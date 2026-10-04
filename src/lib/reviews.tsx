@@ -20,9 +20,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { FEATURES } from "../../convex/lib/features";
-import { useIsModerator } from "~/lib/viewer";
+import { useIsModerator, useViewerQuery } from "~/lib/viewer";
 import { RatingControl, ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
-import { convexClient } from "~/providers";
 
 // Mirrors REVIEW_MIN_LENGTH / REVIEW_MAX_LENGTH / REVIEW_PAGE in convex/reviews.ts.
 const MIN_LENGTH = 20;
@@ -42,8 +41,8 @@ const dateFormat = new Intl.DateTimeFormat("en-US", {
 
 /**
  * The Reviews section. `noun` names the target in prompts ("series",
- * "volume"); `initial` is the loader's first page (null when Convex is not
- * configured or the target is gone).
+ * "volume"); `initial` is the loader's first page (null when the target is
+ * gone).
  */
 export function ReviewsSection({
   target,
@@ -60,11 +59,7 @@ export function ReviewsSection({
         <h2 className="section-title">Reviews</h2>
         <p className="section-note">Newest first · written by readers, in their own words</p>
       </div>
-      {convexClient ? (
-        <LiveReviews target={target} initial={initial} noun={noun} />
-      ) : (
-        <ReviewList items={initial?.items ?? []} noun={noun} />
-      )}
+      <LiveReviews target={target} initial={initial} noun={noun} />
     </section>
   );
 }
@@ -79,7 +74,7 @@ function LiveReviews({
   noun: string;
 }) {
   const [limit, setLimit] = useState(PAGE);
-  const mine = useQuery(api.reviews.mine, { target });
+  const mine = useViewerQuery(api.reviews.mine, { target });
   const ownId = mine?.review?.reviewId ?? null;
   // The viewer's own Review shows above the list, not in it: ask for one
   // extra row so dropping it still leaves a full page.
@@ -158,7 +153,11 @@ function ReviewCard({ item, moderated = false }: { item: ReviewCardData; moderat
         {item.hidden ? <span className="chip chip--hidden">Hidden</span> : null}
       </header>
       {folded ? (
-        <button type="button" className="btn btn-sm review-reveal" onClick={() => setRevealed(true)}>
+        <button
+          type="button"
+          className="btn btn-sm review-reveal"
+          onClick={() => setRevealed(true)}
+        >
           Show spoiler
         </button>
       ) : (
@@ -207,7 +206,7 @@ export function TakePanel({
 
 /** Signed out or without a username, the Reviews section says how to join in. */
 function ReviewPrompt({ noun }: { noun: string }) {
-  const viewer = useQuery(api.users.viewer, {});
+  const viewer = useViewerQuery(api.users.viewer);
   if (viewer === undefined) return null;
   if (viewer === null) {
     return (
@@ -234,12 +233,7 @@ function ReviewPrompt({ noun }: { noun: string }) {
  * the panel can hide itself.
  */
 function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
-  if (!convexClient) return null;
-  return <OwnReviewInner target={target} noun={noun} />;
-}
-
-function OwnReviewInner({ target, noun }: { target: RatingTarget; noun: string }) {
-  const mine = useQuery(api.reviews.mine, { target });
+  const mine = useViewerQuery(api.reviews.mine, { target });
   const [editing, setEditing] = useState(false);
   if (!mine) return null; // loading, signed out, or username pending
   const review = mine.review;
@@ -462,7 +456,7 @@ function ModerateReview({ reviewId, hidden }: { reviewId: Id<"reviews">; hidden:
 
 /** The target's hidden Reviews, for Moderators; nothing for anyone else. */
 function HiddenReviews({ target }: { target: RatingTarget }) {
-  const hidden = useQuery(api.reviews.hiddenList, { target });
+  const hidden = useViewerQuery(api.reviews.hiddenList, { target });
   if (!hidden || hidden.length === 0) return null;
   return (
     <div className="reviews-hidden">

@@ -9,7 +9,7 @@
 // names only the first creator and no role. ANN's terms ask for a link to
 // its Encyclopedia page wherever its person details show (`annPersonUrl`).
 
-import { paginationOptsValidator, type WithoutSystemFields } from "convex/server";
+import { paginationOptsValidator } from "convex/server";
 import { v, type Infer } from "convex/values";
 
 import { internal } from "./_generated/api";
@@ -24,6 +24,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { annCreditValidator, parseApiResponse, type AnnCredit } from "./lib/ann";
+import { statsCoverIsbns } from "./lib/covers";
 import { politeFetch } from "./lib/http";
 import { survivorOf } from "./lib/matching";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
@@ -39,13 +40,7 @@ export type CreditRole = Doc<"seriesCredits">["role"];
  * Display order of roles on a Series: the makers first (the role-less
  * "author" a publisher gives after the specific ones), the source after.
  */
-const ROLE_ORDER: ReadonlyArray<CreditRole> = [
-  "story_art",
-  "story",
-  "art",
-  "author",
-  "original",
-];
+const ROLE_ORDER: ReadonlyArray<CreditRole> = ["story_art", "story", "art", "author", "original"];
 
 /**
  * Whether a credit makes someone the Series' maker: they wrote or drew it,
@@ -239,7 +234,7 @@ const CREDITS_PER_PERSON = 1000;
 /** Credits read per Series: a handful in practice. */
 const CREDITS_PER_SERIES = 50;
 
-/** Work per rebuild action before it continues in a fresh one (actions run ≤10 min). */
+/** Work per rebuild action before it continues in a fresh one (actions run ≤30 min). */
 const REBUILD_BUDGET_MS = 5 * 60 * 1000;
 /** Rows per settling mutation; a PRH row settles its whole Series. */
 const SETTLE_BATCH = 100;
@@ -249,9 +244,13 @@ const SETTLE_BATCH = 100;
  * cursors (`cursor` for observation and row walks, `afterPublicId` for
  * people, `source` for PUBLISHER_SOURCES), the run's stamp, the running
  * counts, and the publisher pass's error message once it failed. Its size
- * does not grow with the catalog: what the passes tally lives on the rows.
+ * does not grow with the catalog: what the passes tally lives on the
+ * credits' run rows (`seriesCreditRuns`). `version` is REBUILD_VERSION
+ * when the state was made; a continuation scheduled before the run fields
+ * left `seriesCredits` has none.
  */
 const rebuildStateValidator = v.object({
+  version: v.optional(v.number()),
   startedAt: v.number(),
   phase: v.union(
     v.literal("rekey"),
@@ -275,6 +274,17 @@ const rebuildStateValidator = v.object({
 type RebuildState = Infer<typeof rebuildStateValidator>;
 
 /**
+ * Where a run keeps its stamps and tallies, carried in its state. 1: in
+ * `seriesCreditRuns`. A continuation of an older layout (no `version`)
+ * starts the rebuild over with a newer stamp instead of resuming. The
+ * credits it stamped hold their tallies on the credit, where settle never
+ * looks, and its settle cursor pages another table. Starting over, every
+ * credit the run stamps gets a run row, and every legacy row is older
+ * than the stamp: restamped (moving its fields off) or swept before settle.
+ */
+export const REBUILD_VERSION = 1;
+
+/**
  * Rebuild every Series credit, in phases that each run only after the one
  * before finished for the same `startedAt` stamp:
  *
@@ -289,8 +299,10 @@ type RebuildState = Infer<typeof rebuildStateValidator>;
  * 5. stats: refresh each author's derived counts and jacket.
  *
  * Idempotent and safe beside an overlapping run (stamps only move
- * forward). After `budgetMs` (default REBUILD_BUDGET_MS) an action hands its
- * state to a fresh one. A failed publisher pass still lets ANN's stale rows
+ * forward). The stamps and tallies live in `seriesCreditRuns`, so a run
+ * that changes nothing writes no credit or person a page reads. After
+ * `budgetMs` (default REBUILD_BUDGET_MS) an action hands its state to a
+ * fresh one. A failed publisher pass still lets ANN's stale rows
  * be swept and the stats refresh, keeping every publisher row (the pass may
  * not have reached them to restamp), their roles, and every person, then
  * throws its error. Runs every six hours (crons.ts); by hand:
@@ -301,19 +313,24 @@ export const rebuild = internalAction({
   handler: async (ctx, { state: resumed, budgetMs }) =>
     withExceptionCapture("people.rebuild", ctx, async () => {
       const began = Date.now();
-      const state: RebuildState = resumed ?? {
-        startedAt: began,
-        phase: "rekey",
-        source: 0,
-        cursor: null,
-        afterPublicId: null,
-        publisherError: null,
-        credits: 0,
-        publisherCredits: 0,
-        swept: 0,
-        pruned: 0,
-        people: 0,
-      };
+      const state: RebuildState =
+        resumed?.version === REBUILD_VERSION
+          ? resumed
+          : {
+              version: REBUILD_VERSION,
+              // Past an older-layout run's stamp, whatever the clock says.
+              startedAt: Math.max(began, (resumed?.startedAt ?? 0) + 1),
+              phase: "rekey",
+              source: 0,
+              cursor: null,
+              afterPublicId: null,
+              publisherError: null,
+              credits: 0,
+              publisherCredits: 0,
+              swept: 0,
+              pruned: 0,
+              people: 0,
+            };
       const counts = () => ({
         credits: state.credits,
         publisherCredits: state.publisherCredits,
@@ -506,25 +523,27 @@ export const pruneOrphans = internalMutation({
  * Settle the publisher rows a run stamped, once its whole publisher pass
  * is done. A `creators` row shows the role this run's observations gave it
  * (`runRole`); a correction that lowers a role lands here. A Series' PRH
- * rows are decided together (`settlePrhSeries`). A page of the run's rows
- * at a time; the next cursor, or null when done.
+ * rows are decided together (`settlePrhSeries`). A page of the run's
+ * `seriesCreditRuns` rows at a time; the next cursor, or null when done.
  */
 export const settleRoles = internalMutation({
   args: { rebuiltAt: v.number(), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { rebuiltAt, cursor }) => {
     const page = await ctx.db
-      .query("seriesCredits")
+      .query("seriesCreditRuns")
       .withIndex("by_rebuiltAt", (q) => q.eq("rebuiltAt", rebuiltAt))
       .paginate({ cursor, numItems: SETTLE_BATCH });
     const memo = newMemo();
     const settled = new Set<Id<"series">>();
-    for (const row of page.page) {
-      if (row.source === "prh") {
-        if (settled.has(row.seriesId)) continue;
-        settled.add(row.seriesId);
-        await settlePrhSeries(ctx, row.seriesId, rebuiltAt, memo);
-      } else if (row.runRole !== undefined && row.runRole !== row.role) {
-        await ctx.db.patch(row._id, { role: row.runRole });
+    for (const run of page.page) {
+      if (run.source === "prh") {
+        if (settled.has(run.seriesId)) continue;
+        settled.add(run.seriesId);
+        await settlePrhSeries(ctx, run.seriesId, rebuiltAt, memo);
+      } else if (run.source === "creators" && run.runRole !== undefined) {
+        const credit = await ctx.db.get(run.creditId);
+        if (credit && credit.role !== run.runRole)
+          await ctx.db.patch(credit._id, { role: run.runRole });
       }
     }
     return page.isDone ? null : page.continueCursor;
@@ -550,13 +569,10 @@ async function settlePrhSeries(
   rebuiltAt: number,
   memo: PublisherMemo,
 ) {
-  const rows = (
-    await ctx.db
-      .query("seriesCredits")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .take(CREDITS_PER_SERIES)
-  ).filter((c) => c.source === "prh" && c.rebuiltAt === rebuiltAt);
-  type Name = NonNullable<Doc<"seriesCredits">["runNames"]>[number] & { key: string; best: number };
+  const rows = (await creditRows(ctx, seriesId)).filter(
+    (c) => c.source === "prh" && c.rebuiltAt === rebuiltAt,
+  );
+  type Name = NonNullable<RunFields["runNames"]>[number] & { key: string; best: number };
   const names = new Map<string, Name>();
   for (const row of rows) {
     for (const n of row.runNames ?? []) {
@@ -589,7 +605,7 @@ async function settlePrhSeries(
     const personId = await personNamed(ctx, group[0]!.name, memo);
     const role = mergeRoles(group.map((n) => n.role));
     const keys = new Set(group.map((n) => n.key));
-    const onRow = (row: Doc<"seriesCredits">) =>
+    const onRow = (row: CreditRow) =>
       (row.runNames ?? []).reduce((sum, n) => sum + (keys.has(nameKey(n.name)) ? n.count : 0), 0);
     const row = rows
       .filter((c) => !used.has(c._id) && onRow(c) > 0)
@@ -607,14 +623,15 @@ async function settlePrhSeries(
       runApart,
     };
     if (!row) {
-      await ctx.db.insert("seriesCredits", { ...fields, seriesId, source: "prh", rebuiltAt });
+      used.add(
+        (await insertCredit(ctx, rows, { ...fields, seriesId, source: "prh", rebuiltAt }))._id,
+      );
       continue;
     }
     used.add(row._id);
-    const current = { personId: row.personId, role: row.role, runRole: row.runRole, runNames: row.runNames, runApart: row.runApart };
-    if (JSON.stringify(current) !== JSON.stringify(fields)) await ctx.db.patch(row._id, fields);
+    await updateRow(ctx, row, fields);
   }
-  for (const row of rows) if (!used.has(row._id)) await ctx.db.delete(row._id);
+  for (const row of rows) if (!used.has(row._id)) await deleteRow(ctx, row);
 }
 
 /** Credit a batch of ANN manga observations, by source record id. */
@@ -661,10 +678,7 @@ async function creditObservation(
   }
   const series = await getActive(ctx, "series", observation.recordRef.id);
   if (!series) return 0;
-  const existing = await ctx.db
-    .query("seriesCredits")
-    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-    .take(CREDITS_PER_SERIES);
+  const existing = await creditRows(ctx, series._id);
   let count = 0;
   for (const credit of snapshot.credits) {
     const role = roleFor(credit.task);
@@ -675,7 +689,8 @@ async function creditObservation(
       (c) => c.personId === personId && c.role === role && c.source === undefined,
     );
     if (row) {
-      if (row.rebuiltAt < rebuiltAt) await ctx.db.patch(row._id, { rebuiltAt });
+      // The stamp only: the credit itself is unchanged.
+      if (row.rebuiltAt < rebuiltAt) await updateRow(ctx, row, { rebuiltAt });
     } else {
       await insertCredit(ctx, existing, { seriesId: series._id, personId, role, rebuiltAt });
     }
@@ -686,7 +701,7 @@ async function creditObservation(
   // pass (which skips the sweep of publisher rows) can't keep them.
   if (count > 0) {
     for (const row of existing) {
-      if (row.source !== undefined) await ctx.db.delete(row._id);
+      if (row.source !== undefined) await deleteRow(ctx, row);
     }
   }
   return count;
@@ -752,15 +767,130 @@ async function insertPerson(ctx: MutationCtx, name: string, key: string, annId?:
   });
 }
 
-/** Insert a credit row and add it to `rows`, the caller's current view of its Series' credits. */
+// ---------- Credit rows and their run bookkeeping ----------
+//
+// A run stamps every credit its observations give, and the sweep deletes
+// the ones it did not. The stamps and the tallies settle reads live in
+// `seriesCreditRuns`, never on the credit: every Series page reads its
+// credits, so a write there would invalidate every credited Series page's
+// cached query on every run. The helpers below join the two, and write a
+// credit only when what it shows changes.
+
+/** The fields of a credit's `seriesCreditRuns` row the rebuild works with. */
+type RunFields = Pick<Doc<"seriesCreditRuns">, "rebuiltAt" | "runRole" | "runNames" | "runApart">;
+/** The legacy run fields a credit row may still carry (schema.ts seriesCredits), cleared. */
+const NO_LEGACY = {
+  rebuiltAt: undefined,
+  runRole: undefined,
+  runNames: undefined,
+  runApart: undefined,
+  runVariants: undefined,
+};
+/** What a credit shows: a write to these is a write the Series page sees. */
+type Shown = Pick<Doc<"seriesCredits">, "personId" | "role">;
+/**
+ * A credit row as the rebuild sees it: what it shows, with its run fields
+ * joined in (`runId` null for a legacy row whose fields are still its own).
+ */
+type CreditRow = Omit<Doc<"seriesCredits">, keyof typeof NO_LEGACY> &
+  RunFields & { runId: Id<"seriesCreditRuns"> | null; legacy: boolean };
+
+/** A Series' credit rows (up to CREDITS_PER_SERIES), each with its run fields. */
+async function creditRows(ctx: QueryCtx, seriesId: Id<"series">): Promise<CreditRow[]> {
+  const [credits, runs] = await Promise.all([
+    ctx.db
+      .query("seriesCredits")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .take(CREDITS_PER_SERIES),
+    ctx.db
+      .query("seriesCreditRuns")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .take(CREDITS_PER_SERIES),
+  ]);
+  const runOf = new Map(runs.map((run) => [run.creditId, run]));
+  return credits.map((credit) => {
+    const { rebuiltAt, runRole, runNames, runApart, runVariants, ...shown } = credit;
+    const legacy = [rebuiltAt, runRole, runNames, runApart, runVariants].some(
+      (f) => f !== undefined,
+    );
+    const run = runOf.get(credit._id);
+    if (run) {
+      const { rebuiltAt, runRole, runNames, runApart } = run;
+      return { ...shown, rebuiltAt, runRole, runNames, runApart, runId: run._id, legacy };
+    }
+    return {
+      ...shown,
+      rebuiltAt: rebuiltAt ?? 0,
+      runRole,
+      runNames,
+      runApart,
+      runId: null,
+      legacy,
+    };
+  });
+}
+
+/** Whether two field values are the same (they are Convex values: JSON is exact). */
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Apply `patch` to a credit row and the caller's copy of it: the shown
+ * fields to `seriesCredits` only where they change, the run fields to its
+ * `seriesCreditRuns` row. A legacy row gets its run row here, and its own
+ * run fields cleared: one write to the credit, once.
+ */
+async function updateRow(ctx: MutationCtx, row: CreditRow, patch: Partial<Shown & RunFields>) {
+  const shown: Partial<Shown> = {};
+  if (patch.personId !== undefined && patch.personId !== row.personId)
+    shown.personId = patch.personId;
+  if (patch.role !== undefined && patch.role !== row.role) shown.role = patch.role;
+  const run: Partial<RunFields> = {};
+  for (const key of ["rebuiltAt", "runRole", "runNames", "runApart"] as const) {
+    if (key in patch && !same(patch[key], row[key])) Object.assign(run, { [key]: patch[key] });
+  }
+  Object.assign(row, patch);
+  if (row.runId === null) {
+    const { _id: creditId, seriesId, source, rebuiltAt, runRole, runNames, runApart } = row;
+    row.runId = await ctx.db.insert("seriesCreditRuns", {
+      creditId,
+      seriesId,
+      source,
+      rebuiltAt,
+      runRole,
+      runNames,
+      runApart,
+    });
+  } else if (Object.keys(run).length > 0) {
+    await ctx.db.patch(row.runId, run);
+  }
+  const write = row.legacy ? { ...shown, ...NO_LEGACY } : shown;
+  row.legacy = false;
+  if (Object.keys(write).length > 0) await ctx.db.patch(row._id, write);
+}
+
+/** Insert a credit and its run row, and add it to `rows`, the caller's current view of its Series' credits. */
 async function insertCredit(
   ctx: MutationCtx,
-  rows: Doc<"seriesCredits">[],
-  fields: WithoutSystemFields<Doc<"seriesCredits">>,
+  rows: CreditRow[],
+  fields: Shown & RunFields & Pick<Doc<"seriesCredits">, "seriesId" | "source">,
 ) {
-  const doc = { _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields };
-  rows.push(doc);
-  return doc;
+  const { seriesId, personId, role, source, ...runFields } = fields;
+  const creditId = await ctx.db.insert("seriesCredits", { seriesId, personId, role, source });
+  const runId = await ctx.db.insert("seriesCreditRuns", {
+    creditId,
+    seriesId,
+    source,
+    ...runFields,
+  });
+  const row: CreditRow = { ...fields, _id: creditId, _creationTime: 0, runId, legacy: false };
+  rows.push(row);
+  return row;
+}
+
+/** Delete a credit row and its run row. */
+async function deleteRow(ctx: MutationCtx, row: CreditRow) {
+  await ctx.db.delete(row._id);
+  if (row.runId !== null) await ctx.db.delete(row.runId);
 }
 
 /** Per-batch memory, so a Series' many observations cost one look each. */
@@ -772,7 +902,7 @@ type PublisherMemo = {
    * settled for this source: ANN credited it this run or, for `creators`
    * names, PRH did.
    */
-  credits: Map<Id<"series">, Doc<"seriesCredits">[] | null>;
+  credits: Map<Id<"series">, CreditRow[] | null>;
   /** A name's exact spelling → its person. */
   people: Map<string, Id<"people">>;
   /** A person → their `nameKey`, for near-spelling checks. */
@@ -860,10 +990,7 @@ async function creditFromPublisher(
   if (!seriesId) return 0;
   let rows = memo.credits.get(seriesId);
   if (rows === undefined) {
-    const existing = await ctx.db
-      .query("seriesCredits")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .take(CREDITS_PER_SERIES);
+    const existing = await creditRows(ctx, seriesId);
     const stampedBy = (source: PublisherMarker | undefined) =>
       existing.some((c) => c.source === source && c.rebuiltAt >= rebuiltAt);
     const settled = stampedBy(undefined) || (marker === "creators" && stampedBy("prh"));
@@ -879,7 +1006,7 @@ async function creditFromPublisher(
   // at the sweep, so no byline shows both meanwhile.
   if (count > 0) {
     for (const row of rows.filter((c) => c.source === "creators")) {
-      await ctx.db.delete(row._id);
+      await deleteRow(ctx, row);
       rows.splice(rows.indexOf(row), 1);
     }
   }
@@ -907,7 +1034,7 @@ async function findFirst<T>(items: ReadonlyArray<T>, test: (item: T) => Promise<
 type StampArgs = {
   seriesId: Id<"series">;
   /** The Series' credit rows, kept current. */
-  rows: Doc<"seriesCredits">[];
+  rows: CreditRow[];
   named: ReadonlyArray<AuthorCredit>;
   rebuiltAt: number;
 };
@@ -926,11 +1053,11 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
     const personId = await personNamed(ctx, credit.name, memo);
     incoming.set(personId, [...(incoming.get(personId) ?? []), credit.role]);
   }
-  const isStamped = (c: Doc<"seriesCredits">) => c.rebuiltAt >= rebuiltAt;
+  const isStamped = (c: CreditRow) => c.rebuiltAt >= rebuiltAt;
   let count = 0;
   for (const [personId, roles] of incoming) {
     const key = await personKey(ctx, memo, personId);
-    const mine: Doc<"seriesCredits">[] = [];
+    const mine: CreditRow[] = [];
     for (const c of rows) {
       if (c.source !== "creators") continue;
       if (c.personId === personId || (await personKey(ctx, memo, c.personId)) === key) mine.push(c);
@@ -938,7 +1065,7 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
     const stamped =
       mine.find((c) => isStamped(c) && c.personId === personId) ?? mine.find(isStamped);
     const runRole = mergeRoles([...roles, ...(stamped ? [stamped.runRole ?? stamped.role] : [])]);
-    const covers = (c: Doc<"seriesCredits">) => mergeRoles([c.role, runRole]) === c.role;
+    const covers = (c: CreditRow) => mergeRoles([c.role, runRole]) === c.role;
     const row =
       stamped ??
       mine.find((c) => c.personId === personId) ??
@@ -949,18 +1076,21 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
       // Shown: a covering role stays until the run settles, so the row
       // doesn't drop to "author" between the batches of "author" and "art".
       const role = covers(row) ? row.role : runRole;
-      if (
-        row.personId !== personId ||
-        row.rebuiltAt < rebuiltAt ||
-        row.role !== role ||
-        row.runRole !== runRole
-      ) {
-        const patch = { personId, rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt), role, runRole };
-        await ctx.db.patch(row._id, patch);
-        Object.assign(row, patch);
-      }
+      await updateRow(ctx, row, {
+        personId,
+        rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt),
+        role,
+        runRole,
+      });
     } else {
-      await insertCredit(ctx, rows, { seriesId, personId, role: runRole, runRole, source: "creators", rebuiltAt });
+      await insertCredit(ctx, rows, {
+        seriesId,
+        personId,
+        role: runRole,
+        runRole,
+        source: "creators",
+        rebuiltAt,
+      });
     }
     count++;
   }
@@ -969,7 +1099,7 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
 
 /**
  * Stamp a PRH author line: the run's credits are the union of the Series'
- * lines, tallied on its rows by name (`runNames`: roles, observations,
+ * lines, tallied on its run rows by name (`runNames`: roles, observations,
  * latest lastSeenAt per spelling key), never by person, so a spelling that
  * loses needs no person. A name goes on the row that already tallies its
  * spelling this run, else the row of the person its key names, else a row
@@ -994,9 +1124,9 @@ async function stampPrh(
     if (entry) entry.roles.push(credit.role);
     else names.set(key, { name: credit.name, roles: [credit.role] });
   }
-  const isStamped = (c: Doc<"seriesCredits">) => c.rebuiltAt >= rebuiltAt;
-  const tallied = (c: Doc<"seriesCredits">) => (isStamped(c) ? (c.runNames ?? []) : []);
-  const placed = new Map<string, Doc<"seriesCredits">>();
+  const isStamped = (c: CreditRow) => c.rebuiltAt >= rebuiltAt;
+  const tallied = (c: CreditRow) => (isStamped(c) ? (c.runNames ?? []) : []);
+  const placed = new Map<string, CreditRow>();
   for (const [key, entry] of names) {
     const role = mergeRoles(entry.roles);
     const taken = new Set([...placed.values()].map((c) => c._id));
@@ -1025,17 +1155,14 @@ async function stampPrh(
         tally.push({ name: entry.name, role, count: 1, seenAt });
       }
       const runRole = mergeRoles(tally.map((n) => n.role));
-      const patch = {
+      await updateRow(ctx, row, {
         rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt),
         // Shown: a covering role stays until the run settles.
         role: mergeRoles([row.role, runRole]) === row.role ? row.role : runRole,
         runRole,
         runNames: tally,
         runApart: isStamped(row) ? (row.runApart ?? []) : [],
-        runVariants: undefined,
-      };
-      await ctx.db.patch(row._id, patch);
-      Object.assign(row, patch);
+      });
       placed.set(key, row);
     } else {
       const doc = await insertCredit(ctx, rows, {
@@ -1059,9 +1186,7 @@ async function stampPrh(
       const pair = [a, b].sort().join("|");
       for (const row of [placed.get(a), placed.get(b)]) {
         if (!row || (row.runApart ?? []).includes(pair)) continue;
-        const runApart = [...(row.runApart ?? []), pair];
-        await ctx.db.patch(row._id, { runApart });
-        row.runApart = runApart;
+        await updateRow(ctx, row, { runApart: [...(row.runApart ?? []), pair] });
       }
     }
   }
@@ -1121,25 +1246,49 @@ async function personNamed(
 }
 
 /**
- * Credits this run did not stamp: no observation gives them any more. Only
- * ANN's rows when `annOnly` (the run's publisher pass failed part-way).
+ * Delete up to SWEEP_BATCH credits this run did not stamp: no observation
+ * gives them any more. Only ANN's rows when `annOnly` (the run's publisher
+ * pass failed part-way). A credit's stamp is its `seriesCreditRuns` row's;
+ * a legacy credit with none still carries its own (schema.ts), and one
+ * this run saw has lost it, so the legacy rows left carrying one are the
+ * ones no run since has seen. Returns how many credits went.
  */
 export const sweepCredits = internalMutation({
   args: { before: v.number(), annOnly: v.optional(v.boolean()) },
   handler: async (ctx, { before, annOnly }) => {
-    const stale = annOnly
+    const runs = annOnly
       ? await ctx.db
-          .query("seriesCredits")
+          .query("seriesCreditRuns")
           .withIndex("by_source_and_rebuiltAt", (q) =>
             q.eq("source", undefined).lt("rebuiltAt", before),
           )
           .take(SWEEP_BATCH)
       : await ctx.db
-          .query("seriesCredits")
+          .query("seriesCreditRuns")
           .withIndex("by_rebuiltAt", (q) => q.lt("rebuiltAt", before))
           .take(SWEEP_BATCH);
-    for (const row of stale) await ctx.db.delete(row._id);
-    return stale.length;
+    for (const run of runs) {
+      if (await ctx.db.get(run.creditId)) await ctx.db.delete(run.creditId);
+      await ctx.db.delete(run._id);
+    }
+    const room = SWEEP_BATCH - runs.length;
+    // `gte(0)`: a row without the field (every row since) sorts first.
+    const legacy =
+      room === 0
+        ? []
+        : annOnly
+          ? await ctx.db
+              .query("seriesCredits")
+              .withIndex("by_source_and_rebuiltAt", (q) =>
+                q.eq("source", undefined).gte("rebuiltAt", 0).lt("rebuiltAt", before),
+              )
+              .take(room)
+          : await ctx.db
+              .query("seriesCredits")
+              .withIndex("by_rebuiltAt", (q) => q.gte("rebuiltAt", 0).lt("rebuiltAt", before))
+              .take(room);
+    for (const row of legacy) await ctx.db.delete(row._id);
+    return runs.length + legacy.length;
   },
 });
 
@@ -1160,7 +1309,8 @@ export const statsBatch = internalMutation({
       const general = (entries: typeof shelf) => entries.filter((entry) => !entry.series.mature);
       // General before made: the general directory lists a mixed-credit
       // author, so a Series they only originated beats a mature one they made.
-      const pool = [general(made), general(shelf), made, shelf].find((entries) => entries.length > 0) ?? [];
+      const pool =
+        [general(made), general(shelf), made, shelf].find((entries) => entries.length > 0) ?? [];
       const biggest = pool.reduce<(typeof shelf)[number] | null>(
         (best, entry) =>
           (entry.stats?.volumeCount ?? 0) > (best?.stats?.volumeCount ?? -1) ? entry : best,
@@ -1197,7 +1347,7 @@ const ANN_BATCH = 50;
 const ANN_DELAY_MS = 1100;
 /** Observations scanned per lookup for ones still missing credits. */
 const BACKFILL_SCAN = 400;
-/** Work per action before it continues in a fresh one (actions run ≤10 min). */
+/** Work per action before it continues in a fresh one (actions run ≤30 min). */
 const BACKFILL_BUDGET_MS = 6 * 60 * 1000;
 
 /**
@@ -1370,7 +1520,7 @@ export const authorPage = query({
         roles,
         sourceStatus: series.sourceStatus ?? null,
         coverUrl: stats?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? null,
+        coverIsbn: statsCoverIsbns(stats),
         volumeCount: stats?.volumeCount ?? 0,
         publishers: stats?.publishers ?? [],
         firstReleaseSort: stats?.firstReleaseSort ?? 0,
@@ -1406,13 +1556,15 @@ export const authors = query({
       .paginate(paginationOpts);
     return {
       ...page,
-      page: page.page.filter((person) => visibleTo(showMature, person.matureOnly)).map((person) => ({
-        publicId: person.publicId,
-        name: person.name,
-        seriesCount: person.seriesCount,
-        coverUrl: person.coverUrl,
-        coverIsbn: person.coverIsbn,
-      })),
+      page: page.page
+        .filter((person) => visibleTo(showMature, person.matureOnly))
+        .map((person) => ({
+          publicId: person.publicId,
+          name: person.name,
+          seriesCount: person.seriesCount,
+          coverUrl: person.coverUrl,
+          coverIsbn: person.coverIsbn,
+        })),
     };
   },
 });

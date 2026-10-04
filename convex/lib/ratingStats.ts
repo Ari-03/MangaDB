@@ -34,7 +34,10 @@ export const pageTargetIdArg = v.union(seriesIdArg, volumeIdArg);
 export type RatingSummary = { average: number | null; count: number };
 
 /** A target's ratingStats row, or null when nobody has rated it. */
-export async function statsRow(ctx: QueryCtx, target: TargetId): Promise<Doc<"ratingStats"> | null> {
+export async function statsRow(
+  ctx: QueryCtx,
+  target: TargetId,
+): Promise<Doc<"ratingStats"> | null> {
   const stats = ctx.db.query("ratingStats");
   switch (target.kind) {
     case "series":

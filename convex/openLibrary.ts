@@ -17,18 +17,21 @@
 //   (publisher, format) — another ISBN there is a reprint or duplicate
 // - it never creates a Series, Volume, or Publisher, and never queues a
 //   match or creation review — OpenLibrary is crowd-sourced and
-//   weak-titled, so an ambiguous or structure-shaped record is simply
-//   recorded on its observation and waits for stronger sources. Its blurb
-//   never queues against weak text another record wrote (ANN's, another
-//   edition's) either: the first text stays (lib/authority.ts)
+//   weak-titled, so an ambiguous or structure-shaped record stays on its
+//   observation and waits for stronger sources. One a person could place
+//   (a known publisher, and an active Series of its title or one an Editor
+//   hid) is a Held Book; the rest are recorded nowhere (placeEdition). Its
+//   blurb never queues against weak text another record wrote (ANN's,
+//   another edition's) either: the first text stays (lib/authority.ts)
 // - no withdrawal pass: the streamed file is an operator-filtered slice of
 //   the dump, so absence from it is never evidence
 //
 // The raw editions dump is ~10 GB; scripts/filter-openlibrary-dump.mjs
 // narrows it offline to manga-relevant publishers, and the operator hosts
 // the filtered file at OPENLIBRARY_DUMP_URL (docs/imports.md). The sync action
-// streams it line by line and self-continues across Convex's action time
-// budget, carrying the Import Run.
+// streams it line by line and hands off to a continuation after
+// LINK_BUDGET_MS or maxLines lines, whichever comes first, carrying the
+// Import Run.
 //
 // `replayDescriptions` re-applies stored editions, with no network: an
 // edition observed before its Release existed (ANN created most VIZ books
@@ -42,24 +45,39 @@ import {
   internalMutation,
   internalQuery,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
+import {
+  closeRun,
+  MAX_CARRIED_ERRORS,
+  registryRow,
+  runToContinue,
+  stampHandOff,
+  stopAtGate,
+} from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
-import { getObservation, upsertObservation } from "./lib/observations";
+import {
+  clearHold,
+  getObservation,
+  type Hold,
+  linkObservation,
+  recordUnplaced,
+  upsertObservation,
+} from "./lib/observations";
 import {
   createCanonicalRecords,
   descriptionRepairWork,
   findPublisherByName,
+  hiddenWorkTitled,
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
   needsEditionLine,
   recleaned,
-  recordUnplaced,
   repairCountsValidator,
   repairLinkedDescription,
   runDescriptionRepair,
@@ -81,6 +99,19 @@ const IMPORT_COMMENT = "Imported from OpenLibrary (CC0).";
 
 /** Lines per invocation before scheduling a continuation. */
 const DEFAULT_MAX_LINES = 20000;
+/**
+ * Wall-clock time per link, from its start, after which the link hands off
+ * to a continuation at the next line it reaches; it counts the download of
+ * the lines earlier links processed. Checked only between new lines, so a
+ * link overruns it by the line in progress (applyRetrying: four tries,
+ * about 2.5 s of backoff) and a gate check, and by however long the next
+ * stream read takes. Neither a read nor the skip over the earlier lines has
+ * a deadline: a stalled read or a slow download of that prefix can carry a
+ * link past ten minutes, as far as Convex's 30-minute action limit.
+ */
+const LINK_BUDGET_MS = 10 * 60 * 1000;
+/** Lines between two checks of the import gate inside a link. */
+const GATE_LINES = 1000;
 
 // ---------- the sync action ----------
 
@@ -95,11 +126,16 @@ type SyncResult =
       nextLine?: number;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
  * One link of a dump pass. Called with no args by the monthly cadence tick
  * (requires OPENLIBRARY_DUMP_URL); continuation links carry the run state.
+ * The import gate (lib/importRuns.ts) is checked at each link and every
+ * GATE_LINES lines. A link applies at least one line, then stops before
+ * the next once it has run for LINK_BUDGET_MS or processed maxLines lines;
+ * a gate stop on that line comes first.
  *
  *   npx convex run openLibrary:sync '{"dumpUrl":"https://…/filtered.txt"}'
  */
@@ -111,6 +147,8 @@ export const sync = internalAction({
     maxLines: v.optional(v.number()),
     /** Never schedule a continuation (tests and bounded manual runs). */
     noContinue: v.optional(v.boolean()),
+    /** Wall-clock budget per link, at most LINK_BUDGET_MS; tests pass 0 to force a hand-off. */
+    linkBudgetMs: v.optional(v.number()),
     /** First dump line (0-based) to process: where a continuation resumes, or an operator's reprocess. */
     startLine: v.optional(v.number()),
     // ----- continuation state (never passed by callers) -----
@@ -121,6 +159,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("openLibrary.sync", ctx, async () => {
+      const linkStartedAt = Date.now();
       const source = await registryRow(ctx, SOURCE_KEY);
       if (!source.enabled && args.runId === undefined) {
         return { skipped: "disabled" as const };
@@ -136,6 +175,10 @@ export const sync = internalAction({
       const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
       if (!Number.isSafeInteger(maxLines) || maxLines < 1 || maxLines > DEFAULT_MAX_LINES) {
         throw new Error(`maxLines must be an integer between 1 and ${DEFAULT_MAX_LINES}`);
+      }
+      const linkBudgetMs = args.linkBudgetMs ?? LINK_BUDGET_MS;
+      if (!(linkBudgetMs >= 0 && linkBudgetMs <= LINK_BUDGET_MS)) {
+        throw new Error(`linkBudgetMs must be between 0 and ${LINK_BUDGET_MS}`);
       }
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
@@ -168,6 +211,8 @@ export const sync = internalAction({
         let lineNo = 0;
         let processed = 0;
         let done = false;
+        let outOfTime = false;
+        let stopped: Awaited<ReturnType<typeof stopAtGate>> = null;
 
         const handleLine = async (line: string) => {
           // 0-based, like startLine/nextLine: an error's line number is the
@@ -188,28 +233,50 @@ export const sync = internalAction({
           }
         };
 
-        while (!done && processed < maxLines) {
+        // Every line goes through here, newline-terminated or the dump's
+        // unterminated last one, so the gate before each GATE_LINES-th line
+        // and the time check before each line apply to both. Returns the
+        // gate's stop, with the line unapplied; out of time, the line is
+        // left unapplied too, for the continuation.
+        const processLine = async (line: string) => {
+          if (line.trim() === "") return null;
+          if (processed > 0 && processed % GATE_LINES === 0) {
+            const stop = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+            if (stop) return stop;
+          }
+          if (processed > 0 && Date.now() - linkStartedAt >= linkBudgetMs) {
+            outOfTime = true;
+            return null;
+          }
+          await handleLine(line);
+          return null;
+        };
+
+        while (!done && !outOfTime && processed < maxLines && !stopped) {
           const chunk = await reader.read();
           if (chunk.done) {
-            done = true;
-            if (buffer.trim() !== "") await handleLine(buffer);
+            stopped = await processLine(buffer);
+            done = !outOfTime;
             break;
           }
           buffer += decoder.decode(chunk.value, { stream: true });
           let newline = buffer.indexOf("\n");
-          while (newline >= 0 && processed < maxLines) {
+          while (newline >= 0 && !outOfTime && processed < maxLines && !stopped) {
             const line = buffer.slice(0, newline);
             buffer = buffer.slice(newline + 1);
-            if (line.trim() !== "") await handleLine(line);
+            stopped = await processLine(line);
             newline = buffer.indexOf("\n");
           }
         }
         await reader.cancel().catch(() => undefined);
+        if (stopped) return { ...stopped, continued: false, nextLine: startLine + processed };
 
         if (!done && args.noContinue !== true) {
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.openLibrary.sync, {
             dumpUrl,
             maxLines: args.maxLines,
+            linkBudgetMs: args.linkBudgetMs,
             startLine: startLine + processed,
             runId,
             seen,
@@ -234,7 +301,10 @@ export const sync = internalAction({
         };
       } catch (e) {
         errors.push(errorMessage(e));
-        return { ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })), continued: false };
+        return {
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
+          continued: false,
+        };
       }
     }),
 });
@@ -243,7 +313,7 @@ export const sync = internalAction({
 
 // Library rebinders (Turtleback, Perfection Learning, …) re-issue a
 // publisher's book under their own ISBN.
-const REBINDER =
+export const REBINDER =
   /^(?:turtleback|perfection learning|selbite|paw prints|demco|topeka bindery|san val|bound to stay bound|findaway|library binding)\b/i;
 
 /** An active Release of this format under the Volume from this publisher. */
@@ -275,7 +345,7 @@ type ApplyResult = {
  * book out of scope, or null. PRH drops such titles before observing them,
  * and Kodansha keys by slug, so Yen Press is the one to ask.
  */
-async function outOfScopeElsewhere(ctx: MutationCtx, isbn13: string): Promise<string | null> {
+export async function outOfScopeElsewhere(ctx: QueryCtx, isbn13: string): Promise<string | null> {
   const yen = await getObservation(ctx, "yenpress", isbn13);
   const reason = (yen?.snapshot as { outOfScope?: string } | undefined)?.outOfScope;
   return reason !== undefined ? `Yen Press (${reason})` : null;
@@ -293,9 +363,219 @@ function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unkno
 }
 
 /**
+ * Where an unlinked edition goes, decided without writing anything, so a
+ * stored edition can be classified too (imports.backfillHolds):
+ *
+ * - `match`: the ladder found its Release (rungs ②–④); applyEdition links it.
+ * - `review`: the ladder flagged a book no one could place (an unknown
+ *   publisher, no Series match, out of scope elsewhere); the reason stays on
+ *   the observation.
+ * - `create`: a leaf Release under a Series, Volume and Publisher that all
+ *   exist (rung ⑤).
+ * - `hold`: a book a person could place, held for the Data Team: a known
+ *   Publisher and at least one active Series, but the ladder flagged its
+ *   ISBN or the Volume's Release in its format (`isbn`, rungs ②–③) or a
+ *   same-titled Series (`series`, rung ④), with the flag in `review` for
+ *   the observation; or it names one Series whose Volume does not exist
+ *   (`volumeMissing`), its packaging cannot be mapped (`packaging`), the
+ *   Series is locked or the title names several (`series`), or the Volume
+ *   already has this publisher's Release in its format (`isbn`); or its
+ *   title names no active Series but one an Editor hid (`series`).
+ * - `skip`: nothing to act on, recorded nowhere: a library rebind, an
+ *   unknown publisher, no Series match, an unlabeled edition with no
+ *   unlabeled Volume, or a book another source holds out of scope.
+ */
+export async function placeEdition(
+  ctx: MutationCtx,
+  snapshot: OlEditionSnapshot,
+): Promise<
+  | { kind: "match"; release: Doc<"releases"> }
+  | { kind: "review"; reason: string }
+  | {
+      kind: "create";
+      series: Doc<"series">;
+      seriesTitle: string;
+      volumeLabel: string | null;
+      publisher: Doc<"publishers">;
+    }
+  | { kind: "hold"; hold: Hold; review?: string }
+  | { kind: "skip" }
+> {
+  // Rungs ②–④ via the shared ladder; the publisher key resolves against
+  // EXISTING rows only (OpenLibrary never creates publishers). Any listed
+  // publisher that resolves counts — records often lead with an imprint
+  // label or a distributor (["SHONEN JUMP", "viz media"]) — but a library
+  // rebinder's record is another book (its own ISBN), never the
+  // publisher's edition.
+  if (snapshot.publishers.some((name) => REBINDER.test(name))) return { kind: "skip" };
+  let publisher: Doc<"publishers"> | null = null;
+  for (const name of snapshot.publishers) {
+    publisher = await findPublisherByName(ctx, name);
+    if (publisher) break;
+  }
+  // Packaging (omnibus, deluxe, box sets) matches by ISBN only — an
+  // Omnibus 4 is never Volume 4. A bare trailing number or roman numeral
+  // resolves against the existing Series first, exactly as the catalog
+  // feeds do ("Chainsaw Man 22" → Chainsaw Man Vol. 22 only when that
+  // Series exists and no "Chainsaw Man 22" does).
+  const packaged = snapshot.multiVolume || snapshot.packaging !== undefined;
+  const { seriesTitle, volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
+  const fact: ReleaseFact = {
+    seriesTitle,
+    volumeLabel: packaged ? null : volumeLabel,
+    multiVolume: packaged,
+    format: snapshot.format,
+    binding: snapshot.binding,
+    language: IMPORT_LANGUAGE,
+    isbn13: snapshot.isbn13,
+    publisherId: publisher?._id ?? null,
+  };
+  const match = await matchRelease(ctx, fact);
+  if (match.kind === "match") return { kind: "match", release: match.release };
+  // The ladder's flag, and the note it leaves on the observation.
+  const flag =
+    match.kind === "review"
+      ? {
+          rung: match.rung,
+          reason: match.reason,
+          note: `unmatched (rung ${match.rung}): ${match.reason}`,
+        }
+      : null;
+
+  // Rung ⑤ — the leaf-creation boundary: a single-volume Release whose
+  // Series (unique title match), Volume (exact label), and Publisher all
+  // already exist, with no Edition-Line shape. Anything else would define
+  // structure, which OpenLibrary never does; what a person could place is
+  // held, the rest is skipped. A publisher feed that knows this ISBN
+  // outranks OpenLibrary's scope guess: Yen Press records its light novels
+  // and audio (by ISBN) as out of scope, and OpenLibrary titles rarely say
+  // "light novel".
+  const outOfScope =
+    snapshot.isbn13 !== undefined && (await outOfScopeElsewhere(ctx, snapshot.isbn13)) !== null;
+  // A title naming no active Series but one an Editor hid is that work's
+  // book: held, as the catalog feeds hold it (removedSeriesFor).
+  if (publisher !== null && candidates.length === 0 && flag === null && !outOfScope) {
+    const hidden = await hiddenWorkTitled(ctx, seriesTitle, publisher._id);
+    if (hidden !== null) return { kind: "hold", hold: { kind: "series", reason: hidden.reason } };
+  }
+  if (publisher === null || candidates.length === 0 || outOfScope) {
+    return flag !== null ? { kind: "review", reason: flag.note } : { kind: "skip" };
+  }
+  if (flag !== null) {
+    return {
+      kind: "hold",
+      review: flag.note,
+      hold: {
+        kind: flag.rung === 4 ? "series" : "isbn",
+        reason: `${flag.reason.charAt(0).toUpperCase()}${flag.reason.slice(1)}.`,
+        ...(candidates.length === 1 ? { seriesId: candidates[0]!._id } : {}),
+      },
+    };
+  }
+  if (candidates.length > 1) {
+    return {
+      kind: "hold",
+      hold: {
+        kind: "series",
+        reason: `"${seriesTitle}" names ${candidates.length} Series (${candidates.map((c) => c.publicId).join(", ")}).`,
+      },
+    };
+  }
+  const series = candidates[0]!;
+  if (packaged || needsEditionLine(snapshot.title)) {
+    return {
+      kind: "hold",
+      hold: {
+        kind: "packaging",
+        reason: `"${snapshot.title}" is packaging of Series ${series.publicId} whose covered Volumes Open Library cannot state — an Editor maps it.`,
+        seriesId: series._id,
+      },
+    };
+  }
+  if (series.locked) {
+    return {
+      kind: "hold",
+      hold: {
+        kind: "series",
+        reason: `Series ${series.publicId} is locked.`,
+        seriesId: series._id,
+      },
+    };
+  }
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+    .collect();
+  const volume = volumes.find(
+    (vol) => vol.status === "active" && labelsEqual(vol.label, volumeLabel),
+  );
+  if (!volume) {
+    if (volumeLabel === null) return { kind: "skip" };
+    return {
+      kind: "hold",
+      hold: {
+        kind: "volumeMissing",
+        reason: `Series ${series.publicId} ("${series.title}") has no Volume ${volumeLabel}; ${publisher.name} publishes it.`,
+        seriesId: series._id,
+      },
+    };
+  }
+
+  // One OpenLibrary leaf per (Volume, publisher, format): the ladder
+  // already linked a same-format sibling without an ISBN unless its known
+  // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
+  // reprint, a library binding, a hardcover, or an OL duplicate. Never a
+  // second Release; the record is held.
+  const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
+  if (sibling) {
+    return {
+      kind: "hold",
+      hold: {
+        kind: "isbn",
+        reason: `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
+        seriesId: series._id,
+      },
+    };
+  }
+
+  return { kind: "create", series, seriesTitle, volumeLabel, publisher };
+}
+
+/**
+ * Keep the edition's `match` note in step with the ladder's flag (spec §6:
+ * a flat crowd-sourced record is never worth a human's review slot on its
+ * own, so the flag stays on the observation): written while the ladder
+ * flags the edition, its time kept while the flag is unchanged, and removed
+ * once it does not. The observation's other notes stay.
+ */
+async function noteFlag(
+  ctx: MutationCtx,
+  observationId: Id<"sourceObservations">,
+  offered: string,
+  reason: string | undefined,
+  now: number,
+): Promise<void> {
+  const conflicts = (await ctx.db.get(observationId))?.conflicts ?? [];
+  const prior = conflicts.find((c) => c.field === "match");
+  if (
+    reason === undefined
+      ? prior === undefined
+      : prior?.reason === reason && prior.offered === offered
+  )
+    return;
+  const kept = conflicts.filter((c) => c.field !== "match");
+  await ctx.db.patch(observationId, {
+    conflicts:
+      reason === undefined ? kept : [...kept, { field: "match", offered, at: now, reason }],
+  });
+}
+
+/**
  * Reconcile one OpenLibrary edition into the catalog. Match → fill; no
- * match → at most a leaf Release under fully pre-existing structure; never
- * a queue item, never new structure. One atomic mutation per record.
+ * match → at most a leaf Release under fully pre-existing structure
+ * (placeEdition); never a queue item, never new structure. A book a person
+ * could place is held, and a hold the edition no longer earns is cleared.
+ * One atomic mutation per record.
  */
 export const applyEdition = internalMutation({
   args: { snapshot: olEditionValidator },
@@ -342,44 +622,18 @@ export const applyEdition = internalMutation({
       };
     }
 
-    // Rungs ②–④ via the shared ladder; the publisher key resolves against
-    // EXISTING rows only (OpenLibrary never creates publishers). Any listed
-    // publisher that resolves counts — records often lead with an imprint
-    // label or a distributor (["SHONEN JUMP", "viz media"]) — but a library
-    // rebinder's record is another book (its own ISBN), never the
-    // publisher's edition.
-    if (snapshot.publishers.some((name) => REBINDER.test(name))) {
-      return { status: "recordOnly", changed: false };
-    }
-    let publisher: Doc<"publishers"> | null = null;
-    for (const name of snapshot.publishers) {
-      publisher = await findPublisherByName(ctx, name);
-      if (publisher) break;
-    }
-    // Packaging (omnibus, deluxe, box sets) matches by ISBN only — an
-    // Omnibus 4 is never Volume 4. A bare trailing number or roman numeral
-    // resolves against the existing Series first, exactly as the catalog
-    // feeds do ("Chainsaw Man 22" → Chainsaw Man Vol. 22 only when that
-    // Series exists and no "Chainsaw Man 22" does).
-    const packaged = snapshot.multiVolume || snapshot.packaging !== undefined;
-    const { seriesTitle, volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
-    const fact: ReleaseFact = {
-      seriesTitle,
-      volumeLabel: packaged ? null : volumeLabel,
-      multiVolume: packaged,
-      format: snapshot.format,
-      binding: snapshot.binding,
-      language: IMPORT_LANGUAGE,
-      isbn13: snapshot.isbn13,
-      publisherId: publisher?._id ?? null,
-    };
-    const match = await matchRelease(ctx, fact);
+    const placement = await placeEdition(ctx, snapshot);
+    const flag =
+      placement.kind === "review"
+        ? placement.reason
+        : placement.kind === "hold"
+          ? placement.review
+          : undefined;
+    await noteFlag(ctx, observation._id, snapshot.title, flag, now);
 
-    if (match.kind === "match") {
-      const release = match.release;
-      await ctx.db.patch(observation._id, {
-        recordRef: { type: "release", id: release._id },
-      });
+    if (placement.kind === "match") {
+      const release = placement.release;
+      await linkObservation(ctx, observation._id, { type: "release", id: release._id });
       await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
@@ -392,67 +646,22 @@ export const applyEdition = internalMutation({
       return { status: "linked", changed: true, releaseId: release._id };
     }
 
-    if (match.kind === "review") {
-      // A flat crowd-sourced record is never worth a human's review slot on
-      // its own; the ambiguity stays on the observation for the record.
-      await ctx.db.patch(observation._id, {
-        conflicts: [
-          {
-            field: "match",
-            offered: snapshot.title,
-            at: now,
-            reason: `unmatched (rung ${match.rung}): ${match.reason}`,
-          },
-        ],
-      });
+    if (placement.kind === "review") {
+      await clearHold(ctx, observation._id);
       return { status: "recordOnly", changed: false };
     }
 
-    // Rung ⑤ — the leaf-creation boundary: a single-volume Release whose
-    // Series (unique title match), Volume (exact label), and Publisher all
-    // already exist, with no Edition-Line shape. Anything else would define
-    // structure, which OpenLibrary never does.
-    if (publisher === null || packaged || needsEditionLine(snapshot.title)) {
-      return { status: "recordOnly", changed: false };
-    }
-    if (candidates.length !== 1) return { status: "recordOnly", changed: false };
-    const series = candidates[0]!;
-    if (series.locked) return { status: "recordOnly", changed: false };
-    const volumes = await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .collect();
-    const volume = volumes.find(
-      (vol) => vol.status === "active" && labelsEqual(vol.label, volumeLabel),
-    );
-    if (!volume) return { status: "recordOnly", changed: false };
-
-    // One OpenLibrary leaf per (Volume, publisher, format): the ladder
-    // already linked a same-format sibling without an ISBN unless its known
-    // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
-    // reprint, a library binding, a hardcover, or an OL duplicate. Never a
-    // second Release; the record stays on its observation.
-    const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
-    if (sibling) {
-      await recordUnplaced(
-        ctx,
-        observation,
-        `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
-        now,
-      );
+    if (placement.kind === "hold") {
+      await recordUnplaced(ctx, observation, placement.hold, now);
       return { status: "recordOnly", changed: false };
     }
 
-    // A publisher feed that knows this ISBN outranks OpenLibrary's scope
-    // guess: Yen Press records its light novels and audio (by ISBN) as out of
-    // scope, and OpenLibrary titles rarely say "light novel".
-    const scopedOut =
-      snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;
-    if (scopedOut) {
-      await recordUnplaced(ctx, observation, `Out of scope per ${scopedOut}.`, now);
+    if (placement.kind === "skip") {
+      await clearHold(ctx, observation._id);
       return { status: "recordOnly", changed: false };
     }
 
+    const { series, seriesTitle, volumeLabel, publisher } = placement;
     const creation = await createCanonicalRecords(ctx, {
       sourceKey: SOURCE_KEY,
       observation,
@@ -483,7 +692,7 @@ export const applyEdition = internalMutation({
 const REPLAY_SCAN = 200;
 /** Editions handed to the action per lookup. */
 const REPLAY_BATCH = 25;
-/** Work per action before it continues in a fresh one (actions run ≤10 min). */
+/** Work per action before it continues in a fresh one (actions run ≤30 min). */
 const REPLAY_BUDGET_MS = 5 * 60 * 1000;
 
 /** The matcher's own note on an edition its ISBN rung declined (applyEdition). */

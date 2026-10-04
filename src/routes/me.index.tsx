@@ -1,10 +1,12 @@
 import { useClerk } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useAction, useQuery } from "convex/react";
-import { useState, type MouseEvent } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { AnalyticsSettings } from "~/lib/analytics";
 import { countLibrary, LibraryCollection } from "~/lib/collection";
+import { mutationErrorMessage } from "~/lib/errors";
 import { LibraryFavorites } from "~/lib/favorites";
 import { LibraryUpcoming } from "~/lib/follows";
 import { todaySortKey } from "~/lib/month";
@@ -13,7 +15,7 @@ import { LibraryReading } from "~/lib/reading";
 import { MatureSettings } from "~/lib/mature";
 import { ScoreFormatSettings } from "~/lib/ratings";
 import { SharingSettings } from "~/lib/sharing";
-import { convexClient } from "~/providers";
+import { clerkEnabled } from "~/providers";
 
 const TABS = [
   { key: "collection", label: "Collection" },
@@ -51,12 +53,11 @@ function viewHref(tab: Tab, shelf: EntryState): string {
  * (linkable, right before hydration) and then switched in place: a click
  * only changes local state and rewrites the address, never navigates, so
  * the /me auth gate is not re-run for every shelf. Each tab mounts the
- * slice that owns it; this page only frames them.
+ * slice that owns it; this page only frames them. Only the open tab's label
+ * shows a count, read from the query its panel already runs.
  */
 export const Route = createFileRoute("/me/")({
-  validateSearch: (
-    search: Record<string, unknown>,
-  ): { tab?: Tab; shelf?: EntryState } => ({
+  validateSearch: (search: Record<string, unknown>): { tab?: Tab; shelf?: EntryState } => ({
     ...(isTab(search.tab) ? { tab: search.tab } : {}),
     ...(isShelf(search.shelf) ? { shelf: search.shelf } : {}),
   }),
@@ -71,6 +72,9 @@ function MePage() {
     shelf: search.shelf ?? "owned",
   });
   const { tab, shelf } = view;
+  // Today's key for the Upcoming panel and its count, once per mount so the
+  // shared query key stays stable.
+  const [todaySort] = useState(() => todaySortKey());
   const show = (next: typeof view) => (event: MouseEvent<HTMLAnchorElement>) => {
     // Plain clicks switch in place; modified clicks keep their link meaning.
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -79,14 +83,27 @@ function MePage() {
     window.history.replaceState(window.history.state, "", viewHref(next.tab, next.shelf));
   };
 
+  if (viewerState.status === "deleting") {
+    // A session still signed in to an account being deleted (from another
+    // device, say): say so and end it.
+    return (
+      <main>
+        {clerkEnabled ? (
+          <SignOutDeleted />
+        ) : (
+          <p className="notice">Your account is being deleted.</p>
+        )}
+      </main>
+    );
+  }
   if (viewerState.status !== "ready") {
-    // Only "unconfigured" reaches the component; the /me gate redirects the
-    // signed-out and username-pending states.
+    // Only "unconfigured" is left; the /me gate redirects the signed-out
+    // and username-pending states.
     return (
       <main>
         <p className="notice">
-          Accounts are not configured. Set the Clerk and Convex environment
-          variables (see the README) to enable sign-in and personal tracking.
+          Accounts are not configured. Set the Clerk environment variables (see the README) to
+          enable sign-in and personal tracking.
         </p>
       </main>
     );
@@ -120,7 +137,7 @@ function MePage() {
             onClick={show({ tab: entry.key, shelf })}
           >
             {entry.label}
-            <TabCount tab={entry.key} />
+            {tab === entry.key ? <TabCount tab={tab} todaySort={todaySort} /> : null}
           </a>
         ))}
       </nav>
@@ -156,7 +173,7 @@ function MePage() {
       ) : tab === "upcoming" ? (
         <section className="lib-panel lib-view" aria-label="Upcoming">
           {/* Series Follows + My Upcoming Releases. */}
-          <LibraryUpcoming />
+          <LibraryUpcoming todaySort={todaySort} />
         </section>
       ) : tab === "favorites" ? (
         <section className="lib-panel lib-view" aria-label="Favorites">
@@ -182,10 +199,15 @@ function MePage() {
             <ScoreFormatSettings />
           </div>
           <div className="acct-panel">
+            <h2 className="lib-group-title">Analytics</h2>
+            {/* The account's analytics opt-out: the browser client and every
+                server event under the viewer's id. */}
+            <AnalyticsSettings />
+          </div>
+          <div className="acct-panel">
             <h2 className="lib-group-title">Account</h2>
             <p className="acct-account-row">
-              Signed in as{" "}
-              <span className="acct-handle">@{viewer.username}</span>
+              Signed in as <span className="acct-handle">@{viewer.username}</span>
               <Link to="/claim-username">Change username</Link>
             </p>
             <DeleteAccount />
@@ -196,24 +218,20 @@ function MePage() {
   );
 }
 
-/** The count in a tab label; nothing until the slice's query answers. */
-function TabCount({ tab }: { tab: Tab }) {
-  if (!convexClient || tab === "settings") return null;
-  return <TabCountInner tab={tab} />;
+/**
+ * The count in the open tab's label (Settings has none); nothing until the
+ * slice's query answers. The arguments match the open panel's own query, so
+ * the two share one subscription.
+ */
+function TabCount({ tab, todaySort }: { tab: Tab; todaySort: number }) {
+  if (tab === "settings") return null;
+  return <TabCountInner tab={tab} todaySort={todaySort} />;
 }
 
-function TabCountInner({ tab }: { tab: Tab }) {
-  // Each tab's own query, so the counts stay live and switching tabs is
-  // instant — the subscriptions are already warm.
+function TabCountInner({ tab, todaySort }: { tab: Tab; todaySort: number }) {
   const library = useQuery(api.collection.myLibrary, tab === "collection" ? {} : "skip");
   const reading = useQuery(api.reading.myReading, tab === "reading" ? {} : "skip");
-  // Today's key like the Upcoming tab itself; once per mount so the query
-  // key stays stable.
-  const [todaySort] = useState(() => todaySortKey());
-  const upcoming = useQuery(
-    api.follows.myUpcoming,
-    tab === "upcoming" ? { todaySort } : "skip",
-  );
+  const upcoming = useQuery(api.follows.myUpcoming, tab === "upcoming" ? { todaySort } : "skip");
   const favorites = useQuery(api.favorites.mine, tab === "favorites" ? {} : "skip");
   const count =
     tab === "collection" && library
@@ -230,31 +248,23 @@ function TabCountInner({ tab }: { tab: Tab }) {
 }
 
 function ShelfCount({ shelf }: { shelf: EntryState }) {
-  if (!convexClient) return null;
-  return <ShelfCountInner shelf={shelf} />;
-}
-
-function ShelfCountInner({ shelf }: { shelf: EntryState }) {
   const library = useQuery(api.collection.myLibrary, {});
   if (!library) return null;
   return <span className="lib-tab-count">{countLibrary(library)[shelf]}</span>;
 }
 
 /**
- * MangaDB-initiated account deletion (spec §9): one Convex action removes the
- * Clerk identity and every MangaDB record, then the local session is dropped.
+ * MangaDB-initiated account deletion (spec §9): one Convex mutation records
+ * the request and schedules the removal of every MangaDB record, then of
+ * the Clerk identity, then the local session is dropped (SignOutDeleted).
+ * A refusal (the last Administrator, say) changes nothing; asking twice is
+ * harmless.
  */
 function DeleteAccount() {
-  if (!convexClient) return null;
-  return <DeleteAccountInner />;
-}
-
-function DeleteAccountInner() {
-  const clerk = useClerk();
-  const navigate = useNavigate();
-  const deleteAccount = useAction(api.users.deleteAccount);
+  const deleteAccount = useMutation(api.users.deleteAccount);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const run = async () => {
@@ -262,32 +272,37 @@ function DeleteAccountInner() {
     setError(null);
     try {
       await deleteAccount({});
-      // The Clerk user is gone; clear the local session and leave.
-      await clerk.signOut();
-      await navigate({ to: "/" });
-    } catch {
-      setError("Account deletion failed. Nothing was removed — try again.");
+    } catch (err) {
+      // A ConvexError is a refusal, made before anything changed. Anything
+      // else may have failed before or after the request was recorded.
+      const refusal = mutationErrorMessage(err, "");
+      setError(
+        refusal
+          ? `Your account was not deleted. ${refusal}`
+          : "The deletion request could not be confirmed. Check your connection and try again.",
+      );
       setBusy(false);
+      return;
     }
+    // The account now counts as gone; clear the local session and leave.
+    setDeleting(true);
   };
+
+  if (deleting) return <SignOutDeleted />;
 
   return (
     <div className="danger-zone">
       {confirming ? (
         <>
           <p>
-            This permanently deletes your sign-in and everything MangaDB knows
-            about you — collection, reading history, follows. There is no undo.
+            This permanently deletes your sign-in and everything MangaDB knows about you —
+            collection, reading history, follows. There is no undo.
           </p>
           <div className="danger-actions">
             <button type="button" disabled={busy} onClick={() => void run()}>
               {busy ? "Deleting…" : "Yes, delete everything"}
             </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setConfirming(false)}
-            >
+            <button type="button" disabled={busy} onClick={() => setConfirming(false)}>
               Keep my account
             </button>
           </div>
@@ -298,6 +313,73 @@ function DeleteAccountInner() {
         </button>
       )}
       {error ? <p className="form-error">{error}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Signs out a session whose account deletion is under way, then goes home.
+ * The first try waits for clerk-js to load: before then clerk.signOut()
+ * only queues the call and resolves at once, so the page would leave
+ * before any sign-out. (useAuth's isLoaded is no signal here: the server's
+ * auth state makes it true before clerk-js has loaded.) The deletion goes
+ * ahead whether or not this works, so a failed sign-out says both, with
+ * another try and a way off the page. If clerk-js fails to load, that is
+ * a failed sign-out with only the way off; the wait offers the way off
+ * too, in case clerk-js never loads.
+ */
+function SignOutDeleted() {
+  // useClerk re-renders on every Clerk status change, so `loaded` and `status` are live.
+  const clerk = useClerk();
+  const navigate = useNavigate();
+  const [failed, setFailed] = useState(false);
+  const started = useRef(false);
+
+  const signOut = useCallback(async () => {
+    setFailed(false);
+    try {
+      await clerk.signOut();
+    } catch {
+      setFailed(true);
+      return;
+    }
+    await navigate({ to: "/" });
+  }, [clerk, navigate]);
+
+  // Once Clerk has loaded; the button retries.
+  useEffect(() => {
+    if (started.current || !clerk.loaded) return;
+    started.current = true;
+    void signOut();
+  }, [clerk.loaded, signOut]);
+
+  // Hotloading clerk-js failed: signOut() would only queue again.
+  const clerkFailed = clerk.status === "error";
+
+  if (!failed && !clerkFailed) {
+    return (
+      <div className="danger-zone">
+        <p>Your account is being deleted. Signing you out…</p>
+        <div className="danger-actions">
+          <Link to="/">Leave this page</Link>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="danger-zone">
+      <p>
+        Your account is being deleted; that goes ahead on its own. Signing you out of this browser
+        failed, though. Check your connection and try again, or leave this page.
+      </p>
+      <div className="danger-actions">
+        {clerkFailed ? null : (
+          <button type="button" onClick={() => void signOut()}>
+            Try signing out again
+          </button>
+        )}
+        <Link to="/">Leave this page</Link>
+      </div>
     </div>
   );
 }

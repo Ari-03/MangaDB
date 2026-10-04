@@ -1,0 +1,829 @@
+// @vitest-environment happy-dom
+// @vitest-environment-options {"url": "https://mangadb.test/"}
+
+// The PostHog client (lib/analyticsClient.tsx) against the real posthog-js
+// in a happy-dom page: its options and applyConsent drive posthog.init and
+// every consent change, as the provider and ConsentSync do; the remount
+// tests render the real component (mountPage), or the real consent gate
+// (ViewerAnalytics) over a mocked Clerk and Convex session. fetch, XHR and
+// sendBeacon are stubbed, so nothing leaves the process, and every request
+// body is decoded into the events it carries. A page load is a fresh
+// posthog-js module over the same localStorage and cookies. Assertions are
+// on the payloads: which ids and URLs actually went out.
+
+import { gunzipSync } from "node:zlib";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AnalyticsConsent } from "./analytics";
+
+// The signed-in session ViewerAnalytics reads: Clerk's useAuth, and
+// users.viewer (undefined while loading).
+const session = vi.hoisted(() => ({
+  auth: { isLoaded: true, isSignedIn: true, userId: "user_b" },
+  viewer: undefined as
+    | { needsUsername: false; username: string; role: null; analyticsOptOut: boolean | null }
+    | undefined,
+}));
+vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => session.auth }));
+vi.mock("convex/react", () => ({
+  useQuery: () => session.viewer,
+  useMutation: () => async () => {},
+}));
+
+type Sent = { event: string; properties: Record<string, unknown>; raw: string };
+
+// Every request's URL, and the events the request bodies carried.
+const requests: string[] = [];
+const events: Sent[] = [];
+const decoding: Array<Promise<void>> = [];
+
+// posthog-js patches history once per window; each page load starts from
+// the browser's own methods, as a real reload does.
+const pristineHistory = { pushState: history.pushState, replaceState: history.replaceState };
+
+/** A request body as text, gunzipped when posthog-js compressed it. */
+async function bodyText(body: unknown): Promise<string> {
+  if (body === undefined || body === null) return "";
+  if (typeof body === "string") return body;
+  const bytes = new Uint8Array(
+    body instanceof Blob
+      ? await body.arrayBuffer()
+      : body instanceof ArrayBuffer
+        ? body
+        : ArrayBuffer.isView(body)
+          ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)
+          : new ArrayBuffer(0),
+  );
+  const gzipped = bytes[0] === 0x1f && bytes[1] === 0x8b;
+  return new TextDecoder().decode(gzipped ? gunzipSync(bytes) : bytes);
+}
+
+/** The events a request body carries: JSON, or base64 form data. */
+function eventsIn(text: string): Array<{ event: string; properties: Record<string, unknown> }> {
+  if (text === "") return [];
+  const json = text.startsWith("data=") ? atob(decodeURIComponent(text.slice(5))) : text;
+  const parsed: unknown = JSON.parse(json);
+  const list = Array.isArray(parsed)
+    ? parsed
+    : typeof parsed === "object" &&
+        parsed !== null &&
+        "batch" in parsed &&
+        Array.isArray(parsed.batch)
+      ? parsed.batch
+      : [parsed];
+  return list;
+}
+
+/**
+ * Route this page load's fetch, XHR and beacons into `requests` and
+ * `events`. posthog-js reads these once, when its module loads. Without
+ * CompressionStream it gzips synchronously, so a flush sends at once.
+ */
+function stubNetwork() {
+  vi.stubGlobal("CompressionStream", undefined);
+  const record = (url: string, body: unknown) => {
+    requests.push(url);
+    decoding.push(
+      bodyText(body).then((text) => {
+        for (const { event, properties } of eventsIn(text)) {
+          events.push({ event, properties, raw: JSON.stringify({ event, properties }) });
+        }
+      }),
+    );
+  };
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    record(String(input), init?.body);
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  });
+  vi.stubGlobal(
+    "XMLHttpRequest",
+    class {
+      withCredentials = false;
+      readyState = 0;
+      status = 0;
+      responseText = "{}";
+      onreadystatechange: (() => void) | null = null;
+      private url = "";
+      open(_method: string, url: string) {
+        this.url = url;
+      }
+      setRequestHeader() {}
+      send(body?: unknown) {
+        record(this.url, body);
+        Object.assign(this, { readyState: 4, status: 200 });
+        this.onreadystatechange?.();
+      }
+    },
+  );
+  Object.defineProperty(navigator, "sendBeacon", {
+    configurable: true,
+    value: (url: string, body?: unknown) => {
+      record(url, body);
+      return true;
+    },
+  });
+}
+
+/** Let timers run (the initial pageview, batch flushes) and decode what was sent. */
+async function settle() {
+  await vi.advanceTimersByTimeAsync(5_000);
+  await Promise.all(decoding.splice(0));
+}
+
+/**
+ * Load a page at `path` with the client on it, applying `consent` at load
+ * as the provider's `loaded` does. Navigation inside the page goes through
+ * history.pushState, as the router's does.
+ */
+async function openPage(path: string, consent: AnalyticsConsent) {
+  Object.assign(history, pristineHistory);
+  history.replaceState(null, "", path);
+  stubNetwork();
+  vi.resetModules();
+  const { default: posthog } = await import("posthog-js");
+  const client = await import("./analyticsClient");
+  posthog.init("phc_test", {
+    ...client.clientOptions(() => consent),
+    // happy-dom's user agent reads as a bot, which posthog-js drops.
+    opt_out_useragent_filter: true,
+  });
+  await settle();
+  return {
+    posthog,
+    /** What ConsentSync does when the session's consent changes. */
+    apply: async (next: AnalyticsConsent) => {
+      client.applyConsent(next);
+      await settle();
+    },
+    go: async (to: string) => {
+      history.pushState(null, "", to);
+      await settle();
+    },
+  };
+}
+
+/**
+ * Load a page at `path` with the real component (PostHogAnalytics, its
+ * provider and ConsentSync) rendered in a React root. `render` passes the
+ * session's consent as props; `renderGate` renders the consent gate
+ * (ViewerAnalytics) instead, which reads `session` and lazily loads the
+ * client; `unmount` removes either while the page and its posthog-js stay,
+ * as an error boundary reset does. `renderWithSearch` renders a search page
+ * before the client, as AnalyticsProvider does, which tracks a search when
+ * its query changes; `renderFailingAfterLoad` renders the client inside an
+ * error boundary whose content throws in the render right after `loaded`.
+ */
+async function mountPage(path: string) {
+  Object.assign(history, pristineHistory);
+  history.replaceState(null, "", path);
+  stubNetwork();
+  vi.resetModules();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // Read when lib/analytics.tsx loads: without it the gate loads no client.
+  vi.stubEnv("VITE_PUBLIC_POSTHOG_KEY", "phc_test");
+  const { act, Component, createElement, Fragment, StrictMode, useEffect, useState } = await import(
+    "react"
+  );
+  const { createRoot } = await import("react-dom/client");
+  const { default: posthog } = await import("posthog-js");
+  const { default: PostHogAnalytics } = await import("./analyticsClient");
+  const { ViewerAnalytics, track } = await import("./analytics");
+  const init = posthog.init.bind(posthog);
+  // happy-dom's user agent reads as a bot, which posthog-js drops.
+  vi.spyOn(posthog, "init").mockImplementation((token, config, name) =>
+    init(token, { ...config, opt_out_useragent_filter: true }, name),
+  );
+  // The provider's second init() on a remount warns that posthog-js is already loaded.
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  mounted.push(() => act(async () => root.unmount()));
+
+  // The search page's search_performed, keyed on the query as routes/search.tsx does.
+  function SearchPage({ query }: { query: string }) {
+    useEffect(() => {
+      track("search_performed", { queryLength: query.length, resultCount: 1 });
+    }, [query]);
+    return null;
+  }
+  // The router's error boundary: an error screen in place of the app.
+  class ErrorScreen extends Component<{ children: ReactNode }, { failed: boolean }> {
+    state = { failed: false };
+    static getDerivedStateFromError() {
+      return { failed: true };
+    }
+    render() {
+      return this.state.failed ? createElement("p", null, "error screen") : this.props.children;
+    }
+  }
+  // A parent's passive effects run after its children's, so this one runs
+  // after the provider's init and `loaded`, and the render it causes throws.
+  function FailsAfterLoad({ children }: { children: ReactNode }) {
+    const [failed, setFailed] = useState(false);
+    useEffect(() => setFailed(true), []);
+    if (failed) throw new Error("render error");
+    return children;
+  }
+
+  return {
+    posthog,
+    container,
+    render: async (consent: AnalyticsConsent) => {
+      await act(async () =>
+        root.render(createElement(PostHogAnalytics, { apiKey: "phc_test", consent })),
+      );
+      await settle();
+    },
+    renderWithSearch: async (consent: AnalyticsConsent, query: string) => {
+      await act(async () =>
+        root.render(
+          createElement(
+            Fragment,
+            null,
+            createElement(SearchPage, { query }),
+            createElement(PostHogAnalytics, { apiKey: "phc_test", consent }),
+          ),
+        ),
+      );
+      await settle();
+    },
+    renderFailingAfterLoad: async (consent: AnalyticsConsent, strict: boolean) => {
+      // React reports the error the boundary caught.
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const app = createElement(ErrorScreen, {
+        children: createElement(FailsAfterLoad, {
+          children: createElement(PostHogAnalytics, { apiKey: "phc_test", consent }),
+        }),
+      });
+      await act(async () => root.render(strict ? createElement(StrictMode, null, app) : app));
+      await settle();
+    },
+    renderGate: async () => {
+      await act(async () => root.render(createElement(ViewerAnalytics)));
+      // The lazy client chunk resolves inside act.
+      await act(settle);
+    },
+    unmount: async () => {
+      await act(async () => root.render(null));
+      await settle();
+    },
+    go: async (to: string) => {
+      history.pushState(null, "", to);
+      await settle();
+    },
+  };
+}
+
+// Roots mountPage rendered, unmounted after each test.
+const mounted: Array<() => Promise<void>> = [];
+
+/** A page visited with no client loaded (an opted-out viewer's page loads). */
+function visitWithoutClient(path: string) {
+  Object.assign(history, pristineHistory);
+  history.replaceState(null, "", path);
+}
+
+/** Every event sent from index `from` of `events` on. */
+const since = (from: number) => events.slice(from);
+
+/** Each event's name and distinct id, sorted: batched and instant sends can arrive either way round. */
+const named = (sent: Sent[]) =>
+  sent
+    .map((e) => [e.event, e.properties.distinct_id])
+    .sort((a, b) => String(a).localeCompare(String(b)));
+
+const identified = (userId: string): AnalyticsConsent => ({
+  status: "identified",
+  userId,
+  username: userId,
+  role: null,
+});
+const ANONYMOUS: AnalyticsConsent = { status: "anonymous" };
+const PENDING: AnalyticsConsent = { status: "pending" };
+const OFF: AnalyticsConsent = { status: "off" };
+
+/** users.viewer for user_b, who has chosen On (`false`) or Off (`true`). */
+const viewerB = (analyticsOptOut: boolean): NonNullable<typeof session.viewer> => ({
+  needsUsername: false,
+  username: "user_b",
+  role: null,
+  analyticsOptOut,
+});
+
+// The pages browsed while analytics is off carry this in their address,
+// and only they are at /search, so a leaked pathname shows too.
+const OFF_TIME = "offtime";
+
+function expectNothingFromOffTime(sent: Sent[]) {
+  for (const event of sent) {
+    expect(event.raw).not.toContain(OFF_TIME);
+    expect(event.raw).not.toContain('"/search"');
+  }
+  expect(sent.map((event) => event.event)).not.toContain("$opt_in");
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  localStorage.clear();
+  sessionStorage.clear();
+  for (const cookie of document.cookie.split(";")) {
+    const name = cookie.split("=")[0]!.trim();
+    if (name !== "") document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+  Object.defineProperty(navigator, "doNotTrack", { configurable: true, value: null });
+  requests.length = 0;
+  events.length = 0;
+});
+
+afterEach(async () => {
+  for (const unmount of mounted.splice(0)) await unmount();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  session.viewer = undefined;
+});
+
+describe("analyticsClient against posthog-js", () => {
+  it("sends nothing, not even the initial pageview, while pending and then off", async () => {
+    const page = await openPage("/", PENDING);
+    await page.go("/series/1");
+    await page.apply(OFF);
+    await page.go(`/search?q=${OFF_TIME}`);
+    expect(requests).toEqual([]);
+  });
+
+  it("carries nothing from the pages browsed while off when the account turns analytics back on", async () => {
+    const page = await openPage("/", identified("user_a"));
+    await page.go("/series/1");
+    await page.apply(OFF);
+    await page.go(`/series/${OFF_TIME}`);
+    await page.go(`/search?q=${OFF_TIME}-query`);
+    await page.go("/me");
+    const resumed = events.length;
+    await page.apply(identified("user_a"));
+    await page.go("/series/2");
+
+    const sent = since(resumed);
+    expectNothingFromOffTime(sent);
+    expect(sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", "user_a", "/series/2"],
+    ]);
+    expect(sent[0]!.properties.$prev_pageview_pathname).toBe("/series/1");
+  });
+
+  it("carries nothing from the pages browsed while off across a session timeout and a reload", async () => {
+    const first = await openPage("/", identified("user_a"));
+    await first.go("/series/1");
+    await first.apply(OFF);
+    vi.setSystemTime(Date.now() + 31 * 60 * 1000);
+    await first.go(`/search?q=${OFF_TIME}-query`);
+    // Reloaded while off: the gate loads no client. Turned on from /me.
+    visitWithoutClient(`/search?q=${OFF_TIME}-query`);
+    visitWithoutClient("/me");
+    const resumed = events.length;
+    await openPage("/me", identified("user_a"));
+
+    const sent = since(resumed);
+    expectNothingFromOffTime(sent);
+    // identify() on a new page load sets the person's properties again.
+    expect(named(sent)).toEqual([
+      ["$pageview", "user_a"],
+      ["$set", "user_a"],
+    ]);
+    for (const event of sent)
+      expect(event.properties.$session_entry_url).toBe("https://mangadb.test/me");
+  });
+
+  it("carries nothing from an opted-out account's pages to the next anonymous pageview after sign-out", async () => {
+    const page = await openPage("/", ANONYMOUS);
+    await page.go("/series/1");
+    const anonymousId = page.posthog.get_distinct_id();
+    await page.apply(PENDING);
+    await page.go(`/pending-${OFF_TIME}`);
+    await page.apply(OFF);
+    await page.go(`/series/${OFF_TIME}`);
+    await page.go(`/search?q=${OFF_TIME}-query`);
+    const signedOut = events.length;
+    await page.apply(ANONYMOUS);
+    await page.go("/series/2");
+
+    const sent = since(signedOut);
+    expectNothingFromOffTime(sent);
+    expect(sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", anonymousId, "/series/2"],
+    ]);
+    expect(sent[0]!.properties.$prev_pageview_pathname).toBe("/series/1");
+  });
+
+  it("captures signed-out visits again after an opted-out account signs out, on the page and after a reload", async () => {
+    const page = await openPage("/", identified("user_a"));
+    await page.apply(OFF);
+    const signedOut = events.length;
+    await page.apply(ANONYMOUS);
+    await page.go("/series/1");
+    expect(since(signedOut).map((e) => [e.event, e.properties.$pathname])).toEqual([
+      ["$pageview", "/series/1"],
+    ]);
+    expect(since(signedOut)[0]!.properties.distinct_id).not.toBe("user_a");
+
+    const reloaded = events.length;
+    await openPage("/series/2", ANONYMOUS);
+    expect(since(reloaded).map((e) => [e.event, e.properties.$pathname])).toEqual([
+      ["$pageview", "/series/2"],
+    ]);
+  });
+
+  it("opts back in for a signed-out visit when an earlier load stored the opt-out", async () => {
+    // Signed in to an opted-out account from anonymous browsing: the
+    // opt-out is stored under the anonymous id. Later loads are signed out.
+    const page = await openPage("/", ANONYMOUS);
+    const anonymousId = page.posthog.get_distinct_id();
+    await page.apply(PENDING);
+    await page.apply(OFF);
+    const reloaded = events.length;
+    await openPage("/series/2", ANONYMOUS);
+    expect(
+      since(reloaded).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+    ).toEqual([["$pageview", anonymousId, "/series/2"]]);
+  });
+
+  it("never sends under one account's id after another signs in, and never merges them", async () => {
+    const page = await openPage("/", identified("user_a"));
+    await page.go("/series/1");
+    const switched = events.length;
+    await page.apply(PENDING);
+    await page.go("/series/2");
+    await page.apply(identified("user_b"));
+    await page.go("/series/3");
+    expect(named(since(switched))).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+
+    const reloaded = events.length;
+    await openPage("/series/4", identified("user_b"));
+    expect(named(since(reloaded))).toEqual([
+      ["$pageview", "user_b"],
+      ["$set", "user_b"],
+    ]);
+    for (const event of since(switched)) expect(event.properties.distinct_id).toBe("user_b");
+    for (const event of events) expect(event.properties.$anon_distinct_id).not.toBe("user_a");
+  });
+
+  it("forgets a remembered account on a later load as another account", async () => {
+    await openPage("/", identified("user_a"));
+    const reloaded = events.length;
+    await openPage("/series/1", identified("user_b"));
+    const sent = since(reloaded);
+    expect(named(sent)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    for (const event of sent) expect(event.properties.$anon_distinct_id).not.toBe("user_a");
+  });
+
+  it("sends the initial pageview once when a page that loaded pending forgets a remembered account for another", async () => {
+    await openPage("/", identified("user_a"));
+    const reloaded = events.length;
+    const page = await openPage("/series/1", PENDING);
+    await page.apply(identified("user_b"));
+    await page.go("/series/2");
+
+    const sent = since(reloaded);
+    const anonymousId = sent.find((e) => e.event === "$identify")?.properties.$anon_distinct_id;
+    expect(anonymousId).not.toBe("user_a");
+    // The initial pageview goes out under the id reset() made, which $identify links to user_b.
+    const expected = [
+      ["$pageview", anonymousId, "/series/1"],
+      ["$identify", "user_b", "/series/1"],
+      ["$pageview", "user_b", "/series/2"],
+    ];
+    const received = sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]);
+    expect(received).toHaveLength(expected.length);
+    expect(received).toEqual(expect.arrayContaining(expected));
+  });
+
+  it("sends the initial pageview once when a page that loaded pending forgets a remembered account on sign-out", async () => {
+    await openPage("/", identified("user_a"));
+    const reloaded = events.length;
+    const page = await openPage("/series/1", PENDING);
+    await page.apply(ANONYMOUS);
+    await page.go("/series/2");
+
+    const sent = since(reloaded);
+    const anonymousId = page.posthog.get_distinct_id();
+    expect(anonymousId).not.toBe("user_a");
+    expect(sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", anonymousId, "/series/1"],
+      ["$pageview", anonymousId, "/series/2"],
+    ]);
+  });
+
+  it("resumes a page that loaded pending after another tab's reset() cleared the stored opt-out", async () => {
+    await openPage("/", identified("user_a"));
+    const reloaded = events.length;
+    const page = await openPage("/series/1", PENDING);
+    localStorage.removeItem("__ph_opt_in_out_phc_test");
+    await page.apply(identified("user_b"));
+    await page.go("/series/2");
+
+    const sent = since(reloaded);
+    const anonymousId = sent.find((e) => e.event === "$identify")?.properties.$anon_distinct_id;
+    expect(anonymousId).not.toBe("user_a");
+    const expected = [
+      ["$pageview", anonymousId, "/series/1"],
+      ["$identify", "user_b", "/series/1"],
+      ["$pageview", "user_b", "/series/2"],
+    ];
+    const received = sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]);
+    expect(received).toHaveLength(expected.length);
+    expect(received).toEqual(expect.arrayContaining(expected));
+  });
+
+  it("resumes a page that loaded pending after another tab opted the browser in", async () => {
+    const page = await openPage("/series/1", PENDING);
+    localStorage.setItem("__ph_opt_in_out_phc_test", "1");
+    await page.apply(ANONYMOUS);
+    await page.go("/series/2");
+
+    const anonymousId = page.posthog.get_distinct_id();
+    expect(events.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", anonymousId, "/series/1"],
+      ["$pageview", anonymousId, "/series/2"],
+    ]);
+  });
+
+  it("resumes a page that loaded under Do Not Track once Do Not Track is turned off", async () => {
+    Object.defineProperty(navigator, "doNotTrack", { configurable: true, value: "1" });
+    const page = await openPage("/series/1", identified("user_a"));
+    Object.defineProperty(navigator, "doNotTrack", { configurable: true, value: null });
+    await page.apply(identified("user_b"));
+    await page.go("/series/2");
+
+    // posthog-js dropped the initial pageview under Do Not Track and does not send it again.
+    const expected = [
+      ["$identify", "user_b", "/series/1"],
+      ["$pageview", "user_b", "/series/2"],
+    ];
+    const received = events.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]);
+    expect(received).toHaveLength(expected.length);
+    expect(received).toEqual(expect.arrayContaining(expected));
+  });
+
+  it("sends nothing while off when another tab opts the browser back in", async () => {
+    const page = await openPage("/", ANONYMOUS);
+    const switched = requests.length;
+    await page.apply(OFF);
+    // posthog-js keeps its consent in localStorage, shared by every tab.
+    localStorage.setItem("__ph_opt_in_out_phc_test", "1");
+    await page.go(`/series/${OFF_TIME}`);
+    expect(requests.slice(switched)).toEqual([]);
+  });
+
+  // A known limit (docs/known-issues.md): before_send drops the event, but
+  // posthog-js has already begun the session on it. Fails if posthog-js stops
+  // doing so, when the limit and its docs can go.
+  it("known limit: a session begun on a page dropped while Off after another tab opted in keeps it as its entry URL", async () => {
+    const page = await openPage("/", identified("user_a"));
+    await page.apply(OFF);
+    localStorage.setItem("__ph_opt_in_out_phc_test", "1");
+    vi.setSystemTime(Date.now() + 31 * 60 * 1000);
+    await page.go(`/search?q=${OFF_TIME}-query`);
+    const resumed = events.length;
+    await page.apply(identified("user_a"));
+    await page.go("/series/2");
+    await openPage("/me", identified("user_a"));
+
+    const sent = since(resumed);
+    expect(named(sent)).toEqual([
+      ["$pageview", "user_a"],
+      ["$pageview", "user_a"],
+      ["$set", "user_a"],
+    ]);
+    for (const event of sent) {
+      expect(event.properties.$session_entry_url).toBe(
+        `https://mangadb.test/search?q=${OFF_TIME}-query`,
+      );
+      expect(event.properties.$session_entry_pathname).toBe("/search");
+    }
+  });
+
+  it("links anonymous browsing to the account it signs in to, once", async () => {
+    const page = await openPage("/", ANONYMOUS);
+    await page.go("/series/1");
+    const anonymousId = page.posthog.get_distinct_id();
+    await page.apply(PENDING);
+    await page.go("/me");
+    await page.apply(identified("user_a"));
+    await page.apply(identified("user_a"));
+    await page.go("/series/2");
+
+    expect(events.map((e) => [e.event, e.properties.distinct_id])).toEqual([
+      ["$pageview", anonymousId],
+      ["$pageview", anonymousId],
+      ["$identify", "user_a"],
+      ["$pageview", "user_a"],
+    ]);
+    expect(events[2]!.properties.$anon_distinct_id).toBe(anonymousId);
+    // The page visited before the account's preference answered is not recorded.
+    expect(events[3]!.properties.$prev_pageview_pathname).toBe("/series/1");
+  });
+
+  it("sends nothing under Do Not Track, whatever the account says", async () => {
+    Object.defineProperty(navigator, "doNotTrack", { configurable: true, value: "1" });
+    const page = await openPage("/", identified("user_a"));
+    await page.go("/series/1");
+    await page.apply(OFF);
+    await page.apply(identified("user_a"));
+    await page.apply(ANONYMOUS);
+    await page.go("/series/2");
+    await openPage("/series/3", ANONYMOUS);
+    expect(requests).toEqual([]);
+  });
+
+  it("stops sending when switched Off after the client remounts", async () => {
+    const page = await mountPage("/series/1");
+    await page.render(identified("user_b"));
+    await page.go("/series/2");
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    await page.unmount();
+    await page.render(identified("user_b"));
+    const switched = requests.length;
+    await page.render(OFF);
+    await page.go("/series/3");
+    expect(requests.slice(switched)).toEqual([]);
+  });
+
+  it("resumes sending once when switched On after a client that was Off remounts", async () => {
+    const page = await mountPage("/series/1");
+    await page.render(identified("user_b"));
+    await page.render(OFF);
+    await page.unmount();
+    await page.render(OFF);
+    const resumed = events.length;
+    await page.render(identified("user_b"));
+    await page.go("/series/2");
+    expect(
+      since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+    ).toEqual([["$pageview", "user_b", "/series/2"]]);
+  });
+
+  it("leaves the consent of a first mount with Off to `loaded`, storing no token-less opt-out", async () => {
+    const page = await mountPage("/series/1");
+    await page.render(OFF);
+    expect(requests).toEqual([]);
+    // An opt-out on posthog-js before init stores it under no token.
+    expect(Object.keys(localStorage)).not.toContain("__ph_opt_in_out_");
+  });
+
+  it("sends nothing while loading and then Off after the consent gate remounts over a loaded client", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.go("/series/2");
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    // Switched Off elsewhere while this page showed an error screen.
+    await page.unmount();
+    const switched = requests.length;
+    session.viewer = undefined;
+    await page.renderGate();
+    session.viewer = viewerB(true);
+    await page.renderGate();
+    await page.go("/series/3");
+    await page.go(`/search?q=${OFF_TIME}`);
+    expect(requests.slice(switched)).toEqual([]);
+  });
+
+  it("sends nothing while the viewer loads after the consent gate remounts over a loaded client", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    await page.unmount();
+    const remounted = requests.length;
+    session.viewer = undefined;
+    await page.renderGate();
+    await page.go("/series/3");
+    expect(requests.slice(remounted)).toEqual([]);
+  });
+
+  it("sends nothing while the consent gate is unmounted, nor after it remounts loading and then Off", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.go("/series/2");
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    // Switched Off elsewhere while this page showed an error screen.
+    await page.unmount();
+    const unmounted = requests.length;
+    await page.go(`/search?q=${OFF_TIME}`);
+    session.viewer = undefined;
+    await page.renderGate();
+    session.viewer = viewerB(true);
+    await page.renderGate();
+    await page.go("/series/3");
+    expect(requests.slice(unmounted)).toEqual([]);
+  });
+
+  it("resumes sending once as the user when the consent gate remounts with the account still On", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.unmount();
+    const unmounted = events.length;
+    await page.go("/series/2");
+    await page.renderGate();
+    await page.go("/series/3");
+    expect(
+      since(unmounted).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+    ).toEqual([["$pageview", "user_b", "/series/3"]]);
+    expect(page.posthog.has_opted_out_capturing()).toBe(false);
+  });
+
+  it.each([false, true])(
+    "sends nothing under a consent changed elsewhere when a render error lands right after posthog-js loads (StrictMode: %s)",
+    async (strict) => {
+      const page = await mountPage("/series/1");
+      await page.renderFailingAfterLoad(identified("user_b"), strict);
+      expect(page.container.textContent).toBe("error screen");
+      // `loaded` identified the viewer; the initial pageview, due a moment
+      // later, found the client unmounted.
+      expect(named(events)).toEqual([["$identify", "user_b"]]);
+      // The account goes Off in another browser while the error screen shows.
+      const failed = events.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await page.go(`/search?q=${OFF_TIME}`);
+      window.dispatchEvent(new Event("pagehide"));
+      await settle();
+      // Earlier tests' page loads still listen for pagehide; only this one's session counts.
+      const sessionId = page.posthog.get_session_id();
+      expect(since(failed).filter((e) => e.properties.$session_id === sessionId)).toEqual([]);
+
+      // The next navigation remounts the client with the session's consent.
+      await page.render(identified("user_b"));
+      const resumed = events.length;
+      await page.go("/series/2");
+      expect(
+        since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+      ).toEqual([["$pageview", "user_b", "/series/2"]]);
+    },
+  );
+
+  it("sends a search made in the commit that changes the username while On", async () => {
+    const page = await mountPage("/search?q=first");
+    await page.renderWithSearch(identified("user_b"), "first");
+    await page.renderWithSearch(identified("user_b"), "second");
+    expect(events.filter((e) => e.event === "search_performed")).toHaveLength(1);
+    const renamed = events.length;
+    await page.renderWithSearch(
+      { status: "identified", userId: "user_b", username: "renamed", role: null },
+      "third",
+    );
+    expect(
+      since(renamed)
+        .filter((e) => e.event === "search_performed")
+        .map((e) => [e.properties.distinct_id, e.properties.queryLength]),
+    ).toEqual([["user_b", "third".length]]);
+  });
+
+  it("sends no search made in the commit that switches Off", async () => {
+    const page = await mountPage("/search?q=first");
+    await page.renderWithSearch(identified("user_b"), "first");
+    await page.renderWithSearch(identified("user_b"), "second");
+    expect(events.filter((e) => e.event === "search_performed")).toHaveLength(1);
+    const switched = requests.length;
+    await page.renderWithSearch(OFF, OFF_TIME);
+    await page.go("/series/2");
+    expect(requests.slice(switched)).toEqual([]);
+  });
+
+  it("sends no pageleave when the tab closes while the consent gate is unmounted", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.unmount();
+    const unmounted = events.length;
+    window.dispatchEvent(new Event("pagehide"));
+    await settle();
+    // Earlier tests' page loads still listen for pagehide; only this one's session counts.
+    const sessionId = page.posthog.get_session_id();
+    expect(since(unmounted).filter((e) => e.properties.$session_id === sessionId)).toEqual([]);
+  });
+});

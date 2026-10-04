@@ -6,14 +6,16 @@
 // The backlist crawl runs against trimmed live pages (lib/__fixtures__).
 
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { BACKLIST_KEY } from "./kodansha";
 import { MIN_COVER_BYTES } from "./lib/covers";
 import {
   insertCoverage,
   insertEdition,
+  insertFullPack,
   insertObservation,
   insertPublisher,
   insertRelease,
@@ -21,7 +23,16 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import {
+  drain,
+  expectStampedAtHandOff,
+  makeT,
+  matureFlags,
+  projectionJobs,
+  seedRegistry,
+  tickingClock,
+  type TestT,
+} from "./test.helpers";
 
 const BASE = "https://kodansha.us";
 
@@ -255,7 +266,9 @@ describe("kodansha.sync — hidden Series stay hidden", () => {
     it(`records the volume on its observation only (${bootstrap ? "Bootstrap Mode" : "steady state"})`, async () => {
       const t = makeT();
       await seedRegistry(t, bootstrap);
-      await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 14761, title: IRUMA.series }));
+      await t.run((ctx) =>
+        insertSeries(ctx, { status: "hidden", publicId: 14761, title: IRUMA.series }),
+      );
       stubSite([{ ...IRUMA, formats: ["print"] }]);
       await sync(t);
       await sync(t);
@@ -618,9 +631,12 @@ describe("kodansha covers — stored once, kept current", () => {
     const t = makeT();
     await seedRegistry(t, true);
     const vol22: FixtureVolume = { ...IRUMA, volume: 22, image: "http://127.0.0.1/cover.webp" };
-    const challenge = "<!DOCTYPE html><html>checking your browser</html>".padEnd(MIN_COVER_BYTES + 1);
-    stubSite([IRUMA, vol22], () =>
-      new Response(challenge, { headers: { "content-type": "image/webp" } }),
+    const challenge = "<!DOCTYPE html><html>checking your browser</html>".padEnd(
+      MIN_COVER_BYTES + 1,
+    );
+    stubSite(
+      [IRUMA, vol22],
+      () => new Response(challenge, { headers: { "content-type": "image/webp" } }),
     );
     expect(await sync(t)).toMatchObject({ errorCount: 4 });
     expect(requested.some((u) => u.includes("127.0.0.1"))).toBe(false);
@@ -661,7 +677,10 @@ describe("kodansha covers — stored once, kept current", () => {
     expect(a![0]).not.toBe(b![0]);
 
     // Volume 21's real jacket arrives; volume 22's Releases still show a live blob.
-    stubSite([{ ...IRUMA, image: "https://production.image.azuki.co/iruma-21-real/800.webp" }, vol22]);
+    stubSite([
+      { ...IRUMA, image: "https://production.image.azuki.co/iruma-21-real/800.webp" },
+      vol22,
+    ]);
     expect(await sync(t)).toMatchObject({ errorCount: 0 });
     await t.run(async (ctx) => {
       for (const r of await ctx.db.query("releases").collect()) {
@@ -713,6 +732,8 @@ type ListedSeries = {
   stamp?: string;
   /** The listing's `short_description`. */
   blurb?: string;
+  /** The listing's `age_rating`. */
+  ageRating?: number;
 };
 
 const BLUE_LOCK: ListedSeries = { slug: "blue-lock", name: "Blue Lock" };
@@ -771,6 +792,7 @@ function stubBacklist(
           type: row.type ?? "comic",
           short_description: row.blurb ?? "",
           last_updated_at: row.stamp ?? "2026-02-06T09:53:10+00:00",
+          age_rating: row.ageRating,
         }));
       return Response.json({
         success: true,
@@ -1168,7 +1190,12 @@ describe("kodansha.backlistSync — the crawl", () => {
       const publisherId = kodansha!._id;
       const seriesId = await insertSeries(ctx, { title: "Blue Lock" });
       const editionId = await insertEdition(ctx, { publisherId });
-      return await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], isbn13: "9798888778210" });
+      return await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9798888778210",
+      });
     });
     // A changed listing stamp re-crawls the series whole.
     vi.unstubAllGlobals();
@@ -1234,7 +1261,9 @@ describe("Kodansha scope gate — both feeds", () => {
     const t = makeT();
     await seedBacklist(t, false);
     // The scope repair hid the earlier picture-book Series.
-    await t.run((ctx) => insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" }));
+    await t.run((ctx) =>
+      insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" }),
+    );
     const listed = {
       slug: "cells-at-work-picture-book",
       name: "Cells at Work! Picture Book",
@@ -1275,7 +1304,10 @@ describe("Kodansha scope gate — both feeds", () => {
     // Simulate the pre-gate import: the observation already links a Release.
     const releaseId = await t.run(async (ctx) => {
       const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
-      const seriesId = await insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" });
+      const seriesId = await insertSeries(ctx, {
+        status: "hidden",
+        title: "Cells at Work! Picture Book",
+      });
       const editionId = await insertEdition(ctx, { publisherId });
       const id = await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] });
       await insertObservation(ctx, {
@@ -1411,8 +1443,11 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     stubBacklist([BLUE_LOCK, NEEDLES, NOVEL], BACKLIST_PAGES);
 
     // A one-fetch budget: each link finishes the series it started, then chains.
+    const clock = tickingClock();
     const first = await backlist(t, { maxFetches: 1 });
     expect(first).toMatchObject({ continued: true, seriesCrawled: 1 });
+    await expectStampedAtHandOff(t);
+    clock.mockRestore();
     await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
@@ -1508,6 +1543,116 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
       recordsChanged: 1,
     });
     expect(await sync(t)).toEqual({ skipped: "disabled" });
+  });
+});
+
+describe("kodansha — disabling the source mid-run", () => {
+  it("finishes the window's fifty applies under way and stops before the next", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // 51 (volume, format) records: two batches between gate checks.
+    stubSite(
+      Array.from({ length: 51 }, (_, i) => ({ ...IRUMA, volume: i + 1, formats: ["print"] })),
+    );
+    const site = globalThis.fetch;
+    // Disabled while the first record's cover downloads, after its apply.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (
+        String(input).includes("azuki.co") &&
+        !requested.some((url) => url.includes("azuki.co"))
+      ) {
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "kodansha",
+          enabled: false,
+        });
+      }
+      return await site(input);
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 50 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 50 });
+      expect(await ctx.db.query("releases").collect()).toHaveLength(50);
+    });
+  });
+
+  it("finishes the series under way and stops before the next due series", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
+    const site = globalThis.fetch;
+    // Series crawl in slug order: 7 Billion Needles, then Blue Lock. The
+    // row is disabled while the first series page loads.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input) === `${BASE}/series/7-billion-needles/`) {
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "kodansha-backlist",
+          enabled: false,
+        });
+      }
+      return await site(input);
+    });
+    expect(await backlist(t)).toMatchObject({ stopped: true, seriesCrawled: 1, continued: false });
+    expect(requested.some((url) => url.includes("/series/blue-lock/"))).toBe(false);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({
+        sourceKey: "kodansha-backlist",
+        status: "stopped",
+        automatic: true,
+      });
+    });
+  });
+});
+
+describe("kodansha.backlistSync — a run of another source", () => {
+  it("stops on a kodansha run id without touching either run or source", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    const runId = await t.mutation(internal.imports.startRun, {
+      sourceKey: "kodansha",
+      automatic: true,
+    });
+    const before = await t.run(async (ctx) => ({
+      run: await ctx.db.get(runId),
+      sources: await ctx.db.query("approvedSources").collect(),
+    }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await backlist(t, { runId })).toEqual({ skipped: "disabled" });
+    expect(error).toHaveBeenCalledWith(
+      expect.stringMatching(/kodansha-backlist: run .* belongs to "kodansha"/),
+    );
+    error.mockRestore();
+    expect(requested).toEqual([]);
+    expect(
+      await t.run(async (ctx) => ({
+        run: await ctx.db.get(runId),
+        sources: await ctx.db.query("approvedSources").collect(),
+      })),
+    ).toEqual(before);
+  });
+});
+
+describe("kodansha.sync — a forced run", () => {
+  it("imports a daily window an operator forced on its disabled row", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "kodansha",
+      enabled: false,
+    });
+    stubSite([IRUMA]);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "kodansha" });
+    expect(await t.action(internal.kodansha.sync, { politeDelayMs: 0, runId })).toMatchObject({
+      runId,
+      recordsSeen: 2,
+      recordsChanged: 2,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(runId)).toMatchObject({ status: "succeeded" });
+      expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+    });
   });
 });
 
@@ -1782,7 +1927,11 @@ describe("kodansha.backlistSync — per-binding identity survives page order (B0
 });
 
 /** Blue Lock volume 1 as an ISBN-less Release another source made under Kodansha, in this Binding and language. */
-async function insertIsbnLessVolume1(t: TestT, binding: Doc<"releases">["binding"], language = "en") {
+async function insertIsbnLessVolume1(
+  t: TestT,
+  binding: Doc<"releases">["binding"],
+  language = "en",
+) {
   const { releaseId } = await t.run((ctx) =>
     seedCatalog(ctx, {
       publisher: { slug: "kodansha" },
@@ -1930,10 +2079,7 @@ describe("kodansha — a legacy snapshot never owns an ISBN another Release hold
     await seedBacklist(t, true);
     const { paperbackId, hardcoverId } = await legacySetup(t);
 
-    stubBacklist(
-      [BLUE_LOCK],
-      blueLockPages([{ ...HARDCOVER, datePublished: "2024-01-09" }]),
-    );
+    stubBacklist([BLUE_LOCK], blueLockPages([{ ...HARDCOVER, datePublished: "2024-01-09" }]));
     await backlist(t);
 
     await t.run(async (ctx) => {
@@ -2094,5 +2240,122 @@ describe("kodansha.backlistSync — failed covers are retried (B22)", () => {
       // Art stored: nothing left to re-check.
       expect(crawl?.snapshot).toMatchObject({ recheck: [] });
     });
+  });
+});
+
+// Mature Series (lib/mature.ts) from the listing's age_rating: a new 18+
+// rating flags the Series in the rating's own mutation, and a scheduled job
+// carries it into the library pack, so a chunk of any mix of ratings is one
+// mutation that rewrites no pack.
+describe("kodansha.recordListingRatings — listing age ratings", () => {
+  const slugOf = (publicId: number) => `series-${publicId}`;
+  const ratings = (count: number, mature: (publicId: number) => boolean) =>
+    Array.from({ length: count }, (_, i) => ({ slug: slugOf(i + 1), mature: mature(i + 1) }));
+
+  // Scheduled jobs wait until the test runs them.
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * Series 1..count, each linked to its Kodansha series page (rated as
+   * `stored` says), in a library pack near 1 MiB. Written without reads, so
+   * a test can cap the reads of what follows.
+   */
+  async function linkedSeries(t: TestT, count: number, stored: { mature?: boolean } = {}) {
+    await t.run(async (ctx) => {
+      for (let publicId = 1; publicId <= count; publicId++) {
+        const title = `Series ${publicId}`;
+        const seriesId = await insertSeries(ctx, { publicId, title });
+        await insertObservation(ctx, {
+          sourceKey: "kodansha",
+          sourceRecordId: `series:${slugOf(publicId)}`,
+          snapshot: { kind: "series", title, ...stored },
+          recordRef: { type: "series", id: seriesId },
+        });
+      }
+      await insertFullPack(ctx);
+    });
+  }
+
+  it("a new 18+ rating on a linked series makes the Series mature before any rebuild, and the pack follows", async () => {
+    const t = makeT();
+    await linkedSeries(t, 1);
+    const shelf = async () =>
+      (await t.query(api.catalog.recentSeries, { limit: 10, showMature: false })).map(
+        (s) => s.publicId,
+      );
+    expect(await shelf()).toEqual([1]);
+
+    await t.mutation(internal.kodansha.recordListingRatings, { entries: ratings(1, () => true) });
+    expect(await matureFlags(t)).toEqual({ series: [1], pack: [] });
+    expect(await shelf()).toEqual([]);
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await matureFlags(t)).toEqual({ series: [1], pack: [1] });
+  });
+
+  it("a backlist run records the listing's ratings: only the 18+ series turns mature", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    await linkedSeries(t, 2);
+    // Crawled just now, so the run fetches nothing past the listing.
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      for (const publicId of [1, 2]) {
+        const slug = slugOf(publicId);
+        await insertObservation(ctx, {
+          sourceKey: BACKLIST_KEY,
+          sourceRecordId: slug,
+          lastSeenAt: now,
+          snapshot: {
+            kind: "kodanshaSeriesCrawl",
+            name: `Series ${publicId}`,
+            url: `${BASE}/series/${slug}/`,
+            lastUpdatedAt: "2026-02-06T09:53:10+00:00",
+            volumes: [],
+            recheck: [],
+            fullCrawledAt: now,
+          },
+        });
+      }
+    });
+    stubBacklist(
+      [
+        { slug: slugOf(1), name: "Series 1", ageRating: 18 },
+        { slug: slugOf(2), name: "Series 2", ageRating: 13 },
+      ],
+      {},
+    );
+
+    expect(await backlist(t)).toMatchObject({ errorCount: 0, fetched: 0, continued: false });
+    expect(await matureFlags(t)).toEqual({ series: [1], pack: [] });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await matureFlags(t)).toEqual({ series: [1], pack: [1] });
+  });
+
+  it("a chunk of 100 ratings, 40 of them new 18+ ones, applies in one mutation within the limits", async () => {
+    const t = makeT({ transactionLimits: true });
+    await linkedSeries(t, 100);
+    const adult = (publicId: number) => publicId % 5 < 2;
+    const flagged = Array.from({ length: 100 }, (_, i) => i + 1).filter(adult);
+    expect(flagged).toHaveLength(40);
+
+    await t.mutation(internal.kodansha.recordListingRatings, { entries: ratings(100, adult) });
+    expect(await matureFlags(t)).toEqual({ series: flagged, pack: [] });
+    expect(await projectionJobs(t)).toEqual(Array(40).fill("pending"));
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await matureFlags(t)).toEqual({ series: flagged, pack: flagged });
+    expect(await projectionJobs(t)).toEqual(Array(40).fill("success"));
+  });
+
+  it("an unchanged chunk reads only its observations and schedules nothing", async () => {
+    // One read per entry: a rating written again would read more.
+    const t = makeT({ transactionLimits: { documentsRead: 100 } });
+    await linkedSeries(t, 100, { mature: true });
+
+    await t.mutation(internal.kodansha.recordListingRatings, { entries: ratings(100, () => true) });
+    expect(await projectionJobs(t)).toEqual([]);
   });
 });

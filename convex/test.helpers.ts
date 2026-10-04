@@ -53,9 +53,17 @@ export const MOD = "user_mod";
 export const EDITOR = "user_editor";
 export const PLAIN = "user_plain";
 export const READER = "user_reader";
-export const alice = { subject: ADMIN, username: "alice", role: "administrator" } as const satisfies TestUser;
+export const alice = {
+  subject: ADMIN,
+  username: "alice",
+  role: "administrator",
+} as const satisfies TestUser;
 export const bob = { subject: MOD, username: "bob", role: "moderator" } as const satisfies TestUser;
-export const carol = { subject: EDITOR, username: "carol", role: "editor" } as const satisfies TestUser;
+export const carol = {
+  subject: EDITOR,
+  username: "carol",
+  role: "editor",
+} as const satisfies TestUser;
 export const dave = { subject: PLAIN, username: "dave" } as const satisfies TestUser;
 export const reader = { subject: READER, username: "reader" } as const satisfies TestUser;
 
@@ -85,7 +93,8 @@ export async function seedTeam(t: TestT, users: readonly TestUser[]) {
   await seedUsers(t, users);
   const admin = users.find((user) => user.role === "administrator");
   if (!admin) {
-    if (users.some((user) => user.role)) throw new Error("seedTeam: roles need an administrator to appoint them");
+    if (users.some((user) => user.role))
+      throw new Error("seedTeam: roles need an administrator to appoint them");
     return;
   }
   await t.mutation(internal.roles.bootstrapAdministrator, { username: admin.username });
@@ -94,6 +103,37 @@ export async function seedTeam(t: TestT, users: readonly TestUser[]) {
     if (user === admin || !user.role) continue;
     await asAdmin.mutation(api.roles.appoint, { username: user.username, role: user.role });
   }
+}
+
+/**
+ * Purges `subject`'s account as users.deleteAccount would, with Clerk
+ * answering at once: marks their User deleting, runs purgeUser until it
+ * sets `purgedAt`, then stands in for the Clerk deletion it scheduled,
+ * cancelling it and removing the row at once, as the removal a confirmed
+ * one schedules does a day later (removePurgedUser). The manifest
+ * redaction the purge schedules stays queued for `drain`. A no-op for a
+ * subject with no User.
+ */
+export async function purgeAccount(t: TestT, subject: string) {
+  const userId = await t.run(async (ctx) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkSubject", (q) => q.eq("clerkSubject", subject))
+      .unique();
+    if (user) await ctx.db.patch(user._id, { deletingSince: Date.now() });
+    return user?._id ?? null;
+  });
+  if (!userId) return;
+  while ((await t.run((ctx) => ctx.db.get(userId)))?.purgedAt === undefined) {
+    await t.mutation(internal.users.purgeUser, { userId });
+  }
+  await t.run(async (ctx) => {
+    for (const job of await ctx.db.system.query("_scheduled_functions").collect()) {
+      if (job.name.endsWith("deleteClerkIdentity") && job.state.kind === "pending")
+        await ctx.scheduler.cancel(job._id);
+    }
+  });
+  await t.mutation(internal.users.removePurgedUser, { clerkSubject: subject });
 }
 
 // ---------- import runs ----------
@@ -114,6 +154,50 @@ export async function drain(t: Pick<Accessor, "finishAllScheduledFunctions">) {
   } finally {
     vi.useRealTimers();
   }
+}
+
+/** The publicIds flagged mature on the Series, and in library pack 0 (lib/mature.ts). */
+export async function matureFlags(t: Pick<Accessor, "run">) {
+  return await t.run(async (ctx) => {
+    const series = await ctx.db.query("series").collect();
+    const pack = await ctx.db
+      .query("seriesStatsPacks")
+      .withIndex("by_block", (q) => q.eq("block", 0))
+      .unique();
+    return {
+      series: series.filter((s) => s.mature).map((s) => s.publicId),
+      pack: (pack?.entries ?? []).filter((entry) => entry.mature).map((entry) => entry.publicId),
+    };
+  });
+}
+
+/** The state of each seriesBrowse.projectMature job scheduled so far, oldest first. */
+export async function projectionJobs(t: Pick<Accessor, "run">) {
+  return await t.run(async (ctx) =>
+    (await ctx.db.system.query("_scheduled_functions").collect())
+      .filter((job) => job.name === "seriesBrowse:projectMature")
+      .map((job) => job.state.kind),
+  );
+}
+
+/** A clock that moves a millisecond at each reading, so no two stamps share a time; mockRestore() stops it. */
+export function tickingClock() {
+  let now = Date.now();
+  return vi.spyOn(Date, "now").mockImplementation(() => (now += 1));
+}
+
+/**
+ * Expect the latest run stamped after every observation it wrote: the
+ * stamp a link writes as it hands off to its continuation
+ * (lib/importRuns.ts stampHandOff). Run the link under tickingClock.
+ */
+export async function expectStampedAtHandOff(t: Pick<Accessor, "run">) {
+  await t.run(async (ctx) => {
+    const [run] = await ctx.db.query("importRuns").order("desc").take(1);
+    const observations = await ctx.db.query("sourceObservations").collect();
+    expect(observations.length).toBeGreaterThan(0);
+    expect(run?.lastActivityAt).toBeGreaterThan(Math.max(...observations.map((o) => o.lastSeenAt)));
+  });
 }
 
 /**

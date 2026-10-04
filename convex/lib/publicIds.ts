@@ -9,10 +9,7 @@ import type { MutationCtx } from "../_generated/server";
 export type PublicIdEntity = "series" | "volume" | "edition" | "bundle" | "person";
 
 /** Allocate the next sequential public ID for one new record. */
-export async function allocatePublicId(
-  ctx: MutationCtx,
-  entity: PublicIdEntity,
-): Promise<number> {
+export async function allocatePublicId(ctx: MutationCtx, entity: PublicIdEntity): Promise<number> {
   const counter = await ctx.db
     .query("counters")
     .withIndex("by_entity", (q) => q.eq("entity", entity))

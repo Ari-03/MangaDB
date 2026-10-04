@@ -67,7 +67,11 @@ async function profileTarget(ctx: QueryCtx, stored: TargetId) {
       if (!("target" in found)) return null;
       return {
         target: found.target,
-        ref: { kind: "edition" as const, publicId: found.edition.publicId, title: found.info.title },
+        ref: {
+          kind: "edition" as const,
+          publicId: found.edition.publicId,
+          title: found.info.title,
+        },
         series: found.series,
         mature: found.info.mature,
       };
@@ -101,10 +105,7 @@ function effectiveVisibility(
     kind === "ownership"
       ? overrides.get(seriesId)?.ownershipVisibility
       : overrides.get(seriesId)?.readingVisibility;
-  return (
-    override ??
-    (kind === "ownership" ? user.ownershipVisibility : user.readingVisibility)
-  );
+  return override ?? (kind === "ownership" ? user.ownershipVisibility : user.readingVisibility);
 }
 
 /** The surviving identities of a Release's covered Series, deduplicated. */
@@ -138,14 +139,9 @@ async function seriesAllPublic(
 ): Promise<boolean> {
   const ids = await resolvedSeriesIds(ctx, rawSeriesIds);
   if (ids.length === 0) {
-    return (
-      (kind === "ownership" ? user.ownershipVisibility : user.readingVisibility) ===
-      "public"
-    );
+    return (kind === "ownership" ? user.ownershipVisibility : user.readingVisibility) === "public";
   }
-  return ids.every(
-    (id) => effectiveVisibility(user, overrides, kind, id) === "public",
-  );
+  return ids.every((id) => effectiveVisibility(user, overrides, kind, id) === "public");
 }
 
 // ---------- mutations ----------
@@ -185,9 +181,7 @@ export const setSeriesVisibility = mutation({
     const series = await requireActive(ctx, "series", seriesId, "Series");
     const override = visibility === "default" ? undefined : visibility;
     const patch =
-      kind === "ownership"
-        ? { ownershipVisibility: override }
-        : { readingVisibility: override };
+      kind === "ownership" ? { ownershipVisibility: override } : { readingVisibility: override };
     // Patching with undefined clears the override back to the default.
     await writeSeriesState(ctx, user._id, series._id, patch, override !== undefined);
     return { kind, visibility };
@@ -242,19 +236,20 @@ export const seriesVisibility = query({
  *   are public by nature), or none while FEATURES.publicReviews is off.
  *   Mature Series in either only with `showMature`.
  *
- * Null when no such user exists. A fully private profile returns empty
- * sections — the page exists (public-but-noindex) but shares nothing.
+ * Null when no such user exists, while they are suspended (their sharing
+ * choices stay as they were, so reinstating brings the profile back), or
+ * once their account deletion is under way. A fully private profile
+ * returns empty sections — the page exists (public-but-noindex) but shares
+ * nothing.
  */
 export const publicProfile = query({
   args: { username: v.string(), ...showMatureArg },
   handler: async (ctx, { username, showMature }) => {
     const user = await ctx.db
       .query("users")
-      .withIndex("by_username", (q) =>
-        q.eq("usernameNormalized", normalizeUsername(username)),
-      )
+      .withIndex("by_username", (q) => q.eq("usernameNormalized", normalizeUsername(username)))
       .unique();
-    if (!user) return null;
+    if (!user || user.suspended || user.deletingSince !== undefined) return null;
     const overrides = await overrideMap(ctx, user._id);
     const ownershipPublic = (ids: Array<Id<"series">>) =>
       seriesAllPublic(ctx, user, overrides, "ownership", ids);
@@ -348,14 +343,10 @@ export const publicProfile = query({
     };
     const readingRows = new Map<Id<"series">, ReadingRow>();
 
-    const readingRowFor = async (
-      rawSeriesId: Id<"series">,
-    ): Promise<ReadingRow | null> => {
+    const readingRowFor = async (rawSeriesId: Id<"series">): Promise<ReadingRow | null> => {
       const series = await getActive(ctx, "series", rawSeriesId);
       if (!series) return null;
-      if (
-        effectiveVisibility(user, overrides, "reading", series._id) !== "public"
-      ) {
+      if (effectiveVisibility(user, overrides, "reading", series._id) !== "public") {
         return null;
       }
       const existing = readingRows.get(series._id);
@@ -408,9 +399,7 @@ export const publicProfile = query({
     for (const pass of passRows) {
       const release = await getActive(ctx, "releases", pass.releaseId);
       if (!release) continue;
-      if (
-        !(await seriesAllPublic(ctx, user, overrides, "reading", release.seriesIds))
-      ) {
+      if (!(await seriesAllPublic(ctx, user, overrides, "reading", release.seriesIds))) {
         continue;
       }
       const row = await readingRowFor(pass.seriesId);
@@ -421,10 +410,7 @@ export const publicProfile = query({
     }
 
     const reading = [...readingRows.values()].filter(
-      (row) =>
-        row.readingStatus !== null ||
-        row.readVolumes.length > 0 ||
-        row.passes.length > 0,
+      (row) => row.readingStatus !== null || row.readVolumes.length > 0 || row.passes.length > 0,
     );
     for (const row of reading) {
       row.readVolumes.sort((a, b) => a.position - b.position);

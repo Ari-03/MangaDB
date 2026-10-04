@@ -30,7 +30,6 @@ vi.mock("convex/react", () => ({
   useMutation: () => fakes.submit,
 }));
 vi.mock("~/lib/viewer", () => ({ useIsModerator: () => true }));
-vi.mock("~/providers", () => ({ convexClient: {} }));
 
 const { Route } = await import("../routes/mod.edit.$type.$key");
 const { FieldInput } = await import("./editForm");
@@ -41,10 +40,12 @@ function liveForm(name: string, baseRevisionId: string | null = null) {
     fields: [{ name: "name", label: "Name", kind: "text", required: true, value: name }],
     ref: { type: "publisher", id: "pub-a" },
     baseRevisionId,
+    importReviewPending: false,
     status: "active",
     locked: false,
     title: name,
     overriddenFields: [],
+    overrides: [],
     backLink: null,
   };
 }

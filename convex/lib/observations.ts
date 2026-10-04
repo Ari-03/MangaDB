@@ -5,10 +5,35 @@
 // only. Retention is indefinite in v1; withdrawal marks, never deletes.
 // A record seen again stops being withdrawn, and the possible-cancellation
 // review its withdrawal queued is retired with it.
+//
+// A record an import cannot place is held (recordUnplaced): its reason is
+// the observation's `placement` note, and one a person could act on is
+// listed as a Held Book (`placementHolds`) while it is unlinked, not
+// withdrawn, and no import's Proposal of it is in review. Linking it
+// (linkObservation), withdrawing it, or an import queuing a creation
+// Proposal for it clears both (clearHold). A member's placement Proposal
+// (placement.ts) leaves the book listed, marked by that Proposal's state.
+//
+// Linking an observation, a new snapshot on a linked one, and a withdrawn
+// linked one seen again make its Series mature at once when it is 18+
+// evidence (lib/mature.ts applyMatureEvidence), for every importer.
 
-import type { Doc } from "../_generated/dataModel";
+import type { Infer } from "convex/values";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { holdKind, recordRef } from "../schema";
+import { applyMatureEvidence } from "./mature";
 import { sameValue } from "./values";
+
+export type HoldKind = Infer<typeof holdKind>;
+
+/**
+ * Why an import holds a record, and the active Series it resolved, if any.
+ * A null `kind` is a record no one can place or that is out of scope (no
+ * ISBN, a variant cover, a prose or foreign-language imprint): its note is
+ * kept for the record, but it is never listed.
+ */
+export type Hold = { kind: HoldKind | null; reason: string; seriesId?: Id<"series"> };
 
 export async function getObservation(
   ctx: QueryCtx | MutationCtx,
@@ -56,13 +81,8 @@ export async function retireLapsedCancellation(
   ) {
     return false;
   }
-  const version = await ctx.db
-    .query("proposalVersions")
-    .withIndex("by_proposal", (q) =>
-      q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
-    )
-    .unique();
-  const op = version?.ops.length === 1 ? version.ops[0] : undefined;
+  const ops = await currentOps(ctx, proposal);
+  const op = ops.length === 1 ? ops[0] : undefined;
   if (op?.kind !== "hide" || op.ref.type !== "release" || op.ref.id !== linked.id) return false;
   await ctx.db.patch(proposal._id, { state: "withdrawn", decidedAt: now });
   return true;
@@ -70,10 +90,12 @@ export async function retireLapsedCancellation(
 
 /**
  * Note a record present at its source (a listing hit, an unchanged fetch):
- * bump last-seen, clear a withdrawn mark, and retire the possible-
- * cancellation review that withdrawal queued. Every presence path goes
- * through here, so no adapter clears withdrawal while leaving its review
- * approvable. Returns the observation as now stored.
+ * bump last-seen, clear a withdrawn mark, retire the possible-cancellation
+ * review that withdrawal queued, and apply the relisted record's 18+
+ * evidence (applyMatureEvidence). Every presence path goes through here, so
+ * no adapter clears withdrawal while leaving its review approvable. An
+ * ordinary sighting writes last-seen only. Returns the observation as now
+ * stored.
  */
 export async function markSeen(
   ctx: MutationCtx,
@@ -82,7 +104,10 @@ export async function markSeen(
 ): Promise<Doc<"sourceObservations">> {
   await ctx.db.patch(observation._id, { lastSeenAt: now, withdrawn: false });
   const seen = { ...observation, lastSeenAt: now, withdrawn: false };
-  if (observation.withdrawn) await retireLapsedCancellation(ctx, seen, now);
+  if (observation.withdrawn) {
+    await retireLapsedCancellation(ctx, seen, now);
+    await applyMatureEvidence(ctx, seen);
+  }
   return seen;
 }
 
@@ -137,5 +162,170 @@ export async function upsertObservation(
     withdrawn: false,
   };
   if (existing.withdrawn) await retireLapsedCancellation(ctx, observation, args.now);
+  await applyMatureEvidence(ctx, observation);
   return { observation, changed: true };
+}
+
+/**
+ * Whether the Proposal the observation points to is an import's and in
+ * review, so the review queue has the book. `queuedProposalId` is a dedup
+ * pointer that outlives its Proposal's decision, and conflict and
+ * cancellation reviews set it too: only the Proposal's state says whether
+ * anyone will act on it. A Data Team member's placement Proposal does not
+ * count: its book stays a Held Book, shown as awaiting review, so a
+ * rejection leaves it listed without waiting for its source to list it again.
+ */
+export async function proposalInReview(
+  ctx: QueryCtx | MutationCtx,
+  observation: Doc<"sourceObservations">,
+): Promise<boolean> {
+  if (observation.queuedProposalId === undefined) return false;
+  const proposal = await ctx.db.get(observation.queuedProposalId);
+  return proposal?.state === "inReview" && proposal.author.kind === "source";
+}
+
+/** The ops of the Proposal's current version. */
+export async function currentOps(
+  ctx: QueryCtx | MutationCtx,
+  proposal: Doc<"proposals">,
+): Promise<Doc<"proposalVersions">["ops"]> {
+  const version = await ctx.db
+    .query("proposalVersions")
+    .withIndex("by_proposal", (q) =>
+      q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+    )
+    .unique();
+  return version?.ops ?? [];
+}
+
+/**
+ * Whether the op changes `ref` against its base Revision: an `update` (an
+ * import's field conflict) or a `clearOverride`. Any Revision on the record
+ * leaves such an op stale (proposals.ts staleRecordsOf); a `hide`, such as a
+ * cancellation review, is not.
+ */
+export function anchoredOn(
+  op: Doc<"proposalVersions">["ops"][number] | undefined,
+  ref: { type: string; id: string },
+): boolean {
+  return (
+    (op?.kind === "update" || op?.kind === "clearOverride") &&
+    op.ref.type === ref.type &&
+    op.ref.id === ref.id
+  );
+}
+
+/** The observation's Held Book row, if it is listed. */
+export async function holdOf(
+  ctx: QueryCtx | MutationCtx,
+  observationId: Id<"sourceObservations">,
+): Promise<Doc<"placementHolds"> | null> {
+  return await ctx.db
+    .query("placementHolds")
+    .withIndex("by_observation", (q) => q.eq("observationId", observationId))
+    .unique();
+}
+
+/**
+ * Leave a record the importer cannot place on its observation (spec §6:
+ * record, never guess): the reason becomes its `placement` note, and an
+ * unlinked, non-withdrawn observation is listed as a Held Book of
+ * `hold.kind` unless an import's Proposal it points to is in review
+ * (proposalInReview). A re-sighting of the same hold keeps its place in
+ * the list (`heldAt`); a new kind moves it to the top. An unlisted hold
+ * (null kind), a linked observation (a box set placed as a Release Bundle
+ * that now names another Series), and one whose import Proposal is in
+ * review (the review queue has it) carry the note only, and any row they
+ * had is removed. Once that Proposal is decided, the next hold lists the
+ * book again. Returns whether anything was written.
+ */
+export async function recordUnplaced(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  hold: Hold,
+  now: number,
+): Promise<boolean> {
+  // The caller's copy may predate a write earlier in this mutation.
+  const current = (await ctx.db.get(observation._id)) ?? observation;
+  let changed = false;
+  if (current.conflicts?.find((c) => c.field === "placement")?.reason !== hold.reason) {
+    const kept = (current.conflicts ?? []).filter((c) => c.field !== "placement");
+    await ctx.db.patch(current._id, {
+      conflicts: [...kept, { field: "placement", offered: null, at: now, reason: hold.reason }],
+    });
+    changed = true;
+  }
+  const row = await holdOf(ctx, current._id);
+  const listed =
+    current.recordRef === undefined &&
+    !current.withdrawn &&
+    !(await proposalInReview(ctx, current));
+  const kind = listed ? hold.kind : null;
+  if (kind === null) {
+    if (row === null) return changed;
+    await ctx.db.delete(row._id);
+    return true;
+  }
+  if (row === null) {
+    await ctx.db.insert("placementHolds", {
+      observationId: current._id,
+      sourceKey: current.sourceKey,
+      kind,
+      heldAt: now,
+      ...(hold.seriesId !== undefined ? { seriesId: hold.seriesId } : {}),
+    });
+    return true;
+  }
+  if (row.kind !== kind) {
+    await ctx.db.patch(row._id, { kind, heldAt: now, seriesId: hold.seriesId });
+    return true;
+  }
+  if (row.seriesId !== hold.seriesId) {
+    await ctx.db.patch(row._id, { seriesId: hold.seriesId });
+    return true;
+  }
+  return changed;
+}
+
+/**
+ * Take the observation off the Held Books list and drop its `placement`
+ * note: it was placed, withdrawn, queued for review, or no longer held.
+ * Returns whether anything was written.
+ */
+export async function clearHold(
+  ctx: MutationCtx,
+  observationId: Id<"sourceObservations">,
+): Promise<boolean> {
+  let changed = false;
+  const row = await holdOf(ctx, observationId);
+  if (row !== null) {
+    await ctx.db.delete(row._id);
+    changed = true;
+  }
+  const conflicts = (await ctx.db.get(observationId))?.conflicts;
+  if (conflicts?.some((c) => c.field === "placement")) {
+    await ctx.db.patch(observationId, {
+      conflicts: conflicts.filter((c) => c.field !== "placement"),
+    });
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * Link the observation to a canonical record (matching rung ①), the one way
+ * every importer and repair writes the link (a merge or Split repoints
+ * links directly, lib/sensitiveOps.ts). A linked record is placed, so
+ * its hold and `placement` note go (clearHold), and its Series becomes
+ * mature at once if the link is 18+ evidence (applyMatureEvidence).
+ */
+export async function linkObservation(
+  ctx: MutationCtx,
+  observationId: Id<"sourceObservations">,
+  ref: Infer<typeof recordRef>,
+): Promise<void> {
+  await ctx.db.patch(observationId, { recordRef: ref });
+  await clearHold(ctx, observationId);
+  const observation = await ctx.db.get(observationId);
+  if (observation) await applyMatureEvidence(ctx, observation);
 }

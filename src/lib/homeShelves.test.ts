@@ -5,6 +5,9 @@ import {
   hasJacket,
   heroBooks,
   heroPool,
+  homePools,
+  homeQuestions,
+  homeShelves,
   jacketed,
   oneCoverPer,
   shelfDays,
@@ -48,7 +51,13 @@ describe("hasJacket", () => {
 
 describe("jacketed", () => {
   test("seats the first jacketed books in shelf order, skipping cloth", () => {
-    const shelf = [book(1, "isbn"), book(2, "none"), book(3, "url"), book(4, "isbn"), book(5, "isbn")];
+    const shelf = [
+      book(1, "isbn"),
+      book(2, "none"),
+      book(3, "url"),
+      book(4, "isbn"),
+      book(5, "isbn"),
+    ];
     const onFile = new Set([isbnOf(4), isbnOf(5)]);
     expect(ids(jacketed(shelf, onFile, 2))).toEqual([3, 4]);
     expect(ids(jacketed(shelf, onFile, 10))).toEqual([3, 4, 5]);
@@ -128,5 +137,78 @@ describe("the hero wall", () => {
     expect(ids(heroBooks(pool, onFile, 2))).toEqual([2, 4]);
     // With enough jacketed books after the shelf day, it is not repeated.
     expect(ids(heroBooks(pool, new Set([isbnOf(2), isbnOf(3), isbnOf(4)]), 2))).toEqual([3, 4]);
+  });
+});
+
+describe("the home page's shelves", () => {
+  const TODAY = 20261003;
+  /** A Series row as recentSeries returns it. */
+  const series = (id: number, art: "url" | "isbn" | "none") => {
+    const { coverUrl, coverIsbns } = book(id, art);
+    return { publicId: id, title: `Series ${id}`, coverUrl, coverIsbns, createdAt: 0 };
+  };
+  const month = [
+    book(1, "isbn", 20261001), // already out
+    book(2, "isbn", 20261006),
+    book(3, "none", 20261006),
+    book(4, "isbn", 20261006),
+    book(5, "isbn", 20261013),
+    book(6, "none", 20261020),
+    book(7, "isbn", 20261000), // day to be announced
+  ];
+  const next = [book(8, "isbn", 20261102), book(9, "isbn", 20261103)];
+  const pools = homePools(month, next, TODAY);
+  const fourSeries = [1, 2, 3, 4, 5].map((id) => series(id + 20, "isbn"));
+
+  test("asks the cover store about the hero, both day shelves and the Series, in that order", () => {
+    const [hero, primary, secondary, shelf] = homeQuestions(pools, fourSeries);
+    expect(hero).toEqual({
+      need: 15,
+      candidates: [isbnOf(5), isbnOf(8), isbnOf(9), isbnOf(2), isbnOf(4)],
+    });
+    expect(primary).toEqual({ need: 14, candidates: [isbnOf(2), isbnOf(4)] });
+    expect(secondary).toEqual({ need: 7, candidates: [isbnOf(5)] });
+    expect(shelf?.candidates).toHaveLength(5);
+  });
+
+  test("seats only books on file, counting every book the day has", () => {
+    const onFile = new Set([isbnOf(4), isbnOf(9), ...[21, 22, 23, 24].map(isbnOf)]);
+    const shelves = homeShelves(pools, fourSeries, onFile);
+    expect(ids(shelves.hero)).toEqual([4, 9]);
+    expect(shelves.primary).toMatchObject({ day: 6, count: 3 });
+    expect(ids(shelves.primary?.books ?? [])).toEqual([4]);
+    // The day after seats nothing on file, so it has no shelf at all.
+    expect(shelves.secondary).toBeNull();
+    // A dated day leads, so the day-TBA book is counted but never carried.
+    expect(shelves.undated).toEqual({ count: 1, books: [] });
+    expect(shelves.series.map((entry) => entry.publicId)).toEqual([21, 22, 23, 24]);
+    expect(shelves.seriesLinks).toEqual([]);
+  });
+
+  test("with the check unanswered, seats every book with art to try", () => {
+    const shelves = homeShelves(pools, fourSeries, null);
+    expect(ids(shelves.primary?.books ?? [])).toEqual([2, 4]);
+    expect(shelves.secondary).toMatchObject({ day: 13, count: 1 });
+    expect(ids(shelves.secondary?.books ?? [])).toEqual([5]);
+  });
+
+  test("shelves day-TBA books once the month has no dated day left", () => {
+    const undated = [book(1, "isbn", 20261000), book(2, "none", 20261000)];
+    const shelves = homeShelves(homePools(undated, [], TODAY), [], null);
+    expect(shelves.primary).toBeNull();
+    expect(shelves.undated.count).toBe(2);
+    expect(ids(shelves.undated.books)).toEqual([1]);
+  });
+
+  test("lists the newest Series by name when too few have jackets", () => {
+    const rows = [series(1, "isbn"), series(2, "none"), series(3, "url")];
+    const shelves = homeShelves(pools, rows, new Set([isbnOf(1)]));
+    expect(shelves.series).toEqual([]);
+    // Names only: the list carries no jacket data it would not show.
+    expect(shelves.seriesLinks).toEqual([
+      { publicId: 1, title: "Series 1" },
+      { publicId: 2, title: "Series 2" },
+      { publicId: 3, title: "Series 3" },
+    ]);
   });
 });

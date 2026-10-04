@@ -26,6 +26,7 @@ import {
 } from "../../test.factories";
 import { makeT, type TestT as T } from "../../test.helpers";
 import { doubtSplit, insertBook, insertDoubt } from "../../test.moderation";
+import { getActive } from "../merges";
 import { TRAIL_CHUNK } from "./audit";
 import type { RepairEntry } from "./entries";
 import { SWEEP_BUDGET, sweepPage } from "./ops";
@@ -48,7 +49,12 @@ async function run(t: T, entries: RepairEntry[]) {
  */
 async function seed(t: T) {
   return await t.run(async (ctx) => {
-    const user = (clerkSubject: string, username: string, readingVisibility: "public" | "private", role?: "administrator") =>
+    const user = (
+      clerkSubject: string,
+      username: string,
+      readingVisibility: "public" | "private",
+      role?: "administrator",
+    ) =>
       ctx.db.insert("users", {
         clerkSubject,
         username,
@@ -72,9 +78,19 @@ async function seed(t: T) {
       followPromptDismissed: false,
       readingVisibility: "private",
     });
-    await ctx.db.insert("volumeProgress", { userId: reader, volumeId: unlabeled, seriesId: source, readCount: 1 });
-    await ctx.db.insert("releaseProgress", { userId: reader, releaseId: b1.releaseId, seriesId: source, percent: 40 });
-    await ctx.db.insert("releaseProgress", { userId: reader, releaseId: b2.releaseId, seriesId: source, percent: 10 });
+    await ctx.db.insert("volumeProgress", { userId: reader, volumeId: unlabeled, readCount: 1 });
+    await ctx.db.insert("releaseProgress", {
+      userId: reader,
+      releaseId: b1.releaseId,
+      seriesId: source,
+      percent: 40,
+    });
+    await ctx.db.insert("releaseProgress", {
+      userId: reader,
+      releaseId: b2.releaseId,
+      seriesId: source,
+      percent: 10,
+    });
     await ctx.db.insert("favorites", { userId: reader, seriesId: source, volumeId: unlabeled });
     await ctx.db.insert("comments", {
       userId: other,
@@ -93,7 +109,9 @@ async function seed(t: T) {
 }
 
 const splitOff = (t: T) =>
-  t.run(async (ctx) => (await ctx.db.query("series").collect()).find((row) => row.title === "Doubt")!);
+  t.run(
+    async (ctx) => (await ctx.db.query("series").collect()).find((row) => row.title === "Doubt")!,
+  );
 
 /** A Series `title` with a vol "1". */
 async function insertWithVol1(ctx: MutationCtx, title: string) {
@@ -105,11 +123,18 @@ async function insertWithVol1(ctx: MutationCtx, title: string) {
  * "Noragami" with a book on each of Volumes "1" and "2", and a box-set book
  * on a "Box" Volume of `boxSeriesId` (default: Noragami itself).
  */
-async function insertNoragamiBox(ctx: MutationCtx, publisherId: Id<"publishers">, boxSeriesId?: Id<"series">) {
+async function insertNoragamiBox(
+  ctx: MutationCtx,
+  publisherId: Id<"publishers">,
+  boxSeriesId?: Id<"series">,
+) {
   const series = await insertSeries(ctx, { publicId: 700, title: "Noragami" });
   const book = async (seriesId: Id<"series">, label: string, position: number, isbn13: string) => {
     const volumeId = await insertVolume(ctx, { seriesId, label, position });
-    return { volumeId, ...(await insertBook(ctx, { publisherId, seriesId, volumeId, release: { isbn13 } })) };
+    return {
+      volumeId,
+      ...(await insertBook(ctx, { publisherId, seriesId, volumeId, release: { isbn13 } })),
+    };
   };
   const v1 = (await book(series, "1", 1, "9780000000011")).volumeId;
   await book(series, "2", 2, "9780000000028");
@@ -121,7 +146,11 @@ async function insertNoragamiBox(ctx: MutationCtx, publisherId: Id<"publishers">
 const MEMBERS = ["9780000000011", "9780000000028"];
 
 /** A releaseBundle entry turning the box set into "Noragami Box Set" of `isbns`, in order. */
-const bundleEntry = (box: { releaseId: Id<"releases"> }, isbns: string[], key = "b"): RepairEntry => ({
+const bundleEntry = (
+  box: { releaseId: Id<"releases"> },
+  isbns: string[],
+  key = "b",
+): RepairEntry => ({
   kind: "releaseBundle",
   key,
   reason: "box set",
@@ -147,17 +176,38 @@ const remodelEntry = (
   line: null,
   bundle: { name: "Noragami Box Set" },
   groups: [
-    { releaseIds: null, coverage: labels.map((label) => ({ label, volumeId: null, extent: "complete" as const })), linePosition: null },
+    {
+      releaseIds: null,
+      coverage: labels.map((label) => ({ label, volumeId: null, extent: "complete" as const })),
+      linePosition: null,
+    },
   ],
   retireVolumeIds: options.retire ? [box.volumeId] : [],
 });
 
-/** Every personal row the split should have re-filed, with the Series it now sits under. */
+/**
+ * Every personal row the split should have re-filed, with the Series it now
+ * sits under; a read count's is its (merge-followed) Volume's.
+ */
 const personalSeries = (t: T, s: Awaited<ReturnType<typeof seed>>) =>
   t.run(async (ctx) => ({
-    volumeProgress: (await ctx.db.query("volumeProgress").collect()).map((row) => row.seriesId),
-    b1Pass: (await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).unique())?.seriesId,
-    b2Pass: (await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b2.releaseId)).unique())?.seriesId,
+    volumeProgress: await Promise.all(
+      (await ctx.db.query("volumeProgress").collect()).map(
+        async (row) => (await getActive(ctx, "volumes", row.volumeId))?.seriesId,
+      ),
+    ),
+    b1Pass: (
+      await ctx.db
+        .query("releaseProgress")
+        .withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId))
+        .unique()
+    )?.seriesId,
+    b2Pass: (
+      await ctx.db
+        .query("releaseProgress")
+        .withIndex("by_release", (q) => q.eq("releaseId", s.b2.releaseId))
+        .unique()
+    )?.seriesId,
     favorites: (await ctx.db.query("favorites").collect()).map((row) => row.seriesId),
     comments: (await ctx.db.query("comments").collect()).map((row) => row.seriesId),
   }));
@@ -179,20 +229,30 @@ describe("series split (B10)", () => {
 
     // myReading groups both passes and the read Volume under the new Series.
     const reading = await asReader(t).query(api.reading.myReading, {});
-    const rows = reading!.series.map((row) => ({ title: row.title, read: row.volumesRead, passes: row.passes.length }));
+    const rows = reading!.series.map((row) => ({
+      title: row.title,
+      read: row.volumesRead,
+      passes: row.passes.length,
+    }));
     expect(rows).toEqual([{ title: "Doubt", read: 1, passes: 2 }]);
 
     // The reader's Reading of "Doubt!!" was private; the moved work stays so.
-    const visibility = await asReader(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId });
+    const visibility = await asReader(t).query(api.sharing.seriesVisibility, {
+      seriesPublicId: target.publicId,
+    });
     expect(visibility?.overrides.reading).toBe("private");
 
     // Personal rows stay out of the public Revisions; the Proposal records them.
     const trail = await t.run(async (ctx) => ({
-      revisions: (await ctx.db.query("revisions").collect()).flatMap((r) => r.changes.map((c) => c.field)),
+      revisions: (await ctx.db.query("revisions").collect()).flatMap((r) =>
+        r.changes.map((c) => c.field),
+      ),
       ops: (await ctx.db.query("proposalVersions").collect()).flatMap((v) => v.ops),
     }));
     expect(trail.revisions).not.toContain("personalTracking");
-    const recorded = trail.ops.flatMap((op) => (op.kind === "update" ? op.changes : [])).filter((c) => c.field === "personalTracking");
+    const recorded = trail.ops
+      .flatMap((op) => (op.kind === "update" ? op.changes : []))
+      .filter((c) => c.field === "personalTracking");
     expect(recorded).toHaveLength(1);
     expect(JSON.stringify(recorded)).not.toContain(s.reader);
 
@@ -206,8 +266,9 @@ describe("series split (B10)", () => {
     const target = await splitOff(t);
     // Put the rows back where the old split left them.
     await t.run(async (ctx) => {
-      for (const table of ["volumeProgress", "releaseProgress", "favorites", "comments"] as const) {
-        for (const row of await ctx.db.query(table).collect()) await ctx.db.patch(row._id, { seriesId: s.source });
+      for (const table of ["releaseProgress", "favorites", "comments"] as const) {
+        for (const row of await ctx.db.query(table).collect())
+          await ctx.db.patch(row._id, { seriesId: s.source });
       }
     });
     expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
@@ -224,13 +285,19 @@ describe("series split (B10)", () => {
     const t = makeT();
     const s = await seed(t);
     // Private default as well as the explicit private override on the source.
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "private" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "private",
+    });
     const profile = () => t.query(api.sharing.publicProfile, { username: "dave" });
     expect((await profile())?.reading).toEqual([]);
 
     expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
     expect((await profile())?.reading).toEqual([]);
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "public",
+    });
     expect((await profile())?.reading).toEqual([]);
     expect((await run(t, [s.entry]))[0]?.status).toBe("alreadyApplied");
   });
@@ -244,17 +311,30 @@ describe("series split (B10)", () => {
    */
   async function seedBundleOwner(t: T, member: "b1" | "b2") {
     const s = await seed(t);
-    await asOther(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
-    await asOther(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
+    await asOther(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
+    await asOther(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId: s.source,
+      kind: "ownership",
+      visibility: "private",
+    });
     await t.run(async (ctx) => {
-      const bundleId = await insertBundle(ctx, { name: "Doubt Box", publisherId: s.publisherId, format: "physical" });
+      const bundleId = await insertBundle(ctx, {
+        name: "Doubt Box",
+        publisherId: s.publisherId,
+        format: "physical",
+      });
       await insertBundleMember(ctx, { bundleId, releaseId: s[member].releaseId });
       await ctx.db.insert("collectionEntries", { userId: s.other, bundleId, state: "owned" });
     });
     return s;
   }
   const ownedBundles = async (t: T) =>
-    (await t.query(api.sharing.publicProfile, { username: "erin" }))?.ownership.bundles.map((b) => b.name);
+    (await t.query(api.sharing.publicProfile, { username: "erin" }))?.ownership.bundles.map(
+      (b) => b.name,
+    );
 
   for (const member of ["b1", "b2"] as const) {
     it(`keeps a Bundle owned privately through a moved book (${member === "b1" ? "whole Volume" : "shared label"}) off the profile`, async () => {
@@ -267,16 +347,30 @@ describe("series split (B10)", () => {
       // The private choice is explicit on the split-off Series, so it survives
       // a later change of the owner's defaults.
       const target = await splitOff(t);
-      const visibility = await asOther(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId });
+      const visibility = await asOther(t).query(api.sharing.seriesVisibility, {
+        seriesPublicId: target.publicId,
+      });
       expect(visibility?.overrides.ownership).toBe("private");
       // The Proposal's trail records the new override row, naming no User.
-      const trail = await t.run(async (ctx) => (await ctx.db.query("repairTrails").collect()).flatMap((record) => record.rows));
+      const trail = await t.run(async (ctx) =>
+        (await ctx.db.query("repairTrails").collect()).flatMap((record) => record.rows),
+      );
       expect(trail).toContainEqual(
-        expect.objectContaining({ table: "userSeriesStates", field: "(inserted)", after: expect.objectContaining({ seriesId: target._id, ownershipVisibility: "private" }) }),
+        expect.objectContaining({
+          table: "userSeriesStates",
+          field: "(inserted)",
+          after: expect.objectContaining({ seriesId: target._id, ownershipVisibility: "private" }),
+        }),
       );
       expect(JSON.stringify(trail)).not.toContain(s.other);
-      await asOther(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "private" });
-      await asOther(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+      await asOther(t).mutation(api.sharing.setDefaultVisibility, {
+        kind: "ownership",
+        visibility: "private",
+      });
+      await asOther(t).mutation(api.sharing.setDefaultVisibility, {
+        kind: "ownership",
+        visibility: "public",
+      });
       expect(await ownedBundles(t)).toEqual([]);
       expect((await run(t, [s.entry]))[0]?.status).toBe("alreadyApplied");
       expect(await ownedBundles(t)).toEqual([]);
@@ -289,10 +383,15 @@ describe("series split (B10)", () => {
     expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
     const target = await splitOff(t);
     const overrides = async () =>
-      (await asReader(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId }))?.overrides;
+      (await asReader(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId }))
+        ?.overrides;
     expect((await overrides())?.reading).toBe("private");
 
-    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: target._id, kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId: target._id,
+      kind: "reading",
+      visibility: "public",
+    });
     expect((await run(t, [s.entry]))[0]?.status).toBe("alreadyApplied");
     expect((await overrides())?.reading).toBe("public");
     const reading = (await t.query(api.sharing.publicProfile, { username: "dave" }))?.reading;
@@ -304,7 +403,11 @@ describe("series split (B10)", () => {
     const s = await seed(t);
     expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
     const target = await splitOff(t);
-    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: target._id, kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId: target._id,
+      kind: "reading",
+      visibility: "public",
+    });
     // A pass the old split left filed under the private source: the profile
     // hides it, as it answers to "Doubt!!" as well.
     await t.run(async (ctx) => {
@@ -315,11 +418,15 @@ describe("series split (B10)", () => {
       await ctx.db.patch(pass!._id, { seriesId: s.source });
     });
     const passes = async () =>
-      (await t.query(api.sharing.publicProfile, { username: "dave" }))?.reading.flatMap((row) => row.passes);
+      (await t.query(api.sharing.publicProfile, { username: "dave" }))?.reading.flatMap(
+        (row) => row.passes,
+      );
     expect(await passes()).toHaveLength(1);
 
     expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
-    const visibility = await asReader(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId });
+    const visibility = await asReader(t).query(api.sharing.seriesVisibility, {
+      seriesPublicId: target.publicId,
+    });
     expect(visibility?.overrides.reading).toBe("private");
     expect(await passes()).toHaveLength(0);
   });
@@ -335,22 +442,36 @@ describe("box set to bundle (B11)", () => {
     const s = await seed(t);
     return await t.run(async (ctx) => {
       const box = await insertNoragamiBox(ctx, s.publisherId, onSource ? s.source : undefined);
-      const variantId = await insertVariant(ctx, { releaseId: box.box.releaseId, name: "Exclusive" });
-      await ctx.db.insert("collectionEntries", { userId: s.reader, releaseId: box.box.releaseId, state: "owned", variantId });
-      await ctx.db.insert("collectionEntries", { userId: s.other, releaseId: box.box.releaseId, state: "owned" });
+      const variantId = await insertVariant(ctx, {
+        releaseId: box.box.releaseId,
+        name: "Exclusive",
+      });
+      await ctx.db.insert("collectionEntries", {
+        userId: s.reader,
+        releaseId: box.box.releaseId,
+        state: "owned",
+        variantId,
+      });
+      await ctx.db.insert("collectionEntries", {
+        userId: s.other,
+        releaseId: box.box.releaseId,
+        state: "owned",
+      });
       return { ...s, ...box };
     });
   }
 
   const entriesOf = (t: T) =>
     t.run(async (ctx) =>
-      (await ctx.db.query("collectionEntries").collect()).map(({ userId, releaseId, bundleId, state, variantId }) => ({
-        userId,
-        releaseId,
-        bundleId,
-        state,
-        variantId,
-      })),
+      (await ctx.db.query("collectionEntries").collect()).map(
+        ({ userId, releaseId, bundleId, state, variantId }) => ({
+          userId,
+          releaseId,
+          bundleId,
+          state,
+          variantId,
+        }),
+      ),
     );
 
   it("hands the box set's Collection Entries to the new bundle (releaseBundle)", async () => {
@@ -372,13 +493,29 @@ describe("box set to bundle (B11)", () => {
 
     const entries = await entriesOf(t);
     expect(entries).toHaveLength(2);
-    expect(entries).toContainEqual({ userId: s.reader, releaseId: undefined, bundleId: existing, state: "owned", variantId: undefined });
-    expect(entries).toContainEqual({ userId: s.other, releaseId: undefined, bundleId: existing, state: "owned", variantId: undefined });
+    expect(entries).toContainEqual({
+      userId: s.reader,
+      releaseId: undefined,
+      bundleId: existing,
+      state: "owned",
+      variantId: undefined,
+    });
+    expect(entries).toContainEqual({
+      userId: s.other,
+      releaseId: undefined,
+      bundleId: existing,
+      state: "owned",
+      variantId: undefined,
+    });
 
     // myLibrary shows the owned bundle, and its members by Derived Ownership.
     const library = await asReader(t).query(api.collection.myLibrary, {});
-    expect(library?.bundles.map((b) => [b.title, b.state])).toEqual([["Noragami Box Set", "owned"]]);
-    const shelved = library!.series.flatMap((shelf) => shelf.paths.flatMap((path) => path.books.map((book) => book.via?.bundleName)));
+    expect(library?.bundles.map((b) => [b.title, b.state])).toEqual([
+      ["Noragami Box Set", "owned"],
+    ]);
+    const shelved = library!.series.flatMap((shelf) =>
+      shelf.paths.flatMap((path) => path.books.map((book) => book.via?.bundleName)),
+    );
     expect(shelved).toEqual(["Noragami Box Set", "Noragami Box Set"]);
 
     const recorded = await t.run(async (ctx) =>
@@ -401,8 +538,20 @@ describe("box set to bundle (B11)", () => {
     const bundle = await t.run(async (ctx) => (await ctx.db.query("releaseBundles").unique())!);
     const entries = await entriesOf(t);
     expect(entries).toEqual([
-      { userId: s.reader, releaseId: undefined, bundleId: bundle._id, state: "owned", variantId: undefined },
-      { userId: s.other, releaseId: undefined, bundleId: bundle._id, state: "owned", variantId: undefined },
+      {
+        userId: s.reader,
+        releaseId: undefined,
+        bundleId: bundle._id,
+        state: "owned",
+        variantId: undefined,
+      },
+      {
+        userId: s.other,
+        releaseId: undefined,
+        bundleId: bundle._id,
+        state: "owned",
+        variantId: undefined,
+      },
     ]);
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
   });
@@ -414,21 +563,37 @@ describe("box set to bundle (B11)", () => {
    */
   async function seedPrivateBox(t: T) {
     const s = await seedBox(t, true);
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
-    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId: s.source,
+      kind: "ownership",
+      visibility: "private",
+    });
     return s;
   }
   const shown = async (t: T) => {
     const profile = await t.query(api.sharing.publicProfile, { username: "dave" });
-    return [...(profile?.ownership.releases.map((r) => r.editionTitle) ?? []), ...(profile?.ownership.bundles.map((b) => b.name) ?? [])];
+    return [
+      ...(profile?.ownership.releases.map((r) => r.editionTitle) ?? []),
+      ...(profile?.ownership.bundles.map((b) => b.name) ?? []),
+    ];
   };
   /** The profile stays as private after the conversion, a change of defaults, and a re-run. */
   async function expectStaysPrivate(t: T, entry: RepairEntry) {
     expect(await shown(t)).toEqual([]);
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     expect(await shown(t)).toEqual([]);
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "private" });
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "private",
+    });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
     expect(await shown(t)).toEqual([]);
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
     expect(await shown(t)).toEqual([]);
@@ -454,14 +619,24 @@ describe("box set to bundle (B11)", () => {
     const bundleId = await t.run(async (ctx) => {
       const boxEntry = await ctx.db
         .query("collectionEntries")
-        .withIndex("by_user_release", (q) => q.eq("userId", s.reader).eq("releaseId", s.box.releaseId))
+        .withIndex("by_user_release", (q) =>
+          q.eq("userId", s.reader).eq("releaseId", s.box.releaseId),
+        )
         .unique();
       await ctx.db.delete(boxEntry!._id);
-      const id = await insertBundle(ctx, { name: "Empty Box", publisherId: s.publisherId, format: "physical" });
+      const id = await insertBundle(ctx, {
+        name: "Empty Box",
+        publisherId: s.publisherId,
+        format: "physical",
+      });
       await ctx.db.insert("collectionEntries", { userId: s.reader, bundleId: id, state: "owned" });
       return id;
     });
-    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.series, kind: "ownership", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId: s.series,
+      kind: "ownership",
+      visibility: "public",
+    });
     const entry: RepairEntry = {
       kind: "releaseBundle",
       key: "fill",
@@ -516,8 +691,13 @@ describe("bounded personal repair work (Standards 1)", () => {
           followPromptDismissed: false,
           readingVisibility: "private",
         });
-        await ctx.db.insert("volumeProgress", { userId, volumeId: s.unlabeled, seriesId: s.source, readCount: 1 });
-        await ctx.db.insert("releaseProgress", { userId, releaseId: s.b1.releaseId, seriesId: s.source, percent: 5 });
+        await ctx.db.insert("volumeProgress", { userId, volumeId: s.unlabeled, readCount: 1 });
+        await ctx.db.insert("releaseProgress", {
+          userId,
+          releaseId: s.b1.releaseId,
+          seriesId: s.source,
+          percent: 5,
+        });
       }
     });
 
@@ -534,17 +714,24 @@ describe("bounded personal repair work (Standards 1)", () => {
   it("re-files a large split's personal rows over several legs, never widening a profile", async () => {
     const t = makeT();
     const s = await seed(t);
-    await addReaders(t, s, SWEEP_BUDGET + 10);
+    // A pass each, enough for more than two legs.
+    const readers = 2 * SWEEP_BUDGET + 10;
+    await addReaders(t, s, readers);
     const privateReading = async () => {
-      for (const username of ["dave", "bulk0", `bulk${SWEEP_BUDGET + 9}`]) {
+      for (const username of ["dave", "bulk0", `bulk${readers - 1}`]) {
         expect((await t.query(api.sharing.publicProfile, { username }))?.reading).toEqual([]);
       }
     };
     await privateReading();
     const onSource = () =>
-      t.run(async (ctx) =>
-        (await ctx.db.query("volumeProgress").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).length +
-          (await ctx.db.query("releaseProgress").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).length,
+      t.run(
+        async (ctx) =>
+          (
+            await ctx.db
+              .query("releaseProgress")
+              .withIndex("by_series", (q) => q.eq("seriesId", s.source))
+              .collect()
+          ).length,
       );
     const before = await onSource();
     const remaining: number[] = [];
@@ -562,7 +749,9 @@ describe("bounded personal repair work (Standards 1)", () => {
     }
     expect(remaining.at(-1)).toBe(0);
     const target = await splitOff(t);
-    const passes = await t.run(async (ctx) => (await ctx.db.query("releaseProgress").collect()).map((row) => row.seriesId));
+    const passes = await t.run(async (ctx) =>
+      (await ctx.db.query("releaseProgress").collect()).map((row) => row.seriesId),
+    );
     expect(new Set(passes)).toEqual(new Set([target._id]));
 
     // The trail sits in bounded records, the Proposals name only its size,
@@ -571,7 +760,9 @@ describe("bounded personal repair work (Standards 1)", () => {
     for (const change of trail.changes) expect(typeof change.after).toBe("number");
     const rows = trail.records.flatMap((record) => record.rows);
     expect(rows.length).toBe(trail.changes.reduce((sum, change) => sum + Number(change.after), 0));
-    expect(rows.filter((row) => row.table === "releaseProgress" && row.field === "seriesId")).toHaveLength(SWEEP_BUDGET + 12);
+    expect(
+      rows.filter((row) => row.table === "releaseProgress" && row.field === "seriesId"),
+    ).toHaveLength(readers + 2);
     for (const record of trail.records) expect(record.rows.length).toBeLessThanOrEqual(TRAIL_CHUNK);
     expect(JSON.stringify(trail.records)).not.toContain(s.reader);
     expect(trail.sweeps).toEqual([]);
@@ -581,7 +772,8 @@ describe("bounded personal repair work (Standards 1)", () => {
     const rerun = await runLegs(t, s.entry, privateReading);
     expect(rerun.at(-1)).toBe("alreadyApplied");
     expect((await trailOf(t)).records).toHaveLength(trail.records.length);
-  });
+    // Three legs need over 2 × SWEEP_BUDGET readers, and convex-test answers each reader's state lookups by scanning every document.
+  }, 60_000);
 
   for (const kind of ["releaseBundle", "remodelEdition"] as const) {
     it(`hands a large box set's Collection Entries to its Bundle over several legs, keeping private owners private (${kind})`, async () => {
@@ -614,7 +806,10 @@ describe("bounded personal repair work (Standards 1)", () => {
       const privateOwnership = async () => {
         for (const username of ["owner0", `owner${SWEEP_BUDGET + 9}`]) {
           const profile = await t.query(api.sharing.publicProfile, { username });
-          expect([...(profile?.ownership.releases ?? []), ...(profile?.ownership.bundles ?? [])]).toEqual([]);
+          expect([
+            ...(profile?.ownership.releases ?? []),
+            ...(profile?.ownership.bundles ?? []),
+          ]).toEqual([]);
         }
       };
       await privateOwnership();
@@ -626,7 +821,12 @@ describe("bounded personal repair work (Standards 1)", () => {
         t.run(async (ctx) => ({
           release: (await ctx.db.get(box.releaseId))?.status,
           edition: (await ctx.db.get(box.editionId))?.status,
-          onBox: (await ctx.db.query("collectionEntries").withIndex("by_release", (q) => q.eq("releaseId", box.releaseId)).collect()).length,
+          onBox: (
+            await ctx.db
+              .query("collectionEntries")
+              .withIndex("by_release", (q) => q.eq("releaseId", box.releaseId))
+              .collect()
+          ).length,
         }));
       const legs: Array<Awaited<ReturnType<typeof boxState>>> = [];
       const statuses = await runLegs(t, entry, async () => {
@@ -639,24 +839,29 @@ describe("bounded personal repair work (Standards 1)", () => {
       // The box set stays up, holding its remaining owners, until the last leg.
       expect(legs[0]).toEqual({ release: "active", edition: "active", onBox: 10 });
       expect(legs.at(-1)).toEqual({ release: "hidden", edition: "hidden", onBox: 0 });
-      const moved = await t.run(async (ctx) => (await ctx.db.query("collectionEntries").collect()).filter((e) => e.bundleId));
+      const moved = await t.run(async (ctx) =>
+        (await ctx.db.query("collectionEntries").collect()).filter((e) => e.bundleId),
+      );
       expect(moved).toHaveLength(SWEEP_BUDGET + 10);
       const trail = await trailOf(t);
-      for (const record of trail.records) expect(record.rows.length).toBeLessThanOrEqual(TRAIL_CHUNK);
-      expect(trail.records.flatMap((record) => record.rows).filter((row) => row.field === "bundleId")).toHaveLength(SWEEP_BUDGET + 10);
+      for (const record of trail.records)
+        expect(record.rows.length).toBeLessThanOrEqual(TRAIL_CHUNK);
+      expect(
+        trail.records.flatMap((record) => record.rows).filter((row) => row.field === "bundleId"),
+      ).toHaveLength(SWEEP_BUDGET + 10);
       expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
     });
   }
 
   const addElse = (t: T) => t.run(async (ctx) => (await insertWithVol1(ctx, "Else")).seriesId);
-  /** How many rows under the moved book are still filed outside `seriesId`. */
-  const staleUnder = (t: T, s: Awaited<ReturnType<typeof seed>>, seriesId: Id<"series">, volumes: boolean) =>
+  /** How many passes on the moved book are still filed outside `seriesId`. */
+  const staleUnder = (t: T, s: Awaited<ReturnType<typeof seed>>, seriesId: Id<"series">) =>
     t.run(async (ctx) => {
-      const passes = await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).collect();
-      const reads = volumes
-        ? await ctx.db.query("volumeProgress").withIndex("by_volume", (q) => q.eq("volumeId", s.unlabeled)).collect()
-        : [];
-      return [...passes, ...reads].filter((row) => row.seriesId !== seriesId).length;
+      const passes = await ctx.db
+        .query("releaseProgress")
+        .withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId))
+        .collect();
+      return passes.filter((row) => row.seriesId !== seriesId).length;
     });
   const bulkPrivate = async (t: T) => {
     for (const username of ["dave", "bulk0", `bulk${SWEEP_BUDGET + 9}`]) {
@@ -680,7 +885,7 @@ describe("bounded personal repair work (Standards 1)", () => {
       retireVolumeIds: [],
     };
     expect(await runLegs(t, entry, () => bulkPrivate(t))).toEqual(["partial", "applied"]);
-    expect(await staleUnder(t, s, elseId, false)).toBe(0);
+    expect(await staleUnder(t, s, elseId)).toBe(0);
     expect((await trailOf(t)).sweeps).toEqual([]);
     // A re-run examines the same rows in bounded legs and changes nothing.
     expect(await runLegs(t, entry, () => bulkPrivate(t))).toEqual(["partial", "alreadyApplied"]);
@@ -692,7 +897,12 @@ describe("bounded personal repair work (Standards 1)", () => {
     await addReaders(t, s, SWEEP_BUDGET + 10);
     const elseId = await addElse(t);
     const packaging = await t.run(async (ctx) =>
-      (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect())
+      (
+        await ctx.db
+          .query("volumes")
+          .withIndex("by_series", (q) => q.eq("seriesId", s.source))
+          .collect()
+      )
         .filter((v) => v._id !== s.unlabeled)
         .map((v) => v._id),
     );
@@ -709,7 +919,7 @@ describe("bounded personal repair work (Standards 1)", () => {
     const legs = await runLegs(t, entry, () => bulkPrivate(t));
     expect(legs[0]).toBe("partial");
     expect(legs.at(-1)).toBe("deferred");
-    expect(await staleUnder(t, s, elseId, true)).toBe(0);
+    expect(await staleUnder(t, s, elseId)).toBe(0);
     expect((await t.run(async (ctx) => await ctx.db.get(s.source)))?.status).toBe("active");
 
     // Stage 4 deals with the packaging Volumes; the merge then completes.
@@ -718,7 +928,7 @@ describe("bounded personal repair work (Standards 1)", () => {
     });
     expect((await runLegs(t, entry, () => bulkPrivate(t))).at(-1)).toBe("applied");
     expect((await t.run(async (ctx) => await ctx.db.get(s.source)))?.status).toBe("merged");
-    expect(await staleUnder(t, s, elseId, true)).toBe(0);
+    expect(await staleUnder(t, s, elseId)).toBe(0);
   });
 });
 
@@ -731,9 +941,19 @@ describe("other repairs that move tracking between Series", () => {
   async function seedMover(t: T) {
     const s = await seed(t);
     const asOther = t.withIdentity({ subject: OTHER });
-    await asOther.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
-    await asOther.mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
-    await asOther.mutation(api.collection.setReleaseEntry, { releaseId: s.b1.releaseId, state: "owned" });
+    await asOther.mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
+    await asOther.mutation(api.sharing.setSeriesVisibility, {
+      seriesId: s.source,
+      kind: "ownership",
+      visibility: "private",
+    });
+    await asOther.mutation(api.collection.setReleaseEntry, {
+      releaseId: s.b1.releaseId,
+      state: "owned",
+    });
     const other = await t.run((ctx) => insertWithVol1(ctx, "Else"));
     return { ...s, else: other.seriesId, elseVol: other.volumeId, asOther };
   }
@@ -747,7 +967,11 @@ describe("other repairs that move tracking between Series", () => {
   /** The title of the Series the reader's own Reading page groups each pass under. */
   const passTitles = async (t: T) => {
     const reading = await asReader(t).query(api.reading.myReading, {});
-    return Object.fromEntries((reading?.series ?? []).flatMap((row) => row.passes.map((pass) => [pass.releaseId, row.title])));
+    return Object.fromEntries(
+      (reading?.series ?? []).flatMap((row) =>
+        row.passes.map((pass) => [pass.releaseId, row.title]),
+      ),
+    );
   };
   const coverElse = (s: Awaited<ReturnType<typeof seedMover>>): RepairEntry => ({
     kind: "setCoverage",
@@ -766,7 +990,12 @@ describe("other repairs that move tracking between Series", () => {
     placement: { label: string; intoVolumeId: Id<"volumes"> | null },
   ): Promise<RepairEntry> => {
     const volumes = await t.run(async (ctx) =>
-      (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).map((v) => v._id),
+      (
+        await ctx.db
+          .query("volumes")
+          .withIndex("by_series", (q) => q.eq("seriesId", s.source))
+          .collect()
+      ).map((v) => v._id),
     );
     return {
       kind: "mergeSeries",
@@ -787,8 +1016,14 @@ describe("other repairs that move tracking between Series", () => {
     expect((await profileOf(t, "erin")).owned).toBe(0);
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     expect((await profileOf(t, "erin")).owned).toBe(0);
-    await s.asOther.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "private" });
-    await s.asOther.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    await s.asOther.mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "private",
+    });
+    await s.asOther.mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
     expect((await profileOf(t, "erin")).owned).toBe(0);
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
   });
@@ -813,7 +1048,11 @@ describe("other repairs that move tracking between Series", () => {
     expect((await personalSeries(t, s)).b1Pass).toBe(s.else);
     // "Else" absorbed the reader's private "Doubt!!" Reading.
     expect((await profileOf(t, "dave")).reading).toEqual([]);
-    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.else, kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId: s.else,
+      kind: "reading",
+      visibility: "public",
+    });
     expect((await profileOf(t, "dave")).reading).toEqual(["Else"]);
     // A re-run leaves the reader's later choice alone (R16).
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
@@ -824,15 +1063,30 @@ describe("other repairs that move tracking between Series", () => {
     const t = makeT();
     const s = await seedMover(t);
     const omnibus = await t.run(async (ctx) => {
-      const labelled = (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect())
+      const labelled = (
+        await ctx.db
+          .query("volumes")
+          .withIndex("by_series", (q) => q.eq("seriesId", s.source))
+          .collect()
+      )
         .filter((v) => v.label !== undefined)
         .sort((a, b) => a.position - b.position)
         .map((v) => v._id);
       await insertVolume(ctx, { seriesId: s.else, position: 2 });
       const editionId = await insertEdition(ctx, { publisherId: s.publisherId });
-      for (const [i, volumeId] of labelled.entries()) await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
-      await insertRelease(ctx, { editionId, isbn13: "9780316335140", publisherId: s.publisherId, seriesIds: [s.source] });
-      const favoriteId = await ctx.db.insert("favorites", { userId: s.reader, seriesId: s.source, editionId });
+      for (const [i, volumeId] of labelled.entries())
+        await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
+      await insertRelease(ctx, {
+        editionId,
+        isbn13: "9780316335140",
+        publisherId: s.publisherId,
+        seriesIds: [s.source],
+      });
+      const favoriteId = await ctx.db.insert("favorites", {
+        userId: s.reader,
+        seriesId: s.source,
+        editionId,
+      });
       return { editionId, labelled, favoriteId };
     });
     const entry: RepairEntry = {
@@ -841,19 +1095,27 @@ describe("other repairs that move tracking between Series", () => {
       reason: "belongs to Else",
       editionId: omnibus.editionId,
       before: omnibus.labelled,
-      coverage: ["1", "2"].map((label) => ({ seriesId: s.else, label, extent: "complete" as const })),
+      coverage: ["1", "2"].map((label) => ({
+        seriesId: s.else,
+        label,
+        extent: "complete" as const,
+      })),
       line: null,
       retireVolumeIds: [],
     };
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
-    expect((await t.run(async (ctx) => await ctx.db.get(omnibus.favoriteId)))?.seriesId).toBe(s.else);
+    expect((await t.run(async (ctx) => await ctx.db.get(omnibus.favoriteId)))?.seriesId).toBe(
+      s.else,
+    );
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
   });
 
   it("files a placed Volume's tracking under the survivor while a Series merge waits (B10)", async () => {
     const t = makeT();
     const s = await seedMover(t);
-    expect((await run(t, [await waitingMerge(t, s, { label: "2", intoVolumeId: null })]))[0]?.status).toBe("deferred");
+    expect(
+      (await run(t, [await waitingMerge(t, s, { label: "2", intoVolumeId: null })]))[0]?.status,
+    ).toBe("deferred");
     expect(await personalSeries(t, s)).toEqual({
       volumeProgress: [s.else],
       b1Pass: s.else,
@@ -867,8 +1129,13 @@ describe("other repairs that move tracking between Series", () => {
   it("files a pass under the survivor when a waiting Series merge merges its Volume into one there (B10)", async () => {
     const t = makeT();
     const s = await seedMover(t);
-    expect((await run(t, [await waitingMerge(t, s, { label: "1", intoVolumeId: s.elseVol })]))[0]?.status).toBe("deferred");
-    expect(await t.run(async (ctx) => (await ctx.db.get(s.unlabeled))?.mergedIntoId)).toBe(s.elseVol);
+    expect(
+      (await run(t, [await waitingMerge(t, s, { label: "1", intoVolumeId: s.elseVol })]))[0]
+        ?.status,
+    ).toBe("deferred");
+    expect(await t.run(async (ctx) => (await ctx.db.get(s.unlabeled))?.mergedIntoId)).toBe(
+      s.elseVol,
+    );
     expect(await personalSeries(t, s)).toEqual({
       volumeProgress: [s.else],
       b1Pass: s.else,
@@ -892,9 +1159,18 @@ describe("other repairs that move tracking between Series", () => {
         confirmImpact: true,
       });
     const placeIntoElse = async (t: T, s: Awaited<ReturnType<typeof seedMover>>) =>
-      expect((await run(t, [await waitingMerge(t, s, { label: "1", intoVolumeId: s.elseVol })]))[0]?.status).toBe("deferred");
+      expect(
+        (await run(t, [await waitingMerge(t, s, { label: "1", intoVolumeId: s.elseVol })]))[0]
+          ?.status,
+      ).toBe("deferred");
     const b1Pass = (t: T, s: Awaited<ReturnType<typeof seedMover>>) =>
-      t.run(async (ctx) => await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).unique());
+      t.run(
+        async (ctx) =>
+          await ctx.db
+            .query("releaseProgress")
+            .withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId))
+            .unique(),
+      );
 
     it("Split reverses a waiting merge's placement into an existing Volume, passes included", async () => {
       const t = makeT();
@@ -907,7 +1183,9 @@ describe("other repairs that move tracking between Series", () => {
         trails: (await ctx.db.query("repairTrails").collect()).flatMap((trail) => trail.rows),
         manifest: await ctx.db
           .query("mergeManifests")
-          .withIndex("by_loser", (q) => q.eq("loserRef.type", "volume").eq("loserRef.id", s.unlabeled))
+          .withIndex("by_loser", (q) =>
+            q.eq("loserRef.type", "volume").eq("loserRef.id", s.unlabeled),
+          )
           .unique(),
       }));
       expect(volume?.status).toBe("active");
@@ -917,7 +1195,12 @@ describe("other repairs that move tracking between Series", () => {
       expect((await profileOf(t, "dave")).reading).toEqual([]);
       expect(trails.filter((row) => row.table === "releaseProgress")).toEqual([]);
       expect(manifest?.repointed).toContainEqual(
-        expect.objectContaining({ table: "releaseProgress", field: "seriesId", before: s.source, after: s.else }),
+        expect.objectContaining({
+          table: "releaseProgress",
+          field: "seriesId",
+          before: s.source,
+          after: s.else,
+        }),
       );
     });
 
@@ -925,13 +1208,20 @@ describe("other repairs that move tracking between Series", () => {
       const t = makeT();
       const s = await seedMover(t);
       await placeIntoElse(t, s);
-      await asReader(t).mutation(api.reading.setPassPercent, { releaseId: s.b1.releaseId, percent: 55 });
+      await asReader(t).mutation(api.reading.setPassPercent, {
+        releaseId: s.b1.releaseId,
+        percent: 55,
+      });
       await splitPlacement(t, s);
       expect(await b1Pass(t, s)).toMatchObject({ seriesId: s.source, percent: 55 });
       const reading = await asReader(t).query(api.reading.myReading, {});
-      const row = reading?.series.find((series) => series.passes.some((pass) => pass.releaseId === s.b1.releaseId));
+      const row = reading?.series.find((series) =>
+        series.passes.some((pass) => pass.releaseId === s.b1.releaseId),
+      );
       expect(row?.title).toBe("Doubt!!");
-      expect(row?.passes.find((pass) => pass.releaseId === s.b1.releaseId)).toMatchObject({ percent: 55 });
+      expect(row?.passes.find((pass) => pass.releaseId === s.b1.releaseId)).toMatchObject({
+        percent: 55,
+      });
     });
 
     it("a later setCoverage is not undone by the Split of the placement", async () => {
@@ -973,7 +1263,12 @@ describe("other repairs that move tracking between Series", () => {
         publisherId: s.publisherId,
         seriesIds: [s.source],
       });
-      await ctx.db.insert("releaseProgress", { userId: s.reader, releaseId, seriesId: s.source, percent: 70 });
+      await ctx.db.insert("releaseProgress", {
+        userId: s.reader,
+        releaseId,
+        seriesId: s.source,
+        percent: 70,
+      });
       return releaseId;
     });
     const entry: RepairEntry = {
@@ -986,31 +1281,53 @@ describe("other repairs that move tracking between Series", () => {
       line: null,
       bundle: null,
       groups: [
-        { releaseIds: null, coverage: [{ label: "1", volumeId: null, extent: "complete" }], linePosition: null },
-        { releaseIds: [second], coverage: [{ label: "2", volumeId: null, extent: "complete" }], linePosition: null },
+        {
+          releaseIds: null,
+          coverage: [{ label: "1", volumeId: null, extent: "complete" }],
+          linePosition: null,
+        },
+        {
+          releaseIds: [second],
+          coverage: [{ label: "2", volumeId: null, extent: "complete" }],
+          linePosition: null,
+        },
       ],
       retireVolumeIds: [],
     };
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     const moved = await t.run(async (ctx) => (await ctx.db.get(second))?.editionId);
     expect(moved).not.toBe(s.b1.editionId);
-    const passes = await t.run(async (ctx) => (await ctx.db.query("releaseProgress").collect()).map((row) => [row.releaseId, row.seriesId]));
-    expect(Object.fromEntries(passes)).toEqual({ [s.b1.releaseId]: s.else, [second]: s.else, [s.b2.releaseId]: s.source });
-    expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [second]: "Else", [s.b2.releaseId]: "Doubt!!" });
+    const passes = await t.run(async (ctx) =>
+      (await ctx.db.query("releaseProgress").collect()).map((row) => [row.releaseId, row.seriesId]),
+    );
+    expect(Object.fromEntries(passes)).toEqual({
+      [s.b1.releaseId]: s.else,
+      [second]: s.else,
+      [s.b2.releaseId]: s.source,
+    });
+    expect(await passTitles(t)).toEqual({
+      [s.b1.releaseId]: "Else",
+      [second]: "Else",
+      [s.b2.releaseId]: "Doubt!!",
+    });
     expect((await profileOf(t, "dave")).reading).toEqual([]);
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
 
     // A remodel made before passes followed is healed by a re-run, the new
     // Edition's Release included.
     await t.run(async (ctx) => {
-      for (const row of await ctx.db.query("releaseProgress").collect()) await ctx.db.patch(row._id, { seriesId: s.source });
+      for (const row of await ctx.db.query("releaseProgress").collect())
+        await ctx.db.patch(row._id, { seriesId: s.source });
     });
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
-    expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [second]: "Else", [s.b2.releaseId]: "Doubt!!" });
+    expect(await passTitles(t)).toEqual({
+      [s.b1.releaseId]: "Else",
+      [second]: "Else",
+      [s.b2.releaseId]: "Doubt!!",
+    });
     expect((await profileOf(t, "dave")).reading).toEqual([]);
   });
 });
-
 
 // A sweep's cursor is a creation time, and Convex does not promise those are
 // unique. convex-test never hands out a tie, so the paging is driven here

@@ -10,6 +10,8 @@ worker-configuration.d.ts
 .tanstack/
 filtered.txt
 .scratch/
+# Metrics reports scripts/repair.ts writes to ./runs when started here
+/runs/
 
 # Convex local backend state (or a symlink to it)
 .convex

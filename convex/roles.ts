@@ -14,7 +14,8 @@ import { internalMutation, mutation, query, type MutationCtx } from "./_generate
 import { fail } from "./lib/errors";
 import {
   canGovern,
-  countActiveAdministrators,
+  DATA_ROLES,
+  guardLastAdministrator,
   requireModerator,
   requireRole,
   type DataRole,
@@ -23,29 +24,14 @@ import { usernameLookup } from "./lib/usernameLookup";
 import { normalizeUsername } from "./lib/usernames";
 import { dataRole } from "./schema";
 
-async function findUserByUsername(
-  ctx: MutationCtx,
-  username: string,
-): Promise<Doc<"users">> {
+/** The User a username names; a User deleting their account counts as none. */
+async function findUserByUsername(ctx: MutationCtx, username: string): Promise<Doc<"users">> {
   const user = await ctx.db
     .query("users")
-    .withIndex("by_username", (q) =>
-      q.eq("usernameNormalized", normalizeUsername(username)),
-    )
+    .withIndex("by_username", (q) => q.eq("usernameNormalized", normalizeUsername(username)))
     .unique();
-  if (!user) fail("notFound", `No user named "${username}".`);
+  if (!user || user.deletingSince !== undefined) fail("notFound", `No user named "${username}".`);
   return user;
-}
-
-/**
- * Refuse any change that would leave MangaDB without a working Administrator
- * (spec §4 makes the Administrator the root of governance).
- */
-async function guardLastAdministrator(ctx: MutationCtx, target: Doc<"users">) {
-  if (target.role !== "administrator" || target.suspended) return;
-  if ((await countActiveAdministrators(ctx)) <= 1) {
-    fail("lastAdministrator", "Cannot remove the last active Administrator.");
-  }
 }
 
 /**
@@ -60,11 +46,15 @@ async function guardLastAdministrator(ctx: MutationCtx, target: Doc<"users">) {
 export const bootstrapAdministrator = internalMutation({
   args: { username: v.string() },
   handler: async (ctx, { username }) => {
-    const existingAdmins = (await ctx.db.query("users").collect()).filter(
-      (u) => u.role === "administrator",
-    );
-    if (existingAdmins.length > 0) {
-      fail("alreadyBootstrapped", "An Administrator already exists; appoint further roles through them.");
+    const existingAdmin = await ctx.db
+      .query("users")
+      .withIndex("by_role", (q) => q.eq("role", "administrator"))
+      .first();
+    if (existingAdmin) {
+      fail(
+        "alreadyBootstrapped",
+        "An Administrator already exists; appoint further roles through them.",
+      );
     }
     const user = await findUserByUsername(ctx, username);
     await ctx.db.patch(user._id, { role: "administrator" });
@@ -79,10 +69,7 @@ export const bootstrapAdministrator = internalMutation({
   },
 });
 
-async function requireGovernanceOver(
-  ctx: MutationCtx,
-  role: DataRole,
-): Promise<Doc<"users">> {
+async function requireGovernanceOver(ctx: MutationCtx, role: DataRole): Promise<Doc<"users">> {
   const actor = await requireRole(ctx, ["moderator", "administrator"]);
   if (!canGovern(actor.role as DataRole, role)) {
     fail("forbidden", `A ${actor.role} cannot govern the ${role} role.`);
@@ -152,8 +139,11 @@ export const revoke = mutation({
 });
 
 /**
- * Suspend a user (privileges and account access stop immediately; the role
- * marker stays so reinstatement restores it). Audited permanently.
+ * Suspend a user: privileges and account access stop immediately (requireUser
+ * refuses them, and they cannot change their username), and their public
+ * profile is hidden (sharing.publicProfile). Nothing of theirs is changed:
+ * the role marker and sharing choices stay, so reinstatement restores both.
+ * Audited permanently.
  */
 export const suspend = mutation({
   args: { username: v.string(), reason: v.string() },
@@ -163,7 +153,7 @@ export const suspend = mutation({
     const actor = await requireGovernanceOver(ctx, governedRole);
     if (target._id === actor._id) fail("forbidden", "You cannot suspend yourself.");
     if (target.suspended) fail("noChange", `@${target.username} is already suspended.`);
-    await guardLastAdministrator(ctx, target);
+    // No last-Administrator guard: only another active Administrator can suspend one.
     await ctx.db.patch(target._id, { suspended: true });
     await ctx.db.insert("roleAudit", {
       userId: target._id,
@@ -196,20 +186,27 @@ export const reinstate = mutation({
   },
 });
 
-/** Current role holders, for the /mod/roles page. Data team only. */
+/**
+ * Current role holders, for the /mod/roles page. Data team only. Reads only
+ * the role holders (by_role, one range per role; the team is a handful of
+ * people) and leaves out anyone deleting their account.
+ */
 export const roster = query({
   args: {},
   handler: async (ctx) => {
     await requireModerator(ctx);
-    const users = await ctx.db.query("users").collect();
-    return users
-      .filter((u) => u.role)
-      .map((u) => ({
-        username: u.username,
-        role: u.role as DataRole,
-        suspended: u.suspended ?? false,
-      }))
-      .sort((a, b) => a.username.localeCompare(b.username));
+    const rows = [];
+    for (const role of DATA_ROLES) {
+      const holders = await ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", role))
+        .collect();
+      for (const u of holders) {
+        if (u.deletingSince !== undefined) continue;
+        rows.push({ username: u.username, role, suspended: u.suspended ?? false });
+      }
+    }
+    return rows.sort((a, b) => a.username.localeCompare(b.username));
   },
 });
 

@@ -9,11 +9,11 @@
 :root {
   /* Two states the shared tokens have no colour for: something is wrong
      (failed run, stale proposal, open gate) and something needs attention. */
-  --mod-bad:  #e8836d;
+  --mod-bad: #e8836d;
   --mod-warn: #e0b256;
 }
 [data-theme="light"] {
-  --mod-bad:  #a8341c;
+  --mod-bad: #a8341c;
   --mod-warn: #8a6316;
 }
 
@@ -47,7 +47,9 @@
   font-size: 1.12rem;
 }
 .mod-page > h2 + .section-hint,
-.mod-page > section:not([class]) > h2 + .section-hint { margin-top: 6px; }
+.mod-page > section:not([class]) > h2 + .section-hint {
+  margin-top: 6px;
+}
 
 /* The standing explanation under a page or panel title. */
 .mod-page .section-hint {
@@ -61,7 +63,9 @@
   color: var(--accent);
   border-bottom: 1px solid transparent;
 }
-.mod-page .section-hint a:hover { border-bottom-color: var(--accent); }
+.mod-page .section-hint a:hover {
+  border-bottom-color: var(--accent);
+}
 
 /* The cross-links between the data team's tools, lifted out of the prose. */
 .mod-tools {
@@ -80,7 +84,10 @@
   padding: 4px 0;
   border-bottom: 2px solid transparent;
 }
-.mod-tools a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.mod-tools a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 
 /* ---------- panels and rows ----------------------------------------------- */
 
@@ -110,11 +117,15 @@
 .mod-panel > div {
   padding-inline: 18px;
 }
-.mod-panel > .section-hint:first-of-type { margin: 14px 0; }
+.mod-panel > .section-hint:first-of-type {
+  margin: 14px 0;
+}
 /* lists run to the panel's edge; prose and forms get a foot */
 .mod-panel > p:last-child,
 .mod-panel > form:last-child,
-.mod-panel > div:last-child { margin-bottom: 16px; }
+.mod-panel > div:last-child {
+  margin-bottom: 16px;
+}
 
 /* Every list on these pages is the same object: a bordered ledger of
    hairline-separated rows, never a stack of cards. */
@@ -145,10 +156,14 @@
   background: transparent;
 }
 /* A row flagged for attention keeps its rule but gains a coloured edge. */
-.mod-flagged { box-shadow: inset 3px 0 0 var(--mod-bad); }
+.mod-flagged {
+  box-shadow: inset 3px 0 0 var(--mod-bad);
+}
 
 /* Dates and counts read as a column wherever they stack. */
-.mod-page time { font-variant-numeric: tabular-nums; }
+.mod-page time {
+  font-variant-numeric: tabular-nums;
+}
 
 .mod-page code {
   padding: 1px 5px;
@@ -168,12 +183,29 @@
 
 /* Worn beside a proposal state, a source's health, a run's outcome. Always
    composed with .chip from the shell. */
-.mod-chip { font-size: 0.72rem; }
-.mod-chip--ok   { color: var(--ok);       border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
-.mod-chip--info { color: var(--info);     border-color: color-mix(in srgb, var(--info) 55%, transparent); }
-.mod-chip--warn { color: var(--mod-warn); border-color: color-mix(in srgb, var(--mod-warn) 55%, transparent); }
-.mod-chip--bad  { color: var(--mod-bad);  border-color: color-mix(in srgb, var(--mod-bad) 60%, transparent); background: color-mix(in srgb, var(--mod-bad) 10%, var(--surface-2)); }
-.mod-chip--mute { color: var(--text-mute); }
+.mod-chip {
+  font-size: 0.72rem;
+}
+.mod-chip--ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, transparent);
+}
+.mod-chip--info {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 55%, transparent);
+}
+.mod-chip--warn {
+  color: var(--mod-warn);
+  border-color: color-mix(in srgb, var(--mod-warn) 55%, transparent);
+}
+.mod-chip--bad {
+  color: var(--mod-bad);
+  border-color: color-mix(in srgb, var(--mod-bad) 60%, transparent);
+  background: color-mix(in srgb, var(--mod-bad) 10%, var(--surface-2));
+}
+.mod-chip--mute {
+  color: var(--text-mute);
+}
 
 /* ---------- forms --------------------------------------------------------- */
 
@@ -183,7 +215,9 @@
   max-width: 40rem;
   margin-top: 18px;
 }
-.mod-panel > .mod-form { margin: 16px 0; }
+.mod-panel > .mod-form {
+  margin: 16px 0;
+}
 
 .mod-form label,
 .mod-edit-form label {
@@ -208,12 +242,19 @@
   background: var(--surface-2);
   color: var(--text);
 }
-.mod-page textarea { line-height: 1.5; resize: vertical; }
+.mod-page textarea {
+  line-height: 1.5;
+  resize: vertical;
+}
 .mod-page input::placeholder,
-.mod-page textarea::placeholder { color: var(--text-mute); }
+.mod-page textarea::placeholder {
+  color: var(--text-mute);
+}
 .mod-page input:focus-visible,
 .mod-page textarea:focus-visible,
-.mod-page select:focus-visible { outline-offset: 1px; }
+.mod-page select:focus-visible {
+  outline-offset: 1px;
+}
 .mod-page input[type="checkbox"] {
   width: auto;
   accent-color: var(--accent);
@@ -243,10 +284,18 @@
   font-weight: 700;
   color: var(--text-dim);
 }
-.date-fieldset label { gap: 4px; }
-.date-fieldset input { max-width: 7rem; }
-.mod-page .date-fieldset input { background: var(--surface); }
-.date-fieldset .field-help { flex-basis: 100%; }
+.date-fieldset label {
+  gap: 4px;
+}
+.date-fieldset input {
+  max-width: 7rem;
+}
+.mod-page .date-fieldset input {
+  background: var(--surface);
+}
+.date-fieldset .field-help {
+  flex-basis: 100%;
+}
 
 /* A row of buttons ending a form or a panel. */
 .mod-actions {
@@ -258,13 +307,34 @@
 
 /* The shell's .btn is a class, so the legacy element-level button rules in
    other page files win on `button[type=submit]`. Pin ours back. */
-.mod-page button.btn { background: var(--surface-2); border-color: var(--line-strong); color: var(--text); }
-.mod-page button.btn:hover { background: var(--surface-3); }
-.mod-page button.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.mod-page button.btn-primary:hover { background: var(--gold); border-color: var(--gold); }
-.mod-page button.btn:disabled { opacity: 0.45; cursor: default; transform: none; }
-.mod-page button.btn:disabled:hover { background: var(--surface-2); }
-.mod-page button.btn-primary:disabled:hover { background: var(--accent); }
+.mod-page button.btn {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.mod-page button.btn:hover {
+  background: var(--surface-3);
+}
+.mod-page button.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.mod-page button.btn-primary:hover {
+  background: var(--gold);
+  border-color: var(--gold);
+}
+.mod-page button.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+.mod-page button.btn:disabled:hover {
+  background: var(--surface-2);
+}
+.mod-page button.btn-primary:disabled:hover {
+  background: var(--accent);
+}
 
 .mod-page .form-error {
   margin: 0;
@@ -309,7 +379,9 @@
   font-weight: 700;
   color: var(--text-dim);
 }
-.mod-page .queue-filters .filter-toggle input { min-width: 0; }
+.mod-page .queue-filters .filter-toggle input {
+  min-width: 0;
+}
 
 /* ---------- revision history ---------------------------------------- */
 
@@ -331,14 +403,20 @@
   font-weight: 700;
   color: var(--text-dim);
 }
-.record-history > summary::-webkit-details-marker { display: none; }
-.record-history > summary:hover { color: var(--accent); }
+.record-history > summary::-webkit-details-marker {
+  display: none;
+}
+.record-history > summary:hover {
+  color: var(--accent);
+}
 .record-history > summary::before {
   content: "▸";
   font-size: 0.7em;
   color: var(--text-mute);
 }
-.record-history[open] > summary::before { content: "▾"; }
+.record-history[open] > summary::before {
+  content: "▾";
+}
 .record-history-count {
   font-weight: 400;
   color: var(--text-mute);
@@ -373,9 +451,16 @@
   font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
 }
-.revision-seq { font-weight: 800; color: var(--text-dim); }
-.revision-author { color: var(--text-dim); }
-.revision-meta time { margin-left: auto; }
+.revision-seq {
+  font-weight: 800;
+  color: var(--text-dim);
+}
+.revision-author {
+  color: var(--text-dim);
+}
+.revision-meta time {
+  margin-left: auto;
+}
 
 .revision-comment {
   margin: 6px 0 0;
@@ -414,8 +499,13 @@
   color: var(--text-mute);
   font-size: 0.82rem;
 }
-.revision-citation a { color: var(--accent); border-bottom: 1px solid transparent; }
-.revision-citation a:hover { border-bottom-color: var(--accent); }
+.revision-citation a {
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+.revision-citation a:hover {
+  border-bottom-color: var(--accent);
+}
 
 /* The data-team entry points on a public page: text links, never buttons. */
 .mod-edit-link {
@@ -431,7 +521,10 @@
   color: var(--text-dim);
   border-bottom: 1px solid var(--line-strong);
 }
-.mod-edit-link a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.mod-edit-link a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 
 /* ---------- edit + propose forms -------------------------------- */
 
@@ -448,14 +541,21 @@
   padding: 13px 18px;
   border-top: 1px solid var(--line);
 }
-.queue-row:first-child { border-top: 0; }
-.queue-row:hover { background: var(--surface-2); }
+.queue-row:first-child {
+  border-top: 0;
+}
+.queue-row:hover {
+  background: var(--surface-2);
+}
 .queue-row > a {
   font-weight: 700;
   font-size: 0.98rem;
   border-bottom: 1px solid transparent;
 }
-.queue-row > a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.queue-row > a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 
 .queue-row-meta {
   display: flex;
@@ -468,7 +568,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-.queue-warnings { color: var(--mod-warn); }
+.queue-warnings {
+  color: var(--mod-warn);
+}
 
 .proposal-actions,
 .proposal-version,
@@ -512,8 +614,12 @@
   font-size: 0.92rem;
   color: var(--text-dim);
 }
-.proposal-version > .revision-comment { margin-top: 14px; }
-.proposal-version > .section-hint { margin-top: 8px; }
+.proposal-version > .revision-comment {
+  margin-top: 14px;
+}
+.proposal-version > .section-hint {
+  margin-top: 8px;
+}
 
 .proposal-ops {
   list-style: none;
@@ -526,11 +632,22 @@
   padding: 10px 0 10px 14px;
   border-left: 2px solid var(--line-strong);
 }
-.proposal-op p { font-size: 0.92rem; }
-.proposal-op .revision-changes { margin-top: 6px; }
+.proposal-op p {
+  font-size: 0.92rem;
+}
+.proposal-op .revision-changes {
+  margin-top: 6px;
+}
 
-.proposal-base { color: var(--text-mute); font-size: 0.84rem; font-weight: 400; }
-.temp-id { font-size: 0.8rem; color: var(--text-mute); }
+.proposal-base {
+  color: var(--text-mute);
+  font-size: 0.84rem;
+  font-weight: 400;
+}
+.temp-id {
+  font-size: 0.8rem;
+  color: var(--text-mute);
+}
 
 .proposal-evidence {
   margin: 8px 0 0;
@@ -540,11 +657,18 @@
   font-size: 0.88rem;
   color: var(--text-dim);
 }
-.proposal-evidence a { color: var(--accent); word-break: break-word; }
-.proposal-evidence a:hover { border-bottom: 1px solid var(--accent); }
+.proposal-evidence a {
+  color: var(--accent);
+  word-break: break-word;
+}
+.proposal-evidence a:hover {
+  border-bottom: 1px solid var(--accent);
+}
 
 /* internal discussion — data-team only, never public */
-.proposal-notes > .section-hint { margin-top: 14px; }
+.proposal-notes > .section-hint {
+  margin-top: 14px;
+}
 .proposal-notes ol {
   list-style: none;
   margin: 14px 0;
@@ -558,7 +682,9 @@
   border-left: 2px solid var(--line-strong);
   color: var(--text-dim);
 }
-.proposal-notes ol strong { color: var(--text); }
+.proposal-notes ol strong {
+  color: var(--text);
+}
 
 /* ---------- sensitive operations ------------------------------------ */
 
@@ -599,13 +725,17 @@
   font-size: 0.89rem;
   color: var(--text-dim);
 }
-.impact-preview li:last-child { border-bottom: 0; }
+.impact-preview li:last-child {
+  border-bottom: 0;
+}
 .impact-preview strong {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
-.manage-action > .section-hint { margin-top: 14px; }
+.manage-action > .section-hint {
+  margin-top: 14px;
+}
 .manage-action form {
   display: grid;
   gap: 14px;
@@ -641,9 +771,13 @@
   border-top: 1px solid var(--line);
 }
 .import-source:first-child,
-.import-run:first-child { border-top: 0; }
+.import-run:first-child {
+  border-top: 0;
+}
 .import-source:hover,
-.import-run:hover { background: var(--surface-2); }
+.import-run:hover {
+  background: var(--surface-2);
+}
 
 /* three consecutive failures: the row has to be impossible to skim past */
 .import-source-unhealthy {
@@ -662,9 +796,15 @@
   gap: 6px 14px;
 }
 .import-source-head strong,
-.import-run-head strong { font-size: 0.98rem; }
+.import-run-head strong {
+  font-size: 0.98rem;
+}
 
-.import-flag { color: var(--mod-bad); font-size: 0.84rem; font-weight: 800; }
+.import-flag {
+  color: var(--mod-bad);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
 
 .import-source-meta {
   display: flex;
@@ -687,15 +827,31 @@
   color: var(--text-mute);
   font-size: 0.84rem;
 }
-.import-run-errors summary { cursor: pointer; }
-.import-run-errors summary:hover { color: var(--accent); }
+.import-run-errors summary {
+  cursor: pointer;
+}
+.import-run-errors summary:hover {
+  color: var(--accent);
+}
 .import-run-errors ul {
   margin: 6px 0 0;
   padding-left: 1.2rem;
   display: grid;
   gap: 4px;
 }
-.import-run-errors code { word-break: break-word; }
+.import-run-errors code {
+  word-break: break-word;
+}
+
+/* a held book's reason, under its facts */
+.import-hold-reason {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.import-holds-more {
+  margin-top: 12px;
+}
 
 /* ---------- launch dashboard ---------------------------------------- */
 
@@ -711,38 +867,58 @@
   border-top: 1px solid var(--line);
   font-size: 0.92rem;
 }
-.launch-gates li:first-child { border-top: 0; }
+.launch-gates li:first-child {
+  border-top: 0;
+}
 .launch-gates li span[aria-hidden] {
   justify-self: center;
   font-weight: 800;
 }
 
-.gate-pass { color: var(--ok); }
-.gate-open { color: var(--mod-bad); }
-.launch-gates .gate-pass { color: var(--text-dim); }
-.launch-gates .gate-pass span[aria-hidden] { color: var(--ok); }
-.launch-gates .gate-open span[aria-hidden] { color: var(--mod-bad); }
+.gate-pass {
+  color: var(--ok);
+}
+.gate-open {
+  color: var(--mod-bad);
+}
+.launch-gates .gate-pass {
+  color: var(--text-dim);
+}
+.launch-gates .gate-pass span[aria-hidden] {
+  color: var(--ok);
+}
+.launch-gates .gate-open span[aria-hidden] {
+  color: var(--mod-bad);
+}
 
 .mod-page .notice.launch-ready {
   border-left-color: var(--ok);
   color: var(--text);
 }
-.mod-page .notice.gate-pass { color: var(--text-dim); border-left-color: var(--ok); }
-
+.mod-page .notice.gate-pass {
+  color: var(--text-dim);
+  border-left-color: var(--ok);
+}
 
 .seed-stages > li {
   padding: 14px 18px;
   border-top: 1px solid var(--line);
 }
-.seed-stages > li:first-child { border-top: 0; }
+.seed-stages > li:first-child {
+  border-top: 0;
+}
 .mod-row-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 12px;
 }
-.mod-row-head strong { font-size: 0.98rem; }
-.seed-stages > li > button { margin-top: 12px; }
+.mod-row-head strong {
+  font-size: 0.98rem;
+}
+.seed-stages > li > button {
+  margin-top: 12px;
+}
 .seed-stages ul {
   list-style: none;
   margin: 8px 0 0;
@@ -753,17 +929,22 @@
   font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
 }
-.seed-stages > li > .mod-actions { margin-top: 12px; }
-
+.seed-stages > li > .mod-actions {
+  margin-top: 12px;
+}
 
 .qa-sample > h3 {
   margin: 22px 0 0;
   font-size: 0.98rem;
 }
-.qa-sample:first-of-type > h3 { margin-top: 14px; }
+.qa-sample:first-of-type > h3 {
+  margin-top: 14px;
+}
 
 .qa-rows,
-.duplicate-queue { font-size: 0.89rem; }
+.duplicate-queue {
+  font-size: 0.89rem;
+}
 .qa-rows li,
 .duplicate-queue li {
   display: flex;
@@ -775,13 +956,24 @@
   color: var(--text-dim);
 }
 .qa-rows li:hover,
-.duplicate-queue li:hover { background: var(--surface-2); }
+.duplicate-queue li:hover {
+  background: var(--surface-2);
+}
 .qa-rows a,
-.duplicate-queue a { border-bottom: 1px solid transparent; font-weight: 700; }
+.duplicate-queue a {
+  border-bottom: 1px solid transparent;
+  font-weight: 700;
+}
 .qa-rows a:hover,
-.duplicate-queue a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.duplicate-queue a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 .qa-rows em,
-.duplicate-queue em { color: var(--text-mute); font-style: normal; }
+.duplicate-queue em {
+  color: var(--text-mute);
+  font-style: normal;
+}
 
 .qa-actions,
 .qa-fail-form {
@@ -791,7 +983,11 @@
   gap: 8px;
   margin-left: auto;
 }
-.mod-page .qa-fail-form input { min-width: 16rem; padding: 5px 10px; font-size: 0.85rem; }
+.mod-page .qa-fail-form input {
+  min-width: 16rem;
+  padding: 5px 10px;
+  font-size: 0.85rem;
+}
 .qa-actions a {
   border-bottom: 0;
   color: var(--accent);
@@ -806,20 +1002,29 @@
   gap: 10px;
   margin: 16px 0;
 }
-.mod-page .attest-form input { max-width: 22rem; }
-.attest-form .form-error { flex-basis: 100%; }
+.mod-page .attest-form input {
+  max-width: 22rem;
+}
+.attest-form .form-error {
+  flex-basis: 100%;
+}
 
 /* ---------- roles ---------------------------------------------------- */
 
 .roster-list,
-.audit-list { font-size: 0.89rem; margin-bottom: 0; }
+.audit-list {
+  font-size: 0.89rem;
+  margin-bottom: 0;
+}
 .roster-list > li,
 .audit-list > li {
   padding: 11px 18px;
   border-top: 1px solid var(--line);
 }
 .roster-list > li:first-child,
-.audit-list > li:first-child { border-top: 0; }
+.audit-list > li:first-child {
+  border-top: 0;
+}
 
 .roster-row {
   display: flex;
@@ -828,7 +1033,9 @@
   justify-content: space-between;
   gap: 10px;
 }
-.roster-name { font-weight: 700; }
+.roster-name {
+  font-weight: 700;
+}
 .roster-actions {
   display: inline-flex;
   flex-wrap: wrap;
@@ -858,31 +1065,51 @@
   .qa-rows li,
   .duplicate-queue li,
   .roster-list > li,
-  .audit-list > li { padding-inline: 14px; }
+  .audit-list > li {
+    padding-inline: 14px;
+  }
 
   .mod-panel > .section-hint,
   .mod-panel > p,
   .mod-panel > form,
-  .mod-panel > div { padding-inline: 14px; }
+  .mod-panel > div {
+    padding-inline: 14px;
+  }
 
   .proposal-actions,
   .proposal-version,
   .proposal-notes,
   .manage-action,
   .impact-preview,
-  .queue-filters { padding-inline: 14px; }
+  .queue-filters {
+    padding-inline: 14px;
+  }
 
   .proposal-actions > h2,
   .proposal-version > h2,
   .proposal-notes > h2,
   .manage-action > h2,
-  .impact-preview h3 { margin-inline: -14px; padding-inline: 14px; }
+  .impact-preview h3 {
+    margin-inline: -14px;
+    padding-inline: 14px;
+  }
 
-  .queue-filters .filter-toggle { flex-basis: 100%; }
+  .queue-filters .filter-toggle {
+    flex-basis: 100%;
+  }
   .qa-actions,
-  .qa-fail-form { margin-left: 0; }
-  .mod-page .qa-fail-form input { min-width: 0; flex: 1 1 12rem; }
-  .revision-meta time { margin-left: 0; }
+  .qa-fail-form {
+    margin-left: 0;
+  }
+  .mod-page .qa-fail-form input {
+    min-width: 0;
+    flex: 1 1 12rem;
+  }
+  .revision-meta time {
+    margin-left: 0;
+  }
   .mod-form,
-  .mod-edit-form { max-width: none; }
+  .mod-edit-form {
+    max-width: none;
+  }
 }

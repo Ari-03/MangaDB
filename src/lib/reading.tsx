@@ -10,7 +10,7 @@
 // pass completes solely via the confirmed completePass mutation.
 
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
@@ -18,9 +18,10 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { track } from "~/lib/analytics";
 import { Cover } from "~/lib/cover";
+import { mutationErrorMessage } from "~/lib/errors";
 import { useRunLock } from "~/lib/quickActions";
-import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
+import { useViewerQuery } from "~/lib/viewer";
 
 const STATUS_LABELS = {
   planToRead: "Plan to Read",
@@ -32,18 +33,13 @@ const STATUS_LABELS = {
 
 export type ReadingStatus = keyof typeof STATUS_LABELS;
 
-const STATUS_ORDER: ReadingStatus[] = [
-  "reading",
-  "planToRead",
-  "paused",
-  "completed",
-  "dropped",
-];
+const STATUS_ORDER: ReadingStatus[] = ["reading", "planToRead", "paused", "completed", "dropped"];
+
+/** What reading.completePass did: what Undo sends back, and its suggestions. */
+type Completion = FunctionReturnType<typeof api.reading.completePass>;
 
 /** A Series a reading write suggests a status for (reading.completePass and kin). */
-export type SeriesSuggestion = FunctionReturnType<
-  typeof api.reading.completePass
->["suggestCompleted"][number];
+export type SeriesSuggestion = Completion["suggestCompleted"][number];
 
 /**
  * The fully-read prompt (spec §3): a completion that leaves every Volume of
@@ -64,8 +60,7 @@ export function CompletedPrompt({
     <span className="prompt" role="status">
       {suggestions.map((suggestion) => (
         <span key={suggestion.seriesId} className="prompt-line">
-          You have now read every volume of “{suggestion.title}”. Mark the
-          series Completed?{" "}
+          You have now read every volume of “{suggestion.title}”. Mark the series Completed?{" "}
           <button
             type="button"
             onClick={() => {
@@ -98,21 +93,8 @@ export function CompletedPrompt({
  * is one of exactly two writers of the status (the other being a confirmed
  * prompt); nothing here changes it as a side effect of anything.
  */
-export function SeriesReadingControls({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  if (!convexClient) return null;
-  return <SeriesReadingControlsInner seriesPublicId={seriesPublicId} />;
-}
-
-function SeriesReadingControlsInner({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+export function SeriesReadingControls({ seriesPublicId }: { seriesPublicId: number }) {
+  const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   if (!tracking) return null;
   return (
@@ -141,9 +123,7 @@ function SeriesReadingControlsInner({
           </option>
         ))}
       </select>
-      <span className="track-hint">
-        Where you are in the story — separate from following.
-      </span>
+      <span className="track-hint">Where you are in the story — separate from following.</span>
     </>
   );
 }
@@ -163,13 +143,8 @@ export function SeriesReadingProgress({
   seriesPublicId: number;
   volumeCount: number;
 }) {
-  if (!convexClient || volumeCount === 0) return null;
-  return (
-    <SeriesReadingProgressInner
-      seriesPublicId={seriesPublicId}
-      volumeCount={volumeCount}
-    />
-  );
+  if (volumeCount === 0) return null;
+  return <SeriesReadingProgressInner seriesPublicId={seriesPublicId} volumeCount={volumeCount} />;
 }
 
 function SeriesReadingProgressInner({
@@ -179,7 +154,7 @@ function SeriesReadingProgressInner({
   seriesPublicId: number;
   volumeCount: number;
 }) {
-  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+  const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   if (!tracking) return null;
   const read = tracking.volumes.filter((volume) => volume.readCount > 0).length;
   const percent = Math.round((read / volumeCount) * 100);
@@ -220,23 +195,7 @@ export function VolumeReadCount({
   seriesPublicId: number;
   volumePublicId: number;
 }) {
-  if (!convexClient) return null;
-  return (
-    <VolumeReadCountInner
-      seriesPublicId={seriesPublicId}
-      volumePublicId={volumePublicId}
-    />
-  );
-}
-
-function VolumeReadCountInner({
-  seriesPublicId,
-  volumePublicId,
-}: {
-  seriesPublicId: number;
-  volumePublicId: number;
-}) {
-  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+  const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   const adjustCount = useMutation(api.reading.adjustVolumeReadCount);
   const lock = useRunLock((claims) => claims.reads.has(volumePublicId));
   if (!tracking) return null;
@@ -281,18 +240,17 @@ function VolumeReadCountInner({
  * The pass controls on a Release row: start a pass, move the optional
  * 0–100% slider, confirm completion (with undo), abandon the pass. Mounts
  * anywhere a Release row renders — Series, Volume, and Edition pages.
- * `releaseId` is the row's document id from the page queries. Completing
- * and undoing write the covered Volumes' Progress, which the client does
- * not know here, so both wait while any "Read all" run is still marking
- * (useRunLock): its later batch could otherwise re-mark an undone Volume.
+ * `releaseId` is the row's document id from the page queries. Undo sends
+ * back what completePass returned, so it reverses that completion even if
+ * the Edition's coverage changed since. A refused completion or Undo shows
+ * its reason inline, and a completion in flight cannot be sent again.
+ * Completing and undoing write the covered Volumes' Progress, which the
+ * client does not know here, so both wait while any "Read all" run is
+ * still marking (useRunLock): its later batch could otherwise re-mark an
+ * undone Volume.
  */
 export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }) {
-  if (!convexClient) return null;
-  return <ReleasePassControlsInner releaseId={releaseId} />;
-}
-
-function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
-  const data = useQuery(api.reading.passForRelease, { releaseId });
+  const data = useViewerQuery(api.reading.passForRelease, { releaseId });
   const startPass = useMutation(api.reading.startPass);
   const setPercent = useMutation(api.reading.setPassPercent);
   const completePass = useMutation(api.reading.completePass);
@@ -308,11 +266,13 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
   // Start-reading suggestions returned by startPass (never auto-applied).
   const [suggestReading, setSuggestReading] = useState<SeriesSuggestion[]>([]);
   // The just-confirmed completion: drives the undo affordance and the
-  // completed-series suggestions.
-  const [completion, setCompletion] = useState<{
-    completedAt: number;
-    suggested: SeriesSuggestion[];
-  } | null>(null);
+  // completed-series suggestions. It stays until Undo succeeds.
+  const [completion, setCompletion] = useState<Completion | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const [undoError, setUndoError] = useState<string | null>(null);
+  // A completion in flight, and why the last one was refused.
+  const [completing, setCompleting] = useState(false);
+  const [completeError, setCompleteError] = useState<string | null>(null);
 
   if (!data) return null; // loading, signed out, or username pending
   const pass = data.pass;
@@ -320,20 +280,49 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
 
   const start = async () => {
     setCompletion(null);
+    setUndoError(null);
+    setCompleteError(null);
     setDraft(null);
     const result = await startPass({ releaseId });
     setSuggestReading(result.suggestReading);
   };
 
   const confirmComplete = async () => {
+    if (completing || lock.held()) return;
+    setCompleting(true);
+    setCompleteError(null);
+    try {
+      const result = await completePass({ releaseId });
+      setDraft(null);
+      setUndoError(null);
+      setCompletion(result);
+    } catch (err) {
+      setCompleteError(
+        mutationErrorMessage(err, "Completing the pass didn't go through. Try again."),
+      );
+    } finally {
+      setCompleting(false);
+      setConfirming(false);
+    }
+  };
+
+  const undo = async (done: Completion) => {
     if (lock.held()) return;
-    setConfirming(false);
-    const result = await completePass({ releaseId });
-    setDraft(null);
-    setCompletion({
-      completedAt: result.completedAt,
-      suggested: result.suggestCompleted,
-    });
+    setUndoing(true);
+    setUndoError(null);
+    try {
+      await undoCompletion({
+        releaseId,
+        completedAt: done.completedAt,
+        volumeIds: done.volumeIds,
+        percent: done.percent,
+      });
+      setCompletion(null);
+    } catch (err) {
+      setUndoError(mutationErrorMessage(err, "Undo didn't go through. Try again."));
+    } finally {
+      setUndoing(false);
+    }
   };
 
   return (
@@ -367,6 +356,7 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
             className="pass-cancel"
             onClick={() => {
               setConfirming(false);
+              setCompleteError(null);
               setDraft(null);
               void cancelPass({ releaseId });
             }}
@@ -375,14 +365,13 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
           </button>
           {confirming ? (
             <span className="prompt" role="status">
-              Mark this pass complete? Every volume this release covers
-              completely gets +1 read.{" "}
+              Mark this pass complete? Every volume this release covers completely gets +1 read.{" "}
               <button
                 type="button"
-                disabled={lock.locked}
+                disabled={lock.locked || completing}
                 onClick={() => void confirmComplete()}
               >
-                Complete pass
+                {completing ? "Completing…" : "Complete pass"}
               </button>{" "}
               <button type="button" onClick={() => setConfirming(false)}>
                 Not yet
@@ -395,21 +384,19 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
           Pass completed — read counts updated.{" "}
           <button
             type="button"
-            disabled={lock.locked}
-            onClick={() => {
-              if (lock.held()) return;
-              void undoCompletion({
-                releaseId,
-                completedAt: completion.completedAt,
-              });
-              setCompletion(null);
-            }}
+            disabled={lock.locked || undoing}
+            onClick={() => void undo(completion)}
           >
             Undo
           </button>
+          {undoError ? (
+            <span className="form-error" role="alert">
+              {undoError}
+            </span>
+          ) : null}
           <CompletedPrompt
-            suggestions={completion.suggested}
-            onDone={() => setCompletion({ ...completion, suggested: [] })}
+            suggestions={completion.suggestCompleted}
+            onDone={() => setCompletion({ ...completion, suggestCompleted: [] })}
           />
         </span>
       ) : (
@@ -417,6 +404,11 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
           Start reading
         </button>
       )}
+      {completeError ? (
+        <span className="form-error" role="alert">
+          {completeError}
+        </span>
+      ) : null}
       {suggestReading.length > 0 ? (
         <span className="prompt" role="status">
           {suggestReading.map((suggestion) => (
@@ -462,12 +454,7 @@ type ReadingFilter = "all" | ReadingStatus;
  * through its books. Filter chips narrow to one status.
  */
 export function LibraryReading() {
-  if (!convexClient) return null;
-  return <LibraryReadingInner />;
-}
-
-function LibraryReadingInner() {
-  const overview = useQuery(api.reading.myReading, {});
+  const overview = useViewerQuery(api.reading.myReading);
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   const [filter, setFilter] = useState<ReadingFilter>("all");
   if (overview === undefined) return <p className="placeholder">Loading…</p>;
@@ -475,8 +462,8 @@ function LibraryReadingInner() {
   if (overview.series.length === 0) {
     return (
       <p className="placeholder">
-        Pick a reading status on any series page, mark a book read from its
-        cover, or start a reading pass on a release, and it will appear here.
+        Pick a reading status on any series page, mark a book read from its cover, or start a
+        reading pass on a release, and it will appear here.
       </p>
     );
   }
@@ -508,8 +495,7 @@ function LibraryReadingInner() {
               aria-pressed={filter === status}
               onClick={() => setFilter(status)}
             >
-              {STATUS_LABELS[status]}{" "}
-              <span className="lib-chip-count">{count(status)}</span>
+              {STATUS_LABELS[status]} <span className="lib-chip-count">{count(status)}</span>
             </button>
           ) : null,
         )}
@@ -517,9 +503,7 @@ function LibraryReadingInner() {
       <ul className="reading-list">
         {rows.map((row) => {
           const percent =
-            row.totalVolumes === 0
-              ? 0
-              : Math.round((row.volumesRead / row.totalVolumes) * 100);
+            row.totalVolumes === 0 ? 0 : Math.round((row.volumesRead / row.totalVolumes) * 100);
           return (
             <li key={row.seriesPublicId} className="reading-row">
               <Link

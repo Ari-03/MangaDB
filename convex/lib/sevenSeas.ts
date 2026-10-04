@@ -8,7 +8,8 @@
 //   The ACF fields (release date, ISBN, price…) are NOT exposed in REST.
 // - The book page HTML (`link`), whose `#volume-meta` block carries
 //   "Series:", "Story & Art by:", "Release Date:", "Price:", "Format:",
-//   "ISBN:" lines, plus the cover image and its age-rating badge.
+//   "ISBN:" lines, plus the cover image, its age-rating badge and, for an
+//   imprint's book, the imprint's block beside it.
 //
 // Keeping this module pure (no Convex imports beyond values) lets the
 // parsers be unit-tested against saved fixture responses without a backend.
@@ -47,10 +48,21 @@ export const bookSnapshotValidator = v.object({
   coverUrl: v.optional(v.string()),
   description: v.optional(v.string()),
   /**
-   * The page rates the book 18+ (`isMatureRating`). Absent on snapshots
-   * taken before ratings were read, which the sync re-fetches.
+   * The page rates the book 18+ (`isMatureRating`). False also when the
+   * page states no rating; `ageRating` tells the two apart. Absent on
+   * snapshots taken before ratings were read.
    */
   mature: v.optional(v.boolean()),
+  /** The badge's id as the page states it ("teen", "olderteen17", "mature"); absent without one. */
+  ageRating: v.optional(v.string()),
+  /**
+   * The imprint the page names beside the rating ("Ghost Ship",
+   * "Steamship"). The Edition stays filed under Seven Seas; an adult-only
+   * imprint makes its Series mature (lib/mature.ts observationRatesMature).
+   */
+  imprint: v.optional(v.string()),
+  /** The BOOK_PAGE_VERSION that read the page; absent before versions. */
+  parserVersion: v.optional(v.number()),
 });
 
 export type BookSnapshot = Infer<typeof bookSnapshotValidator>;
@@ -121,13 +133,28 @@ export type BookPageDetails = {
   category?: string;
   isbn13?: string;
   coverUrl?: string;
-  /** The age-rating badge's id: "allages", "teen", "olderteen15", "olderteen17", "mature". */
+  /**
+   * The age-rating badge's id ("allages", "tenplus", "teen", "olderteen",
+   * "olderteen15", "olderteen17", "mature").
+   */
   ageRating?: string;
+  /** The imprint named in the block beside the badge ("Ghost Ship"). */
+  imprint?: string;
 };
 
 /**
+ * The book-page parser's version, stored on every snapshot it reads. Bump
+ * it when the parser learns to read a page better: the sync re-reads each
+ * book page stored under an older version once (sevenSeas.ts noteListing).
+ * 1: the age rating read by attribute, the imprint, the metadata's rating.
+ * 2: the badge and imprint read only beside the cover; no metadata rating.
+ */
+export const BOOK_PAGE_VERSION = 2;
+
+/**
  * Seven Seas' age ratings (sevenseasentertainment.com/about/age-ratings/):
- * only "mature" is 18+; Older Teen is 15+ or 17+.
+ * only Mature is 18+. All Ages, 10+, Teen, and Older Teen at 15+ or 17+
+ * (once one Older Teen at 16+) are not (CONTEXT.md, Mature Series).
  */
 export function isMatureRating(ageRating: string | undefined): boolean {
   return ageRating === "mature";
@@ -152,9 +179,48 @@ function metaLine(html: string, label: string): string | undefined {
   return value === "" ? undefined : value;
 }
 
+/** A start tag's attributes in any order and quoting: lowercased name → decoded value. */
+function tagAttributes(source: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  const attribute = /([^\s"'=<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  for (const m of source.matchAll(attribute)) {
+    attributes.set(m[1]!.toLowerCase(), decodeEntities(m[2] ?? m[3] ?? m[4] ?? ""));
+  }
+  return attributes;
+}
+
+/** The badge ids on sevenseasentertainment.com/about/age-ratings/, and the old Older Teen. */
+const RATING_ID = /^(?:allages|tenplus|teen|olderteen\d*|mature)$/;
+
+/**
+ * The blocks in `html` whose class list holds "age-rating", read by
+ * attribute in any order, quoting or class list. The rating badge is read
+ * by its id (`<div class="age-rating" id="mature"></div>`); a block with
+ * text and no rating id names the book's imprint (`<div id="SS-block"
+ * class="age-rating">Steamship</div>`; Ghost Ship's wraps its name in a
+ * link). Any other block is ignored. The first of each wins.
+ */
+function ageRatingBlocks(html: string): { badge?: string; imprint?: string } {
+  const found: { badge?: string; imprint?: string } = {};
+  for (const m of html.matchAll(/<([a-z][a-z0-9]*)(\s[^>]*)>/gi)) {
+    const attributes = tagAttributes(m[2]!);
+    const classes = (attributes.get("class") ?? "").toLowerCase().split(/\s+/);
+    if (!classes.includes("age-rating")) continue;
+    const id = attributes.get("id")?.trim().toLowerCase() ?? "";
+    const from = m.index + m[0].length;
+    const close = html.slice(from).search(new RegExp(`</${m[1]}\\s*>`, "i"));
+    const text = close < 0 ? "" : stripHtml(html.slice(from, from + close));
+    if (RATING_ID.test(id)) found.badge ??= id;
+    else if (text !== "") found.imprint ??= text;
+  }
+  return found;
+}
+
 /**
  * Extract the volume-meta facts from a Seven Seas book page. Verified
- * against the live page shape on 2026-08-19. The metadata block must exist;
+ * against the live page shape on 2026-08-19, and its rating and imprint
+ * blocks against archived pages from 2025-08 to 2026-08
+ * (__fixtures__/sevenSeas). The metadata block must exist;
  * individual facts remain optional. Error pages must never become books.
  */
 export function parseBookPage(html: string): BookPageDetails {
@@ -199,14 +265,18 @@ export function parseBookPage(html: string): BookPageDetails {
 
   // The cover is the last uploads image before the volume-meta block.
   const head = html.slice(0, meta.index);
-  let coverUrl: string | undefined;
+  let coverAt = 0;
   for (const m of head.matchAll(/<img[^>]+src="([^"]*\/wp-content\/uploads\/[^"]+)"/gi)) {
-    coverUrl = m[1]!;
+    details.coverUrl = m[1]!;
+    coverAt = m.index;
   }
-  details.coverUrl = coverUrl;
 
-  // The rating badge beside the cover: <div class="age-rating" id="teen">.
-  details.ageRating = /<div\s+class="age-rating"\s+id="([a-z0-9-]+)"/i.exec(head)?.[1]?.toLowerCase();
+  // The rating badge and imprint block sit between the cover and the
+  // metadata; blocks elsewhere on the page (a legend, a strip of other
+  // books) are not this book's.
+  const { badge, imprint } = ageRatingBlocks(head.slice(coverAt));
+  details.ageRating = badge;
+  details.imprint = imprint;
 
   return details;
 }
@@ -259,5 +329,8 @@ export function normalizeBook(listing: BookListing, page: BookPageDetails): Book
     coverUrl: page.coverUrl,
     description: listing.description,
     mature: isMatureRating(page.ageRating),
+    ageRating: page.ageRating,
+    imprint: page.imprint,
+    parserVersion: BOOK_PAGE_VERSION,
   };
 }

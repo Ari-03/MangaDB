@@ -8,7 +8,19 @@ import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import { insertEdition, insertPublisher, insertRelease, insertSeries } from "./test.factories";
-import { ADMIN, MOD, PLAIN, alice, bob, dave, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
+import {
+  ADMIN,
+  MOD,
+  PLAIN,
+  alice,
+  bob,
+  dave,
+  drain,
+  makeT,
+  seedRegistry,
+  seedTeam,
+  type TestT,
+} from "./test.helpers";
 
 async function setup(t: TestT) {
   await seedTeam(t, [alice, bob, dave]);
@@ -17,11 +29,7 @@ async function setup(t: TestT) {
 }
 
 /** Insert one finished Import Run so a stage/source counts as succeeded. */
-async function addRun(
-  t: TestT,
-  sourceKey: string,
-  status: "succeeded" | "failed" = "succeeded",
-) {
+async function addRun(t: TestT, sourceKey: string, status: "succeeded" | "failed" = "succeeded") {
   return await t.run(async (ctx) => {
     return await ctx.db.insert("importRuns", {
       sourceKey,
@@ -91,6 +99,7 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
       .withIdentity({ subject: ADMIN })
       .mutation(api.launch.startSeedStage, { stage: 2 });
     expect(res.started).toEqual(["ann"]);
+    await drain(t);
   });
 
   it("starts stage 1's two pilots, and stage 2 once stage 1 completed", async () => {
@@ -111,6 +120,7 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
 
     const stage2 = await asAdmin.mutation(api.launch.startSeedStage, { stage: 2 });
     expect(stage2).toMatchObject({ started: ["ann"] });
+    await drain(t);
   });
 
   it("a failed run does not complete a stage; ordering tracks first successes", async () => {
@@ -262,10 +272,7 @@ describe("duplicate sweep (gate ③)", () => {
   it("auto-closes an open pair once a member is merged away", async () => {
     const t = makeT();
     await setup(t);
-    const [aId, bId] = await seedCatalog(t, [
-      { title: "Berserk" },
-      { title: "Berserk" },
-    ]);
+    const [aId, bId] = await seedCatalog(t, [{ title: "Berserk" }, { title: "Berserk" }]);
     const asMod = t.withIdentity({ subject: MOD });
     await asMod.action(api.launch.runDuplicateSweep, {});
     let qa = await asMod.query(api.launch.qaStatus, {});
@@ -324,9 +331,7 @@ describe("launchChecklist (spec §7: gates, and only the gates)", () => {
   it("computes every gate and flips ready when all pass", async () => {
     const t = makeT();
     await setup(t);
-    const [seriesId] = await seedCatalog(t, [
-      { title: "Witch Hat Atelier", releases: 2 },
-    ]);
+    const [seriesId] = await seedCatalog(t, [{ title: "Witch Hat Atelier", releases: 2 }]);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     const asMod = t.withIdentity({ subject: MOD });
 
@@ -439,5 +444,20 @@ describe("seedPublishers (the canonical publisher list)", () => {
     // New rows are born marked; only the pre-existing Ghost Ship row needed it.
     expect(first.markedAdultOnly).toEqual(["ghost-ship"]);
     expect(again.markedAdultOnly).toEqual([]);
+  });
+
+  it("marks an existing Steamship row adult-only, like Ghost Ship", async () => {
+    const t = makeT();
+    // A row an earlier seed created before Steamship was on the adult-only list.
+    await t.run((ctx) => insertPublisher(ctx, { name: "Steamship", slug: "steamship" }));
+    const seeded = await t.mutation(internal.launch.seedPublishers, {});
+    expect(seeded.markedAdultOnly).toEqual(["steamship"]);
+    const steamship = await t.run((ctx) =>
+      ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "steamship"))
+        .unique(),
+    );
+    expect(steamship?.contentRating).toBe("mature");
   });
 });

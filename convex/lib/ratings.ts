@@ -146,10 +146,7 @@ export async function omnibusEdition(
 }
 
 /** A stored target's surviving active record with its Series, or why not. */
-async function activeTarget(
-  ctx: QueryCtx,
-  target: TargetId,
-): Promise<Active<TargetId> | Refusal> {
+async function activeTarget(ctx: QueryCtx, target: TargetId): Promise<Active<TargetId> | Refusal> {
   switch (target.kind) {
     case "series": {
       const series = await getActive(ctx, "series", target.id);
@@ -199,8 +196,14 @@ export async function resolveTarget(
   ctx: QueryCtx,
   ref: PageTargetRef,
 ): Promise<Active<PageTargetId> | null>;
-export async function resolveTarget(ctx: QueryCtx, ref: TargetRef): Promise<Active<TargetId> | null>;
-export async function resolveTarget(ctx: QueryCtx, ref: TargetRef): Promise<Active<TargetId> | null> {
+export async function resolveTarget(
+  ctx: QueryCtx,
+  ref: TargetRef,
+): Promise<Active<TargetId> | null>;
+export async function resolveTarget(
+  ctx: QueryCtx,
+  ref: TargetRef,
+): Promise<Active<TargetId> | null> {
   const stored = await targetByPublicId(ctx, ref);
   if (!stored) return null;
   const found = await activeTarget(ctx, stored);

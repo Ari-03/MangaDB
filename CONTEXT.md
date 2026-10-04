@@ -67,7 +67,7 @@ An active Series whose Volumes are known but to which no English book has attach
 _Avoid_: empty series, orphan series
 
 **Mature Series**:
-A Series for adults only: rated 18+ by a source (a publisher's own age rating, or ANN's), with an Edition from an adult-only publisher, or so rated by the Data Team, whose call wins either way. Discovery (browse, search, the calendar, the Publishers board, author shelves, the sitemap) leaves it out unless the viewer has opted in to mature titles; its pages stay reachable but hide their cover art until then. A publisher's teen or older-teen rating does not make a Series mature.
+A Series for adults only: rated 18+ by a source (a publisher's own age rating, or ANN's), with an Edition from an adult-only publisher, or so rated by the Data Team, whose call wins either way. Discovery (browse, search, the calendar, the Publishers board, author shelves, the sitemap) leaves it out unless the viewer has opted in to mature titles, and the home page's shelves leave it out always; its pages stay reachable but hide their cover art until then. A publisher's teen or older-teen rating does not make a Series mature. An adult-only imprint (Ghost Ship, Steamship) makes a Series mature whatever rating its books carry; the older-teen rule is about a rating alone.
 _Avoid_: NSFW, adult manga, explicit
 
 **Unmapped Packaging**:
@@ -165,6 +165,10 @@ A fact reported by an external data source about a Series, Volume, or Release. S
 **Withdrawn Observation**:
 A Source Observation whose record disappeared from a complete sweep of its source. It is retained, never deleted, and never changes a Canonical Record by itself; when its linked Release is still future-dated, it queues a possible-cancellation review.
 
+**Held Book**:
+A book an Approved Source lists that its import could not place and a person could: the Volume it names does not exist under a known Series and Publisher, its packaging cannot be mapped, no single active Series fits, its ISBN or its Volume's slot for that publisher and Format is taken, or its distributor is missing or unknown. Its Source Observation keeps the reason, and the Data Team's held list shows it until the observation is linked to a Canonical Record or withdrawn, and not while an import's Proposal of it is in review; a Data Team member's placement Proposal of it leaves it listed, marked as a Draft or awaiting review. A book no one can place or that is out of scope keeps the reason but is not held. Nothing canonical exists for it, unlike Unmapped Packaging.
+_Avoid_: unplaced book, orphan
+
 **Import Run**:
 One recorded execution of an Approved Source's import: source, timing, records seen and changed, and errors. Runs happen unattended on the source's registry cadence; three consecutive failed Import Runs mark the source Unhealthy.
 
@@ -175,7 +179,7 @@ An Approved Source whose last three Import Runs all failed. The transition email
 MangaDB's currently approved representation of a Series, Volume, or Release. This is what the public site displays.
 
 **Human Override**:
-An approved field-level correction to a Canonical Record. Imports may report a conflicting Source Observation but cannot replace the corrected value until a Moderator explicitly clears the override.
+An approved field-level correction to a Canonical Record. Imports may report a conflicting Source Observation but never replace the corrected value. A Moderator can clear the override; the value and its author stay, and imports then follow the usual Field Authority rules, under which replacing a human-written value still needs review.
 
 **Proposal**:
 A coherent, atomic data-maintenance intent submitted for review. A Proposal may affect multiple Canonical Records when all of its changes must succeed or fail together; unrelated changes belong in separate Proposals.

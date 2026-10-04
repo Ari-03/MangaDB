@@ -12,7 +12,11 @@ import {
   type Incumbent,
 } from "./authority";
 
-const SEVEN_SEAS = { date: "authoritative", isbn: "authoritative", price: "authoritative" } as const;
+const SEVEN_SEAS = {
+  date: "authoritative",
+  isbn: "authoritative",
+  price: "authoritative",
+} as const;
 const ANN = { date: "standard", titles: "standard" } as const;
 const OPENLIBRARY = { date: "weak", isbn: "standard" } as const;
 
@@ -83,12 +87,8 @@ describe("decideField — the conflict table", () => {
   });
 
   it("records a lower-authority disagreement on the observation only", () => {
-    expect(decide({ incomingRank: 2, incumbent: src("kodansha", 3) }).action).toBe(
-      "recordOnly",
-    );
-    expect(decide({ incomingRank: 1, incumbent: src("prh", 3) }).action).toBe(
-      "recordOnly",
-    );
+    expect(decide({ incomingRank: 2, incumbent: src("kodansha", 3) }).action).toBe("recordOnly");
+    expect(decide({ incomingRank: 1, incumbent: src("prh", 3) }).action).toBe("recordOnly");
   });
 
   it("lets a source record update its own fact, whatever the ranks say", () => {
@@ -114,13 +114,10 @@ describe("decideField — the conflict table", () => {
 
   it("Human Overrides stay sticky: queue at ANY authority, never overwrite", () => {
     expect(decide({ overridden: true, incomingRank: 3 }).action).toBe("queue");
-    expect(
-      decide({ overridden: true, incumbent: src("sevenseas", 3) }).action,
-    ).toBe("queue");
+    expect(decide({ overridden: true, incumbent: src("sevenseas", 3) }).action).toBe("queue");
     // Even an override on an empty field holds.
     expect(
-      decide({ overridden: true, current: undefined, incumbent: { kind: "none" } })
-        .action,
+      decide({ overridden: true, current: undefined, incumbent: { kind: "none" } }).action,
     ).toBe("queue");
   });
 
@@ -132,15 +129,13 @@ describe("decideField — the conflict table", () => {
   it("a source with no authority for the field records only", () => {
     expect(decide({ incomingRank: 0 }).action).toBe("recordOnly");
     expect(
-      decide({ incomingRank: 0, current: undefined, incumbent: { kind: "none" } })
-        .action,
+      decide({ incomingRank: 0, current: undefined, incumbent: { kind: "none" } }).action,
     ).toBe("recordOnly");
   });
 
   it("filling an empty field is not a disagreement", () => {
     expect(
-      decide({ current: undefined, incumbent: { kind: "none" }, incomingRank: 1 })
-        .action,
+      decide({ current: undefined, incumbent: { kind: "none" }, incomingRank: 1 }).action,
     ).toBe("auto");
   });
 });
@@ -306,12 +301,17 @@ describe("the description category", () => {
       "recordOnly",
     );
     expect(
-      blurb({ ...weak, field: "synopsis", incomingSourceKey: "ann", incumbent: src("openlibrary", 1) }),
+      blurb({
+        ...weak,
+        field: "synopsis",
+        incomingSourceKey: "ann",
+        incumbent: src("openlibrary", 1),
+      }),
     ).toBe("recordOnly");
     // Two records of one weak source (two OL editions of an ISBN): the same.
-    expect(blurb({ ...weak, incomingSourceKey: "openlibrary", incumbent: src("openlibrary", 1) })).toBe(
-      "recordOnly",
-    );
+    expect(
+      blurb({ ...weak, incomingSourceKey: "openlibrary", incumbent: src("openlibrary", 1) }),
+    ).toBe("recordOnly");
     // The record that wrote the text updates its own fact.
     expect(
       blurb({
@@ -322,26 +322,54 @@ describe("the description category", () => {
     ).toBe("auto");
     // Still a queue: a Human Override, and equal rank above weak.
     expect(
-      blurb({ ...weak, incomingSourceKey: "openlibrary", overridden: true, incumbent: src("ann", 1) }),
+      blurb({
+        ...weak,
+        incomingSourceKey: "openlibrary",
+        overridden: true,
+        incumbent: src("ann", 1),
+      }),
     ).toBe("queue");
-    expect(blurb({ incomingSourceKey: "prh", incomingRank: 2, incumbent: src("prh2", 2) })).toBe("queue");
+    expect(blurb({ incomingSourceKey: "prh", incomingRank: 2, incumbent: src("prh2", 2) })).toBe(
+      "queue",
+    );
   });
 
   it("(h) a blank a source cleared is open to any source; a human's blank is not", () => {
     // ANN's repair cleared a credit-only text: ANN is still the incumbent.
     const cleared = { current: undefined, offered: "An OpenLibrary blurb." };
-    expect(blurb({ ...cleared, incomingSourceKey: "openlibrary", incomingRank: 1, incumbent: src("ann", 1) })).toBe(
-      "auto",
-    );
-    expect(blurb({ ...cleared, incumbent: src("kodansha", 3), incomingSourceKey: "ann", incomingRank: 1 })).toBe(
-      "auto",
-    );
+    expect(
+      blurb({
+        ...cleared,
+        incomingSourceKey: "openlibrary",
+        incomingRank: 1,
+        incumbent: src("ann", 1),
+      }),
+    ).toBe("auto");
+    expect(
+      blurb({
+        ...cleared,
+        incumbent: src("kodansha", 3),
+        incomingSourceKey: "ann",
+        incomingRank: 1,
+      }),
+    ).toBe("auto");
     // A Human Override, or a blank a human authored, still never fills.
     expect(
-      blurb({ ...cleared, overridden: true, incomingSourceKey: "openlibrary", incomingRank: 1, incumbent: src("ann", 1) }),
+      blurb({
+        ...cleared,
+        overridden: true,
+        incomingSourceKey: "openlibrary",
+        incomingRank: 1,
+        incumbent: src("ann", 1),
+      }),
     ).toBe("queue");
-    expect(blurb({ ...cleared, incomingSourceKey: "openlibrary", incomingRank: 1, incumbent: { kind: "human" } })).toBe(
-      "queue",
-    );
+    expect(
+      blurb({
+        ...cleared,
+        incomingSourceKey: "openlibrary",
+        incomingRank: 1,
+        incumbent: { kind: "human" },
+      }),
+    ).toBe("queue");
   });
 });

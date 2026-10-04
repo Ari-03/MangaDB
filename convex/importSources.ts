@@ -10,12 +10,7 @@
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
-import {
-  internalMutation,
-  internalQuery,
-  mutation,
-  query,
-} from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { AuthorityLevel } from "./lib/authority";
 import { capture } from "./lib/posthog";
@@ -56,7 +51,8 @@ export const V1_SOURCE_DEFAULTS = [
       description: "authoritative",
     },
     cadence: "daily",
-    attribution: "Cover and publication data courtesy of Seven Seas Entertainment (sevenseasentertainment.com).",
+    attribution:
+      "Cover and publication data courtesy of Seven Seas Entertainment (sevenseasentertainment.com).",
   },
   {
     key: "kodansha",
@@ -171,10 +167,7 @@ export const V1_SOURCE_DEFAULTS = [
   },
 ] as const;
 
-export async function getSourceByKey(
-  ctx: QueryCtx | MutationCtx,
-  key: string,
-) {
+export async function getSourceByKey(ctx: QueryCtx | MutationCtx, key: string) {
   return await ctx.db
     .query("approvedSources")
     .withIndex("by_key", (q) => q.eq("key", key))
@@ -241,7 +234,7 @@ export const upsert = mutation({
     if (!/^[a-z][a-z0-9-]*$/.test(key)) {
       throw new ConvexError({
         code: "invalidKey",
-        message: "Source keys are lowercase slugs (e.g. \"sevenseas\").",
+        message: 'Source keys are lowercase slugs (e.g. "sevenseas").',
       });
     }
     const existing = await getSourceByKey(ctx, key);
@@ -334,9 +327,7 @@ export async function recordSourceOutcome(
 // ---------- Bootstrap Mode (spec §7) ----------
 
 /** The singleton appConfig row's toggle; absent config means steady-state. */
-export async function getBootstrapMode(
-  ctx: QueryCtx | MutationCtx,
-): Promise<boolean> {
+export async function getBootstrapMode(ctx: QueryCtx | MutationCtx): Promise<boolean> {
   const config = await ctx.db.query("appConfig").first();
   return config?.bootstrapMode ?? false;
 }

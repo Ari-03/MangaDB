@@ -25,8 +25,14 @@
 // Without a key and a non-empty imprint list (PRH_IMPRINT_CODES or the
 // `imprints` argument), a fresh call skips as "unconfigured" and opens no
 // run. A link the sync hands off carries its imprint list in its arguments,
-// so removing PRH_IMPRINT_CODES mid-run has no effect on it; removing
-// PRH_API_KEY closes the run as failed.
+// so removing PRH_IMPRINT_CODES mid-run has no effect on it. A link that
+// finds PRH_API_KEY gone closes its run as failed, except an automatic run
+// on a disabled source, which the gate stops first (as "stopped").
+//
+// Disabling the source follows the shared rule (lib/importRuns.ts): the gate
+// is checked at each link, before each list page and before the withdrawal
+// pass, so a scheduled run stops as "stopped" and withdraws nothing, while a
+// forced run imports and withdraws only after a complete full sweep.
 //
 // The API cannot filter by date (lib/prh.ts), so future mode pages an
 // imprint newest-first and cuts off at today client-side.
@@ -35,10 +41,11 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
-import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
+import { applyCatalogTitle } from "./lib/catalogTitle";
+import type { ApplyResult } from "./lib/unmatched";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
-import { closeRun, registryRow } from "./lib/importRuns";
+import { closeRun, registryRow, runToContinue, stampHandOff, stopAtGate } from "./lib/importRuns";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { toPartialDate } from "./lib/pipeline";
@@ -49,7 +56,7 @@ export const SOURCE_KEY = "prh";
 const API_BASE = "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US";
 const IMPORT_COMMENT = "Imported from the Penguin Random House API.";
 const ROWS_PER_PAGE = 200;
-/** Per-link wall-clock budget, well inside Convex's 10-minute action limit. */
+/** Per-link wall-clock budget, well inside Convex's 30-minute action limit. */
 const LINK_BUDGET_MS = 4 * 60 * 1000;
 /** The list endpoint's content zoom: each title embeds its flap copy (lib/prh.ts). */
 const CONTENT_ZOOM = "https://api.penguinrandomhouse.com/title/titles/content/definition";
@@ -73,6 +80,7 @@ type SyncResult =
       failed?: boolean;
       /** This link ran out of time budget and scheduled the next one. */
       continued?: true;
+      stopped?: true;
     };
 
 /**
@@ -111,47 +119,55 @@ export const sync = internalAction({
     recordFailures: v.optional(v.number()),
     completeSweep: v.optional(v.boolean()),
     errors: v.optional(v.array(v.string())),
+    /**
+     * Set on every link this sync hands off. A continuation without it was
+     * scheduled by an older sync whose applies refused writes once the
+     * source was disabled, so a title its earlier pages listed may never
+     * have been observed: such a chain finishes, but its sweep counts as
+     * incomplete and never withdraws. The marker can go once no chain
+     * scheduled before it can still be queued.
+     */
+    observedEveryPage: v.optional(v.literal(true)),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("prh.sync", ctx, async () => {
       const linkStartedAt = Date.now();
       const source = await registryRow(ctx, SOURCE_KEY);
-      // A continuation link whose source was disabled or unconfigured between
-      // links must not leave its run open forever: close it as failed, saying why.
-      // PRH does not use lib/importRuns.ts runToContinue, so an operator-forced
-      // run on a disabled source is refused here too: applyTitle refuses every
-      // write, and a full sweep that imported nothing would withdraw every title.
-      const closeResumed = async (why: string) => {
-        if (args.runId === undefined) return;
-        await closeRun(ctx, args.runId, "failed", {
-          seen: args.seen ?? 0,
-          changed: args.changed ?? 0,
-          errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
-        });
-      };
-      if (!source.enabled) {
-        await closeResumed("the source was disabled.");
-        return { skipped: "disabled" as const };
-      }
       const apiKey = process.env.PRH_API_KEY;
       const configured = (process.env.PRH_IMPRINT_CODES ?? "")
         .split(",")
         .map((code) => code.trim())
         .filter((code) => code !== "");
       const imprints = args.imprints ?? configured;
-      if (!apiKey || imprints.length === 0) {
+      const unconfigured = !apiKey || imprints.length === 0;
+      if (unconfigured) {
         console.warn(
           "[imports] PRH adapter is unconfigured (set PRH_API_KEY and PRH_IMPRINT_CODES) — skipping",
         );
-        await closeResumed("PRH_API_KEY / PRH_IMPRINT_CODES were removed.");
+        if (args.runId === undefined) return { skipped: "unconfigured" as const };
+      }
+      // A continuation's gate comes before its configuration. An automatic
+      // run on a disabled source stops here, so an operator who disabled the
+      // source gets no failure alert for it. Every other run that lost its
+      // configuration fails below: a forced run on a disabled source, or any
+      // run on an enabled one.
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
+      // A run that lost its configuration between links must not stay open
+      // forever: it closes as failed, saying why.
+      if (unconfigured) {
+        await closeRun(ctx, runId, "failed", {
+          seen: args.seen ?? 0,
+          changed: args.changed ?? 0,
+          errors: [
+            ...(args.errors ?? []),
+            "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed.",
+          ],
+        });
         return { skipped: "unconfigured" as const };
       }
-      const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
-      const runId: Id<"importRuns"> =
-        args.runId ??
-        (await ctx.runMutation(internal.imports.startRun, {
-          sourceKey: SOURCE_KEY,
-        }));
+      const mode: "future" | "full" =
+        args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
       const runStartedAt = args.runStartedAt ?? linkStartedAt;
       const delay = args.politeDelayMs ?? 350;
       const maxPages = args.maxPages ?? 50;
@@ -160,14 +176,25 @@ export const sync = internalAction({
       let seen = args.seen ?? 0;
       let changed = args.changed ?? 0;
       let recordFailures = args.recordFailures ?? 0;
-      // A subset sweep can't prove absence, so it never withdraws.
-      let completeSweep = args.completeSweep ?? (mode === "full" && args.imprints === undefined);
+      // A subset sweep can't prove absence, so it never withdraws; nor can a
+      // continuation without `observedEveryPage` (every continuation carries
+      // runStartedAt).
+      const unmarkedContinuation =
+        args.runStartedAt !== undefined && args.observedEveryPage !== true;
+      let completeSweep =
+        !unmarkedContinuation &&
+        (args.completeSweep ?? (mode === "full" && args.imprints === undefined));
       const todayKey = todaySortKey();
       const firstImprint = args.imprintIndex ?? 0;
       // Schedule the next link with the run state. The EFFECTIVE imprint list
       // travels with it: a configured list re-read from the environment could
       // change between links and shift imprintIndex onto another imprint.
-      const handOff = async (imprintIndex: number, start: number, pages: number): Promise<SyncResult> => {
+      const handOff = async (
+        imprintIndex: number,
+        start: number,
+        pages: number,
+      ): Promise<SyncResult> => {
+        await stampHandOff(ctx, runId, { seen, changed, errors });
         await ctx.scheduler.runAfter(0, internal.prh.sync, {
           mode,
           imprints,
@@ -184,6 +211,7 @@ export const sync = internalAction({
           recordFailures,
           completeSweep,
           errors,
+          observedEveryPage: true,
         });
         return {
           runId,
@@ -207,6 +235,8 @@ export const sync = internalAction({
               completeSweep = false;
               break;
             }
+            const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+            if (stopped) return { ...stopped, mode, completeSweep: false };
             const params = new URLSearchParams({
               api_key: apiKey,
               rows: String(ROWS_PER_PAGE),
@@ -250,7 +280,9 @@ export const sync = internalAction({
               titles.some((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort < todayKey);
             const toApply =
               mode === "future"
-                ? titles.filter((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort >= todayKey)
+                ? titles.filter(
+                    (t) => t.onsale !== undefined && toPartialDate(t.onsale).sort >= todayKey,
+                  )
                 : titles;
 
             for (const snapshot of toApply) {
@@ -274,7 +306,8 @@ export const sync = internalAction({
             const exhausted =
               rawCount === 0 || (recordCount !== undefined && start >= recordCount) || pastReached;
             if (exhausted) break;
-            if (Date.now() - linkStartedAt >= linkBudgetMs) return await handOff(index, start, pages);
+            if (Date.now() - linkStartedAt >= linkBudgetMs)
+              return await handOff(index, start, pages);
           }
           // An imprint that fits on one page never reaches the check above; a
           // sweep of many small imprints would run past the action limit.
@@ -283,8 +316,11 @@ export const sync = internalAction({
           }
         }
         // Disappearance → withdrawn, only after a COMPLETE full-catalog sweep
-        // (absence is never evidence on a future-only or capped run).
+        // (absence is never evidence on a future-only or capped run) by a run
+        // the gate still lets go on.
         if (mode === "full" && completeSweep) {
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+          if (stopped) return { ...stopped, mode, completeSweep: false };
           await ctx.runMutation(internal.imports.markWithdrawn, {
             sourceKey: SOURCE_KEY,
             notSeenSince: runStartedAt,

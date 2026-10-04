@@ -16,7 +16,10 @@ export function Breadcrumbs({ trail }: { trail: Array<string | ReactElement> }) 
     <nav className="breadcrumbs" aria-label="Breadcrumb">
       <Link to="/">MangaDB</Link>
       {trail.map((crumb, i) => (
-        <Fragment key={i}>
+        <Fragment
+          // biome-ignore lint/suspicious/noArrayIndexKey: a page passes a fixed trail; a crumb's position is its identity
+          key={i}
+        >
           {" "}
           <span aria-hidden="true">/</span>{" "}
           {typeof crumb === "string" ? <span>{crumb}</span> : crumb}
@@ -57,8 +60,7 @@ export function NotFound({ noun, kind, browse = "catalog" }: NotFoundProps) {
  * Route options for a slugless `/{entity}/{id}` URL (and a merged loser's
  * ID): a permanent redirect to the record's canonical `/{entity}/{id}/{slug}`
  * (spec §11), or a 404. The slug is cosmetic; the ID alone identifies the
- * record. `fetchPage` returns null for an unknown ID or an unconfigured
- * deployment.
+ * record. `fetchPage` returns null for an unknown ID.
  */
 export function slugRedirect<Page>(
   fetchPage: (publicId: number) => Promise<Page | null>,

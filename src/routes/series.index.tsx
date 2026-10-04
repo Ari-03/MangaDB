@@ -90,13 +90,8 @@ const LETTERS = ["#", ..."abcdefghijklmnopqrstuvwxyz"];
 const SEARCH_DELAY_MS = 250;
 
 /** `value` when it is one of `labels`' keys, else undefined. */
-function keyOf<K extends string>(
-  labels: Record<K, string>,
-  value: unknown,
-): K | undefined {
-  return typeof value === "string" && Object.hasOwn(labels, value)
-    ? (value as K)
-    : undefined;
+function keyOf<K extends string>(labels: Record<K, string>, value: unknown): K | undefined {
+  return typeof value === "string" && Object.hasOwn(labels, value) ? (value as K) : undefined;
 }
 
 /**
@@ -107,8 +102,7 @@ function keyOf<K extends string>(
  */
 function validateLibrarySearch(search: Record<string, unknown>): LibrarySearch {
   const sort = keyOf(SORT_LABELS, search.sort);
-  const letter =
-    typeof search.letter === "string" ? search.letter.toLowerCase() : "";
+  const letter = typeof search.letter === "string" ? search.letter.toLowerCase() : "";
   const q = typeof search.q === "string" ? search.q.trim().slice(0, 100) : "";
   const publishers = [search.publisher]
     .flat()
@@ -124,10 +118,7 @@ function validateLibrarySearch(search: Record<string, unknown>): LibrarySearch {
     letter: LETTERS.includes(letter) ? letter : undefined,
     q: q || undefined,
     sort: sort === "title" ? undefined : sort,
-    order:
-      search.order === "asc" || search.order === "desc"
-        ? search.order
-        : undefined,
+    order: search.order === "asc" || search.order === "desc" ? search.order : undefined,
   };
 }
 
@@ -137,10 +128,7 @@ function viewKey(search: LibrarySearch): string {
 }
 
 /** The backend query args for a view (first page unless a cursor is given). */
-function browseArgs(
-  search: LibrarySearch,
-  cursor: string | null = null,
-): SeriesBrowseArgs {
+function browseArgs(search: LibrarySearch, cursor: string | null = null): SeriesBrowseArgs {
   const { publisher, sort, ...filters } = search;
   return {
     ...filters,
@@ -158,7 +146,8 @@ function browseArgs(
  * next time.
  */
 const clientFacets = new Map<boolean, ReturnType<typeof fetchFacets>>();
-const fetchFacets = (mature: boolean) => catalogQuery(api.seriesBrowse.facets, { showMature: mature });
+const fetchFacets = (mature: boolean) =>
+  catalogQuery(api.seriesBrowse.facets, { showMature: mature });
 function libraryFacets() {
   const mature = showMature();
   if (typeof window === "undefined") return fetchFacets(mature);
@@ -237,11 +226,7 @@ function SeriesLibraryPage() {
       <div className="library-layout">
         <FilterPanel draft={draft} update={update} facets={facets} />
 
-        <section
-          className="library-results"
-          aria-label="Series"
-          aria-busy={loading || undefined}
-        >
+        <section className="library-results" aria-label="Series" aria-busy={loading || undefined}>
           <div className="results-head">
             <ResultCount page={page} facets={facets} />
             <label className="results-sort">
@@ -271,12 +256,7 @@ function SeriesLibraryPage() {
           <ActiveFilters search={search} facets={facets} />
           <LetterStrip search={search} />
 
-          {page === null ? (
-            <p className="notice">
-              Convex is not configured. Set <code>VITE_CONVEX_URL</code> (see
-              the README) and restart to browse the library.
-            </p>
-          ) : page.items.length === 0 ? (
+          {page.items.length === 0 ? (
             <p className="notice">
               No series match these filters.{" "}
               <Link to="/series" search={{ sort: search.sort, order: search.order }}>
@@ -339,19 +319,12 @@ function useLibraryDraft(search: LibrarySearch) {
 type UpdateDraft = ReturnType<typeof useLibraryDraft>["update"];
 
 /** "123 series match" for a filtered view, the catalog size otherwise. */
-function ResultCount({
-  page,
-  facets,
-}: {
-  page: SeriesBrowsePage | null;
-  facets: SeriesFacets | null;
-}) {
-  const count = page?.total ?? facets?.total;
-  if (count === undefined) return <p className="results-count" />;
+function ResultCount({ page, facets }: { page: SeriesBrowsePage; facets: SeriesFacets }) {
+  const count = page.total ?? facets.total;
   const n = count.toLocaleString("en-US");
   return (
     <p className="results-count" aria-live="polite">
-      {page?.total === null || page?.total === undefined ? (
+      {page.total === null ? (
         <>
           <strong>{n}</strong> series in the catalog
         </>
@@ -377,11 +350,11 @@ function FilterPanel({
 }: {
   draft: LibrarySearch;
   update: UpdateDraft;
-  facets: SeriesFacets | null;
+  facets: SeriesFacets;
 }) {
   const [open, setOpen] = useState(false);
   const statusCounts = new Map<string, number>(
-    facets?.statuses.map((entry) => [entry.status, entry.count]) ?? [],
+    facets.statuses.map((entry) => [entry.status, entry.count]),
   );
   const publishers = draft.publisher?.split(",") ?? [];
   const activeCount =
@@ -415,7 +388,14 @@ function FilterPanel({
             autoComplete="off"
           />
           <button className="library-search-btn" type="submit" aria-label="Search">
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <circle cx="8.5" cy="8.5" r="5.5" />
               <path d="m13 13 4 4" />
             </svg>
@@ -433,13 +413,11 @@ function FilterPanel({
         </button>
 
         <div id="library-filter-groups" className="filter-groups" data-open={open}>
-          {facets ? (
-            <PublisherPicker
-              publishers={facets.publishers}
-              selected={publishers}
-              onChange={(slugs) => update({ publisher: slugs.join(",") || undefined })}
-            />
-          ) : null}
+          <PublisherPicker
+            publishers={facets.publishers}
+            selected={publishers}
+            onChange={(slugs) => update({ publisher: slugs.join(",") || undefined })}
+          />
           <ChoiceGroup
             legend="Volumes"
             name="volumes"
@@ -604,14 +582,8 @@ function ChoiceGroup<K extends string>({
  * The filters in force as removable chips, then "Clear all" (which keeps the
  * sort). Links, so they work before hydration and push history.
  */
-function ActiveFilters({
-  search,
-  facets,
-}: {
-  search: LibrarySearch;
-  facets: SeriesFacets | null;
-}) {
-  const names = new Map(facets?.publishers.map((p) => [p.slug, p.name]));
+function ActiveFilters({ search, facets }: { search: LibrarySearch; facets: SeriesFacets }) {
+  const names = new Map(facets.publishers.map((p) => [p.slug, p.name]));
   const publishers = search.publisher?.split(",") ?? [];
   const chips: Array<{ key: string; label: string; next: LibrarySearch }> = [
     ...publishers.map((slug) => ({
@@ -624,19 +596,39 @@ function ActiveFilters({
     })),
   ];
   if (search.volumes) {
-    chips.push({ key: "volumes", label: `${VOLUME_LABELS[search.volumes]} ${search.volumes === "one" ? "volume" : "volumes"}`, next: { ...search, volumes: undefined } });
+    chips.push({
+      key: "volumes",
+      label: `${VOLUME_LABELS[search.volumes]} ${search.volumes === "one" ? "volume" : "volumes"}`,
+      next: { ...search, volumes: undefined },
+    });
   }
   if (search.timing) {
-    chips.push({ key: "timing", label: `Releases: ${TIMING_LABELS[search.timing]}`, next: { ...search, timing: undefined } });
+    chips.push({
+      key: "timing",
+      label: `Releases: ${TIMING_LABELS[search.timing]}`,
+      next: { ...search, timing: undefined },
+    });
   }
   if (search.format) {
-    chips.push({ key: "format", label: FORMAT_LABELS[search.format], next: { ...search, format: undefined } });
+    chips.push({
+      key: "format",
+      label: FORMAT_LABELS[search.format],
+      next: { ...search, format: undefined },
+    });
   }
   if (search.status) {
-    chips.push({ key: "status", label: `Source: ${STATUS_LABELS[search.status]}`, next: { ...search, status: undefined } });
+    chips.push({
+      key: "status",
+      label: `Source: ${STATUS_LABELS[search.status]}`,
+      next: { ...search, status: undefined },
+    });
   }
   if (search.letter) {
-    chips.push({ key: "letter", label: `Starts with ${search.letter.toUpperCase()}`, next: { ...search, letter: undefined } });
+    chips.push({
+      key: "letter",
+      label: `Starts with ${search.letter.toUpperCase()}`,
+      next: { ...search, letter: undefined },
+    });
   }
   if (search.q) {
     chips.push({ key: "q", label: `“${search.q}”`, next: { ...search, q: undefined } });
@@ -656,7 +648,9 @@ function ActiveFilters({
               aria-label={`Remove filter: ${chip.label}`}
             >
               {chip.label}
-              <span className="active-filter-x" aria-hidden="true">×</span>
+              <span className="active-filter-x" aria-hidden="true">
+                ×
+              </span>
             </Link>
           </li>
         ))}
@@ -754,7 +748,6 @@ function LibraryShelf({
     setState("loading");
     try {
       const next = await fetchSeriesBrowse(browseArgs(search, cursor));
-      if (!next) throw new Error("Convex is not configured");
       const merged = [...items, ...next.items];
       loadedViews.set(viewId, { items: merged, cursor: next.nextCursor });
       setItems(merged);

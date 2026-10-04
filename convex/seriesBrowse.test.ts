@@ -13,8 +13,16 @@ import { makeT } from "./test.helpers";
 async function seeded() {
   const t = makeT();
   const ids = await t.run(async (ctx) => {
-    const viz = await ctx.db.insert("publishers", { status: "active", name: "VIZ Media", slug: "viz-media" });
-    const seas = await ctx.db.insert("publishers", { status: "active", name: "Seven Seas", slug: "seven-seas" });
+    const viz = await ctx.db.insert("publishers", {
+      status: "active",
+      name: "VIZ Media",
+      slug: "viz-media",
+    });
+    const seas = await ctx.db.insert("publishers", {
+      status: "active",
+      name: "Seven Seas",
+      slug: "seven-seas",
+    });
     const user = await ctx.db.insert("users", {
       clerkSubject: "user_1",
       username: "reader",
@@ -54,7 +62,12 @@ async function seeded() {
           publicId: publicId * 100 + i,
           publisherId: publisher,
         });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          order: 0,
+          extent: "complete",
+        });
         const sort = dates[i] ?? 0;
         releaseIds.push(
           await ctx.db.insert("releases", {
@@ -65,7 +78,14 @@ async function seeded() {
             format: i % 2 === 0 ? "physical" : "digital",
             language: "en",
             isbn13: `978199900${String(publicId * 10 + i).padStart(4, "0")}`,
-            pubDate: sort ? { year: Math.floor(sort / 10000), month: Math.floor(sort / 100) % 100, day: sort % 100, sort } : undefined,
+            pubDate: sort
+              ? {
+                  year: Math.floor(sort / 10000),
+                  month: Math.floor(sort / 100) % 100,
+                  day: sort % 100,
+                  sort,
+                }
+              : undefined,
           }),
         );
       }
@@ -74,8 +94,17 @@ async function seeded() {
     const ghoul = await mk(1, "Tokyo Ghoul", viz, 4, [20150616, 20160101, 20170101, 20991231]);
     const quiet = await mk(2, "The Quiet Cartographer", seas, 1, [20240101], "active", "completed");
     await mk(3, "Hidden Series", viz, 1, [20240101], "hidden");
-    await ctx.db.insert("userSeriesStates", { userId: user, seriesId: ghoul.seriesId, following: true, followPromptDismissed: false });
-    await ctx.db.insert("collectionEntries", { userId: user, releaseId: ghoul.releaseIds[0]!, state: "owned" });
+    await ctx.db.insert("userSeriesStates", {
+      userId: user,
+      seriesId: ghoul.seriesId,
+      following: true,
+      followPromptDismissed: false,
+    });
+    await ctx.db.insert("collectionEntries", {
+      userId: user,
+      releaseId: ghoul.releaseIds[0]!,
+      state: "owned",
+    });
     return { ghoul, quiet };
   });
   await t.action(internal.seriesBrowse.rebuild, {});
@@ -106,7 +135,41 @@ describe("seriesBrowse.rebuild", () => {
     });
     expect(ghoul.coverIsbn).toBe("9781999000010");
     const quiet = rows.find((r) => r.title === "The Quiet Cartographer")!;
-    expect(quiet).toMatchObject({ titleSort: "quiet cartographer", letter: "q", nextReleaseSort: 0, followers: 0 });
+    expect(quiet).toMatchObject({
+      titleSort: "quiet cartographer",
+      letter: "q",
+      nextReleaseSort: 0,
+      followers: 0,
+    });
+  });
+
+  it("stores the jacket's ISBNs best first, deduped and capped, the first also alone", async () => {
+    const { t, ids } = await seeded();
+    // A print Release of Volume 2 filed under Volume 1's ISBN: a duplicate
+    // candidate, ranked between Volume 1's print book and Volume 3's.
+    await t.run(async (ctx) => {
+      const twin = (await ctx.db.get(ids.ghoul.releaseIds[1]!))!;
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: twin.editionId,
+        publisherId: twin.publisherId,
+        seriesIds: twin.seriesIds,
+        format: "physical",
+        language: "en",
+        isbn13: "9781999000010",
+        pubDate: twin.pubDate,
+      });
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    const row = await t.run((ctx) =>
+      ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.ghoul.seriesId))
+        .unique(),
+    );
+    // Print before digital, then by Volume; the forthcoming ebook is past the cap.
+    expect(row?.coverIsbns).toEqual(["9781999000010", "9781999000012", "9781999000011"]);
+    expect(row?.coverIsbn).toBe("9781999000010");
   });
 
   it("sweeps rows whose Series was hidden since", async () => {
@@ -131,7 +194,13 @@ describe("seriesBrowse.rebuild", () => {
       await t.run(async (ctx) => {
         for (let i = 0; i < 25; i++) {
           const title = `Filler ${String(i).padStart(2, "0")}`;
-          await ctx.db.insert("series", { status: "active", publicId: 100 + i, title, altTitles: [], searchText: title });
+          await ctx.db.insert("series", {
+            status: "active",
+            publicId: 100 + i,
+            title,
+            altTitles: [],
+            searchText: title,
+          });
         }
       });
       // The scheduler runs on timers; each Date.now() call jumps four
@@ -143,15 +212,17 @@ describe("seriesBrowse.rebuild", () => {
 
       const first = await t.action(internal.seriesBrowse.rebuild, {});
       expect(first).toMatchObject({ continuedAfter: expect.any(Number) });
-      const flaggedMidway = await t.run(async (ctx) =>
-        (await ctx.db.query("series").collect()).filter((s) => s.bookless === true).length,
+      const flaggedMidway = await t.run(
+        async (ctx) =>
+          (await ctx.db.query("series").collect()).filter((s) => s.bookless === true).length,
       );
       expect(flaggedMidway).toBeGreaterThan(0);
       expect(flaggedMidway).toBeLessThan(25);
 
       await t.finishAllScheduledFunctions(vi.runAllTimers);
-      const flagged = await t.run(async (ctx) =>
-        (await ctx.db.query("series").collect()).filter((s) => s.bookless === true).length,
+      const flagged = await t.run(
+        async (ctx) =>
+          (await ctx.db.query("series").collect()).filter((s) => s.bookless === true).length,
       );
       expect(flagged).toBe(25);
       // One run, one timestamp: the sweep must not treat the first leg's rows as stale.
@@ -168,7 +239,11 @@ describe("seriesBrowse.browse", () => {
     const first = await t.query(api.seriesBrowse.browse, { sort: "title", pageSize: 1 });
     expect(first.items.map((i) => i.title)).toEqual(["The Quiet Cartographer"]);
     expect(first.nextCursor).not.toBeNull();
-    const second = await t.query(api.seriesBrowse.browse, { sort: "title", pageSize: 1, cursor: first.nextCursor });
+    const second = await t.query(api.seriesBrowse.browse, {
+      sort: "title",
+      pageSize: 1,
+      cursor: first.nextCursor,
+    });
     expect(second.items.map((i) => i.title)).toEqual(["Tokyo Ghoul"]);
     expect(second.nextCursor).toBeNull();
   });
@@ -185,7 +260,10 @@ describe("seriesBrowse.browse", () => {
 
   it("filters by publisher, status, format, and letter", async () => {
     const { t } = await seeded();
-    const seas = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["seven-seas"] });
+    const seas = await t.query(api.seriesBrowse.browse, {
+      sort: "title",
+      publishers: ["seven-seas"],
+    });
     expect(seas.items.map((i) => i.title)).toEqual(["The Quiet Cartographer"]);
     const done = await t.query(api.seriesBrowse.browse, { sort: "title", status: "completed" });
     expect(done.items.map((i) => i.title)).toEqual(["The Quiet Cartographer"]);
@@ -193,6 +271,23 @@ describe("seriesBrowse.browse", () => {
     expect(digital.items.map((i) => i.title)).toEqual(["Tokyo Ghoul"]);
     const q = await t.query(api.seriesBrowse.browse, { sort: "title", letter: "q" });
     expect(q.items.map((i) => i.title)).toEqual(["The Quiet Cartographer"]);
+  });
+
+  it("offers a card every jacket ISBN, or the lone one of a row not rebuilt since", async () => {
+    const { t, ids } = await seeded();
+    const ghoul = async () =>
+      (await t.query(api.seriesBrowse.browse, { sort: "title" })).items.find(
+        (i) => i.title === "Tokyo Ghoul",
+      );
+    expect((await ghoul())?.coverIsbn).toEqual(["9781999000010", "9781999000012", "9781999000011"]);
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.ghoul.seriesId))
+        .unique();
+      await ctx.db.patch(row!._id, { coverIsbns: undefined });
+    });
+    expect((await ghoul())?.coverIsbn).toEqual(["9781999000010"]);
   });
 
   it("searches titles and never surfaces hidden Series", async () => {
@@ -259,12 +354,32 @@ describe("seriesBrowse review follow-ups", () => {
     const ym = Math.floor(todaySortKey() / 100) * 100;
     await t.run(async (ctx) => {
       const pub = await ctx.db.insert("publishers", { status: "active", name: "P", slug: "p" });
-      const seriesId = await ctx.db.insert("series", { status: "active", publicId: 9, title: "Soon", altTitles: [], searchText: "Soon" });
-      const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: 900, seriesId, position: 1 });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 900, publisherId: pub });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 9,
+        title: "Soon",
+        altTitles: [],
+        searchText: "Soon",
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 900,
+        seriesId,
+        position: 1,
+      });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 900,
+        publisherId: pub,
+      });
       await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
       await ctx.db.insert("releases", {
-        status: "active", editionId, publisherId: pub, seriesIds: [seriesId], format: "physical", language: "en",
+        status: "active",
+        editionId,
+        publisherId: pub,
+        seriesIds: [seriesId],
+        format: "physical",
+        language: "en",
         pubDate: { year: Math.floor(ym / 10000), month: Math.floor(ym / 100) % 100, sort: ym },
       });
     });
@@ -278,17 +393,42 @@ describe("seriesBrowse review follow-ups", () => {
     await t.run(async (ctx) => {
       const pub = await ctx.db.insert("publishers", { status: "active", name: "P", slug: "p" });
       for (let i = 1; i <= 3; i++) {
-        const seriesId = await ctx.db.insert("series", { status: "active", publicId: i, title: `Echo ${i}`, altTitles: [], searchText: `Echo ${i}` });
-        const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: i, seriesId, position: 1 });
-        const editionId = await ctx.db.insert("editions", { status: "active", publicId: i, publisherId: pub });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
+        const seriesId = await ctx.db.insert("series", {
+          status: "active",
+          publicId: i,
+          title: `Echo ${i}`,
+          altTitles: [],
+          searchText: `Echo ${i}`,
+        });
+        const volumeId = await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: i,
+          seriesId,
+          position: 1,
+        });
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: i,
+          publisherId: pub,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          order: 0,
+          extent: "complete",
+        });
       }
     });
     await t.action(internal.seriesBrowse.rebuild, {});
     const p1 = await t.query(api.seriesBrowse.browse, { sort: "title", q: "echo", pageSize: 2 });
     expect(p1.items.map((i) => i.title)).toEqual(["Echo 1", "Echo 2"]);
     expect(p1.nextCursor).not.toBeNull();
-    const p2 = await t.query(api.seriesBrowse.browse, { sort: "title", q: "echo", pageSize: 2, cursor: p1.nextCursor });
+    const p2 = await t.query(api.seriesBrowse.browse, {
+      sort: "title",
+      q: "echo",
+      pageSize: 2,
+      cursor: p1.nextCursor,
+    });
     expect(p2.items.map((i) => i.title)).toEqual(["Echo 3"]);
     expect(p2.nextCursor).toBeNull();
   });
@@ -319,7 +459,10 @@ async function library(specs: Array<ShelfSpec>) {
   await t.run(async (ctx) => {
     const publishers = new Map<string, Id<"publishers">>();
     for (const slug of new Set(specs.flatMap((s) => s.publishers))) {
-      publishers.set(slug, await ctx.db.insert("publishers", { status: "active", name: slug.toUpperCase(), slug }));
+      publishers.set(
+        slug,
+        await ctx.db.insert("publishers", { status: "active", name: slug.toUpperCase(), slug }),
+      );
     }
     for (const [n, spec] of specs.entries()) {
       const publicId = n + 1;
@@ -334,9 +477,23 @@ async function library(specs: Array<ShelfSpec>) {
       });
       for (let i = 0; i < spec.volumes; i++) {
         const publisherId = publishers.get(spec.publishers[i % spec.publishers.length]!)!;
-        const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: publicId * 100 + i, seriesId, position: i + 1 });
-        const editionId = await ctx.db.insert("editions", { status: "active", publicId: publicId * 100 + i, publisherId });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
+        const volumeId = await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: publicId * 100 + i,
+          seriesId,
+          position: i + 1,
+        });
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: publicId * 100 + i,
+          publisherId,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          order: 0,
+          extent: "complete",
+        });
         const sort = spec.dates[i] ?? 0;
         await ctx.db.insert("releases", {
           status: "active",
@@ -345,7 +502,14 @@ async function library(specs: Array<ShelfSpec>) {
           seriesIds: [seriesId],
           format: "physical",
           language: "en",
-          pubDate: sort ? { year: Math.floor(sort / 10000), month: Math.floor(sort / 100) % 100, day: sort % 100, sort } : undefined,
+          pubDate: sort
+            ? {
+                year: Math.floor(sort / 10000),
+                month: Math.floor(sort / 100) % 100,
+                day: sort % 100,
+                sort,
+              }
+            : undefined,
         });
       }
     }
@@ -358,23 +522,52 @@ describe("seriesBrowse filters first, then the sort", () => {
   const shelf = () =>
     library([
       { title: "Alpha", publishers: ["viz"], volumes: 1, dates: [monthsAgo(1)] },
-      { title: "Bravo", publishers: ["yen"], volumes: 3, dates: [monthsAgo(7), monthsAgo(5), 20991231] },
+      {
+        title: "Bravo",
+        publishers: ["yen"],
+        volumes: 3,
+        dates: [monthsAgo(7), monthsAgo(5), 20991231],
+      },
       { title: "Charlie", publishers: ["seas"], volumes: 8, dates: [monthsAgo(30), monthsAgo(24)] },
-      { title: "Delta", publishers: ["viz", "yen"], volumes: 20, dates: [monthsAgo(10)], altTitles: ["Dérapage Contrôlé"] },
+      {
+        title: "Delta",
+        publishers: ["viz", "yen"],
+        volumes: 20,
+        dates: [monthsAgo(10)],
+        altTitles: ["Dérapage Contrôlé"],
+      },
       { title: "Echo", publishers: ["kodansha"], volumes: 2, dates: [] },
-      { title: "Foxtrot", publishers: ["seas"], volumes: 1, dates: [monthsAgo(30)], sourceStatus: "ongoing" },
+      {
+        title: "Foxtrot",
+        publishers: ["seas"],
+        volumes: 1,
+        dates: [monthsAgo(30)],
+        sourceStatus: "ongoing",
+      },
     ]);
   const titles = (page: { items: Array<{ title: string }> }) => page.items.map((i) => i.title);
 
   it("records the last release already out beside the next one", async () => {
     const t = await shelf();
-    const bravo = await t.run((ctx) => ctx.db.query("seriesStats").withIndex("by_publicId", (q) => q.eq("publicId", 2)).unique());
-    expect(bravo).toMatchObject({ lastReleasedSort: monthsAgo(5), nextReleaseSort: 20991231, latestReleaseSort: 20991231 });
+    const bravo = await t.run((ctx) =>
+      ctx.db
+        .query("seriesStats")
+        .withIndex("by_publicId", (q) => q.eq("publicId", 2))
+        .unique(),
+    );
+    expect(bravo).toMatchObject({
+      lastReleasedSort: monthsAgo(5),
+      nextReleaseSort: 20991231,
+      latestReleaseSort: 20991231,
+    });
   });
 
   it("matches any of several publishers, with an exact total", async () => {
     const t = await shelf();
-    const page = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["viz", "yen"] });
+    const page = await t.query(api.seriesBrowse.browse, {
+      sort: "title",
+      publishers: ["viz", "yen"],
+    });
     expect(titles(page)).toEqual(["Alpha", "Bravo", "Delta"]);
     expect(page.total).toBe(3);
     const one = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["kodansha"] });
@@ -397,7 +590,13 @@ describe("seriesBrowse filters first, then the sort", () => {
   it("filters by release timing", async () => {
     const t = await shelf();
     const timing = async (timing: Timing) =>
-      titles(await t.query(api.seriesBrowse.browse, { sort: "title", timing, todaySort: todaySortKey() }));
+      titles(
+        await t.query(api.seriesBrowse.browse, {
+          sort: "title",
+          timing,
+          todaySort: todaySortKey(),
+        }),
+      );
     expect(await timing("upcoming")).toEqual(["Bravo"]);
     expect(await timing("past-3m")).toEqual(["Alpha"]);
     expect(await timing("past-6m")).toEqual(["Alpha", "Bravo"]);
@@ -429,10 +628,18 @@ describe("seriesBrowse filters first, then the sort", () => {
     // The next page is asked for after the day turned, three months on:
     // Bravo (five months ago) would have aged out, but the cursor keeps the
     // first page's cutoff, so the view ends as it began.
-    const p2 = await t.query(api.seriesBrowse.browse, { ...args, todaySort: monthsAgo(-3), cursor: p1.nextCursor });
+    const p2 = await t.query(api.seriesBrowse.browse, {
+      ...args,
+      todaySort: monthsAgo(-3),
+      cursor: p1.nextCursor,
+    });
     expect([titles(p2), p2.total, p2.nextCursor]).toEqual([["Bravo"], 2, null]);
     // A cursor from before this field existed falls back to todaySort.
-    const bare = await t.query(api.seriesBrowse.browse, { ...args, todaySort: monthsAgo(-3), cursor: btoa(JSON.stringify({ v: "alpha", id: 1 })) });
+    const bare = await t.query(api.seriesBrowse.browse, {
+      ...args,
+      todaySort: monthsAgo(-3),
+      cursor: btoa(JSON.stringify({ v: "alpha", id: 1 })),
+    });
     expect([titles(bare), bare.total]).toEqual([[], 1]);
   });
 
@@ -443,17 +650,30 @@ describe("seriesBrowse filters first, then the sort", () => {
     const p2 = await t.query(api.seriesBrowse.browse, { ...args, cursor: p1.nextCursor });
     const p3 = await t.query(api.seriesBrowse.browse, { ...args, cursor: p2.nextCursor });
     // Most volumes first; the one-volume tie breaks by newest publicId.
-    expect([titles(p1), titles(p2), titles(p3)]).toEqual([["Delta", "Charlie"], ["Bravo", "Foxtrot"], ["Alpha"]]);
+    expect([titles(p1), titles(p2), titles(p3)]).toEqual([
+      ["Delta", "Charlie"],
+      ["Bravo", "Foxtrot"],
+      ["Alpha"],
+    ]);
     expect([p1.total, p2.total, p3.total]).toEqual([5, 5, 5]);
     expect(p3.nextCursor).toBeNull();
 
-    const narrow = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["seas"], volumes: "one", timing: "past-12m", todaySort: todaySortKey() });
+    const narrow = await t.query(api.seriesBrowse.browse, {
+      sort: "title",
+      publishers: ["seas"],
+      volumes: "one",
+      timing: "past-12m",
+      todaySort: todaySortKey(),
+    });
     expect(narrow).toMatchObject({ items: [], total: 0, nextCursor: null });
   });
 
   it("keeps nothing-announced last on a filtered upcoming sort", async () => {
     const t = await shelf();
-    const page = await t.query(api.seriesBrowse.browse, { sort: "upcoming", publishers: ["yen", "kodansha"] });
+    const page = await t.query(api.seriesBrowse.browse, {
+      sort: "upcoming",
+      publishers: ["yen", "kodansha"],
+    });
     expect(titles(page)).toEqual(["Bravo", "Delta", "Echo"]);
   });
 
@@ -478,35 +698,54 @@ describe("seriesBrowse filters first, then the sort", () => {
       { title: "Attack on Titan", publishers: ["kodansha"], volumes: 1, dates: [] },
       { title: "SPY×FAMILY", publishers: ["viz"], volumes: 1, dates: [] },
     ]);
-    const q = async (q: string) => titles(await t.query(api.seriesBrowse.browse, { sort: "title", q }));
+    const q = async (q: string) =>
+      titles(await t.query(api.seriesBrowse.browse, { sort: "title", q }));
     // Initials count only whole: "aotd" (Ace of the Diamond) is not "aot".
     expect(await q("aot")).toEqual(["Attack on Titan"]);
     expect(await q("sxf")).toEqual(["SPY×FAMILY"]);
     expect(await q("spy x")).toEqual(["SPY×FAMILY"]);
     expect(await q("ao")).toEqual(["Ao Haru Ride"]);
-    const aot = await t.run((ctx) => ctx.db.query("series").withIndex("by_publicId", (q) => q.eq("publicId", 3)).unique());
+    const aot = await t.run((ctx) =>
+      ctx.db
+        .query("series")
+        .withIndex("by_publicId", (q) => q.eq("publicId", 3))
+        .unique(),
+    );
     expect(aot?.searchText).toBe(seriesSearchText("Attack on Titan", []));
   });
 
   it("packs every row once, by publicId block, and drops emptied packs", async () => {
     const t = await shelf();
     const packs = await t.run((ctx) => ctx.db.query("seriesStatsPacks").collect());
-    expect(packs.map((p) => [p.block, p.entries.map((e) => e.publicId)])).toEqual([[0, [1, 2, 3, 4, 5, 6]]]);
-    expect(packs[0]!.entries[3]).toMatchObject({ titleSort: "delta", searchKey: "delta derapage controle derapagecontrole =dc", volumeCount: 20 });
+    expect(packs.map((p) => [p.block, p.entries.map((e) => e.publicId)])).toEqual([
+      [0, [1, 2, 3, 4, 5, 6]],
+    ]);
+    expect(packs[0]!.entries[3]).toMatchObject({
+      titleSort: "delta",
+      searchKey: "delta derapage controle derapagecontrole =dc",
+      volumeCount: 20,
+    });
     // A stale pack past the catalog's last block goes on the next rebuild.
     await t.run((ctx) => ctx.db.insert("seriesStatsPacks", { block: 7, entries: [] }));
     await t.action(internal.seriesBrowse.rebuild, {});
-    const blocks = await t.run(async (ctx) => (await ctx.db.query("seriesStatsPacks").collect()).map((p) => p.block));
+    const blocks = await t.run(async (ctx) =>
+      (await ctx.db.query("seriesStatsPacks").collect()).map((p) => p.block),
+    );
     expect(blocks).toEqual([0]);
   });
 
   it("filters from the rows themselves before any pack is written", async () => {
     const t = await shelf();
     await t.run(async (ctx) => {
-      for (const pack of await ctx.db.query("seriesStatsPacks").collect()) await ctx.db.delete(pack._id);
-      for (const config of await ctx.db.query("appConfig").collect()) await ctx.db.delete(config._id);
+      for (const pack of await ctx.db.query("seriesStatsPacks").collect())
+        await ctx.db.delete(pack._id);
+      for (const config of await ctx.db.query("appConfig").collect())
+        await ctx.db.delete(config._id);
     });
-    const page = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["viz", "yen"] });
+    const page = await t.query(api.seriesBrowse.browse, {
+      sort: "title",
+      publishers: ["viz", "yen"],
+    });
     expect(titles(page)).toEqual(["Alpha", "Bravo", "Delta"]);
     expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(6);
   });
@@ -520,10 +759,14 @@ describe("seriesBrowse filters first, then the sort", () => {
         await ctx.db.patch(pack!._id, { entries: pack!.entries.slice(0, 2) });
       });
     await t.run(async (ctx) => {
-      for (const config of await ctx.db.query("appConfig").collect()) await ctx.db.delete(config._id);
+      for (const config of await ctx.db.query("appConfig").collect())
+        await ctx.db.delete(config._id);
     });
     await truncate();
-    const page = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["viz", "yen"] });
+    const page = await t.query(api.seriesBrowse.browse, {
+      sort: "title",
+      publishers: ["viz", "yen"],
+    });
     expect([titles(page), page.total]).toEqual([["Alpha", "Bravo", "Delta"], 3]);
     expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(6);
     // The last pack of a run publishes the set; from then on readers trust it.
@@ -553,7 +796,9 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
     const { t } = await seeded();
     // An ANN-style backbone: Series + Volumes, nothing covering them.
     const { seriesId, volumeId, viz } = await t.run(async (ctx) => {
-      const viz = (await ctx.db.query("publishers").collect()).find((p) => p.slug === "viz-media")!._id;
+      const viz = (await ctx.db.query("publishers").collect()).find(
+        (p) => p.slug === "viz-media",
+      )!._id;
       const seriesId = await ctx.db.insert("series", {
         status: "active",
         publicId: 9,
@@ -568,7 +813,13 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
         position: 1,
         label: "1",
       });
-      await ctx.db.insert("volumes", { status: "active", publicId: 902, seriesId, position: 2, label: "2" });
+      await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 902,
+        seriesId,
+        position: 2,
+        label: "2",
+      });
       return { seriesId, volumeId, viz };
     });
     await t.action(internal.seriesBrowse.rebuild, {});
@@ -592,7 +843,11 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
 
     // A book attaches (as an import would): the next rebuild restores the Series.
     await t.run(async (ctx) => {
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9001, publisherId: viz });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 9001,
+        publisherId: viz,
+      });
       await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
       await ctx.db.insert("releases", {
         status: "active",
@@ -607,7 +862,9 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
     await t.action(internal.seriesBrowse.rebuild, {});
     await t.run(async (ctx) => {
       expect((await ctx.db.get(seriesId))?.bookless).toBeUndefined();
-      expect((await ctx.db.query("seriesStats").collect()).map((r) => r.title)).toContain("Backbone Only");
+      expect((await ctx.db.query("seriesStats").collect()).map((r) => r.title)).toContain(
+        "Backbone Only",
+      );
     });
     const after = await t.query(api.seriesBrowse.browse, { sort: "title" });
     expect(after.items.map((i) => i.title)).toContain("Backbone Only");
@@ -624,7 +881,9 @@ describe("seriesBrowse Top rated", () => {
       { title: "Delta", publishers: ["viz"], volumes: 1, dates: [] },
     ]);
     await t.run(async (ctx) => {
-      const byTitle = new Map((await ctx.db.query("series").collect()).map((s) => [s.title, s._id]));
+      const byTitle = new Map(
+        (await ctx.db.query("series").collect()).map((s) => [s.title, s._id]),
+      );
       await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 270, count: 3 });
       await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 350, count: 5 });
       await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Charlie")!, sum: 200, count: 2 });
@@ -653,9 +912,16 @@ describe("seriesBrowse Top rated", () => {
     const asc = await t.query(api.seriesBrowse.browse, { sort: "rating", order: "asc" });
     expect(titles(asc)).toEqual(["Bravo", "Alpha", "Charlie", "Delta"]);
 
-    const filtered = await t.query(api.seriesBrowse.browse, { sort: "rating", publishers: ["viz"] });
+    const filtered = await t.query(api.seriesBrowse.browse, {
+      sort: "rating",
+      publishers: ["viz"],
+    });
     expect(titles(filtered)).toEqual(titles(all));
-    const filteredAsc = await t.query(api.seriesBrowse.browse, { sort: "rating", order: "asc", publishers: ["viz"] });
+    const filteredAsc = await t.query(api.seriesBrowse.browse, {
+      sort: "rating",
+      order: "asc",
+      publishers: ["viz"],
+    });
     expect(titles(filteredAsc)).toEqual(titles(asc));
 
     // One at a time, the cursor walks the same order through the zero group.
@@ -685,7 +951,9 @@ describe("seriesBrowse Top rated", () => {
       })),
     );
     await t.run(async (ctx) => {
-      const byTitle = new Map((await ctx.db.query("series").collect()).map((s) => [s.title, s._id]));
+      const byTitle = new Map(
+        (await ctx.db.query("series").collect()).map((s) => [s.title, s._id]),
+      );
       await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 270, count: 3 });
       await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 350, count: 5 });
     });
@@ -718,10 +986,14 @@ describe("seriesBrowse Top rated", () => {
           const walked: Array<string> = [];
           let cursor: string | null = null;
           do {
-            const page: { items: Array<{ title: string }>; nextCursor: string | null } = await t.query(
-              api.seriesBrowse.browse,
-              { sort: "rating", order, publishers, pageSize, cursor },
-            );
+            const page: { items: Array<{ title: string }>; nextCursor: string | null } =
+              await t.query(api.seriesBrowse.browse, {
+                sort: "rating",
+                order,
+                publishers,
+                pageSize,
+                cursor,
+              });
             walked.push(...titles(page));
             cursor = page.nextCursor;
           } while (cursor && walked.length < 20);

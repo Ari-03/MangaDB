@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
+import { isbn10To13 } from "./lib/isbn";
 import {
   skipsWithoutFetch,
   parseSitemap,
@@ -17,7 +18,15 @@ import {
   toSnapshots,
 } from "./lib/yenPress";
 import { insertBundle, insertObservation, insertPublisher, insertSeries } from "./test.factories";
-import { bundleMembers, drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import {
+  bundleMembers,
+  drain,
+  expectStampedAtHandOff,
+  makeT,
+  seedRegistry,
+  tickingClock,
+  type TestT,
+} from "./test.helpers";
 
 // Trimmed first-party HTML fetched 2026-09-26; only fields used by the parser.
 const liveFixture = (name: string) =>
@@ -305,7 +314,37 @@ describe("yenPress.sync — disabling a source", () => {
     expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(1);
   });
 
-  it("finishes a run an operator forced on the disabled source", async () => {
+  it("finishes the hundred titles under way and stops before the next hundred", async () => {
+    const t = makeT();
+    await seed(t);
+    // 101 new titles: two planning chunks. Every title page is gone (a 404 is
+    // only a notice), and the source is disabled while the first one loads.
+    const urls = Array.from(
+      { length: 101 },
+      (_, i) =>
+        `https://yenpress.com/titles/${isbn10To13(`19753${String(i).padStart(4, "0")}0`)}-gate-manga-vol-${i + 1}`,
+    );
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url === "https://yenpress.com/sitemap.xml") return new Response(sitemap(urls));
+      if (requested.length === 2) {
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "yenpress",
+          enabled: false,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, fetched: 100, continued: false });
+    expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(100);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+    });
+  });
+
+  it("imports through a run an operator forced on the disabled source", async () => {
     const t = makeT();
     await seed(t);
     await t.mutation(internal.importSources.setEnabledInternal, {
@@ -326,8 +365,28 @@ describe("yenPress.sync — disabling a source", () => {
     await drain(t);
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
-      expect(run?.status).toBe("succeeded");
+      expect(run).toMatchObject({ status: "succeeded", recordsSeen: 5 });
       expect(run?.errors.some((e) => /disabled mid-run/.test(e))).toBe(false);
+      // Every book is observed and placed, as on an enabled source: Vol. 4
+      // print + digital and the Deluxe hardback + digital become Releases,
+      // the box an observation of its own.
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId).sort()).toEqual([
+        "9798400906855",
+        "9798855431483",
+        "9798855431490",
+        "9798855438611",
+        "9798855438628",
+      ]);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.isbn13).sort()).toEqual([
+        "9798855431483",
+        "9798855431490",
+        "9798855438611",
+        "9798855438628",
+      ]);
+      const linked = observations.filter((o) => o.recordRef?.type === "release");
+      expect(linked).toHaveLength(4);
     });
     expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(3);
   });
@@ -499,8 +558,11 @@ describe("yenPress.sync", () => {
       [IZE_URL]: IZE_BOX_PAGE,
     });
 
+    const clock = tickingClock();
     const first = await sync(t, { maxFetches: 1 });
     expect(first).toMatchObject({ continued: true, fetched: 1 });
+    await expectStampedAtHandOff(t);
+    clock.mockRestore();
     await drain(t);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
@@ -572,7 +634,10 @@ describe("yenPress.applyTitle — a box set gains members that arrive after it (
       changed: true,
     });
     const members = await bundleMembers(t);
-    expect(members.map((member) => member.release.isbn13)).toEqual(["9781975300012", "9781975300029"]);
+    expect(members.map((member) => member.release.isbn13)).toEqual([
+      "9781975300012",
+      "9781975300029",
+    ]);
     expect(await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX })).toMatchObject({
       status: "unchanged",
     });
@@ -620,7 +685,9 @@ describe("yenPress.reconcileLinkedBox", () => {
     expect(await mignonMembers(t)).toEqual(["9781975300012@1", "9781975300029@2"]);
   });
 
-  it("adds nothing for a Release, or while the source is disabled", async () => {
+  // Operator and scheduled runs alike: whether to run is the sync's gate, so
+  // the mutation fills a box while the source is disabled too.
+  it("adds nothing for a Release, and fills a box whatever the source's flag", async () => {
     const t = makeT();
     await seedMignon(t);
     await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
@@ -628,17 +695,14 @@ describe("yenPress.reconcileLinkedBox", () => {
     expect(
       await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: "9781975300012" }),
     ).toEqual({ added: 0 });
-    const enable = (enabled: boolean) =>
-      t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled });
-    await enable(false);
-    expect(
-      await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
-    ).toEqual({ added: 0 });
-    expect(await mignonMembers(t)).toEqual([]);
-    await enable(true);
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "yenpress",
+      enabled: false,
+    });
     expect(
       await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
     ).toEqual({ added: 1 });
+    expect(await mignonMembers(t)).toEqual(["9781975300012@1"]);
   });
 });
 
@@ -669,7 +733,8 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
     [VOL_2_URL]: titlePage("Alpha Adventures, Vol. 2", "9781975300029"),
   };
   /** The one box's members, by their Releases' ISBNs in bundle order. */
-  const boxMembers = async (t: TestT) => (await bundleMembers(t)).map((member) => member.release.isbn13);
+  const boxMembers = async (t: TestT) =>
+    (await bundleMembers(t)).map((member) => member.release.isbn13);
 
   it("links the late books on the next run, without fetching the box page", async () => {
     const t = makeT();
@@ -707,7 +772,8 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
       ]),
     );
     await t.run(async (ctx) => {
-      for (const title of ["Alpha Adventures", "Beta Adventures"]) await insertSeries(ctx, { title });
+      for (const title of ["Alpha Adventures", "Beta Adventures"])
+        await insertSeries(ctx, { title });
     });
     stubYen({ ...pages, ...betaPages });
     await sync(t);
@@ -779,7 +845,10 @@ describe("yenPress.applyTitle — a gapped coverage statement is never widened (
   it("a title listing Volumes 1 & 3 leaves the book Unmapped Packaging", async () => {
     const t = makeT();
     await seed(t);
-    const page = { ...parseTitlePage(DELUXE_PAGE)!, title: "Battle Royale 3-in-1 Edition 1 (Vol. 1 & 3)" };
+    const page = {
+      ...parseTitlePage(DELUXE_PAGE)!,
+      title: "Battle Royale 3-in-1 Edition 1 (Vol. 1 & 3)",
+    };
     for (const snapshot of toSnapshots(page, DELUXE_URL)) {
       await t.mutation(internal.yenPress.applyTitle, { snapshot });
     }
@@ -788,6 +857,73 @@ describe("yenPress.applyTitle — a gapped coverage statement is never widened (
       expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(0);
       const editions = await ctx.db.query("editions").collect();
       expect(editions.map((e) => e.coverageUnmapped)).toEqual([true]);
+    });
+  });
+});
+
+describe("yenPress.applyTitle — a sequel's book stays off its first work", () => {
+  const FIRST = "The Alchemist Who Survived Now Dreams of a Quiet City Life";
+  const SEQUEL = `${FIRST} II`;
+  const ISBN = "9781975393489";
+  const [snapshot] = toSnapshots(
+    {
+      title: `${SEQUEL}, Vol. 1 (manga): Cycle of the Elixir`,
+      category: "manga",
+      formats: [
+        { tab: "Paperback", isbn13: ISBN, imprint: "Yen Press", seriesName: `${SEQUEL} (manga)` },
+      ],
+    },
+    `https://yenpress.com/titles/${ISBN}-the-alchemist-who-survived-now-dreams-of-a-quiet-city-life-ii-vol-1-manga`,
+  );
+
+  /** The first work carrying the sequel's name as an alt title, and the sequel's Series. */
+  async function seedAlchemist(t: TestT, sequel: "active" | "hidden") {
+    await seed(t);
+    return await t.run(async (ctx) => {
+      const firstId = await insertSeries(ctx, {
+        publicId: 1229,
+        title: FIRST,
+        altTitles: [SEQUEL],
+      });
+      const sequelId = await insertSeries(ctx, { publicId: 5358, title: SEQUEL, status: sequel });
+      for (const seriesId of [firstId, sequelId]) {
+        await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: seriesId === firstId ? 12291 : 53581,
+          seriesId,
+          label: "1",
+          position: 1,
+        });
+      }
+      return { firstId, sequelId };
+    });
+  }
+
+  it("files it under the sequel's Series by Yen's own series title", async () => {
+    const t = makeT();
+    const { sequelId } = await seedAlchemist(t, "active");
+    expect(snapshot!.seriesTitle).toBe(SEQUEL);
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: snapshot! });
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => [r.isbn13, r.seriesIds])).toEqual([[ISBN, [sequelId]]]);
+    });
+  });
+
+  it("holds it when the sequel is hidden, though the first work carries the sequel's name as an alt title", async () => {
+    const t = makeT();
+    await seedAlchemist(t, "hidden");
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: snapshot! });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toEqual([]);
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === ISBN,
+      )!;
+      const hold = await ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", obs._id))
+        .unique();
+      expect(hold?.kind).toBe("series");
     });
   });
 });

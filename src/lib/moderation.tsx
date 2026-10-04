@@ -7,11 +7,12 @@
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import type { ReactNode } from "react";
+import type { FunctionReturnType } from "convex/server";
+import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
-import { convexClient } from "~/providers";
+import type { WrittenBy } from "../../convex/moderation";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 
@@ -31,17 +32,47 @@ export function renderFieldValue(value: unknown): string {
     const record = value as Record<string, unknown>;
     if (typeof record.year === "number") {
       return (
-        formatPartialDate(record as { year: number; month?: number; day?: number }) ??
-        "(empty)"
+        formatPartialDate(record as { year: number; month?: number; day?: number }) ?? "(empty)"
       );
     }
     if (typeof record.amountCents === "number") {
-      return (
-        formatPrice(record as { amountCents: number; currency: string }) ?? "(empty)"
-      );
+      return formatPrice(record as { amountCents: number; currency: string }) ?? "(empty)";
     }
   }
   return JSON.stringify(value);
+}
+
+/**
+ * What lifting a Human Override does, said beside every control that lifts
+ * one: the flag goes, the value and its author stay, and the import rules
+ * weigh that author (convex/lib/authority.ts decideField). It promises only
+ * that an import never replaces a human-written value unreviewed: an offer
+ * may also be skipped, or fill an empty field nobody wrote.
+ */
+export const CLEAR_OVERRIDE_HINT =
+  "Clearing keeps the value and who wrote it; imports then follow the usual Field Authority rules, so replacing a human-written value still needs review, and a value a source wrote may update automatically.";
+
+/** Who wrote a field's current value, as moderation.writtenBy reports it. */
+export function writtenByLabel(author: WrittenBy): string {
+  if (author.kind === "human") return "written by a person";
+  if (author.kind === "source") return `imported from ${author.sourceKey}`;
+  return "no recorded author";
+}
+
+/** A revision's change to `overriddenFields`, read as the overrides it set or cleared. */
+function overrideChangeText(before: unknown, after: unknown): string {
+  const names = (value: unknown) =>
+    Array.isArray(value) ? value.filter((name): name is string => typeof name === "string") : [];
+  const was = names(before);
+  const now = names(after);
+  const cleared = was.filter((name) => !now.includes(name));
+  const set = now.filter((name) => !was.includes(name));
+  return [
+    cleared.length > 0 ? `Human Override cleared on ${cleared.join(", ")}` : null,
+    set.length > 0 ? `Human Override set on ${set.join(", ")}` : null,
+  ]
+    .filter((part) => part !== null)
+    .join("; ");
 }
 
 const ROLE_LABELS = {
@@ -73,36 +104,47 @@ export function ProposalStateChip({ state }: { state: string }) {
 
 /**
  * The public revision history of a record page, as a closed disclosure so it
- * sits quietly under the catalog content. Renders nothing until the client
- * has data (history is reactive, not SSR'd) and nothing at all when the
- * record has no history yet.
+ * sits quietly under the catalog content. Few readers open it and the query
+ * reads every revision with its authors, so it subscribes the first time the
+ * disclosure opens (and stays live from then on): "Loading…" until the
+ * history arrives, the revision count in the summary after.
  */
-export function RecordHistory(props: {
-  type: HistoryTargetType;
-  publicId: number;
-}) {
-  if (!convexClient) return null;
-  return <RecordHistoryInner {...props} />;
-}
-
-function RecordHistoryInner({
-  type,
-  publicId,
-}: {
-  type: HistoryTargetType;
-  publicId: number;
-}) {
-  const history = useQuery(api.moderation.recordHistory, { type, publicId });
-  if (!history || history.revisions.length === 0) return null;
-  const count = history.revisions.length;
+export function RecordHistory({ type, publicId }: { type: HistoryTargetType; publicId: number }) {
+  const [opened, setOpened] = useState(false);
+  const history = useQuery(api.moderation.recordHistory, opened ? { type, publicId } : "skip");
+  const count = history?.revisions.length;
   return (
-    <details className="record-history">
+    <details
+      className="record-history"
+      onToggle={(event) => {
+        if (event.currentTarget.open) setOpened(true);
+      }}
+    >
       <summary>
         History
-        <span className="record-history-count">
-          {count} revision{count === 1 ? "" : "s"}
-        </span>
+        {count !== undefined ? (
+          <span className="record-history-count">
+            {count} revision{count === 1 ? "" : "s"}
+          </span>
+        ) : null}
       </summary>
+      {opened ? <HistoryBody history={history} /> : null}
+    </details>
+  );
+}
+
+/** The opened history: loading, empty, or the revisions newest first. */
+function HistoryBody({
+  history,
+}: {
+  history: FunctionReturnType<typeof api.moderation.recordHistory> | undefined;
+}) {
+  if (history === undefined) return <p className="section-hint">Loading…</p>;
+  if (history === null || history.revisions.length === 0) {
+    return <p className="section-hint">No changes recorded yet.</p>;
+  }
+  return (
+    <>
       <p className="section-hint">
         Every approved change to this record, newest first.
         {history.overriddenFields.length > 0 ? (
@@ -124,18 +166,14 @@ function RecordHistoryInner({
                     {revision.author.username
                       ? `@${revision.author.username}`
                       : "(deleted account)"}
-                    {revision.author.role
-                      ? ` (${ROLE_LABELS[revision.author.role]})`
-                      : null}
+                    {revision.author.role ? ` (${ROLE_LABELS[revision.author.role]})` : null}
                   </>
                 ) : (
                   `Imported from ${revision.author.sourceKey}`
                 )}
               </span>
               <span className="revision-approver">
-                {revision.approver
-                  ? `approved by @${revision.approver}`
-                  : "approved automatically"}
+                {revision.approver ? `approved by @${revision.approver}` : "approved automatically"}
               </span>
               <time dateTime={new Date(revision.at).toISOString()}>
                 {new Date(revision.at).toLocaleDateString(undefined, {
@@ -147,13 +185,16 @@ function RecordHistoryInner({
             </div>
             <p className="revision-comment">{revision.comment}</p>
             <ul className="revision-changes">
-              {revision.changes.map((change) => (
-                <li key={change.field}>
-                  <code>{change.field}</code>:{" "}
-                  <del>{renderFieldValue(change.before)}</del> →{" "}
-                  <ins>{renderFieldValue(change.after)}</ins>
-                </li>
-              ))}
+              {revision.changes.map((change) =>
+                change.field === "overriddenFields" ? (
+                  <li key={change.field}>{overrideChangeText(change.before, change.after)}</li>
+                ) : (
+                  <li key={change.field}>
+                    <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
+                    <ins>{renderFieldValue(change.after)}</ins>
+                  </li>
+                ),
+              )}
             </ul>
             {revision.citation ? (
               <p className="revision-citation">
@@ -163,7 +204,7 @@ function RecordHistoryInner({
           </li>
         ))}
       </ol>
-    </details>
+    </>
   );
 }
 
@@ -181,9 +222,8 @@ export const timestamp = (ms: number) =>
  * The access gate in front of a mod page: "Checking your access…" while the
  * viewer loads, then the page for a viewer holding `role`, else a refusal
  * that says who the page is for (`refusal`) and links sign-in when signed
- * out. `children` only mounts once the viewer is let in. Only under the
- * Convex provider: each page answers the unconfigured mode itself first.
- * The Convex functions re-check the role on every call.
+ * out. `children` only mounts once the viewer is let in. The Convex
+ * functions re-check the role on every call.
  */
 export function ModGate({
   role,
@@ -271,12 +311,7 @@ function CommentsQueueLinkInner() {
  * Administrators get the direct edit (`/mod/edit`); Editors get the update
  * proposal (`/mod/propose`) whose submission lands In Review.
  */
-export function ModEditLink(props: { type: string; editKey: string }) {
-  if (!convexClient) return null;
-  return <ModEditLinkInner {...props} />;
-}
-
-function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) {
+export function ModEditLink({ type, editKey }: { type: string; editKey: string }) {
   const isModerator = useIsModerator();
   const isDataTeam = useIsDataTeam();
   if (isModerator) {
@@ -310,16 +345,7 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
  * data-team member can propose a new Volume + Edition + Release in one
  * temp-ID Proposal.
  */
-export function ProposeNewRecordsLink(props: { seriesPublicId: number }) {
-  if (!convexClient) return null;
-  return <ProposeNewRecordsLinkInner {...props} />;
-}
-
-function ProposeNewRecordsLinkInner({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
+export function ProposeNewRecordsLink({ seriesPublicId }: { seriesPublicId: number }) {
   const isDataTeam = useIsDataTeam();
   if (!isDataTeam) return null;
   return (
@@ -339,14 +365,7 @@ function ProposeNewRecordsLinkInner({
  * of their own (spec §11), so their edit entry point lives on the Edition
  * page, one link per row keyed by the row's anchor.
  */
-export function ModReleaseEditLinks(props: {
-  releases: Array<{ id: string; anchor: string }>;
-}) {
-  if (!convexClient) return null;
-  return <ModReleaseEditLinksInner {...props} />;
-}
-
-function ModReleaseEditLinksInner({
+export function ModReleaseEditLinks({
   releases,
 }: {
   releases: Array<{ id: string; anchor: string }>;

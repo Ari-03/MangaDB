@@ -12,12 +12,11 @@
 // get null from the queries, so the public pages render without the controls.
 
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { convexClient } from "~/providers";
-import { useReadyViewer } from "~/lib/viewer";
+import { useReadyViewer, useViewerQuery } from "~/lib/viewer";
 
 type Kind = "ownership" | "reading";
 type Visibility = "public" | "private";
@@ -31,8 +30,7 @@ const KIND_LABELS: Record<Kind, string> = {
 const KIND_HINTS: Record<Kind, string> = {
   ownership:
     "Public shows your Owned releases, variants, and box sets. Wanted and Ordered are never shown to anyone.",
-  reading:
-    "Public shows your reading statuses, volume read counts, and active passes.",
+  reading: "Public shows your reading statuses, volume read counts, and active passes.",
 };
 
 /**
@@ -79,11 +77,6 @@ const PUBLIC_PRIVATE: Array<{ value: Choice; label: string }> = [
 
 /** The Sharing section of /me: both visibility defaults + the profile link. */
 export function SharingSettings() {
-  if (!convexClient) return null;
-  return <SharingSettingsInner />;
-}
-
-function SharingSettingsInner() {
   const viewer = useReadyViewer();
   const setDefault = useMutation(api.sharing.setDefaultVisibility);
   if (!viewer) return null;
@@ -93,15 +86,13 @@ function SharingSettingsInner() {
     reading: viewer.readingVisibility,
   };
   const anythingPublic =
-    viewer.ownershipVisibility === "public" ||
-    viewer.readingVisibility === "public";
+    viewer.ownershipVisibility === "public" || viewer.readingVisibility === "public";
 
   return (
     <div className="sharing-settings">
       <p className="sharing-lede">
-        Your tracking is private by default. Ownership and Reading are shared
-        separately; each series page can override your default for that series.
-        Series follows always stay private.
+        Your tracking is private by default. Ownership and Reading are shared separately; each
+        series page can override your default for that series. Series follows always stay private.
       </p>
       {(["ownership", "reading"] as const).map((kind) => (
         <div className="vis-field" key={kind}>
@@ -113,9 +104,7 @@ function SharingSettingsInner() {
             labelledBy={`visibility-${kind}-label`}
             value={defaults[kind]}
             options={PUBLIC_PRIVATE}
-            onPick={(next) =>
-              void setDefault({ kind, visibility: next as Visibility })
-            }
+            onPick={(next) => void setDefault({ kind, visibility: next as Visibility })}
           />
           <p className="vis-hint">{KIND_HINTS[kind]}</p>
         </div>
@@ -135,32 +124,19 @@ function SharingSettingsInner() {
 
 // ---------- per-Series overrides ----------
 
+const VISIBILITY_WORDS: Record<Visibility, string> = {
+  public: "Public",
+  private: "Private",
+};
+
 /**
  * The per-Series visibility overrides on the Series page (spec §3), behind
  * one "Sharing" button in the tracking bar. The panel floats over the page
  * (never pushing the bar or the shelf below it) and closes on an outside
  * click or Escape. Renders nothing signed out.
  */
-export function SeriesVisibilityControls({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  if (!convexClient) return null;
-  return <SeriesVisibilityControlsInner seriesPublicId={seriesPublicId} />;
-}
-
-const VISIBILITY_WORDS: Record<Visibility, string> = {
-  public: "Public",
-  private: "Private",
-};
-
-function SeriesVisibilityControlsInner({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  const state = useQuery(api.sharing.seriesVisibility, { seriesPublicId });
+export function SeriesVisibilityControls({ seriesPublicId }: { seriesPublicId: number }) {
+  const state = useViewerQuery(api.sharing.seriesVisibility, { seriesPublicId });
   const setOverride = useMutation(api.sharing.setSeriesVisibility);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -215,16 +191,10 @@ function SeriesVisibilityControlsInner({
           <circle cx="8" cy="8" r="2" />
         </svg>
         Sharing
-        {customised ? (
-          <span className="vis-pop-dot" title="Customised for this series" />
-        ) : null}
+        {customised ? <span className="vis-pop-dot" title="Customised for this series" /> : null}
       </button>
       {open ? (
-        <div
-          className="vis-pop-panel"
-          role="dialog"
-          aria-label="Sharing for this series"
-        >
+        <div className="vis-pop-panel" role="dialog" aria-label="Sharing for this series">
           <p className="vis-hint">
             For this series only, on{" "}
             <Link to="/u/$username" params={{ username: state.username }}>

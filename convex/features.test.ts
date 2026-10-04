@@ -57,11 +57,17 @@ describe("Comments switched off", () => {
       author.mutation(api.comments.edit, { commentId, body: "Edited", spoiler: false }),
     ).rejects.toMatchObject(disabled);
     await expect(
-      t.withIdentity({ subject: OTHER }).mutation(api.comments.report, { commentId, reason: "spam" }),
+      t
+        .withIdentity({ subject: OTHER })
+        .mutation(api.comments.report, { commentId, reason: "spam" }),
     ).rejects.toMatchObject(disabled);
     // Signed out is refused the same way, before any auth check.
     await expect(
-      t.mutation(api.comments.post, { target: { kind: "series", id: seriesId }, body: "Hi", spoiler: false }),
+      t.mutation(api.comments.post, {
+        target: { kind: "series", id: seriesId },
+        body: "Hi",
+        spoiler: false,
+      }),
     ).rejects.toMatchObject(disabled);
   });
 
@@ -76,7 +82,9 @@ describe("Comments switched off", () => {
       await t.withIdentity({ subject: AUTHOR }).query(api.comments.replies, { target, commentId }),
     ).toEqual([]);
     // Unknown targets are still null.
-    expect(await t.query(api.comments.list, { target: { kind: "series", publicId: 999 } })).toBeNull();
+    expect(
+      await t.query(api.comments.list, { target: { kind: "series", publicId: 999 } }),
+    ).toBeNull();
   });
 });
 
@@ -84,7 +92,11 @@ describe("Reviews private", () => {
   it("keeps writing open and shows the Review to its author only", async () => {
     const { t, seriesId } = await seed();
     const author = t.withIdentity({ subject: AUTHOR });
-    await author.mutation(api.reviews.save, { target: { kind: "series", id: seriesId }, body: TEXT, spoiler: false });
+    await author.mutation(api.reviews.save, {
+      target: { kind: "series", id: seriesId },
+      body: TEXT,
+      spoiler: false,
+    });
 
     const mine = await author.query(api.reviews.mine, { target });
     expect(mine!.review).toMatchObject({ username: "carol", body: TEXT });
@@ -92,10 +104,15 @@ describe("Reviews private", () => {
     expect(await t.query(api.reviews.list, { target })).toEqual({ items: [], hasMore: false });
     expect(await author.query(api.reviews.list, { target })).toEqual({ items: [], hasMore: false });
     // Moderators get no hidden list either.
-    expect(await t.withIdentity({ subject: ADMIN }).query(api.reviews.hiddenList, { target })).toBeNull();
+    expect(
+      await t.withIdentity({ subject: ADMIN }).query(api.reviews.hiddenList, { target }),
+    ).toBeNull();
 
     // The profile leaves Reviews out even with everything public.
-    await author.mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    await author.mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "public",
+    });
     const profile = await t.query(api.sharing.publicProfile, { username: "carol" });
     expect(profile!.reviews).toEqual([]);
   });

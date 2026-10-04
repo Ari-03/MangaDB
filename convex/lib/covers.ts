@@ -1,7 +1,6 @@
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, QueryCtx } from "../_generated/server";
-import { todaySortKey } from "./dates";
 import { coveringOf, releasesOf } from "./editionRows";
 import { politeFetch } from "./http";
 
@@ -132,7 +131,8 @@ export async function storeCover(
     const res = await politeFetch(args.sourceUrl, args.delayMs);
     const bytes = new Uint8Array(await res.arrayBuffer());
     const header = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    const image = header.startsWith("image/") && (header === "image/svg+xml" || !looksLikeMarkup(bytes));
+    const image =
+      header.startsWith("image/") && (header === "image/svg+xml" || !looksLikeMarkup(bytes));
     const type = image ? header : rasterType(bytes);
     if (type === null) {
       throw new Error(`not an image (${header || "no type"}, ${bytes.length} bytes)`);
@@ -212,9 +212,7 @@ export async function releaseCover(
  */
 export function jacketCache(
   ctx: QueryCtx,
-  coverage: (editionId: Id<"editions">) => Promise<Array<Doc<"volumeCoverages">>> = (
-    editionId,
-  ) =>
+  coverage: (editionId: Id<"editions">) => Promise<Array<Doc<"volumeCoverages">>> = (editionId) =>
     ctx.db
       .query("volumeCoverages")
       .withIndex("by_edition", (q) => q.eq("editionId", editionId))
@@ -301,15 +299,19 @@ export type SeriesCoverCandidate = Pick<Doc<"releases">, "isbn13" | "format" | "
  * before forthcoming (unannounced books have no art yet), then the earliest
  * Volume, the standard run before an Edition Line covering the same Volume,
  * and the earliest release — so a standard-edition Volume 1 in print when
- * one is on file, else the earliest book that is. Only the first is stored
- * per Series (`seriesStats.coverIsbn`), so the order favours the Releases
- * the cover upstreams know best.
+ * one is on file, else the earliest book that is. Stored per Series
+ * (`seriesStats.coverIsbns`) and tried in turn by its cards, so the order
+ * favours the Releases the cover upstreams know best.
+ *
+ * `today` is today's yyyymmdd (lib/dates.ts `todaySortKey`), the line
+ * between published and forthcoming. It has no default: a query that read
+ * the clock here would have its cached result expire within seconds, so
+ * queries take the day as an argument and only the rebuild reads a clock.
  */
 export function seriesCoverIsbns(
   candidates: ReadonlyArray<SeriesCoverCandidate>,
-  now: Date = new Date(),
+  today: number,
 ): string[] {
-  const today = todaySortKey(now);
   const published = (c: SeriesCoverCandidate) => {
     const sort = c.pubDate?.sort ?? 0;
     return sort > 0 && sort <= today;
@@ -331,11 +333,27 @@ export function seriesCoverIsbns(
 }
 
 /**
- * A jacket for a whole Series from its first few Volumes: the first stored
- * cover, else the `seriesCoverIsbns` candidates. Cheap enough for a
- * home-page shelf.
+ * The ISBNs a Series card built from its `seriesStats` row looks its jacket
+ * up by, best first: the stored candidates, or the lone `coverIsbn` of a row
+ * written before they were stored. Empty for a Series with no row yet.
  */
-export async function seriesCover(ctx: QueryCtx, seriesId: Id<"series">): Promise<Jacket> {
+export function statsCoverIsbns(
+  row: Pick<Doc<"seriesStats">, "coverIsbn" | "coverIsbns"> | null | undefined,
+): string[] {
+  if (!row) return [];
+  return row.coverIsbns ?? (row.coverIsbn ? [row.coverIsbn] : []);
+}
+
+/**
+ * A jacket for a whole Series from its first few Volumes: the first stored
+ * cover, else the `seriesCoverIsbns` candidates ranked as of `today`
+ * (yyyymmdd). Cheap enough for a home-page shelf.
+ */
+export async function seriesCover(
+  ctx: QueryCtx,
+  seriesId: Id<"series">,
+  today: number,
+): Promise<Jacket> {
   const volumes = await ctx.db
     .query("volumes")
     .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
@@ -362,5 +380,5 @@ export async function seriesCover(ctx: QueryCtx, seriesId: Id<"series">): Promis
       }
     }
   }
-  return { coverUrl: null, coverIsbns: seriesCoverIsbns(candidates) };
+  return { coverUrl: null, coverIsbns: seriesCoverIsbns(candidates, today) };
 }

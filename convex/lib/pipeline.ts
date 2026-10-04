@@ -40,7 +40,13 @@ import { coverageOf, coveringOf, releasesOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
-import { getObservation, upsertObservation } from "./observations";
+import {
+  clearHold,
+  getObservation,
+  linkObservation,
+  recordUnplaced,
+  upsertObservation,
+} from "./observations";
 import { applyRetrying } from "./occ";
 import { allocatePublicId } from "./publicIds";
 import {
@@ -257,9 +263,7 @@ export async function linkSeriesObservation(
     now: args.now,
   });
   if (!observation.recordRef) {
-    await ctx.db.patch(observation._id, {
-      recordRef: { type: "series", id: args.seriesId },
-    });
+    await linkObservation(ctx, observation._id, { type: "series", id: args.seriesId });
   }
   return observation._id;
 }
@@ -316,9 +320,7 @@ export async function reconcileLinkedSeries(
   let seriesObs = linked.link;
   // A repair merged the linked Series: the link follows it to the survivor.
   if (series._id !== seriesObs.recordRef?.id) {
-    await ctx.db.patch(seriesObs._id, {
-      recordRef: { type: "series", id: series._id },
-    });
+    await linkObservation(ctx, seriesObs._id, { type: "series", id: series._id });
   }
   const snapshot = seriesObs.snapshot as SeriesLinkSnapshot;
   if (args.offeredSynopsis !== undefined && snapshot.synopsis !== args.offeredSynopsis) {
@@ -440,12 +442,6 @@ export async function removedSeriesFor(
     publisherId: Id<"publishers"> | null;
   },
 ): Promise<RemovedSeries | null> {
-  const hidden = (series: Doc<"series">): RemovedSeries => ({
-    kind: "hidden",
-    series,
-    reason: `"${args.seriesTitle}" is Series ${series.publicId} ("${series.title}"), which an Editor hid — not recreated by an import.`,
-  });
-
   const linkObs =
     args.observation.recordRef?.type === "series"
       ? args.observation
@@ -454,20 +450,42 @@ export async function removedSeriesFor(
         : null;
   if (linkObs?.recordRef?.type === "series") {
     const linked = await survivorOf<"series">(ctx, await ctx.db.get(linkObs.recordRef.id));
-    if (linked?.status === "hidden") return hidden(linked);
+    if (linked?.status === "hidden") return hiddenWork(args.seriesTitle, linked);
     if (linked?.status === "active" && linked._id !== linkObs.recordRef.id) {
       return { kind: "merged", survivor: linked };
     }
   }
+  return await hiddenWorkTitled(ctx, args.seriesTitle, args.publisherId);
+}
 
-  const incoming =
-    args.publisherId !== null ? new Set(await publisherHouse(ctx, args.publisherId)) : null;
-  for (const series of await hiddenSeriesTitled(ctx, args.seriesTitle)) {
+type HiddenWork = Extract<RemovedSeries, { kind: "hidden" }>;
+
+function hiddenWork(seriesTitle: string, series: Doc<"series">): HiddenWork {
+  return {
+    kind: "hidden",
+    series,
+    reason: `"${seriesTitle}" is Series ${series.publicId} ("${series.title}"), which an Editor hid — not recreated by an import.`,
+  };
+}
+
+/**
+ * The hidden Series a title names (step 2 of removedSeriesFor), or null:
+ * one with the same normalized title, unless both sides name publishers
+ * and they differ. Open Library, which never creates a Series, asks it to
+ * hold such a book.
+ */
+export async function hiddenWorkTitled(
+  ctx: MutationCtx,
+  seriesTitle: string,
+  publisherId: Id<"publishers"> | null,
+): Promise<HiddenWork | null> {
+  const incoming = publisherId !== null ? new Set(await publisherHouse(ctx, publisherId)) : null;
+  for (const series of await hiddenSeriesTitled(ctx, seriesTitle)) {
     if (incoming !== null) {
       const houses = await seriesPublishers(ctx, series._id);
       if (houses.size > 0 && ![...houses].some((id) => incoming.has(id))) continue;
     }
-    return hidden(series);
+    return hiddenWork(seriesTitle, series);
   }
   return null;
 }
@@ -508,7 +526,10 @@ export async function recordIsbnConflict(
   reason: string,
   now: number,
 ): Promise<void> {
-  const kept = (observation.conflicts ?? []).filter((c) => c.field !== "isbn13");
+  // Stored, not the caller's copy: a link earlier in this mutation may have
+  // cleared its placement note.
+  const stored = (await ctx.db.get(observation._id))?.conflicts ?? [];
+  const kept = stored.filter((c) => c.field !== "isbn13");
   await ctx.db.patch(observation._id, {
     conflicts: [...kept, { field: "isbn13", offered: isbn13, at: now, reason }],
   });
@@ -915,7 +936,13 @@ export type CreationArgs = {
 type CreatedRecord = {
   ref: {
     type:
-      "publisher" | "series" | "volume" | "editionLine" | "edition" | "release" | "releaseBundle";
+      | "publisher"
+      | "series"
+      | "volume"
+      | "editionLine"
+      | "edition"
+      | "release"
+      | "releaseBundle";
     id: string;
   };
   table: string;
@@ -1028,26 +1055,26 @@ async function ensureVolumes(
   return volumeIds;
 }
 
+/** Whether a Release may be filed under this Edition: active and unlocked. */
+export const joinableEdition = (edition: Doc<"editions">) =>
+  edition.status === "active" && !edition.locked;
+
 /**
- * An existing active Edition by this publisher covering exactly these
+ * Every Edition, in any state, by this publisher covering exactly these
  * volumes (complete, in order) in the same Edition Line at the same
- * position — or outside any line when the new Release has none. That is the
- * sibling edition a same-packaging Release in another Format/Binding
- * belongs to (spec §2: an Edition is realized by Releases differing only
- * there); an omnibus never joins a single volume's Edition, or vice versa.
+ * position — or outside any line when the new Release has none.
  */
-async function findSiblingEdition(
-  ctx: MutationCtx,
+export async function siblingEditions(
+  ctx: QueryCtx,
   publisherId: Id<"publishers">,
   volumeIds: Id<"volumes">[],
   line: { id: Id<"editionLines">; position: string | null } | null,
-): Promise<Id<"editions"> | null> {
-  if (volumeIds.length === 0) return null;
-  const coverages = await coveringOf(ctx, volumeIds[0]!);
-  for (const coverage of coverages) {
+): Promise<Doc<"editions">[]> {
+  if (volumeIds.length === 0) return [];
+  const siblings = [];
+  for (const coverage of await coveringOf(ctx, volumeIds[0]!)) {
     const edition = await ctx.db.get(coverage.editionId);
-    if (!edition || edition.status !== "active" || edition.locked) continue;
-    if (edition.publisherId !== publisherId) continue;
+    if (!edition || edition.publisherId !== publisherId) continue;
     if ((edition.editionLineId ?? null) !== (line?.id ?? null)) continue;
     if (line !== null && (edition.linePosition ?? null) !== line.position) continue;
     const rows = await coverageOf(ctx, edition._id);
@@ -1055,35 +1082,62 @@ async function findSiblingEdition(
     const matches = rows
       .sort((a, b) => a.order - b.order)
       .every((row, i) => row.volumeId === volumeIds[i] && row.extent === "complete");
-    if (matches) return edition._id;
+    if (matches) siblings.push(edition);
   }
-  return null;
+  return siblings;
 }
 
 /**
- * The sibling of an Unmapped Packaging Release: the line member at the same
- * position from the same publisher that is itself still unmapped (print and
- * digital of "Deluxe 14" share one Edition). Coverage cannot tell them
- * apart yet, so the position does.
+ * The active, unlocked one of those siblings (siblingEditions): the
+ * Edition a same-packaging Release in another Format/Binding belongs to
+ * (spec §2: an Edition is realized by Releases differing only there); an
+ * omnibus never joins a single volume's Edition, or vice versa. A placement
+ * Proposal's Edition joins it too (lib/proposalCreates.ts).
  */
-async function findUnmappedSibling(
-  ctx: MutationCtx,
+export async function findSiblingEdition(
+  ctx: QueryCtx,
+  publisherId: Id<"publishers">,
+  volumeIds: Id<"volumes">[],
+  line: { id: Id<"editionLines">; position: string | null } | null,
+): Promise<Id<"editions"> | null> {
+  return (
+    (await siblingEditions(ctx, publisherId, volumeIds, line)).find(joinableEdition)?._id ?? null
+  );
+}
+
+/**
+ * The line's members, in any state, from this publisher at this position
+ * that are Unmapped Packaging: the siblings of an Unmapped Packaging
+ * Release (print and digital of "Deluxe 14" share one Edition). Coverage
+ * cannot tell them apart yet, so the position does.
+ */
+export async function unmappedSiblings(
+  ctx: QueryCtx,
   publisherId: Id<"publishers">,
   line: { id: Id<"editionLines">; position: string | null },
-): Promise<Id<"editions"> | null> {
+): Promise<Doc<"editions">[]> {
   const members = await ctx.db
     .query("editions")
     .withIndex("by_line", (q) => q.eq("editionLineId", line.id))
     .collect();
-  const sibling = members.find(
+  return members.filter(
     (edition) =>
-      edition.status === "active" &&
-      !edition.locked &&
       edition.publisherId === publisherId &&
       edition.coverageUnmapped === true &&
       (edition.linePosition ?? null) === line.position,
   );
-  return sibling?._id ?? null;
+}
+
+/**
+ * The active, unlocked one of those (unmappedSiblings). A placement
+ * Proposal's unmapped Edition joins it too (lib/proposalCreates.ts).
+ */
+export async function findUnmappedSibling(
+  ctx: QueryCtx,
+  publisherId: Id<"publishers">,
+  line: { id: Id<"editionLines">; position: string | null },
+): Promise<Id<"editions"> | null> {
+  return (await unmappedSiblings(ctx, publisherId, line)).find(joinableEdition)?._id ?? null;
 }
 
 /** The Series' active Edition Line of this name (any case) for one publisher. */
@@ -1206,7 +1260,7 @@ export async function createCanonicalRecords(
       publisherId: publisher?._id ?? null,
     });
     if (removed?.kind === "hidden") {
-      await recordUnplaced(ctx, args.observation, removed.reason, now);
+      await recordUnplaced(ctx, args.observation, { kind: "series", reason: removed.reason }, now);
       return {
         seriesId: removed.series._id,
         volumeIds: [],
@@ -1362,9 +1416,7 @@ export async function createCanonicalRecords(
   );
 
   if (releaseId !== undefined) {
-    await ctx.db.patch(args.observation._id, {
-      recordRef: { type: "release", id: releaseId },
-    });
+    await linkObservation(ctx, args.observation._id, { type: "release", id: releaseId });
   }
 
   return { seriesId, volumeIds, releaseId, changed: created.length > 0 };
@@ -1418,9 +1470,7 @@ export async function createReleaseBundle(
           .first()
       : null;
   if (existing) {
-    await ctx.db.patch(args.observation._id, {
-      recordRef: { type: "releaseBundle", id: existing._id },
-    });
+    await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: existing._id });
     const { expected, conflict } = await addLateBundleMembers(ctx, existing, {
       ...args,
       format: args.release.format,
@@ -1482,9 +1532,7 @@ export async function createReleaseBundle(
     },
     created,
   );
-  await ctx.db.patch(args.observation._id, {
-    recordRef: { type: "releaseBundle", id: bundleId },
-  });
+  await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: bundleId });
   return { bundleId, members: memberIds.length, created: true };
 }
 
@@ -1595,11 +1643,7 @@ async function addLateBundleMembers(
   bundle: Doc<"releaseBundles">,
   args: BundleMembersArgs,
 ): Promise<{ expected: number; added: number; conflict?: string }> {
-  if (
-    bundle.status !== "active" ||
-    bundle.locked ||
-    bundle.overriddenFields?.includes("members")
-  ) {
+  if (bundle.status !== "active" || bundle.locked || bundle.overriddenFields?.includes("members")) {
     return { expected: 0, added: 0 };
   }
   // In page order: by `order`, then creation.
@@ -1609,10 +1653,7 @@ async function addLateBundleMembers(
     .collect();
   const conflict = await bundleIdentityConflict(ctx, bundle, current, args);
   if (conflict !== null) {
-    const recorded = args.observation.conflicts?.some(
-      (c) => c.field === "placement" && c.reason === conflict,
-    );
-    if (!recorded) await recordUnplaced(ctx, args.observation, conflict, args.now);
+    await recordUnplaced(ctx, args.observation, { kind: "series", reason: conflict }, args.now);
     return { expected: 0, added: 0, conflict };
   }
   const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
@@ -1688,51 +1729,54 @@ export async function reconcileLinkedBundle(
   return conflict === undefined ? { added } : { added, conflict };
 }
 
-/**
- * Leave a packaged record the importer cannot place on its observation only
- * (spec §6: record, never guess): packaging whose covered Volumes the title
- * never states, or whose base Series is unknown. An Editor maps it later.
- */
-export async function recordUnplaced(
-  ctx: MutationCtx,
-  observation: Doc<"sourceObservations">,
-  reason: string,
-  now: number,
-): Promise<void> {
-  const kept = (observation.conflicts ?? []).filter((c) => c.field !== "placement");
-  await ctx.db.patch(observation._id, {
-    conflicts: [...kept, { field: "placement", offered: null, at: now, reason }],
-  });
-}
-
 // ---------- the steady-state review queue path ----------
 
-export type QueueArgs = {
-  sourceKey: string;
-  observation: Doc<"sourceObservations">;
+/** One temp-ID create op of a Proposal (lib/proposalCreates.ts reads them). */
+export type CreateOp = { kind: "create"; table: string; tempId: string; fields: unknown };
+
+/** What the creation ops describe: the records a book needs, in temp-ID form. */
+export type CreationOpsArgs = {
   seriesId: Id<"series"> | null;
   seriesTitle: string;
   seriesAltTitles?: string[];
-  /** Covered labels; [] = one unlabeled Volume, unless `seriesOnly`. */
+  /** Covered labels; [] = one unlabeled Volume, unless `seriesOnly` or `placement` says otherwise. */
   labels: string[];
   seriesOnly?: boolean;
   /**
-   * The Edition Line a packaged guess belongs to. The queued ops reference
-   * the base Series' existing line of that name, or create it, so approval
-   * files the Edition under it. Its position wins over `linePosition`.
+   * The Edition Line a packaged guess belongs to. The ops reference the base
+   * Series' existing line of that name, or create it, so approval files the
+   * Edition under it. Its position wins over `linePosition`.
    */
   editionLine?: { name: string; position: string | null };
   /** Edition Line Position of a packaged guess queued without `editionLine`. */
   linePosition?: string;
   /** The Release guess with the publisher's slug; absent = backbone only. */
   release?: ReleasePayload & { publisherSlug: string };
+  /**
+   * A Data Team member's placement of a held book (placement.ts), under its
+   * existing Series. Its coverage is `labels`, or Unmapped Packaging under
+   * the line, or not stated yet (`pending`: the Edition covers nothing and
+   * the Draft cannot be submitted). Its Volume and Edition ops join a record
+   * created meanwhile instead of duplicating it (`joinExisting`), and the
+   * Release op names the observation approval links to it.
+   */
+  placement?: {
+    observationId: Id<"sourceObservations">;
+    seriesId: Id<"series">;
+    coverage: "labels" | "unmapped" | "pending";
+  };
+};
+
+export type QueueArgs = Omit<CreationOpsArgs, "placement"> & {
+  sourceKey: string;
+  observation: Doc<"sourceObservations">;
   comment: string;
   now: number;
 };
 
 /**
- * The Edition Line reference for a queued packaging guess: the base Series'
- * active line of that name from this publisher when one exists (the
+ * The Edition Line reference for a queued packaging guess: the base
+ * Series' active line of that name from this publisher when one exists (the
  * importer's ensureEditionLine rule), else a create op for it appended to
  * `ops`, whose temp-ID is returned. The op is `joinExisting`: two members of
  * one new line queued before either is approved both carry it, and the one
@@ -1744,7 +1788,7 @@ async function queueEditionLine(
     seriesId: Id<"series"> | null;
     publisherSlug: string;
     name: string;
-    ops: Array<{ kind: "create"; table: string; tempId: string; fields: unknown }>;
+    ops: CreateOp[];
   },
 ): Promise<string> {
   const publisher = await ctx.db
@@ -1774,25 +1818,16 @@ async function queueEditionLine(
 }
 
 /**
- * Queue an In-Review Proposal pre-filled with the parsed guess (spec §5/§6):
- * temp-ID create ops for whatever does not exist yet (Series, Volumes,
- * Edition Line, Edition, Release), evidence citing the observation, the gate
- * or matching-ladder flag in the change comment.
- * These land in the shared review queue (proposals.ts); a Moderator's
- * approval applies the ops via the creation registry. The observation
- * remembers the proposal (queuedProposalId) so an unchanged snapshot never
- * re-queues — not while one is open, and not after a rejection.
+ * The temp-ID create ops for whatever does not exist yet (Series, Volumes,
+ * Edition Line, Edition, Release): existing active Volumes of a label (or a
+ * merged one's survivor) are referenced by ID, the rest created. Shared by
+ * an import's queued Proposal (queueCreationProposal) and a member's
+ * placement of a held book (placement.ts), which alone sets `placement`.
  */
-export async function queueCreationProposal(
-  ctx: MutationCtx,
-  args: QueueArgs,
-): Promise<Id<"proposals">> {
-  const ops: Array<{
-    kind: "create";
-    table: string;
-    tempId: string;
-    fields: unknown;
-  }> = [];
+export async function creationOps(ctx: MutationCtx, args: CreationOpsArgs): Promise<CreateOp[]> {
+  const ops: CreateOp[] = [];
+  const placement = args.placement;
+  const join = placement !== undefined ? { joinExisting: true } : {};
   if (args.seriesId === null) {
     ops.push({
       kind: "create",
@@ -1813,7 +1848,13 @@ export async function queueCreationProposal(
           .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId!))
           .collect();
   const volumeLabels: Array<string | undefined> =
-    args.labels.length > 0 ? args.labels.map(canonicalLabel) : args.seriesOnly ? [] : [undefined];
+    placement !== undefined && placement.coverage !== "labels"
+      ? []
+      : args.labels.length > 0
+        ? args.labels.map(canonicalLabel)
+        : args.seriesOnly
+          ? []
+          : [undefined];
   for (const [i, label] of volumeLabels.entries()) {
     const sameLabel = existingVolumes.filter((volume) => labelsEqual(volume.label, label ?? null));
     let existing = sameLabel.find((volume) => volume.status === "active");
@@ -1839,7 +1880,7 @@ export async function queueCreationProposal(
       kind: "create",
       table: "volumes",
       tempId,
-      fields: { seriesId: args.seriesId ?? "series", label },
+      fields: { seriesId: args.seriesId ?? "series", label, ...join },
     });
   }
   if (args.release !== undefined) {
@@ -1866,6 +1907,8 @@ export async function queueCreationProposal(
           order: i + 1,
           extent: "complete",
         })),
+        ...(placement?.coverage === "unmapped" ? { coverageUnmapped: true } : {}),
+        ...join,
       },
     });
     ops.push({
@@ -1882,18 +1925,41 @@ export async function queueCreationProposal(
         pubDate: args.release.pubDate,
         price: args.release.price,
         description: args.release.description,
+        ...(placement !== undefined
+          ? { placement: { observationId: placement.observationId, seriesId: placement.seriesId } }
+          : {}),
       },
     });
   }
+  return ops;
+}
 
+/**
+ * Queue an In-Review Proposal pre-filled with the parsed guess (spec §5/§6):
+ * temp-ID create ops for whatever does not exist yet (creationOps),
+ * evidence citing the observation, the gate or matching-ladder flag in the
+ * change comment.
+ * These land in the shared review queue (proposals.ts); a Moderator's
+ * approval applies the ops via the creation registry. The observation
+ * remembers the proposal (queuedProposalId) so an unchanged snapshot never
+ * re-queues — not while one is open, and not after a rejection. While the
+ * Proposal is in review the book is the review queue's, never a Held Book
+ * (clearHold); once it is decided, a later hold lists the book again.
+ */
+export async function queueCreationProposal(
+  ctx: MutationCtx,
+  args: QueueArgs,
+): Promise<Id<"proposals">> {
+  const { sourceKey, observation, comment, now, ...described } = args;
   const { proposalId } = await insertSourceProposal(ctx, {
-    sourceKey: args.sourceKey,
+    sourceKey,
     state: "inReview",
-    ops,
-    evidence: [args.observation._id],
-    comment: args.comment,
-    now: args.now,
+    ops: await creationOps(ctx, described),
+    evidence: [observation._id],
+    comment,
+    now,
   });
-  await ctx.db.patch(args.observation._id, { queuedProposalId: proposalId });
+  await ctx.db.patch(observation._id, { queuedProposalId: proposalId });
+  await clearHold(ctx, observation._id);
   return proposalId;
 }

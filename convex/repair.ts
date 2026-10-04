@@ -36,7 +36,13 @@ function evidenceFor(entry: RepairEntry) {
       return [{ kind: "observation" as const, observationId: entry.observationId }, note];
     case "editionPublisher":
     case "splitSeries":
-      return [...entry.observationIds.map((observationId) => ({ kind: "observation" as const, observationId })), note];
+      return [
+        ...entry.observationIds.map((observationId) => ({
+          kind: "observation" as const,
+          observationId,
+        })),
+        note,
+      ];
     case "updateFields":
       return entry.evidenceObservationId
         ? [{ kind: "observation" as const, observationId: entry.evidenceObservationId }, note]
@@ -53,7 +59,12 @@ export const applyOne = internalMutation({
   args: { entry: repairEntry, dryRun: v.boolean(), actor: v.string() },
   returns: outcome,
   handler: async (ctx, { entry, dryRun, actor }) => {
-    const audit = createAudit(ctx, await resolveActor(ctx, actor), `Data repair: ${entry.reason}`, evidenceFor(entry));
+    const audit = createAudit(
+      ctx,
+      await resolveActor(ctx, actor),
+      `Data repair: ${entry.reason}`,
+      evidenceFor(entry),
+    );
     const result = await applyEntry(ctx, audit, entry);
     await audit.finish();
     const reported: Outcome = {
@@ -91,7 +102,8 @@ export const runBatch = internalMutation({
       } catch (error) {
         const data = errorData(error);
         if (data?.dryRun) outcomes.push(data.dryRun);
-        else if (data?.skip) outcomes.push({ key: entry.key, status: "skipped", reason: data.skip });
+        else if (data?.skip)
+          outcomes.push({ key: entry.key, status: "skipped", reason: data.skip });
         else {
           outcomes.push({
             key: entry.key,
@@ -132,7 +144,9 @@ export const observationsPage = internalQuery({
     const page = await ctx.db
       .query("sourceObservations")
       .withIndex("by_source_record", (q) =>
-        sourceKey === "ann" ? q.eq("sourceKey", "ann").gte("sourceRecordId", "release:") : q.eq("sourceKey", sourceKey),
+        sourceKey === "ann"
+          ? q.eq("sourceKey", "ann").gte("sourceRecordId", "release:")
+          : q.eq("sourceKey", sourceKey),
       )
       .paginate({ cursor, numItems });
     return {

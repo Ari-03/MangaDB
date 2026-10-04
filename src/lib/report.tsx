@@ -10,35 +10,20 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
-import { convexClient } from "~/providers";
 
-export function SeriesReportAffordance({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
+export function SeriesReportAffordance({ seriesPublicId }: { seriesPublicId: number }) {
   const [open, setOpen] = useState(false);
   return (
     <section className="series-report">
       {open ? (
-        convexClient ? (
-          <ReportForm seriesPublicId={seriesPublicId} onDone={() => setOpen(false)} />
-        ) : (
-          <p className="notice">
-            Reporting needs a configured Convex deployment (see the README).
-          </p>
-        )
+        <ReportForm seriesPublicId={seriesPublicId} onDone={() => setOpen(false)} />
       ) : (
         <>
           <p className="report-lede">
-            A missing volume, a wrong date, a duplicate series — tell the data
-            team and an editor will pick it up.
+            A missing volume, a wrong date, a duplicate series — tell the data team and an editor
+            will pick it up.
           </p>
-          <button
-            type="button"
-            className="btn btn-sm report-toggle"
-            onClick={() => setOpen(true)}
-          >
+          <button type="button" className="btn btn-sm report-toggle" onClick={() => setOpen(true)}>
             Report something wrong
           </button>
         </>
@@ -47,13 +32,7 @@ export function SeriesReportAffordance({
   );
 }
 
-function ReportForm({
-  seriesPublicId,
-  onDone,
-}: {
-  seriesPublicId: number;
-  onDone: () => void;
-}) {
+function ReportForm({ seriesPublicId, onDone }: { seriesPublicId: number; onDone: () => void }) {
   const viewer = useQuery(api.users.viewer, {});
   const submit = useMutation(api.reports.submit);
   const [message, setMessage] = useState("");
@@ -64,8 +43,8 @@ function ReportForm({
   if (viewer === null) {
     return (
       <p className="notice">
-        <a href="/sign-in">Sign in</a> to report a missing volume, a wrong
-        date, or anything else off about this series.
+        <a href="/sign-in">Sign in</a> to report a missing volume, a wrong date, or anything else
+        off about this series.
       </p>
     );
   }
@@ -79,8 +58,7 @@ function ReportForm({
   if (sent) {
     return (
       <p className="notice">
-        Thanks — your report is in the review queue. The data team will take a
-        look.
+        Thanks — your report is in the review queue. The data team will take a look.
       </p>
     );
   }
@@ -108,11 +86,7 @@ function ReportForm({
       </label>
       {error ? <p className="form-error">{error}</p> : null}
       <div className="report-actions">
-        <button
-          type="submit"
-          className="btn btn-sm btn-primary"
-          disabled={message.trim() === ""}
-        >
+        <button type="submit" className="btn btn-sm btn-primary" disabled={message.trim() === ""}>
           Send report
         </button>
         <button type="button" className="btn btn-sm" onClick={onDone}>

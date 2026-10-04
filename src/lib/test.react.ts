@@ -1,12 +1,20 @@
 // A fake React for driving components as plain functions under vitest's
 // edge runtime, which has no DOM. Importing this file mocks `react`:
-// useState keeps each component's state in `harness.slots` across renders,
+// useState, useRef and useMemo keep each component's values in
+// `harness.slots` across renders, useEffect queues its effect for `mount`
+// to run once the render is done (again only when a dependency changed),
 // and useSyncExternalStore reads the store's snapshot directly, recording
 // the subscribe function it was handed. `backendHooks` is a convex/react
-// whose useQuery answers from `harness.snapshot` and whose useMutation runs
-// against the convex-test `harness.backend`. A suite opts into it with
+// whose useQuery answers from `harness.snapshot` (nothing for "skip", and
+// records what it subscribed in `harness.subscribed`), whose useMutation
+// runs against the convex-test `harness.backend`, and whose useConvexAuth
+// reports `harness.convexAuth` (in step with Clerk unless a test says
+// otherwise); `clerkHooks` is a Clerk whose useAuth reports the session in
+// `harness.auth` (signed in unless a test says otherwise). A suite opts
+// into them with
 //
 //   vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
+//   vi.mock("@clerk/tanstack-react-start", async () => (await import("./test.react")).clerkHooks);
 //
 // and imports the components under test with `await import(...)` after
 // this file. Test-only: the name stays outside vitest's include
@@ -18,21 +26,32 @@ import { vi } from "vitest";
 
 import type { Accessor } from "../../convex/test.helpers";
 
+type Session = { isLoaded: boolean; isSignedIn: boolean | undefined };
+type ConvexAuth = { isLoading: boolean; isAuthenticated: boolean };
+
 /**
- * State shared with the mocks: the signed-in backend, the query snapshot
- * useQuery answers from, an optional wrapper around every mutation call
- * (see hold), the in-flight mutation promises, the hook slots of the
- * component being rendered with its cursor, and the last subscribe an
- * external store was read with. Hoisted, so the react mock can use it (and
- * exported under another name, as vitest cannot export a hoisted binding).
+ * State shared with the mocks: the signed-in backend, the Clerk session
+ * useAuth reports, Convex's ruling on its token as useConvexAuth reports
+ * it (null: in step with Clerk, as once the token is accepted), the query
+ * snapshot useQuery answers from, the queries useQuery was asked for
+ * without "skip", an optional wrapper around every mutation call (see
+ * hold), the in-flight mutation promises, the hook slots of the
+ * component being rendered with its cursor, the effects the render queued,
+ * and the last subscribe an external store was read with. Hoisted, so the
+ * react mock can use it (and exported under another name, as vitest cannot
+ * export a hoisted binding).
  */
 const state = vi.hoisted(() => ({
   backend: null as Accessor | null,
+  auth: { isLoaded: true, isSignedIn: true } as Session | null,
+  convexAuth: null as ConvexAuth | null,
+  subscribed: new Set<string>(),
   intercept: null as ((name: string, run: () => Promise<unknown>) => Promise<unknown>) | null,
   snapshot: new Map<string, unknown>(),
   inflight: [] as Array<Promise<unknown>>,
   slots: [] as unknown[],
   cursor: 0,
+  effects: [] as Array<() => void>,
   subscribe: null as ((listener: () => void) => () => void) | null,
 }));
 export const harness = state;
@@ -49,36 +68,104 @@ vi.mock("react", async (importOriginal) => {
       slots[index] = typeof initial === "function" ? (initial as () => S)() : initial;
     }
     const set = (next: S | ((prev: S) => S)) => {
-      slots[index] = typeof next === "function" ? (next as (prev: S) => S)(slots[index] as S) : next;
+      slots[index] =
+        typeof next === "function" ? (next as (prev: S) => S)(slots[index] as S) : next;
     };
     return [slots[index] as S, set] as const;
   }
-  function useSyncExternalStore<T>(subscribe: (listener: () => void) => () => void, snapshot: () => T) {
+  // Whether a hook's `deps` differ from those stored in its slot (always
+  // on its first render, and every render without deps).
+  const changed = (index: number, deps?: readonly unknown[]) => {
+    const prev = (state.slots[index] as { deps?: readonly unknown[] } | undefined)?.deps;
+    return (
+      !prev ||
+      !deps ||
+      prev.length !== deps.length ||
+      deps.some((dep, i) => !Object.is(dep, prev[i]))
+    );
+  };
+  // biome-ignore lint/suspicious/noConfusingVoidType: mirrors React's EffectCallback, which returns void or a destructor
+  function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]) {
+    const slots = state.slots;
+    const index = state.cursor++;
+    if (!changed(index, deps)) return;
+    const prev = slots[index] as { cleanup?: () => void } | undefined;
+    const slot: { deps?: readonly unknown[]; cleanup?: () => void } = { deps };
+    slots[index] = slot;
+    state.effects.push(() => {
+      prev?.cleanup?.();
+      slot.cleanup = effect() ?? undefined;
+    });
+  }
+  function useMemo<T>(create: () => T, deps: readonly unknown[]) {
+    const index = state.cursor++;
+    if (changed(index, deps)) state.slots[index] = { deps, value: create() };
+    return (state.slots[index] as { value: T }).value;
+  }
+  function useRef<T>(initial: T) {
+    const index = state.cursor++;
+    if (!(index in state.slots)) state.slots[index] = { current: initial };
+    return state.slots[index] as { current: T };
+  }
+  function useSyncExternalStore<T>(
+    subscribe: (listener: () => void) => () => void,
+    snapshot: () => T,
+  ) {
     state.subscribe = subscribe;
     return snapshot();
   }
-  return { ...actual, useState, useSyncExternalStore };
+  return { ...actual, useState, useEffect, useMemo, useRef, useSyncExternalStore };
 });
 
 /** convex/react wired to the harness: queries from the snapshot, mutations to the backend. */
 export const backendHooks = {
-  useQuery: (ref: FunctionReference<"query">) => harness.snapshot.get(getFunctionName(ref)),
+  useQuery: (ref: FunctionReference<"query">, args?: unknown) => {
+    if (args === "skip") return undefined;
+    harness.subscribed.add(getFunctionName(ref));
+    return harness.snapshot.get(getFunctionName(ref));
+  },
   useMutation: (ref: FunctionReference<"mutation">) => (args: Record<string, unknown>) => {
     const run = () => harness.backend!.mutation(ref, args);
     const call = harness.intercept ? harness.intercept(getFunctionName(ref), run) : run();
     harness.inflight.push(call);
     return call;
   },
+  useConvexAuth: (): ConvexAuth =>
+    harness.convexAuth ?? {
+      isLoading: harness.auth?.isLoaded !== true,
+      isAuthenticated: harness.auth?.isSignedIn === true,
+    },
 };
+
+/** Clerk wired to the harness: the session is `harness.auth`. */
+export const clerkHooks = {
+  // Null stands for Clerk off: no ClerkProvider above, where useAuth throws.
+  useAuth: () => {
+    if (!harness.auth)
+      throw new Error("useAuth can only be used within the <ClerkProvider /> component.");
+    return harness.auth;
+  },
+};
+
+/** The Clerk sessions a test can put `harness.auth` in, or null for Clerk off. */
+export const AUTH = {
+  signedIn: { isLoaded: true, isSignedIn: true },
+  signedOut: { isLoaded: true, isSignedIn: false },
+  loading: { isLoaded: false, isSignedIn: undefined },
+} satisfies Record<string, Session>;
 
 /** Clear the harness between tests. */
 export function resetHarness() {
   harness.backend = null;
+  harness.auth = AUTH.signedIn;
+  harness.convexAuth = null;
+  harness.subscribed.clear();
   harness.intercept = null;
   harness.snapshot.clear();
   harness.inflight = [];
   harness.slots = [];
   harness.cursor = 0;
+  harness.effects = [];
   harness.subscribe = null;
 }
 
@@ -101,10 +188,15 @@ export function render(node: ReactNode): Host[] {
   return render(props.children);
 }
 
-/** Render a root component with a fresh hook cursor (slots persist). */
+/**
+ * Render a root component with a fresh hook cursor (slots persist), then
+ * run the effects the render queued.
+ */
 export function mount(component: () => ReactNode): Host[] {
   harness.cursor = 0;
-  return render(component());
+  const tree = render(component());
+  for (const effect of harness.effects.splice(0)) effect();
+  return tree;
 }
 
 /**
@@ -137,7 +229,8 @@ export function text(node: ReactNode): string {
 export function press(tree: Host[], label: string) {
   const button = tree.find(
     (host) =>
-      host.type === "button" && (text(host.props.children) === label || host.props["aria-label"] === label),
+      host.type === "button" &&
+      (text(host.props.children) === label || host.props["aria-label"] === label),
   );
   if (!button) throw new Error(`No button "${label}"`);
   const onClick = button.props.onClick as () => void;

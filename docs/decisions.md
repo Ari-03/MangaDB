@@ -46,6 +46,40 @@ threads. Google's Perspective API is not an option; it is being shut down.
   cheap, and import runs, source health and moderation have no browser call
   site.
 
+## Disjoint ISBNs mean another work
+
+When ANN's entry and a Series of the same title both hold ISBNs in a
+shared format and share none, `workMatch` calls them different works
+(decided 2026-10-04). It is what keeps a parent off its spinoff (Citrus
+off Citrus+, which carries "Citrus Plus" as an alternative title): a
+spinoff shares its author, so only the books tell them apart. A wrong "same" lets ANN build Volumes and credits on the wrong
+Series, which is hard to undo; a wrong "different" costs a duplicate
+Series, which a merge undoes. The case it gets wrong is a work reissued
+under new ISBNs, or a Series a publisher feed built from later Volumes than
+ANN lists.
+
+When nothing tells them apart, a Series another live ANN entry already
+holds is another work as well (decided 2026-10-04). A Series ANN creates
+has no book until the page pass after the mirror, so on a fresh seed the
+title alone put the Alchemist sequel (ANN 30340) on the first work's
+Series. In the production export of 2026-10-02, nine groups of ANN entries
+share a title and each entry has its own Series. A shared ISBN still
+links. Its cost is an entry whose id ANN replaced, which arrives while the
+old entry still holds the Series and gets a duplicate Series beside it.
+
+Both drops are made visible: when either rule drops the only Series of
+the entry's title and ANN creates a second Series beside it, the pair goes
+on the duplicate list on `/mod/launch` with the reason (no shared ISBN, or
+the ANN entry that holds the Series); in steady state the creation
+Proposal names the dropped Series and the reason. A candidate dropped
+among several Series of the title, or one reached through an alternative
+title, leaves no record.
+
+Ruled out: holding such an entry for review instead, which in Bootstrap
+Mode would leave its books out of the catalog until a person looked; and
+treating disjoint ISBNs as no evidence, which would link namesakes by
+title alone.
+
 ## Cover art sources
 
 Covers come from Penguin Random House's distribution CDN first and the
@@ -61,6 +95,34 @@ Ruled out:
 - **VIZ and Yen Press websites.** Their terms forbid reuse of site
   material, and Yen's images are signed URLs.
 - **Open Library by edition key.** It found nothing the ISBN lookup missed.
+
+## Open Library continuations read the dump from the start
+
+Each continuation of `openLibrary:sync` downloads the filtered dump again
+from byte zero and skips the lines earlier links processed (decided
+2026-10-04). A run is monthly, and starting over needs no stored byte
+offset and no host that answers range requests, so any static URL can
+serve the dump. Continuing from a byte offset with HTTP Range, or
+splitting the dump into separate files, would save the repeated download.
+
+A link hands off at the first line it reaches after ten minutes
+([imports](imports.md#open-library)), so a run makes about one download
+per ten minutes it runs. For today's dump of 57,766 editions that is
+about 12 or 13 downloads at the pace of the runs of 2026-09-26 and 27
+(111 and 126 minutes) and about 26 at the pace of 2026-10-04 (6,295
+editions in 28 minutes, about four and a quarter hours for the whole
+dump), where 20,000-line links made four or five. Each download stops
+where its link stops, so together they read about half as many whole
+dumps.
+
+The design's limit: if downloading and skipping the prefix alone takes
+longer than ten minutes, every link applies exactly one line and
+downloads the prefix again, so the run crawls. It keeps going only while
+each link also applies its line and hands off before Convex's 30-minute
+limit; a link that does not is ended there and the run is stranded. The
+decision changes if the
+dump grows until reading it up to a late link's first line takes much of
+that link's ten minutes, or if Open Library offers range requests.
 
 ## Staging
 

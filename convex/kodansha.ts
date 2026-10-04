@@ -1,8 +1,10 @@
 // The Kodansha adapter (spec §6/§7): Kodansha's own catalog
 // through the shared pipeline, from two feeds that share one observation
 // per (volume, format) and one apply path (`applyVolume`: observation →
-// matching ladder → authority reconciliation → creation/queue, as in
-// sevenSeas.ts; the shared halves live in lib/pipeline.ts):
+// matching ladder → authority reconciliation, or for a volume that matched
+// no Release the placement tail Seven Seas, PRH and Yen Press share,
+// lib/unmatched.ts, which holds every unmatched packaging volume of
+// Kodansha's; the shared halves live in lib/pipeline.ts):
 //
 // - `sync` (daily, registry row "kodansha"): the first-party JSON window —
 //   the release calendar (~8 weekly buckets of upcoming volumes) plus this
@@ -35,6 +37,10 @@
 // other non-manga volume (lib/kodansha.ts `outOfScope`) is observed and
 // never placed. The crawl never even fetches Kodansha's ~310 novel-type series.
 //
+// Each feed is gated on its own registry row (lib/importRuns.ts): the window
+// before each batch of applies, the crawl at each link and before each
+// series. Disabling "kodansha" stops the window, not the crawl.
+//
 // Neither feed is a withdrawal sweep: the calendar is a rolling window, and
 // the crawl skips fresh series, so absence proves nothing.
 
@@ -47,12 +53,21 @@ import {
   internalQuery,
   type MutationCtx,
 } from "./_generated/server";
-import { getBootstrapMode, getSourceByKey } from "./importSources";
-import type { ApplyResult } from "./lib/catalogTitle";
+import { getSourceByKey } from "./importSources";
+import { parseBookTitle, type CoverRange, type Packaging } from "./lib/bookTitle";
+import { coverageFromLine } from "./lib/coverage";
 import { coverKey, coverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue, storeRunCover } from "./lib/importRuns";
+import {
+  closeRun,
+  MAX_CARRIED_ERRORS,
+  registryRow,
+  runToContinue,
+  stampHandOff,
+  stopAtGate,
+  storeRunCover,
+} from "./lib/importRuns";
 import {
   baseRecordId,
   crawlMode,
@@ -79,21 +94,15 @@ import {
   type SeriesListingEntry,
 } from "./lib/kodansha";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
-import { getObservation, markSeen, upsertObservation } from "./lib/observations";
+import { getObservation, linkObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
-  alreadyHandled,
-  createCanonicalRecords,
-  creationGates,
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
   isbnHolderBesides,
   linkSeriesObservation,
   publisherBySlug,
-  queueCreationProposal,
   reconcileLinkedSeries,
-  removedSeriesFor,
   recordIsbnConflict,
-  recordUnplaced,
   seriesEditions,
   toPartialDate,
 } from "./lib/pipeline";
@@ -101,12 +110,13 @@ import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
 import { sameValue } from "./lib/values";
 import { withExceptionCapture } from "./lib/posthog";
+import { placeUnmatched, type ApplyResult } from "./lib/unmatched";
 
 export const SOURCE_KEY = "kodansha";
 /** The backlist crawl's registry row: its runs, cadence, health, and crawl state. */
 export const BACKLIST_KEY = "kodansha-backlist";
 const BASE_URL = "https://kodansha.us";
-const PUBLISHER: CanonicalPublisher = { name: "Kodansha", slug: "kodansha" };
+export const PUBLISHER: CanonicalPublisher = { name: "Kodansha", slug: "kodansha" };
 const VERTICAL: CanonicalPublisher = {
   name: "Vertical",
   slug: "vertical",
@@ -122,6 +132,8 @@ const DEFAULT_MAX_FETCHES = 200;
 const PLAN_CHUNK = 100;
 /** Listing pages read before giving up (1,170 series = 12 pages). */
 const MAX_LISTING_PAGES = 40;
+/** The daily window's applies between two checks of the import gate. */
+const WINDOW_BATCH = 50;
 
 // ---------- the daily window ----------
 
@@ -133,11 +145,13 @@ type SyncResult =
       recordsChanged: number;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
  * One Kodansha window run: two JSON fetches, then one apply mutation per
- * (volume, format). Runs daily per the registry cadence.
+ * (volume, format), with the import gate before each WINDOW_BATCH of them.
+ * Runs daily per the registry cadence.
  *
  *   npx convex run kodansha:sync '{}'
  */
@@ -145,15 +159,14 @@ export const sync = internalAction({
   args: {
     /** Pause before every request; tests pass 0. */
     politeDelayMs: v.optional(v.number()),
+    /** A run an operator opened with imports:startRun (forced). */
+    runId: v.optional(v.id("importRuns")),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("kodansha.sync", ctx, async () => {
       const source = await registryRow(ctx, SOURCE_KEY);
-      if (!source.enabled) return { skipped: "disabled" as const };
-
-      const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
-        sourceKey: SOURCE_KEY,
-      });
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
       const delay = args.politeDelayMs ?? 350;
       const errors: string[] = [];
       let seen = 0;
@@ -184,7 +197,12 @@ export const sync = internalAction({
         ingest(parseNewReleases(await newRes.json()));
 
         const covers: StoredCovers = new Map();
+        let applied = 0;
         for (const [recordId, { snapshot }] of items) {
+          if (applied++ % WINDOW_BATCH === 0) {
+            const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+            if (stopped) return stopped;
+          }
           seen++;
           try {
             const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
@@ -293,7 +311,8 @@ export const recordSeriesCrawl = internalMutation({
 /**
  * Write the listing's age ratings onto the series-link observations
  * (`series:{slug}`) of series already linked to the catalog, where the
- * Mature Series rebuild reads them (lib/mature.ts). Kodansha rates series,
+ * Mature Series rebuild reads them; a new 18+ rating also makes its Series
+ * mature at once (lib/mature.ts). Kodansha rates series,
  * not books, and the listing is fetched in full every run, so this costs no
  * page fetches. A series linked later this run gets its rating next run.
  */
@@ -352,6 +371,7 @@ type BacklistResult =
       continued: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
@@ -389,8 +409,8 @@ export const backlistSync = internalAction({
   handler: async (ctx, args): Promise<BacklistResult> =>
     withExceptionCapture("kodansha.backlistSync", ctx, async () => {
       const source = await registryRow(ctx, BACKLIST_KEY);
-      // The shared gate: disabling the row stops a scheduled crawl at its next
-      // link (the run closes as "stopped"); an operator-forced run finishes.
+      // Disabling the row stops a scheduled crawl at its next link or series
+      // (the run closes as "stopped"); an operator-forced run finishes.
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
       const delay = args.politeDelayMs ?? BACKLIST_DELAY_MS;
@@ -450,6 +470,9 @@ export const backlistSync = internalAction({
               budgetSpent = true;
               break;
             }
+            const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+            if (stopped)
+              return { ...stopped, seriesCrawled, fetched: fetchedTotal, continued: false };
 
             // The series page: its volume list and blurb.
             const seriesUrl = `${BASE_URL}/series/${entry.slug}/`;
@@ -488,7 +511,8 @@ export const backlistSync = internalAction({
                 if (page === null && !volumePageAwaitsIsbn(html)) {
                   throw new Error("unrecognized volume page: no JSON-LD Book");
                 }
-                if (page === null || needsRecheck(page.offers, Date.now())) recheck.push(volumeSlug);
+                if (page === null || needsRecheck(page.offers, Date.now()))
+                  recheck.push(volumeSlug);
                 if (page === null) continue;
                 for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(
                   page,
@@ -559,6 +583,7 @@ export const backlistSync = internalAction({
         }
 
         if (budgetSpent) {
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.kodansha.backlistSync, {
             politeDelayMs: args.politeDelayMs,
             maxFetches: args.maxFetches,
@@ -619,7 +644,8 @@ async function withPageFacts(
 ): Promise<KodanshaSnapshot> {
   if (snapshot.isbn13 !== undefined) return snapshot;
   const stored = (await getObservation(ctx, SOURCE_KEY, recordId))?.snapshot as
-    KodanshaSnapshot | undefined;
+    | KodanshaSnapshot
+    | undefined;
   if (stored?.isbn13 === undefined) return snapshot;
   return {
     ...snapshot,
@@ -636,13 +662,46 @@ async function withPageFacts(
 }
 
 /**
+ * The note an unmatched packaging volume is held with. This importer never
+ * places packaging (it passes the tail no labels for it), so the note says
+ * so, and quotes the coverage the book states, if any: the range its own
+ * title states, read with the shared title parser, else, when neither the
+ * title nor the series name states any Volumes (no range, no gapped list),
+ * the size its line's name declares (lib/coverage.ts). The snapshot's
+ * `packaging` comes from the series name, which every member of the line
+ * shares, so its range is never quoted. The calendar titles each book
+ * "{series name} Volume N", so a title range equal to the series name's is
+ * taken for the series name's, also on a volume page whose own title
+ * repeats it, and the note then quotes no coverage. The line's size is not
+ * quoted under a series name that states Volumes either: some spellings of
+ * the series name's range do not survive into the composed title's parse,
+ * and the size could contradict the range the quoted title shows.
+ */
+function packagingHold(snapshot: KodanshaSnapshot, packaging: Packaging): string {
+  const own = parseBookTitle(snapshot.title).packaging;
+  const named = packaging.coverRange;
+  const fromLine = coverageFromLine(packaging.lineName, packaging.linePosition);
+  const stated = own?.coverRange
+    ? own.coverRange.from === named?.from && own.coverRange.to === named?.to
+      ? null
+      : { range: own.coverRange, by: "in its title" }
+    : fromLine && !own?.coverageGapped && !named && !packaging.coverageGapped
+      ? { range: fromLine, by: "by its line's size" }
+      : null;
+  const volumes = (range: CoverRange) =>
+    range.from === range.to ? `Volume ${range.from}` : `Volumes ${range.from}-${range.to}`;
+  return `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}"${stated ? `, stating ${volumes(stated.range)} ${stated.by}` : ""}. The Kodansha importer does not place packaging — an Editor maps it.`;
+}
+
+/**
  * Reconcile one normalized (volume, format) snapshot into the canonical
  * catalog — one atomic mutation per record (spec §6). Mirrors
- * sevenSeas.applyBook on the shared pipeline; a snapshot with an ISBN
- * (volume pages) matches by ISBN first, and is stored under the identity its
- * ISBN owns (`offerRecordId`), whatever id the page order proposed. Each feed
- * gates itself on its own registry row ("kodansha" / "kodansha-backlist");
- * authority is always the "kodansha" row's.
+ * sevenSeas.applyBook and shares its unmatched tail (lib/unmatched.ts); a
+ * snapshot with an ISBN (volume pages) matches by ISBN first, and is stored
+ * under the identity its ISBN owns (`offerRecordId`), whatever id the page
+ * order proposed. It applies whatever either registry row's enabled flag
+ * says (each feed's sync gates its own run); authority is always the
+ * "kodansha" row's.
  */
 export const applyVolume = internalMutation({
   args: { sourceRecordId: v.string(), snapshot: kodanshaSnapshotValidator },
@@ -772,9 +831,9 @@ export const applyVolume = internalMutation({
     }
 
     // A packaging line's volume (omnibus, box set, collector's edition) is
-    // an Edition Line member whose covered Volumes Kodansha never states: it
-    // links by ISBN (multiVolume skips the label rungs) or is left for an
-    // Editor — never a Volume, never a Series of its own.
+    // an Edition Line member whose covered Volumes this importer does not
+    // read: it links by ISBN (multiVolume skips the label rungs) or is left
+    // for an Editor — never a Volume, never a Series of its own.
     const packaging = snapshot.packaging ?? null;
     const publisherRef = packaging ? PUBLISHER : await publisherForSeries(ctx, seriesId);
     const publisher = packaging ? null : await publisherBySlug(ctx, publisherRef.slug);
@@ -792,9 +851,7 @@ export const applyVolume = internalMutation({
 
     if (match.kind === "match") {
       const release = match.release;
-      await ctx.db.patch(observation._id, {
-        recordRef: { type: "release", id: release._id },
-      });
+      await linkObservation(ctx, observation._id, { type: "release", id: release._id });
       const firstSeriesId = release.seriesIds[0];
       if (firstSeriesId !== undefined) {
         await linkSeriesObservation(ctx, {
@@ -824,20 +881,6 @@ export const applyVolume = internalMutation({
       };
     }
 
-    if (packaging) {
-      await recordUnplaced(
-        ctx,
-        observation,
-        `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
-        now,
-      );
-      return {
-        status: "recordOnly",
-        changed: false,
-        reason: "packaging without coverage",
-      };
-    }
-
     const releasePayload = {
       format: snapshot.format,
       binding: snapshot.binding,
@@ -848,98 +891,43 @@ export const applyVolume = internalMutation({
           ? { amountCents: snapshot.priceCents, currency: "USD" }
           : undefined,
     };
-    const labels = snapshot.volumeLabel !== undefined ? [snapshot.volumeLabel] : [];
+    // A packaging line's volume covers no Volume the tail could place, even
+    // when its title states a range (its note quotes it), so it is held.
+    const labels = !packaging && snapshot.volumeLabel !== undefined ? [snapshot.volumeLabel] : [];
 
-    if (match.kind === "review" || ambiguousSeries > 0) {
-      const reason =
-        match.kind === "review" ? match.reason : `${ambiguousSeries} same-titled Series`;
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false, reason };
-      }
-      await queueCreationProposal(ctx, {
+    // No Release matched: the shared tail holds, queues, or creates it
+    // (lib/unmatched.ts), under the source's series link.
+    const result = await placeUnmatched(
+      ctx,
+      {
         sourceKey: SOURCE_KEY,
         observation,
+        citation,
+        importComment: IMPORT_COMMENT,
+        title: snapshot.title,
+        match,
         seriesId,
         seriesTitle: snapshot.seriesTitle,
+        ambiguousSeries,
+        seriesKey: snapshot.seriesSlug,
+        seriesUrl: snapshot.seriesUrl,
+        seriesSynopsis: snapshot.seriesSynopsis,
+        packaging: packaging && { ...packaging, hold: packagingHold(snapshot, packaging) },
         labels,
-        release: { ...releasePayload, publisherSlug: publisherRef.slug },
+        publisher: publisherRef,
+        publisherId: publisher?._id ?? null,
+        release: releasePayload,
         now,
-        comment:
-          match.kind === "review"
-            ? `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`
-            : `"${snapshot.seriesTitle}" matches ${ambiguousSeries} same-titled Series — the importer never guesses.`,
-      });
-      return { status: "needsReview", changed: true, reason };
-    }
-
-    const bootstrap = await getBootstrapMode(ctx);
-    const gates = creationGates({
-      seriesId,
-      multiVolume: false,
-      editionLineHint: false,
-    });
-    if (gates.length > 0 && !bootstrap) {
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false };
-      }
-      if (seriesId === null) {
-        // A brand-new Series for a work an Editor hid would undo the repair:
-        // the volume stays on its observation instead of the queue. (The
-        // creation path below makes the same check itself.)
-        const removed = await removedSeriesFor(ctx, {
-          sourceKey: SOURCE_KEY,
-          observation,
-          seriesKey: snapshot.seriesSlug,
-          seriesTitle: snapshot.seriesTitle,
-          publisherId: publisher?._id ?? null,
-        });
-        if (removed?.kind === "hidden") {
-          await recordUnplaced(ctx, observation, removed.reason, now);
-          return {
-            status: "recordOnly",
-            changed: false,
-            reason: "hidden series",
-          };
-        }
-      }
-      await queueCreationProposal(ctx, {
-        sourceKey: SOURCE_KEY,
-        observation,
-        seriesId,
-        seriesTitle: snapshot.seriesTitle,
-        labels,
-        release: { ...releasePayload, publisherSlug: publisherRef.slug },
-        now,
-        comment: `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.`,
-      });
-      return { status: "queued", changed: true };
-    }
-
-    const creation = await createCanonicalRecords(ctx, {
-      sourceKey: SOURCE_KEY,
-      observation,
-      citation,
-      importComment: IMPORT_COMMENT,
-      seriesId,
-      seriesTitle: snapshot.seriesTitle,
-      seriesKey: snapshot.seriesSlug,
-      seriesUrl: snapshot.seriesUrl,
-      seriesSynopsis: snapshot.seriesSynopsis,
-      labels,
-      release: { ...releasePayload, publisher: publisherRef },
-      tagBootstrapUnreviewed: bootstrap && gates.length > 0,
-      now,
-    });
-    if (creation.blocked !== undefined) {
-      return { status: "recordOnly", changed: false, reason: "hidden series" };
-    }
-    const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
-    return {
-      status: "created",
-      changed: true,
-      releaseId: creation.releaseId,
-      cover: created ? coverRequest(created, snapshot.coverUrl) : undefined,
-    };
+      },
+      {
+        unmappedPackaging: false,
+        ambiguityQuotesBook: false,
+      },
+    );
+    // A created Release's art is the action's to store.
+    if (result.status !== "created" || result.releaseId === undefined) return result;
+    const created = await ctx.db.get(result.releaseId);
+    return { ...result, cover: created ? coverRequest(created, snapshot.coverUrl) : undefined };
   },
 });
 

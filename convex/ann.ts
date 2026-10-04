@@ -76,7 +76,17 @@ import {
 import { errorMessage, politeFetch } from "./lib/http";
 import { decodeUtf8OrWindows1252 } from "./lib/text";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, openFollowOnRun, registryRow, runToContinue } from "./lib/importRuns";
+import {
+  closeRun,
+  isStranded,
+  lastActiveAt,
+  MAX_CARRIED_ERRORS,
+  openFollowOnRun,
+  registryRow,
+  runToContinue,
+  stampHandOff,
+  stopAtGate,
+} from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import { coveringOf, releasesOf } from "./lib/editionRows";
@@ -89,7 +99,13 @@ import {
   workMatch,
   type WorkEvidence,
 } from "./lib/matching";
-import { getObservation, upsertObservation } from "./lib/observations";
+import {
+  getObservation,
+  type HoldKind,
+  linkObservation,
+  recordUnplaced,
+  upsertObservation,
+} from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
@@ -102,7 +118,6 @@ import {
   repairLinkedDescription,
   rewriteOwnDescription,
   queueCreationProposal,
-  recordUnplaced,
   removedSeriesFor,
   runDescriptionRepair,
   REPAIR_SCAN,
@@ -111,6 +126,7 @@ import {
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
 import { withExceptionCapture } from "./lib/posthog";
+import { pairKeyOf } from "./lib/qa";
 
 export const SOURCE_KEY = "ann";
 /** The source's name in a citation when the registry row has none. */
@@ -138,11 +154,14 @@ type SyncResult =
       continued: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
  * One link of the weekly mirror chain. Called with no args by the cadence
- * dispatcher; continuation links carry the run state.
+ * dispatcher; continuation links carry the run state. Each report page, and
+ * the withdrawal pass, starts at the import gate (lib/importRuns.ts); a run
+ * it stops chains no page pass.
  *
  *   npx convex run ann:sync '{}'
  */
@@ -192,11 +211,15 @@ export const sync = internalAction({
         let reachedEnd = false;
 
         while (batchesDone < maxBatches && !reachedEnd) {
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+          if (stopped) return { ...stopped, continued: false };
           let ids: string[];
           let rawCount: number;
           if (targeted) {
             // One pass over the named entries; the report is never read.
-            ids = [...new Set(args.onlyManga!.map((id) => id.trim()).filter((id) => /^\d+$/.test(id)))];
+            ids = [
+              ...new Set(args.onlyManga!.map((id) => id.trim()).filter((id) => /^\d+$/.test(id))),
+            ];
             rawCount = ids.length;
             reachedEnd = true;
             if (ids.length === 0) break;
@@ -278,6 +301,7 @@ export const sync = internalAction({
 
         if (!reachedEnd) {
           // Budget spent mid-mirror: hand the run to the next link.
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.ann.sync, {
             politeDelayMs: args.politeDelayMs,
             maxBatches: args.maxBatches,
@@ -311,6 +335,8 @@ export const sync = internalAction({
         }
         const complete = errors.length === 0;
         if (complete && !targeted) {
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+          if (stopped) return { ...stopped, continued: false };
           // The full mirror completed: entries the sweep no longer lists have
           // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
           await ctx.runMutation(internal.imports.markWithdrawn, {
@@ -340,7 +366,10 @@ export const sync = internalAction({
         return { ...closed, continued: false };
       } catch (e) {
         errors.push(errorMessage(e));
-        return { ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })), continued: false };
+        return {
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
+          continued: false,
+        };
       }
     }),
 });
@@ -460,6 +489,62 @@ function printingsOf(snapshot: AnnMangaSnapshot, line: AnnLine): number {
       other.format === line.format &&
       labelsEqual(other.label, line.label ?? null),
   ).length;
+}
+
+/**
+ * A title-matched Series the entry was not linked to: its books and the
+ * entry's share no ISBN (`heldBy` null), or another live ANN entry, id
+ * `heldBy`, already holds it and nothing tells the two works apart.
+ */
+type SetAside = { series: Doc<"series">; heldBy: string | null };
+
+// Bound on the observations annEntryHolding reads for one Series. A Series
+// carries one link per ANN entry and per publisher series feed naming it
+// (at most five in production on 2026-10-02); an ANN link past the bound
+// is not seen, and the title links as it did before the rule.
+const SERIES_LINK_SCAN = 20;
+
+/**
+ * The id of a live ANN entry linked to the Series, or null. Asked only for
+ * an entry that has no Series link, so the holder is always another entry.
+ */
+async function annEntryHolding(ctx: MutationCtx, seriesId: Id<"series">): Promise<string | null> {
+  const links = await ctx.db
+    .query("sourceObservations")
+    .withIndex("by_record", (q) => q.eq("recordRef.type", "series").eq("recordRef.id", seriesId))
+    .take(SERIES_LINK_SCAN);
+  const holder = links.find(
+    (link) =>
+      link.sourceKey === SOURCE_KEY && !link.withdrawn && link.sourceRecordId.startsWith("manga:"),
+  );
+  return holder?.sourceRecordId.slice("manga:".length) ?? null;
+}
+
+/**
+ * Flag the Series ANN created for an entry beside the one Series of the
+ * entry's title that it set aside, for sharing no ISBN with the entry's
+ * books or for being held by another live ANN entry: a duplicate candidate
+ * for the Data Team (/mod/launch), whose reason says which. The created
+ * Series is new, so the pair is too.
+ */
+async function flagSetAsideTwin(
+  ctx: MutationCtx,
+  createdId: Id<"series">,
+  { series, heldBy }: SetAside,
+  snapshot: AnnMangaSnapshot,
+) {
+  await ctx.db.insert("duplicateCandidates", {
+    pairKey: pairKeyOf(series._id, createdId),
+    aId: series._id,
+    bId: createdId,
+    aTitle: series.title,
+    bTitle: snapshot.title,
+    reason:
+      heldBy === null
+        ? `ANN entry ${snapshot.id} has this title, but its books share no ISBN with Series ${series.publicId}'s, so the import created a Series of its own. Merge them if they are one work under other ISBNs.`
+        : `ANN entry ${snapshot.id} has this title, but ANN entry ${heldBy} already holds Series ${series.publicId}, so the import created a Series of its own. Merge them if ANN lists one work twice.`,
+    status: "open",
+  });
 }
 
 // An ANN line and a canonical Release more than this many years apart are
@@ -590,6 +675,9 @@ export const applyManga = internalMutation({
 
     // ----- the Series: rung ① stored link, else resolve/create -----
     let seriesId: Id<"series"> | null = null;
+    // The one Series of the entry's title, when it was set aside: flagged
+    // beside whatever Series the entry gets created or queued.
+    let setAside: SetAside | null = null;
     if (observation.recordRef?.type === "series") {
       // Repairs stand: a merged Series is followed to its survivor (and the
       // link repointed); a hidden one keeps its lines on record only.
@@ -602,9 +690,7 @@ export const applyManga = internalMutation({
       if (series && series.status === "active") {
         seriesId = series._id;
         if (series._id !== linkedId) {
-          await ctx.db.patch(observation._id, {
-            recordRef: { type: "series", id: series._id },
-          });
+          await linkObservation(ctx, observation._id, { type: "series", id: series._id });
           changed = true;
         }
         if (!series.locked) {
@@ -628,6 +714,11 @@ export const applyManga = internalMutation({
     } else {
       // A title names candidates; the entry's staff and ISBNs rule out the
       // ones that are another work (Doubt vs Doubt!!, Citrus vs Citrus+).
+      // With nothing to tell them apart, a Series another live ANN entry
+      // already holds is another work too: in production no two ANN entries
+      // of one title share a Series, and a Series ANN created has no book
+      // until the page pass, so the title alone put the Alchemist's sequel
+      // on the first work's Series. A shared ISBN still links.
       const evidence: WorkEvidence = {
         books: snapshot.releases.flatMap((r) =>
           r.isbn13 ? [{ isbn13: r.isbn13, format: r.format }] : [],
@@ -636,12 +727,22 @@ export const applyManga = internalMutation({
       };
       const sameWork = async (found: Doc<"series">[]) => {
         const kept: Doc<"series">[] = [];
+        const disjoint: SetAside[] = [];
         for (const series of found) {
-          if ((await workMatch(ctx, series._id, evidence)) !== "different") kept.push(series);
+          const verdict = await workMatch(ctx, series._id, evidence);
+          if (verdict === "disjointBooks") disjoint.push({ series, heldBy: null });
+          else if (verdict === "unknown") {
+            const heldBy = await annEntryHolding(ctx, series._id);
+            if (heldBy === null) kept.push(series);
+            else disjoint.push({ series, heldBy });
+          } else if (verdict === "same") kept.push(series);
         }
-        return kept;
+        return { kept, disjoint };
       };
-      let candidates = await sameWork(await candidateSeries(ctx, snapshot.title));
+      const titled = await candidateSeries(ctx, snapshot.title);
+      const byTitle = await sameWork(titled);
+      let candidates = byTitle.kept;
+      if (titled.length === 1 && byTitle.disjoint.length === 1) setAside = byTitle.disjoint[0]!;
       if (candidates.length === 0) {
         // ANN often names a work by a short title and carries the
         // publisher's full title only as an alternative ("7th Time Loop:
@@ -654,13 +755,11 @@ export const applyManga = internalMutation({
         for (const alt of snapshot.altTitles) {
           for (const series of await candidateSeries(ctx, alt)) byAlt.set(series._id, series);
         }
-        candidates = await sameWork([...byAlt.values()]);
+        candidates = (await sameWork([...byAlt.values()])).kept;
       }
       if (candidates.length === 1) {
         seriesId = candidates[0]!._id;
-        await ctx.db.patch(observation._id, {
-          recordRef: { type: "series", id: seriesId },
-        });
+        await linkObservation(ctx, observation._id, { type: "series", id: seriesId });
         changed = true;
       } else if (candidates.length > 1) {
         // Two same-titled Series: linking either would be a guess.
@@ -687,7 +786,7 @@ export const applyManga = internalMutation({
           publisherId: null,
         });
         if (removed?.kind === "hidden") {
-          await recordUnplaced(ctx, observation, removed.reason, now);
+          await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
           return { status: "recordOnly", changed: true, releasesLinked: 0 };
         }
         await queueCreationProposal(ctx, {
@@ -699,7 +798,13 @@ export const applyManga = internalMutation({
           labels: labels.filter((l): l is string => l !== undefined),
           seriesOnly: packagingOnly(snapshot),
           now,
-          comment: `"${snapshot.title}" observed at ${sourceName} needs a brand-new Series — steady-state creation gate. Series + Volume backbone only; ANN carries no publisher, so Releases arrive from other sources.`,
+          comment: `"${snapshot.title}" observed at ${sourceName} needs a brand-new Series — steady-state creation gate. Series + Volume backbone only; ANN carries no publisher, so Releases arrive from other sources.${
+            setAside === null
+              ? ""
+              : setAside.heldBy === null
+                ? ` Series ${setAside.series.publicId} ("${setAside.series.title}") has this title, but its books share no ISBN with this entry's, so the import did not link it: it may be the same work under other ISBNs.`
+                : ` Series ${setAside.series.publicId} ("${setAside.series.title}") has this title, but ANN entry ${setAside.heldBy} already holds it, so the import did not link it: it may be one work ANN lists twice.`
+          }`,
         });
         return { status: "queued", changed: true, releasesLinked: 0 };
       }
@@ -722,9 +827,8 @@ export const applyManga = internalMutation({
         return { status: "recordOnly", changed: true, releasesLinked: 0 };
       }
       seriesId = creation.seriesId;
-      await ctx.db.patch(observation._id, {
-        recordRef: { type: "series", id: seriesId },
-      });
+      await linkObservation(ctx, observation._id, { type: "series", id: seriesId });
+      if (setAside !== null) await flagSetAsideTwin(ctx, seriesId, setAside, snapshot);
       changed = true;
     } else if (labels.length > 0) {
       // The Volume backbone under a linked Series — within the spec §6
@@ -776,9 +880,7 @@ export const applyManga = internalMutation({
             : ({ kind: "none" } as const);
         if (match.kind === "one") {
           canonical = match.release;
-          await ctx.db.patch(releaseObs._id, {
-            recordRef: { type: "release", id: canonical._id },
-          });
+          await linkObservation(ctx, releaseObs._id, { type: "release", id: canonical._id });
           releasesLinked++;
           changed = true;
         }
@@ -857,20 +959,41 @@ const FOREIGN_DISTRIBUTORS =
 const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
 
 /**
+ * Why a release line is out of scope, from its title and stored page, or
+ * null: a store-exclusive or variant cover, a prose imprint, or a
+ * foreign-language distributor. No one places such a line, so it is noted
+ * and never a Held Book (applyReleasePage; imports.backfillHolds reads the
+ * stored line the same way).
+ */
+export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
+  if (VARIANT_LINE.test(line.title))
+    return "A store-exclusive or variant cover: never a Release of its own.";
+  const distributor = line.page?.distributor;
+  if (distributor === undefined) return null;
+  if (NOVEL_DISTRIBUTORS.test(distributor))
+    return `"${distributor}" is a prose imprint: out of manga scope.`;
+  if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
+    return `"${distributor}" publishes in another language: out of English scope.`;
+  }
+  return null;
+}
+
+/**
  * ANN's packaged line titles come in two shapes: "Naruto [3-in-1 Edition]"
  * (the designator number is the line position) and "One Piece - [Omnibus]
  * 33 - Wano" (the position follows the tag; the designator holds the volume
  * range). Both yield the line name and position; a bare "(GN 1-3)" range
  * with no tag is an Omnibus. Box sets are bundles, never lines: null.
  */
-function packagingOf(line: {
+export function packagingOf(line: {
   title: string;
   label?: string;
   multi: boolean;
   coverRange?: { from: string; to: string };
 }): { name: string; position: string | null } | null {
-  const tagged =
-    /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(line.title);
+  const tagged = /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(
+    line.title,
+  );
   const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : line.title;
   const parsed = parseBookTitle(probe);
   if (parsed.isBox) return null;
@@ -966,12 +1089,13 @@ type PageSyncResult =
       continued: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
  * Open the release-page pass's run and schedule its first link in one
  * transaction: if scheduling fails, no run is left "running" (which would
- * make the dispatcher skip ANN until someone repaired it).
+ * make the dispatcher skip ANN until it counted as stranded).
  */
 export const chainReleasePages = internalMutation({
   args: {
@@ -998,7 +1122,8 @@ export const chainReleasePages = internalMutation({
  * Release lacks a description is fetched once more to offer the page's
  * (`descriptionRefetch`), at most DESCRIPTION_REFETCHES_PER_RUN per run.
  * Chained after each finished mirror, complete or errored; self-continues
- * after `maxFetches` fetches or LINK_BUDGET_MS, whichever comes first.
+ * after `maxFetches` fetches or LINK_BUDGET_MS, whichever comes first. Each
+ * candidate page starts at the import gate (lib/importRuns.ts).
  *
  *   npx convex run ann:syncReleasePages '{}'
  */
@@ -1044,6 +1169,8 @@ export const syncReleasePages = internalAction({
 
       try {
         pages: while (!done && fetchedHere < maxFetches) {
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
+          if (stopped) return { ...stopped, fetched: fetchedTotal, continued: false };
           const page: {
             candidates: Array<{ annId: string; fetch: boolean; refetch?: true }>;
             continueCursor: string;
@@ -1090,6 +1217,7 @@ export const syncReleasePages = internalAction({
         }
 
         if (!done) {
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
             politeDelayMs: args.politeDelayMs,
             maxFetches: args.maxFetches,
@@ -1140,7 +1268,9 @@ async function fetchReleasePage(annId: string, delay: number): Promise<PageState
   const fetchedAt = Date.now();
   try {
     const res = await politeFetch(releaseUrl(annId), delay);
-    const parsed = parseReleasePage(decodeUtf8OrWindows1252(new Uint8Array(await res.arrayBuffer())));
+    const parsed = parseReleasePage(
+      decodeUtf8OrWindows1252(new Uint8Array(await res.arrayBuffer())),
+    );
     return parsed
       ? { status: "ok", fetchedAt, ...parsed, descriptionChecked: true }
       : { status: "unparsed", fetchedAt };
@@ -1188,7 +1318,7 @@ function descriptionOffer(
  * through `cleanAnnDescription`, so a page stored before the cleaner last
  * changed never writes stale text (credit tails, chrome, mojibake).
  */
-function pageDescriptionText(page: PageState | undefined): string | undefined {
+export function pageDescriptionText(page: PageState | undefined): string | undefined {
   return page?.description !== undefined ? cleanAnnDescription(page.description) : undefined;
 }
 
@@ -1246,17 +1376,25 @@ export const applyReleasePage = internalMutation({
       return { status: fetched ? "stored" : "skipped", changed };
     }
     const citation = await pageCitation(ctx, annId);
-    const hold = async (reason: string): Promise<PlaceResult> => {
-      const current = (observation!.conflicts ?? []).find((c) => c.field === "placement");
-      if (current?.reason !== reason) {
-        await recordUnplaced(ctx, observation!, reason, now);
-        changed = true;
-      }
-      return { status: "recordOnly", changed, reason };
+    // `seriesId`: the line's active Series, once it is known. A null kind
+    // keeps the reason for a line no one can place or that is out of scope,
+    // off the Held Books list.
+    const hold = async (
+      kind: HoldKind | null,
+      reason: string,
+      seriesId?: Id<"series">,
+    ): Promise<PlaceResult> => {
+      const held = await recordUnplaced(
+        ctx,
+        observation!,
+        { kind, reason, ...(seriesId !== undefined ? { seriesId } : {}) },
+        now,
+      );
+      return { status: "recordOnly", changed: changed || held, reason };
     };
 
     const isbn13 = page.isbn13 ?? line.isbn13;
-    if (isbn13 === undefined) return await hold("ANN lists no ISBN for this release.");
+    if (isbn13 === undefined) return await hold(null, "ANN lists no ISBN for this release.");
 
     // The Series: the manga entry's rung-① link, through any repair merge.
     const mangaObs = await getObservation(ctx, SOURCE_KEY, `manga:${line.mangaId}`);
@@ -1266,19 +1404,34 @@ export const applyReleasePage = internalMutation({
         ? await survivorOf<"series">(ctx, await ctx.db.get(seriesRef.id))
         : null;
 
-    // An existing Release with the ISBN: link it (same Series only). One an
-    // Editor hid is never recreated.
+    // An existing Release with the ISBN: link it (same Series only).
     const { active: byIsbn, hidden: isbnHidden } = await releaseByIsbn(ctx, isbn13);
+    if (byIsbn && series && byIsbn.seriesIds.includes(series._id)) return await link(byIsbn);
+
+    // A line out of scope is noted only, whatever else would hold it.
+    const outOfScope = lineOutOfScope(line);
+    if (outOfScope !== null) return await hold(null, outOfScope);
+
+    // One an Editor hid is never recreated.
     if (!byIsbn && isbnHidden) {
-      return await hold(`ISBN ${isbn13} is on a Release an Editor hid — not recreated.`);
+      return await hold("isbn", `ISBN ${isbn13} is on a Release an Editor hid — not recreated.`);
     }
     if (byIsbn) {
-      if (!series || !byIsbn.seriesIds.includes(series._id)) {
-        return await hold(
-          `ISBN ${isbn13} is already on a Release of another Series — a duplicate-Series question for an Editor.`,
-        );
-      }
-      return await link(byIsbn);
+      return await hold(
+        "isbn",
+        `ISBN ${isbn13} is already on a Release of another Series — a duplicate-Series question for an Editor.`,
+      );
+    }
+
+    // A designator listing Volumes no range holds ("(GN 1, 3)") states its
+    // coverage, so the line's name never sizes it and no Volume is guessed:
+    // an Editor maps it.
+    if (line.coverageGapped) {
+      return await hold(
+        "packaging",
+        `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose Volume list no range holds — an Editor maps it.`,
+        series?.status === "active" ? series._id : undefined,
+      );
     }
 
     // Packaging: an Edition Line member, never a Volume. A packaged line is
@@ -1289,27 +1442,26 @@ export const applyReleasePage = internalMutation({
     // variant covers still only link by ISBN.
     const packaging = line.editionLineHint || line.multi ? packagingOf(line) : null;
     if ((line.multi || line.editionLineHint) && packaging === null) {
-      return await hold("Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
-    }
-    if (VARIANT_LINE.test(line.title)) {
-      return await hold("A store-exclusive or variant cover: never a Release of its own.");
+      return await hold(
+        "packaging",
+        "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.",
+      );
     }
     if (!series || series.status !== "active") {
-      return await hold("The manga entry has no linked active Series.");
+      return await hold("series", "The manga entry has no linked active Series.");
     }
-    if (series.locked) return await hold("The Series is locked.");
+    if (series.locked) return await hold("series", "The Series is locked.", series._id);
 
     const distributor = page.distributor;
-    if (distributor === undefined) return await hold("The release page names no distributor.");
-    if (NOVEL_DISTRIBUTORS.test(distributor)) {
-      return await hold(`"${distributor}" is a prose imprint: out of manga scope.`);
-    }
-    if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
-      return await hold(`"${distributor}" publishes in another language: out of English scope.`);
-    }
+    if (distributor === undefined)
+      return await hold("other", "The release page names no distributor.", series._id);
     const publisher = await findPublisherByName(ctx, distributor);
     if (!publisher) {
-      return await hold(`Distributor "${distributor}" resolves to no publisher row.`);
+      return await hold(
+        "other",
+        `Distributor "${distributor}" resolves to no publisher row.`,
+        series._id,
+      );
     }
 
     const volumes = await ctx.db
@@ -1326,7 +1478,9 @@ export const applyReleasePage = internalMutation({
       );
       if (labels.length > 0 && covered.length !== labels.length) {
         return await hold(
+          "volumeMissing",
           `${packaging.name} ${packaging.position ?? ""} would cover Volumes ${range!.from}–${range!.to}, but the Series lacks ${labels.filter((l) => !covered.includes(l)).join(", ")}.`,
+          series._id,
         );
       }
       const unmapped = labels.length === 0;
@@ -1335,9 +1489,11 @@ export const applyReleasePage = internalMutation({
       // Mode creates it and tags it for the post-launch backlog.
       if (!(await getBootstrapMode(ctx))) {
         return await hold(
+          "packaging",
           unmapped
             ? `${packaging.name} of unknown size: steady state leaves unmapped packaging to review.`
             : `${packaging.name} ${packaging.position ?? ""}: steady state leaves Edition Line creation to review.`,
+          series._id,
         );
       }
       const packagedDate = page.date ?? line.date;
@@ -1373,7 +1529,11 @@ export const applyReleasePage = internalMutation({
       (vol) => vol.status === "active" && labelsEqual(vol.label, line.label ?? null),
     );
     if (!volume) {
-      return await hold(`No Volume ${line.label ?? "(unlabeled)"} under the Series.`);
+      return await hold(
+        "volumeMissing",
+        `No Volume ${line.label ?? "(unlabeled)"} under the Series.`,
+        series._id,
+      );
     }
 
     // One Release per (Volume, publisher, format): a same-format sibling
@@ -1394,7 +1554,9 @@ export const applyReleasePage = internalMutation({
         if (release.status !== "active" || release.format !== line.format) continue;
         if (release.isbn13 === undefined && !release.locked) return await link(release);
         return await hold(
+          "isbn",
           `Volume ${line.label ?? "(unlabeled)"} already has a ${line.format} ${publisher.name} Release (ISBN ${release.isbn13 ?? "none"}): a reprint or variant, not created.`,
+          series._id,
         );
       }
     }
@@ -1426,9 +1588,7 @@ export const applyReleasePage = internalMutation({
     return { status: "created", changed: true, releaseId: creation.releaseId };
 
     async function link(release: Doc<"releases">): Promise<PlaceResult> {
-      await ctx.db.patch(observation!._id, {
-        recordRef: { type: "release", id: release._id },
-      });
+      await linkObservation(ctx, observation!._id, { type: "release", id: release._id });
       const date = page!.date ?? line.date;
       const offered: Record<string, unknown> = { ...descriptionOffer(page, release) };
       if (date) offered.pubDate = toPartialDate(date);
@@ -1487,7 +1647,12 @@ async function fillLinked(
   }
   const changed = fetched !== undefined;
   const release = await ctx.db.get(releaseId);
-  if (refresh && fetched?.status === "ok" && release !== null && release.description !== undefined) {
+  if (
+    refresh &&
+    fetched?.status === "ok" &&
+    release !== null &&
+    release.description !== undefined
+  ) {
     const text = pageDescriptionText(page);
     const shrinks = text === undefined || text.length < release.description.length / 2;
     if (shrinks && !allowClear && text !== release.description) {
@@ -1501,7 +1666,8 @@ async function fillLinked(
       citation: await pageCitation(ctx, line.annId),
       now,
     });
-    const status = rewritten === "cleared" ? "cleared" : rewritten === "updated" ? "refreshed" : "stored";
+    const status =
+      rewritten === "cleared" ? "cleared" : rewritten === "updated" ? "refreshed" : "stored";
     return { status, changed, releaseId };
   }
   const offered = release !== null ? descriptionOffer(page, release) : {};
@@ -1573,26 +1739,30 @@ export const descriptionlessLines = internalQuery({
 });
 
 /**
- * A "running" ANN Import Run older than this is stranded (its chain died
- * without closing it), not live: a full mirror plus page pass takes hours.
- */
-const STRANDED_RUN_MS = 12 * 60 * 60 * 1000;
-
-/**
- * The latest ANN Import Run when it is still "running": its id and age.
- * The backfill decides whether it blocks (`STRANDED_RUN_MS`).
+ * The latest ANN Import Run when it is still "running": its id and when it
+ * opened and was last active. The backfill decides whether it blocks
+ * (lib/importRuns.ts isStranded).
+ *
+ * A backfill action deployed before heartbeats passes `now` and reads
+ * `ageMs`, holding off while it is at most 12 hours. It gets the time since
+ * the run was last active, so it holds off while the chain is alive. The
+ * argument and the field can go once no such action can still be running.
  */
 export const annRunInProgress = internalQuery({
-  args: { now: v.number() },
+  args: { now: v.optional(v.number()) },
   handler: async (ctx, { now }) => {
     const latest = await ctx.db
       .query("importRuns")
       .withIndex("by_source", (q) => q.eq("sourceKey", SOURCE_KEY))
       .order("desc")
       .first();
-    return latest?.status === "running"
-      ? { runId: latest._id, ageMs: now - latest._creationTime }
-      : null;
+    if (latest?.status !== "running") return null;
+    return {
+      runId: latest._id,
+      _creationTime: latest._creationTime,
+      lastActivityAt: latest.lastActivityAt,
+      ...(now === undefined ? {} : { ageMs: now - lastActiveAt(latest) }),
+    };
   },
 });
 
@@ -1634,8 +1804,9 @@ type BackfillResult = {
  * the limit is spent; safe to rerun.
  *
  * Polite by construction: it refuses to run while an ANN Import Run is
- * running (the two would double the request rate) unless that run is older
- * than STRANDED_RUN_MS (a dead chain, not a live crawl), stops after
+ * running (the two would double the request rate) unless that run is
+ * stranded (lib/importRuns.ts isStranded: a dead chain, not a live crawl;
+ * the hourly tick closes it), stops after
  * BACKFILL_MAX_FAILURES consecutive failed fetches across its links (ANN
  * is down; a failed refetch never replaces a stored page), and never
  * touches a withdrawn line. A stop is logged with its reason, since a
@@ -1689,7 +1860,9 @@ export const backfillDescriptions = internalAction({
     let failures = args.failures ?? 0;
     if (args.allowClear && !args.refresh) throw new Error("allowClear only applies with refresh.");
     if (args.refresh && args.annIds === undefined) {
-      throw new Error("refresh needs annIds: it rewrites only the pages you name (see ann:listRefreshCandidates).");
+      throw new Error(
+        "refresh needs annIds: it rewrites only the pages you name (see ann:listRefreshCandidates).",
+      );
     }
     let handled = 0;
     const errors: string[] = [];
@@ -1705,18 +1878,16 @@ export const backfillDescriptions = internalAction({
       return result({ continued: false, stopped });
     };
 
-    const running: { runId: Id<"importRuns">; ageMs: number } | null = await ctx.runQuery(
-      internal.ann.annRunInProgress,
-      { now: Date.now() },
-    );
-    if (running !== null && running.ageMs <= STRANDED_RUN_MS) {
+    const running = await ctx.runQuery(internal.ann.annRunInProgress, {});
+    const now = Date.now();
+    if (running !== null && !isStranded(running, now)) {
       return stop(
-        `An ANN Import Run (${running.runId}, started ${age(running.ageMs)} ago) is running; the backfill would double the request rate to ANN. Rerun it once the run finishes.`,
+        `An ANN Import Run (${running.runId}, last active ${age(now - lastActiveAt(running))} ago) is running; the backfill would double the request rate to ANN. Rerun it once the run finishes.`,
       );
     }
     if (running !== null) {
       console.warn(
-        `[ann.backfillDescriptions] ignoring stranded ANN Import Run ${running.runId} (started ${age(running.ageMs)} ago)`,
+        `[ann.backfillDescriptions] ignoring stranded ANN Import Run ${running.runId} (last active ${age(now - lastActiveAt(running))} ago)`,
       );
     }
 

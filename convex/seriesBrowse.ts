@@ -31,12 +31,30 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { coverUrl, seriesCoverIsbns, type SeriesCoverCandidate } from "./lib/covers";
+import {
+  coverUrl,
+  seriesCoverIsbns,
+  statsCoverIsbns,
+  type SeriesCoverCandidate,
+} from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { releasesOf } from "./lib/editionRows";
-import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
+import {
+  MATURE_PROJECTIONS_PER_JOB,
+  ratedByDataTeam,
+  showMatureArg,
+  sourceRatesMature,
+  syncMatureProjection,
+  visibleTo,
+} from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
+import {
+  PACK_SPAN,
+  patchPackEntry,
+  seriesStatsRow,
+  type PackEntry as Entry,
+} from "./lib/seriesStats";
 import { withExceptionCapture } from "./lib/posthog";
 
 export const SORTS = [
@@ -71,7 +89,7 @@ const STALE_SWEEP = 200;
 
 /**
  * Wall-clock budget for one rebuild action before it hands the cursor to a
- * scheduled continuation. Convex stops an action at ten minutes, and the
+ * scheduled continuation. Convex stops an action at 30 minutes, and the
  * full walk over production (every Series' releases, collection entries and
  * tracking rows) can take longer than that; a chain of short actions cannot.
  */
@@ -129,7 +147,9 @@ export const rebuild = internalAction({
       // Then the packs the filtered views read, from the rows as they now are.
       let blocks = 0;
       for (;;) {
-        const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: blocks });
+        const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, {
+          block: blocks,
+        });
         blocks++;
         if (!more) break;
       }
@@ -198,31 +218,6 @@ export const sweepStale = internalMutation({
 });
 
 /**
- * A Series' library row, or null before the rebuild has written one (or
- * while it is bookless). The rebuild keeps one row per Series.
- */
-export async function seriesStatsRow(ctx: QueryCtx, seriesId: Id<"series">) {
-  return await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .unique();
-}
-
-/**
- * Carry a Series' new `mature` flag into its library row and pack entry at
- * once, so a Data Team rating edit (moderation.applyUpdate) shows in the
- * filtered library and its facets without waiting for the next rebuild.
- * A Series without a row yet (never rebuilt, or bookless) has nothing to
- * update.
- */
-export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
-  const flag = mature ? { mature: true as const } : { mature: undefined };
-  const row = await seriesStatsRow(ctx, series._id);
-  if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);
-  await patchPackEntry(ctx, series.publicId, (entry) => (entry.mature === true) === mature, flag);
-}
-
-/**
  * Carry a Series' new rating aggregate into its library row and pack entry
  * at once (lib/ratings.ts calls this from every rating write), so "Top
  * rated" reorders without waiting for the next rebuild. The pack, a large
@@ -252,28 +247,30 @@ export async function syncRatingProjection(
 }
 
 /**
- * Rewrite one Series' entry in its pack with `change`, unless the pack or
- * the entry is missing or `holds` says the entry already has it: a pack is
- * a large document many Series share.
+ * Carry Series an import just made mature into their library rows and pack
+ * entries (scheduled by lib/mature.ts applyMatureEvidence): the first
+ * MATURE_PROJECTIONS_PER_JOB now, the rest in a job of their own, so no
+ * transaction rewrites more packs than that. Each Series is read again: one
+ * hidden, merged, deleted or rated `general` by the Data Team since is
+ * skipped, and one already projected is left as it is. A failed or lost job
+ * leaves the projection to the next rebuild.
  */
-async function patchPackEntry(
-  ctx: MutationCtx,
-  publicId: number,
-  holds: (entry: Entry) => boolean,
-  change: Partial<Entry>,
-) {
-  const pack = await ctx.db
-    .query("seriesStatsPacks")
-    .withIndex("by_block", (q) => q.eq("block", Math.floor(publicId / PACK_SPAN)))
-    .unique();
-  const at = pack?.entries.findIndex((entry) => entry.publicId === publicId) ?? -1;
-  if (!pack || at < 0 || holds(pack.entries[at]!)) return;
-  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ...change } : entry));
-  await ctx.db.patch(pack._id, { entries });
-}
+export const projectMature = internalMutation({
+  args: { seriesIds: v.array(v.id("series")) },
+  handler: async (ctx, { seriesIds }) => {
+    for (const seriesId of seriesIds.slice(0, MATURE_PROJECTIONS_PER_JOB)) {
+      const series = await ctx.db.get(seriesId);
+      if (series?.status === "active" && series.mature === true) {
+        await syncMatureProjection(ctx, series, true);
+      }
+    }
+    const rest = seriesIds.slice(MATURE_PROJECTIONS_PER_JOB);
+    if (rest.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.seriesBrowse.projectMature, { seriesIds: rest });
+    }
+  },
+});
 
-/** Series per pack: block k covers publicIds [k * PACK_SPAN, (k + 1) * PACK_SPAN). */
-const PACK_SPAN = 1000;
 /** Packs a reader takes at most: room for 100k publicIds. */
 const MAX_PACKS = 100;
 
@@ -314,7 +311,8 @@ export const repackBlock = internalMutation({
         .take(MAX_PACKS);
       for (const pack of beyond) await ctx.db.delete(pack._id);
       const config = await ctx.db.query("appConfig").first();
-      if (!config) await ctx.db.insert("appConfig", { bootstrapMode: false, seriesPacksReady: true });
+      if (!config)
+        await ctx.db.insert("appConfig", { bootstrapMode: false, seriesPacksReady: true });
       else if (!config.seriesPacksReady) await ctx.db.patch(config._id, { seriesPacksReady: true });
     }
     return more !== null;
@@ -371,7 +369,9 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   let storedCover: string | null = null;
   const coverCandidates: SeriesCoverCandidate[] = [];
   const collectors = new Set<string>();
-  const today = todaySortKey();
+  // A mutation may read the clock (no cached result to expire); the row
+  // records the day's split into released and forthcoming, and its cover pick.
+  const today = todaySortKey(new Date());
 
   for (const [editionId, edition] of editions) {
     const publisher = await ctx.db.get(edition.publisherId);
@@ -425,6 +425,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   const rating = await ratingSummary(ctx, { kind: "series", id: series._id });
 
   const titleSort = sortKeyFor(series.title);
+  const coverIsbns = seriesCoverIsbns(coverCandidates, today);
   const row = {
     seriesId: series._id,
     publicId: series.publicId,
@@ -448,7 +449,8 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     ratingCount: rating.count,
     ratingRank: ratingRankOf(rating),
     coverUrl: storedCover,
-    coverIsbn: seriesCoverIsbns(coverCandidates)[0] ?? null,
+    coverIsbn: coverIsbns[0] ?? null,
+    coverIsbns,
     ...(mature ? { mature: true as const } : {}),
     rebuiltAt,
   };
@@ -499,15 +501,20 @@ export function letterFor(titleSort: string): string {
 function isDayKey(key: number): boolean {
   const month = Math.floor(key / 100) % 100;
   const day = key % 100;
-  return Number.isInteger(key) && key >= 10000101 && key <= 99991231 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+  return (
+    Number.isInteger(key) &&
+    key >= 10000101 &&
+    key <= 99991231 &&
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= 31
+  );
 }
-
 
 // ---------- Browse (public) ----------
 
 type StatsRow = Doc<"seriesStats">;
-/** One Series' filter-and-sort facts, as packed in seriesStatsPacks. */
-type Entry = Doc<"seriesStatsPacks">["entries"][number];
 
 /**
  * A row's pack entry. Rows written before searchKey and lastReleasedSort
@@ -662,7 +669,8 @@ function timingTest(timing: Timing, today: number | undefined): (entry: Entry) =
 function matcher(f: Filters, today: number | undefined): ((entry: Entry) => boolean) | null {
   const tests: Array<(entry: Entry) => boolean> = [];
   const publishers = new Set(f.publishers?.filter(Boolean));
-  if (publishers.size > 0) tests.push((entry) => entry.publishers.some((p) => publishers.has(p.slug)));
+  if (publishers.size > 0)
+    tests.push((entry) => entry.publishers.some((p) => publishers.has(p.slug)));
   if (f.volumes) {
     const { min, max } = VOLUME_RANGES[f.volumes];
     tests.push((entry) => entry.volumeCount >= min && entry.volumeCount <= max);
@@ -672,7 +680,8 @@ function matcher(f: Filters, today: number | undefined): ((entry: Entry) => bool
   if (status) tests.push((entry) => entry.sourceStatus === status);
   if (format === "physical") tests.push((entry) => entry.hasPhysical);
   if (format === "digital") tests.push((entry) => entry.hasDigital);
-  if (letter && /^[a-z#]$/.test(letter)) tests.push((entry) => letterFor(entry.titleSort) === letter);
+  if (letter && /^[a-z#]$/.test(letter))
+    tests.push((entry) => letterFor(entry.titleSort) === letter);
   const words = searchWords(f.q ?? "");
   if (words.length > 0) {
     tests.push((entry) => {
@@ -701,7 +710,7 @@ function card(row: StatsRow) {
     ratingAverage: row.ratingAverage ?? null,
     ratingCount: row.ratingCount ?? 0,
     coverUrl: row.coverUrl,
-    coverIsbn: row.coverIsbn,
+    coverIsbn: statsCoverIsbns(row),
   };
 }
 
@@ -775,35 +784,47 @@ async function readChunk(
       case "title":
         return [
           table().withIndex("by_title", (r) => same(r.eq("titleSort", str))),
-          table().withIndex("by_title", (r) => (asc ? r.gt("titleSort", str) : r.lt("titleSort", str))),
+          table().withIndex("by_title", (r) =>
+            asc ? r.gt("titleSort", str) : r.lt("titleSort", str),
+          ),
         ];
       case "recent":
         return [table().withIndex("by_publicId", (r) => same(r))];
       case "volumes":
         return [
           table().withIndex("by_volumes", (r) => same(r.eq("volumeCount", num))),
-          table().withIndex("by_volumes", (r) => (asc ? r.gt("volumeCount", num) : r.lt("volumeCount", num))),
+          table().withIndex("by_volumes", (r) =>
+            asc ? r.gt("volumeCount", num) : r.lt("volumeCount", num),
+          ),
         ];
       case "latest":
         return [
           table().withIndex("by_latest", (r) => same(r.eq("latestReleaseSort", num))),
-          table().withIndex("by_latest", (r) => (asc ? r.gt("latestReleaseSort", num) : r.lt("latestReleaseSort", num))),
+          table().withIndex("by_latest", (r) =>
+            asc ? r.gt("latestReleaseSort", num) : r.lt("latestReleaseSort", num),
+          ),
         ];
       case "upcoming":
         return [
           table().withIndex("by_next", (r) => same(r.eq("nextReleaseSort", num))),
-          table().withIndex("by_next", (r) => (asc ? r.gt("nextReleaseSort", num) : r.lt("nextReleaseSort", num))),
+          table().withIndex("by_next", (r) =>
+            asc ? r.gt("nextReleaseSort", num) : r.lt("nextReleaseSort", num),
+          ),
           ...(zerosLast ? [zerosAfter(-1)] : []),
         ];
       case "followers":
         return [
           table().withIndex("by_followers", (r) => same(r.eq("followers", num))),
-          table().withIndex("by_followers", (r) => (asc ? r.gt("followers", num) : r.lt("followers", num))),
+          table().withIndex("by_followers", (r) =>
+            asc ? r.gt("followers", num) : r.lt("followers", num),
+          ),
         ];
       case "collectors":
         return [
           table().withIndex("by_collectors", (r) => same(r.eq("collectors", num))),
-          table().withIndex("by_collectors", (r) => (asc ? r.gt("collectors", num) : r.lt("collectors", num))),
+          table().withIndex("by_collectors", (r) =>
+            asc ? r.gt("collectors", num) : r.lt("collectors", num),
+          ),
         ];
     }
   })();
@@ -1019,4 +1040,3 @@ export const facets = query({
     };
   },
 });
-

@@ -28,8 +28,7 @@ import {
   type Smiley,
 } from "../../convex/lib/scoreFormat";
 import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
-import { convexClient } from "~/providers";
-import { useReadyViewer } from "~/lib/viewer";
+import { useReadyViewer, useViewerQuery } from "~/lib/viewer";
 
 /** A rating target as pages know it: `{ kind: "series" | "volume" | "edition", publicId }`. */
 export type RatingTarget = FunctionArgs<typeof api.ratings.summary>["target"];
@@ -60,7 +59,7 @@ export function writeErrorMessage(err: unknown): string {
 
 /**
  * The signed-in viewer's Rating Format; null while loading, signed out, or
- * username pending. Only for components rendered under the Convex provider.
+ * username pending.
  */
 function useViewerFormat(): ScoreFormat | null {
   return useReadyViewer()?.scoreFormat ?? null;
@@ -76,7 +75,7 @@ const AVERAGE_TITLES: Record<ScoreFormat, string> = {
 };
 
 /**
- * The target's aggregate as a chip, live when Convex is configured and the
+ * The target's aggregate as a chip, live once the query answers and the
  * loader's copy until then. Renders nothing while the target is unrated.
  */
 export function RatingAggregate({
@@ -86,17 +85,18 @@ export function RatingAggregate({
   target: RatingTarget;
   initial: RatingSummary | null;
 }) {
-  if (!convexClient) return <AggregateChip summary={initial} format={null} />;
-  return <LiveAggregate target={target} initial={initial} />;
-}
-
-function LiveAggregate({ target, initial }: { target: RatingTarget; initial: RatingSummary | null }) {
   const live = useQuery(api.ratings.summary, { target });
   const format = useViewerFormat();
   return <AggregateChip summary={live === undefined ? initial : live} format={format} />;
 }
 
-function AggregateChip({ summary, format }: { summary: RatingSummary | null; format: ScoreFormat | null }) {
+function AggregateChip({
+  summary,
+  format,
+}: {
+  summary: RatingSummary | null;
+  format: ScoreFormat | null;
+}) {
   const line = summary ? ratingLine(summary, format) : null;
   if (!line) return null;
   return (
@@ -120,17 +120,6 @@ export function RatingLine({
   summary: { average: number | null; count: number };
   fallback?: ReactNode;
 }) {
-  if (!convexClient) return <>{ratingLine(summary, null) ?? fallback}</>;
-  return <LiveRatingLine summary={summary} fallback={fallback} />;
-}
-
-function LiveRatingLine({
-  summary,
-  fallback,
-}: {
-  summary: { average: number | null; count: number };
-  fallback: ReactNode;
-}) {
   return <>{ratingLine(summary, useViewerFormat()) ?? fallback}</>;
 }
 
@@ -141,11 +130,6 @@ function LiveRatingLine({
  * point10 for signed-out viewers: "8/10", "4 ★", "84/100", or a smiley.
  */
 export function ScoreText({ score }: { score: number }) {
-  if (!convexClient) return <ScoreParts score={score} format="point10" />;
-  return <LiveScoreText score={score} />;
-}
-
-function LiveScoreText({ score }: { score: number }) {
   return <ScoreParts score={score} format={useViewerFormat() ?? "point10"} />;
 }
 
@@ -228,12 +212,7 @@ function SmileyGlyph({ smiley }: { smiley: Smiley }) {
  * Nothing at all signed out, so the container can hide itself.
  */
 export function RatingControl({ target }: { target: RatingTarget }) {
-  if (!convexClient) return null;
-  return <RatingControlInner target={target} />;
-}
-
-function RatingControlInner({ target }: { target: RatingTarget }) {
-  const mine = useQuery(api.ratings.mine, { target });
+  const mine = useViewerQuery(api.ratings.mine, { target });
   const format = useViewerFormat();
   const setScore = useMutation(api.ratings.set);
   // The score just picked, shown until the query catches up.
@@ -313,7 +292,8 @@ function ScoreStepper({ format, current, onSave }: ControlProps & { format: Nume
     if (String(step) !== shown) onSave(fromFormat(step, format));
   };
   const nudge = (delta: number) => {
-    const base = Number(draft) || (current === null ? Math.ceil(steps / 2) : toFormat(current, format));
+    const base =
+      Number(draft) || (current === null ? Math.ceil(steps / 2) : toFormat(current, format));
     commit(String(clampStep(base + delta, format)));
   };
   const { field, unit } = STEPPER_TEXT[format];
@@ -326,7 +306,12 @@ function ScoreStepper({ format, current, onSave }: ControlProps & { format: Nume
         commit(draft);
       }}
     >
-      <button type="button" className="rating-stepper-btn" aria-label={`One ${unit} lower`} onClick={() => nudge(-1)}>
+      <button
+        type="button"
+        className="rating-stepper-btn"
+        aria-label={`One ${unit} lower`}
+        onClick={() => nudge(-1)}
+      >
         {"\u2212"}
       </button>
       <input
@@ -345,7 +330,12 @@ function ScoreStepper({ format, current, onSave }: ControlProps & { format: Nume
       <span className="rating-stepper-of" aria-hidden="true">
         /{steps}
       </span>
-      <button type="button" className="rating-stepper-btn" aria-label={`One ${unit} higher`} onClick={() => nudge(1)}>
+      <button
+        type="button"
+        className="rating-stepper-btn"
+        aria-label={`One ${unit} higher`}
+        onClick={() => nudge(1)}
+      >
         +
       </button>
     </form>
@@ -396,19 +386,14 @@ const FORMAT_OPTIONS: ReadonlyArray<{ value: ScoreFormat; label: string }> = [
  * Stored ratings never change; only the display does.
  */
 export function ScoreFormatSettings() {
-  if (!convexClient) return null;
-  return <ScoreFormatSettingsInner />;
-}
-
-function ScoreFormatSettingsInner() {
   const format = useViewerFormat();
   const setFormat = useMutation(api.users.setScoreFormat);
   if (!format) return null;
   return (
     <div className="sharing-settings">
       <p className="sharing-lede">
-        How you rate series, volumes and omnibuses, and how scores read to you. Switching keeps every rating
-        you have made; it only changes how they show.
+        How you rate series, volumes and omnibuses, and how scores read to you. Switching keeps
+        every rating you have made; it only changes how they show.
       </p>
       <div className="vis-field">
         <span className="vis-legend" id="score-format-label">

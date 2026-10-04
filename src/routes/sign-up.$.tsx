@@ -21,8 +21,8 @@ function SignUpPage() {
     return (
       <main>
         <p className="notice">
-          Sign-up is not configured. Set <code>VITE_CLERK_PUBLISHABLE_KEY</code>{" "}
-          and <code>CLERK_SECRET_KEY</code> (see the README) to enable Clerk.
+          Sign-up is not configured. Set <code>VITE_CLERK_PUBLISHABLE_KEY</code> and{" "}
+          <code>CLERK_SECRET_KEY</code> (see the README) to enable Clerk.
         </p>
       </main>
     );
@@ -32,14 +32,12 @@ function SignUpPage() {
       <div className="auth-card">
         <div className="auth-head">
           <h1>Start your shelf</h1>
-          <p>An account keeps your collection, reading history and follows — and nothing is public until you say so.</p>
+          <p>
+            An account keeps your collection, reading history and follows — and nothing is public
+            until you say so.
+          </p>
         </div>
-        <SignUp
-          routing="path"
-          path="/sign-up"
-          signInUrl="/sign-in"
-          fallbackRedirectUrl="/me"
-        />
+        <SignUp routing="path" path="/sign-up" signInUrl="/sign-in" fallbackRedirectUrl="/me" />
       </div>
     </main>
   );

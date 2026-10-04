@@ -32,11 +32,11 @@ Refreshing staging from production is in
 
 ## Production
 
-1. Open a pull request. `.github/workflows/ci.yml` typechecks, tests and
-   builds it, and its `check` job must pass before the pull request can
-   merge. The "Protect main" ruleset (`.github/rulesets/main.json`) blocks
-   direct pushes, force pushes and deletion of `main`, so every change lands
-   this way.
+1. Open a pull request. `.github/workflows/ci.yml` checks its formatting
+   and lint, typechecks, tests and builds it, and its `check` job must pass
+   before the pull request can merge. The "Protect main" ruleset
+   (`.github/rulesets/main.json`) blocks direct pushes, force pushes and
+   deletion of `main`, so every change lands this way.
 2. Merge it. `.github/workflows/deploy.yml` runs CI again on `main` and queues
    a production deploy. A merge that touches only Markdown files or `docs/`
    queues no deploy.
@@ -238,6 +238,11 @@ Outside GitHub, once per environment:
 Visit the deployed URL. The home page is server-rendered on the Worker and
 shows live catalog counts fetched from Convex during SSR, so it proves the
 SSR to Convex round trip.
+
+Scripts and styles under `/assets/` should answer `Cache-Control: public,
+max-age=31536000, immutable` (`public/_headers`; their names carry a content
+hash, so a deploy gives changed files new URLs). The favicons and every page
+keep the default revalidation.
 
 ## Why it is built this way
 

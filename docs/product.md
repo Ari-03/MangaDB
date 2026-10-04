@@ -152,8 +152,8 @@ Volume or Bundle text search. Search pages are noindex.
   aliases from `convex/lib/publishers.ts` ("Shonen Jump" finds VIZ Media)
   and merged publishers' old names.
 - The header box is a typeahead (`src/lib/searchSuggest.tsx`) showing up to
-  six Series, up to three publishers and a "See all results" row. Without
-  Convex or before hydration it is a plain GET form.
+  six Series, up to three publishers and a "See all results" row. Before
+  hydration it is a plain GET form.
 - When no Series contains every typed word and the query names no
   publisher, both the typeahead and the page offer "Did you mean" titles
   ("berzerk" finds Berserk). A typo in the first three letters of a
@@ -182,9 +182,10 @@ Want all, Order all, Own all and Read all, capped at 200 books per click.
 Nothing removes entries in bulk.
 
 `/me` is the library, with tabs Collection, Reading, Upcoming, Favorites
-and Settings. Collection shelves entries by Series and reading path, one
-shelf per state (`?shelf=owned|ordered|wanted`). "Add the other N" opens
-the rest of a run with unmarked books faded.
+and Settings. The open tab's label shows its count; Settings has none.
+Collection shelves entries by Series and reading path, one shelf per state
+(`?shelf=owned|ordered|wanted`). "Add the other N" opens the rest of a run
+with unmarked books faded.
 
 ## Reading
 
@@ -197,7 +198,10 @@ Reading is three separate things (`convex/reading.ts`):
   you confirm.
 - **Volume Progress** is a read count per Volume. Confirming a pass adds
   one read to every Volume the Edition covers completely, never partially.
-  Another pass is a reread. Undo reverses the latest completion. The
+  Another pass is a reread. Undo, offered right after a completion, takes
+  back the reads it added, even if the Edition's coverage changed since,
+  and puts the pass back at its old percent. A Volume read again or raised
+  since keeps its count, and a pass started since stays as it is. The
   Volume page edits the count directly, and the Mark read toggle on a cover
   gives each completely covered Volume its first read.
 
@@ -236,7 +240,56 @@ the same to everyone, its owner included.
   public for that user.
 
 Profiles are noindex, absent from sitemaps, and show current state only,
-with no activity feed.
+with no activity feed. A suspended user's profile is not found until they
+are reinstated.
+
+## Analytics
+
+Settings, Analytics turns product analytics off for the account: nothing
+from the browser while signed in, and none of the events the user causes
+from the server, moderation included. Nothing is sent while a
+signed-in user's choice is still loading. If another tab turns analytics
+on while this one is Off or loading, a page opened in this tab before it
+catches up can still reach PostHog later: the next events from this tab
+name it as the previous page, with how long it was open and how far it was
+scrolled, and carry any campaign tag in its address; if a visit began on
+it, every event of the visit carries its address, search text included.
+This tab catches up when the change reaches it, but if two tabs are signed
+in to different accounts at once, it can last as long as the other
+account has analytics on. A browser that sends Do Not Track
+or Global Privacy Control sends nothing either way, and switches an account
+that has never chosen to Off, once; the panel says so. A browser without
+it never switches an account back on. Signed-out visitors have no toggle;
+Do Not Track covers them and they create no person profile. Two accounts
+used on one browser are never merged into one person, and no event carries
+the other account's id, though their events share a device id, and after
+switching on one page the next account's first events still point to the
+previous account's last page view: its address, how long it was open and
+how far it was scrolled. Events never
+carry the user's email or the text of their reviews and comments, but they
+include page addresses and titles, so a search's text is sent with the
+search page, and PostHog also receives the visitor's IP address and browser
+details; the panel says both. Off stops new events; events captured before
+the switch may still be delivered later, including after a lost connection
+is restored, and events already collected are not deleted. What is collected
+is listed in [configuration](configuration.md#analytics-posthog).
+
+## Account deletion
+
+Settings, Account deletes the account. The request is recorded first;
+from then on the user counts as gone: the profile returns not found, every
+personal page treats them as signed out, and the browser signs out. If
+signing out fails, the page says the deletion goes ahead and offers
+another try. Their collection, reading, follows, ratings, reviews,
+favorites, comments and reports are then deleted in batches. Then the
+Clerk sign-in is deleted, with retries, and the user row a day later,
+which frees the username; the day covers session tokens issued before the
+sign-in went. Until then, a session on another device that opens `/me` is
+told the account is being deleted and signed out, and the sign-in cannot
+claim a new username. If Clerk keeps failing, an operator finishes it
+([operations](operations.md#account-deletion)). The last active
+Administrator is refused until they appoint another. Revisions, Proposals
+and audit rows stay, credited to a deleted account.
 
 ## Ratings and reviews
 
@@ -294,18 +347,19 @@ work Pending, Reported, Hidden and Removed tabs at `/mod/comments`, and can
 shadow a user so their comments look published only to them. Every
 decision writes a `commentAudit` row. Rate limits: 20 posts and 10 reports
 an hour per user. The policy numbers are in `COMMENT_POLICY` in
-`convex/comments.ts`.
+`convex/lib/commentPolicy.ts`.
 
 To turn comments on, set `comments: true` in `convex/lib/features.ts` and
 deploy both halves. Staff the queue first.
 
 ## Mature titles
 
-A Mature Series (see CONTEXT.md) stays out of browse, search, the home
-shelf, the calendar, the Publishers board, author shelves and the sitemap
-until the viewer opts in. Its own pages still load. For a viewer who has
-not opted in they lead with a notice and draw every cover as an 18+ cloth
-binding without requesting the art. They also carry
+A Mature Series (see CONTEXT.md) stays out of browse, search, the calendar,
+the Publishers board, author shelves and the sitemap until the viewer opts
+in. The home page's shelves leave it and its books out even then; the
+header search still follows the viewer's choice. Its own pages still load.
+For a viewer who has not opted in they lead with a notice and draw every
+cover as an 18+ cloth binding without requesting the art. They also carry
 `<meta name="rating" content="adult">` and no cover-led social card.
 
 The Series library and Series pages ask "Allow mature content?" once per
@@ -314,19 +368,28 @@ change later in the Series filters, Settings, or the notice on a mature
 page, each behind an "I'm 18 or older" check. Your own library always
 shows your own books.
 
-The library rebuild derives `series.mature`, so it lags by up to one
-rebuild. Evidence, strongest first:
+The library rebuild derives `series.mature`. A Data Team call applies at
+once, and so does an import that links a book which is evidence, or whose
+Edition is under an adult-only publisher, that brings a linked book new
+evidence, or that lists a withdrawn linked book again. Such an import flags
+the Series in its own transaction, so it leaves the home page, the
+calendars and the library's pages at once; the library's filtered totals
+and facet counts follow a moment later, when a scheduled job updates the
+library pack. Other changes, such as a publisher marked adult-only later,
+evidence that went away, or a merge or Split, wait for the next rebuild.
+Evidence, strongest first:
 
 | Evidence | Source |
 |---|---|
 | Data Team call | `series.contentRating` ("mature" or "general") wins over everything |
 | Adult-only publisher | `publishers.contentRating = "mature"`, from `adultOnly` in `convex/lib/publishers.ts` |
+| Adult-only imprint | a PRH title or Seven Seas book page naming an `adultOnly` imprint (Ghost Ship, Steamship), whatever Publisher its Edition is filed under |
 | Kodansha | `age_rating` 18 or over on the backlist listing |
-| Seven Seas | the book page's mature age-rating block |
+| Seven Seas | the book page's Mature age-rating badge |
 | Yen Press | the "Age Rating" detail ("18+ M (Mature)", "18 & Up") |
 | ANN | objectionable content MA or AO, or an erotica or hentai genre |
 
-PRH and Open Library carry no age rating for manga.
+PRH and Open Library carry no age rating for manga; PRH names the imprint.
 
 ## SEO
 
@@ -358,7 +421,33 @@ Release with an ISBN-13. It tries the edge cache, then the `mangadb-covers`
 R2 bucket, then Penguin Random House's distribution CDN, then the Open
 Library Covers API. Known "no image" and "coming soon" stand-ins are
 rejected, so those books stay cloth. A miss everywhere is remembered for a
-day. An upstream that is down or rate-limiting gives a five-minute miss.
+day. An upstream that is down, rate-limiting or has not delivered within 10
+seconds gives a five-minute miss.
+Found art is stored in R2 and cached for 30 days.
+
+A visitor waits at most 3 seconds for art R2 does not hold. Past that they
+get an uncached 503, and the page moves to the Release's next ISBN and then
+to cloth. The lookup keeps running in the background and stores its
+answer (the art, or the day's or five minutes' miss), so the next view
+finds it. Every jacket is sent with an `ETag`: R2's for a stored copy, and
+for fresh art the MD5 tag R2 gives it once stored. A request whose
+`If-None-Match` names it gets a 304, whether it is answered from the edge
+cache or from R2. The 304 repeats the 200's caching headers and the edge
+copy's `Age`, so a stale jacket's hour is not restarted downstream.
+`If-Modified-Since` is not answered.
+
+A stored jacket is checked again once 90 days have passed since its
+upstreams were last asked. The stored copy is still served, cached for an
+hour, while the check runs in the background in the same source order,
+stopping at the source the copy came from. Real art replaces it; a miss or
+a stand-in keeps it, and the check is recorded either way, so the next one
+is 90 days off. An upstream that could not answer records nothing: the copy
+stays due, and the first request after its hour asks again. A response is
+never cached past the moment its copy falls due, but a browser or edge copy
+taken before a replacement is still shown until its lifetime ends: a
+corrected jacket appears within about an hour of the check, not the moment
+the publisher changes it. To replace one sooner, delete its object from
+the bucket; edge and browser copies still run out their lifetime.
 
 Only Kodansha and Seven Seas art lives in Convex file storage, stored once
 per Edition and image URL. A Release wears its Edition's jacket, physical

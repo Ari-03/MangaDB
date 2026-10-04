@@ -1,0 +1,4 @@
+# Formatting only: the first Biome reformat of the repo (npm run format).
+# Its message records the one difference that reaches the runtime: how 20
+# JSX elements split their text into child strings.
+934771373c1b0fd6584e7490068b95b22c147007

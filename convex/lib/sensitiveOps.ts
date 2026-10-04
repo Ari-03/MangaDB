@@ -23,7 +23,8 @@
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { primaryVolumeSeries } from "../catalogPages";
-import { followMerges } from "./merges";
+import { liveUser } from "./auth";
+import { followMerges, mergeSurvivor } from "./merges";
 import {
   displayInfo,
   getCanonical,
@@ -69,10 +70,7 @@ async function recordRevision(
   return (await insertRevision(ctx, ref, latest, changes, meta)).revisionId;
 }
 
-async function requireRecord(
-  ctx: MutationCtx,
-  ref: RecordRef,
-): Promise<CatalogDoc> {
+async function requireRecord(ctx: MutationCtx, ref: RecordRef): Promise<CatalogDoc> {
   const doc = await getCanonical(ctx, ref);
   if (!doc) fail("notFound", `No such ${ref.type}.`);
   return doc;
@@ -212,9 +210,7 @@ async function transferProvenance(
 ): Promise<void> {
   const observations = await ctx.db
     .query("sourceObservations")
-    .withIndex("by_record", (q) =>
-      q.eq("recordRef.type", loser.type).eq("recordRef.id", loser.id),
-    )
+    .withIndex("by_record", (q) => q.eq("recordRef.type", loser.type).eq("recordRef.id", loser.id))
     .collect();
   for (const observation of observations) {
     await repoint(ctx, log, "sourceObservations", observation, {
@@ -223,9 +219,7 @@ async function transferProvenance(
   }
   const suppressions = await ctx.db
     .query("conflictSuppressions")
-    .withIndex("by_key", (q) =>
-      q.eq("ref.type", loser.type).eq("ref.id", loser.id),
-    )
+    .withIndex("by_key", (q) => q.eq("ref.type", loser.type).eq("ref.id", loser.id))
     .collect();
   for (const suppression of suppressions) {
     await repoint(ctx, log, "conflictSuppressions", suppression, {
@@ -671,15 +665,18 @@ async function withDependents(ctx: MutationCtx, records: Records): Promise<Recor
  * everything under them (withDependents); `trackers`: every User with a
  * profile surface on any of those (trackersIn).
  */
-async function trackersOf(ctx: MutationCtx, touched: Records): Promise<{ records: RecordSets; trackers: Trackers }> {
+async function trackersOf(
+  ctx: MutationCtx,
+  touched: Records,
+): Promise<{ records: RecordSets; trackers: Trackers }> {
   const records = await withDependents(ctx, touched);
   return { records, trackers: await trackersIn(ctx, records) };
 }
 
 /**
  * Every User with a profile surface on these records, per record, and the
- * overrides governing it. A Series: state rows, Series Ratings, and the read
- * counts and passes filed under it. A Volume: its read counts. An Edition:
+ * overrides governing it. A Series: state rows, Series Ratings, and the
+ * passes filed under it. A Volume: its read counts. An Edition:
  * its omnibus Ratings. A Release: its entries and passes. A Bundle: its
  * entries. Reviews, Volume Ratings and Favorites are no surface of Tracking
  * Visibility: the profile lists Reviews whatever it is and never shows the
@@ -687,11 +684,15 @@ async function trackersOf(ctx: MutationCtx, touched: Records): Promise<{ records
  */
 async function trackersIn(ctx: MutationCtx, records: RecordSets): Promise<Trackers> {
   const trackers: Trackers = new Map();
-  const add = (table: TableNames, recordId: string, rows: Array<{ userId: Id<"users">; state?: unknown }>) => {
+  const add = (
+    table: TableNames,
+    recordId: string,
+    rows: Array<{ userId: Id<"users">; state?: unknown }>,
+  ) => {
     for (const row of rows) addTracker(trackers, row.userId, recordId, surfacesOf(table, row));
   };
   for (const seriesId of records.series) {
-    for (const table of ["userSeriesStates", "ratings", "volumeProgress", "releaseProgress"] as const) {
+    for (const table of ["userSeriesStates", "ratings", "releaseProgress"] as const) {
       add(
         table,
         seriesId,
@@ -825,7 +826,8 @@ async function carryEditionRatings(
   from: Array<Id<"series">>,
   raters?: Array<Id<"users">>,
 ): Promise<void> {
-  const userIds = raters ?? (await ratingsOf(ctx, { kind: "edition", id: editionId })).map((row) => row.userId);
+  const userIds =
+    raters ?? (await ratingsOf(ctx, { kind: "edition", id: editionId })).map((row) => row.userId);
   if (userIds.length === 0) return;
   const to = await editionRatedSeries(ctx, editionId);
   await refuseSeriesChange(from, to, sink.reversible ? async () => true : null);
@@ -1095,9 +1097,7 @@ async function transferReferences(
     case "seriesFamily": {
       const members = await ctx.db
         .query("series")
-        .withIndex("by_family", (q) =>
-          q.eq("familyId", loserDoc._id as Id<"seriesFamilies">),
-        )
+        .withIndex("by_family", (q) => q.eq("familyId", loserDoc._id as Id<"seriesFamilies">))
         .collect();
       for (const member of members) {
         await repoint(ctx, log, "series", member, { familyId: survivorDoc._id });
@@ -1119,7 +1119,13 @@ async function transferReferences(
         .query("userSeriesStates")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
         .collect();
-      await guardSurvivorOverrides(ctx, log, dependents, survivorId, new Set(states.map((state) => state.userId)));
+      await guardSurvivorOverrides(
+        ctx,
+        log,
+        dependents,
+        survivorId,
+        new Set(states.map((state) => state.userId)),
+      );
       const volumes = await ctx.db
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
@@ -1198,7 +1204,13 @@ async function transferReferences(
         const existing = await seriesStateOf(ctx, state.userId, survivorId);
         if (existing) {
           await removeRow(ctx, log, "userSeriesStates", state);
-          await repoint(ctx, log, "userSeriesStates", existing, stricterVisibility(existing, [state]));
+          await repoint(
+            ctx,
+            log,
+            "userSeriesStates",
+            existing,
+            stricterVisibility(existing, [state]),
+          );
         } else {
           await repoint(ctx, log, "userSeriesStates", state, {
             seriesId: survivorId,
@@ -1206,21 +1218,14 @@ async function transferReferences(
           });
         }
       }
-      // Progress rows key on user × release / user × volume, which the merge
-      // does not change — repoint the series denorm only.
+      // Passes key on user × release, which the merge does not change —
+      // repoint the series denorm only. Read counts follow their Volumes.
       const releaseProgress = await ctx.db
         .query("releaseProgress")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
         .collect();
       for (const row of releaseProgress) {
         await repoint(ctx, log, "releaseProgress", row, { seriesId: survivorId });
-      }
-      const volumeProgress = await ctx.db
-        .query("volumeProgress")
-        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
-        .collect();
-      for (const row of volumeProgress) {
-        await repoint(ctx, log, "volumeProgress", row, { seriesId: survivorId });
       }
       await transferRatingsAndReviews(
         ctx,
@@ -1304,18 +1309,20 @@ async function transferReferences(
       for (const row of progress) {
         const existing = await ctx.db
           .query("volumeProgress")
-          .withIndex("by_user_volume", (q) =>
-            q.eq("userId", row.userId).eq("volumeId", survivorId),
-          )
+          .withIndex("by_user_volume", (q) => q.eq("userId", row.userId).eq("volumeId", survivorId))
           .unique();
         if (existing) await removeRow(ctx, log, "volumeProgress", row);
         else {
-          await repoint(ctx, log, "volumeProgress", row, {
-            volumeId: survivorId,
-            seriesId: survivor.seriesId,
-          });
+          await repoint(ctx, log, "volumeProgress", row, { volumeId: survivorId });
           if (crossSeries) {
-            await carryVisibility(ctx, sink, row.userId, READING, [loserSeriesId], [survivor.seriesId]);
+            await carryVisibility(
+              ctx,
+              sink,
+              row.userId,
+              READING,
+              [loserSeriesId],
+              [survivor.seriesId],
+            );
           }
         }
       }
@@ -1367,9 +1374,7 @@ async function transferReferences(
     case "editionLine": {
       const editions = await ctx.db
         .query("editions")
-        .withIndex("by_line", (q) =>
-          q.eq("editionLineId", loserDoc._id as Id<"editionLines">),
-        )
+        .withIndex("by_line", (q) => q.eq("editionLineId", loserDoc._id as Id<"editionLines">))
         .collect();
       // Unmapped Packaging takes its Releases' Series from its line, so a
       // merge across Series re-derives them and carries their tracking.
@@ -1448,7 +1453,9 @@ async function transferReferences(
       for (const row of favorites) {
         const existing = await ctx.db
           .query("favorites")
-          .withIndex("by_user_edition", (q) => q.eq("userId", row.userId).eq("editionId", survivorId))
+          .withIndex("by_user_edition", (q) =>
+            q.eq("userId", row.userId).eq("editionId", survivorId),
+          )
           .unique();
         if (existing) await removeRow(ctx, log, "favorites", row);
         else await repoint(ctx, log, "favorites", row, { editionId: survivorId, ...seriesDenorm });
@@ -1485,7 +1492,8 @@ async function transferReferences(
         .withIndex("by_release", (q) => q.eq("releaseId", loserId))
         .collect();
       for (const membership of memberships) {
-        for (const userId of await bundleOwners(ctx, membership.bundleId)) await carry(userId, OWNERSHIP);
+        for (const userId of await bundleOwners(ctx, membership.bundleId))
+          await carry(userId, OWNERSHIP);
         const bundleRows = await ctx.db
           .query("bundleMemberships")
           .withIndex("by_bundle", (q) => q.eq("bundleId", membership.bundleId))
@@ -1541,7 +1549,14 @@ async function transferReferences(
             ...passSeries,
           });
           // The profile gates a pass by its Release's Series and its own.
-          await carryVisibility(ctx, sink, row.userId, READING, [...fromSeries, row.seriesId], toSeries);
+          await carryVisibility(
+            ctx,
+            sink,
+            row.userId,
+            READING,
+            [...fromSeries, row.seriesId],
+            toSeries,
+          );
         }
       }
       return;
@@ -1550,14 +1565,14 @@ async function transferReferences(
     case "releaseVariant": {
       const loserId = loserDoc._id as Id<"releaseVariants">;
       const survivorId = survivorDoc._id as Id<"releaseVariants">;
-      // Variant pins have no index of their own; variant merges are rare
-      // enough that a scan of the two referencing tables is acceptable.
-      for (const entry of await ctx.db.query("collectionEntries").collect()) {
-        if (entry.variantId !== loserId) continue;
+      // Found by the pin itself, not the row's Release: a pin's Release has
+      // not always matched its variant's. applyMerge refused more than
+      // VARIANT_MERGE_PIN_LIMIT of them.
+      const pins = variantPins(ctx, loserId);
+      for (const entry of await pins.entries.collect()) {
         await repoint(ctx, log, "collectionEntries", entry, { variantId: survivorId });
       }
-      for (const membership of await ctx.db.query("bundleMemberships").collect()) {
-        if (membership.variantId !== loserId) continue;
+      for (const membership of await pins.memberships.collect()) {
         await repoint(ctx, log, "bundleMemberships", membership, {
           variantId: survivorId,
         });
@@ -1617,6 +1632,75 @@ async function transferReferences(
   }
 }
 
+// ---------- Release Variant merges ----------
+
+/**
+ * Pins one Release Variant merge may move, in both tables together. Split
+ * puts every pin back in one transaction and reads far more per pin than
+ * the merge: of a transaction's 4,096 index ranges, about 5 per Owned entry
+ * with a User of its own and 11 per membership of a one-Release Bundle, so
+ * 250 of either, or of both, leave a third for the rest. The limit does not
+ * make every variant merge reversible: Split also reads 4 ranges per further
+ * Release of a moved membership's Bundle and several per owner of that
+ * Bundle, so a merge that touched a Bundle with very many owners or many
+ * Releases can still be beyond a Split.
+ */
+export const VARIANT_MERGE_PIN_LIMIT = 250;
+
+/** The Collection Entries and Bundle Memberships pinning a Release Variant. */
+function variantPins(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
+  return {
+    entries: ctx.db
+      .query("collectionEntries")
+      .withIndex("by_variantId", (q) => q.eq("variantId", variantId)),
+    memberships: ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_variantId", (q) => q.eq("variantId", variantId)),
+  };
+}
+
+/** How many rows pin a variant, each count stopping one past the merge limit. */
+async function variantPinCounts(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
+  const pins = variantPins(ctx, variantId);
+  return {
+    entries: (await pins.entries.take(VARIANT_MERGE_PIN_LIMIT + 1)).length,
+    memberships: (await pins.memberships.take(VARIANT_MERGE_PIN_LIMIT + 1)).length,
+  };
+}
+
+/**
+ * Why merging Release Variant `loserId` into `survivorId` is refused, or
+ * null. Variants merge only within one Release, each resolved through any
+ * Release merge, so a moved pin stays on its row's Release; and move at
+ * most VARIANT_MERGE_PIN_LIMIT pins. applyMerge refuses
+ * with this before writing anything; the merge form shows it instead of
+ * the merge.
+ */
+export async function variantMergeRefusal(
+  ctx: QueryCtx,
+  survivorId: Id<"releaseVariants">,
+  loserId: Id<"releaseVariants">,
+): Promise<string | null> {
+  const releaseOf = async (variantId: Id<"releaseVariants">) => {
+    const variant = await ctx.db.get(variantId);
+    if (!variant) return null;
+    return (await mergeSurvivor(ctx, "releases", await ctx.db.get(variant.releaseId)))?._id ?? null;
+  };
+  const survivorRelease = await releaseOf(survivorId);
+  if (!survivorRelease || survivorRelease !== (await releaseOf(loserId))) {
+    return "These variants belong to different Releases. Merge the Releases first, then merge the variants.";
+  }
+  const { entries, memberships } = await variantPinCounts(ctx, loserId);
+  if (entries + memberships > VARIANT_MERGE_PIN_LIMIT) {
+    return (
+      `More than ${VARIANT_MERGE_PIN_LIMIT} collection entries and bundle memberships pin the ` +
+      `variant being merged, and a variant merge moves at most ${VARIANT_MERGE_PIN_LIMIT}, since Split ` +
+      "puts every pin back in one transaction."
+    );
+  }
+  return null;
+}
+
 // ---------- merge & split ----------
 
 /**
@@ -1648,6 +1732,10 @@ export async function applyMerge(
     if (doc.locked) {
       fail("locked", `The merge ${role} is temporarily locked — unlock it first.`);
     }
+  }
+  if (survivor.type === "releaseVariant" && loser.type === "releaseVariant") {
+    const refusal = await variantMergeRefusal(ctx, survivor.id, loser.id);
+    if (refusal) fail("badMerge", refusal);
   }
 
   const loserTitle = (await displayInfo(ctx, loser.type, loserDoc)).title;
@@ -1712,9 +1800,7 @@ async function reversibleManifestsOf(
 ): Promise<Array<Doc<"mergeManifests">>> {
   const manifests = await ctx.db
     .query("mergeManifests")
-    .withIndex("by_loser", (q) =>
-      q.eq("loserRef.type", ref.type).eq("loserRef.id", ref.id),
-    )
+    .withIndex("by_loser", (q) => q.eq("loserRef.type", ref.type).eq("loserRef.id", ref.id))
     .collect();
   const lastSplit = Math.max(
     0,
@@ -1730,22 +1816,38 @@ async function reversibleManifestsOf(
 
 /**
  * Whether a manifest snapshot may be reinserted: a personal row (one with a
- * `userId`) only while its User still exists. Account deletion redacts these
- * snapshots (redactUserFromManifests), and this guard covers any the
- * redaction has not reached yet.
+ * `userId`) only while its User still exists and is not being deleted, so a
+ * Split never refills a table the account purge has drained. Account
+ * deletion redacts these snapshots (redactUserFromManifests), and this
+ * guard covers any the redaction has not reached yet.
  */
 async function ownerExists(ctx: MutationCtx, doc: unknown): Promise<boolean> {
   const userId = (doc as { userId?: unknown }).userId;
   if (typeof userId !== "string") return true;
   const id = ctx.db.normalizeId("users", userId);
-  return id !== null && (await ctx.db.get(id)) !== null;
+  return id !== null && (await liveUser(ctx, id)) !== null;
+}
+
+/**
+ * Fields older manifests log that their table no longer keeps, by table: a
+ * read count's Series, which is its Volume's. Split neither repoints nor
+ * reinserts them, nor reads tracking from them.
+ */
+const RETIRED_FIELDS: Partial<Record<string, string>> = { volumeProgress: "seriesId" };
+
+/** A removed row's snapshot as Split reinserts it: without its table's retired field. */
+function liveSnapshot(table: string, doc: unknown): Record<string, unknown> {
+  const fields = { ...(doc as Record<string, unknown>) };
+  const retired = RETIRED_FIELDS[table];
+  if (retired) delete fields[retired];
+  return fields;
 }
 
 /**
  * Personal snapshots a deleted User left in merge manifests, removed from one
- * page of manifests at a time. The account purge (users.purgeUser) schedules
- * internal.users.redactMergeManifests, which calls this per page; Split then
- * has nothing of theirs to reinsert.
+ * page of manifests at a time. The account purge (users.purgeUser), once it
+ * has emptied the User's tables, schedules internal.users.redactMergeManifests,
+ * which calls this per page; Split then has nothing of theirs to reinsert.
  */
 export async function redactUserFromManifests(
   ctx: MutationCtx,
@@ -1784,7 +1886,12 @@ const LOSER_KINDS: Partial<Record<RecordRef["type"], RecordKind>> = {
 };
 
 /** Add a manifest's untyped reference (one id or an array of them) of one kind; returns the ids added. */
-function addRefs<K extends RecordKind>(ctx: MutationCtx, into: RecordSets, kind: K, value: unknown) {
+function addRefs<K extends RecordKind>(
+  ctx: MutationCtx,
+  into: RecordSets,
+  kind: K,
+  value: unknown,
+) {
   const values: unknown[] = Array.isArray(value) ? value : [value];
   const added: Array<RecordId<K>> = [];
   for (const raw of values) {
@@ -1808,7 +1915,11 @@ function addRefs<K extends RecordKind>(ctx: MutationCtx, into: RecordSets, kind:
  * their row points at. `records`: everything trackersOf read, plus every
  * record those personal rows point at on either side of the replay.
  */
-async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<Doc<"mergeManifests">>) {
+async function splitScope(
+  ctx: MutationCtx,
+  loser: RecordRef,
+  manifests: Array<Doc<"mergeManifests">>,
+) {
   const users: Trackers = new Map();
   const moved = recordSets();
   const refs = recordSets();
@@ -1820,6 +1931,7 @@ async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<D
     const userId = typeof row?.userId === "string" ? ctx.db.normalizeId("users", row.userId) : null;
     if (!row || !userId || fields.length === 0) return;
     for (const [field, kind] of REF_FIELDS) {
+      if (field === RETIRED_FIELDS[table]) continue;
       for (const id of addRefs(ctx, refs, kind, row[field])) addTracker(users, userId, id, fields);
     }
   };
@@ -1849,14 +1961,22 @@ async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<D
     }
     for (const { table, docId } of manifest.inserted) personal(table, await current(table, docId));
     for (const { table, docId, field, before, after } of manifest.repointed) {
+      if (field === RETIRED_FIELDS[table]) continue;
       if (table === "volumes" && field === "seriesId") addRefs(ctx, moved, "volumes", docId);
-      else if (table === "editionLines" && field === "seriesId") addRefs(ctx, moved, "lines", docId);
-      else if (table === "editions" && field === "editionLineId") addRefs(ctx, moved, "editions", docId);
-      else if (table === "releases" && field === "seriesIds") addRefs(ctx, moved, "releases", docId);
+      else if (table === "editionLines" && field === "seriesId")
+        addRefs(ctx, moved, "lines", docId);
+      else if (table === "editions" && field === "editionLineId")
+        addRefs(ctx, moved, "editions", docId);
+      else if (table === "releases" && field === "seriesIds")
+        addRefs(ctx, moved, "releases", docId);
       else if (table === "releases" && field === "editionId") {
         addRefs(ctx, moved, "releases", docId);
         addRefs(ctx, moved, "editions", [before, after]);
-      } else if (PERSONAL_SURFACES[table] || table === "volumeCoverages" || table === "bundleMemberships") {
+      } else if (
+        PERSONAL_SURFACES[table] ||
+        table === "volumeCoverages" ||
+        table === "bundleMemberships"
+      ) {
         // The row as it stands, and as the replay will point it (a row the
         // world moved since stays where it is).
         const row = await current(table, docId);
@@ -1875,11 +1995,9 @@ async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<D
 }
 
 /** A record as the profile reads it: followed through merges, or as stored when hidden. */
-async function asShown<T extends "editionLines" | "volumes" | "editions" | "releases" | "releaseBundles">(
-  ctx: MutationCtx,
-  table: T,
-  id: Id<T>,
-) {
+async function asShown<
+  T extends "editionLines" | "volumes" | "editions" | "releases" | "releaseBundles",
+>(ctx: MutationCtx, table: T, id: Id<T>) {
   const stored = await ctx.db.get(id);
   return (await followMerges(ctx, table, stored)) ?? stored;
 }
@@ -1926,12 +2044,17 @@ async function seriesByRecord(ctx: MutationCtx, records: RecordSets) {
  * (null: no row), the floor keepSplitVisibility holds the Split to. One
  * lookup per User and Series their own tracking reaches.
  */
-async function splitGovernance(ctx: MutationCtx, loser: RecordRef, manifests: Array<Doc<"mergeManifests">>) {
+async function splitGovernance(
+  ctx: MutationCtx,
+  loser: RecordRef,
+  manifests: Array<Doc<"mergeManifests">>,
+) {
   const { users, records } = await splitScope(ctx, loser, manifests);
   const before = await seriesByRecord(ctx, records);
   const snapshots = new Map<Id<"users">, Map<Id<"series">, VisibilityOverrides | null>>();
   for (const [userId, tracked] of users) {
-    if (!(await ctx.db.get(userId))) continue;
+    // A User gone or being deleted gets no override rows written for them.
+    if (!(await liveUser(ctx, userId))) continue;
     const snapshot = new Map<Id<"series">, VisibilityOverrides | null>();
     for (const recordId of tracked.keys()) {
       for (const seriesId of before.get(recordId) ?? []) {
@@ -1939,7 +2062,10 @@ async function splitGovernance(ctx: MutationCtx, loser: RecordRef, manifests: Ar
         const state = await seriesStateOf(ctx, userId, seriesId);
         snapshot.set(
           seriesId,
-          state && { ownershipVisibility: state.ownershipVisibility, readingVisibility: state.readingVisibility },
+          state && {
+            ownershipVisibility: state.ownershipVisibility,
+            readingVisibility: state.readingVisibility,
+          },
         );
       }
     }
@@ -1965,13 +2091,15 @@ async function keepSplitVisibility(
   { users, records, before, snapshots }: Awaited<ReturnType<typeof splitGovernance>>,
 ): Promise<void> {
   const after = await seriesByRecord(ctx, records);
-  const losesSeries = (id: string) => (before.get(id)?.length ?? 0) > 0 && after.get(id)?.length === 0;
+  const losesSeries = (id: string) =>
+    (before.get(id)?.length ?? 0) > 0 && after.get(id)?.length === 0;
   const refuse = () =>
     fail(
       "badSplit",
       "This Split would leave a Release or Bundle that Users have tracked since the merge with no Series, where no override could keep that tracking private. Give it Volume Coverage or Bundle members first.",
     );
-  for (const id of records.releases) if (losesSeries(id) && (await releaseTracked(ctx, id))) refuse();
+  for (const id of records.releases)
+    if (losesSeries(id) && (await releaseTracked(ctx, id))) refuse();
   for (const id of records.bundles) if (losesSeries(id) && (await bundleTracked(ctx, id))) refuse();
   const editions = new Set<string>(records.editions);
   const scratch = manifestSink(ctx, { repointed: [], removed: [], inserted: [] });
@@ -1987,15 +2115,21 @@ async function keepSplitVisibility(
     for (const [seriesId, state] of snapshot) hold(seriesId, VISIBILITY_FIELDS, [state]);
     for (const [recordId, fields] of users.get(userId) ?? []) {
       const to = after.get(recordId) ?? [];
-      const absorbed = absorbedFrom(before.get(recordId) ?? [], to, editions.has(recordId) ? "one" : "all");
+      const absorbed = absorbedFrom(
+        before.get(recordId) ?? [],
+        to,
+        editions.has(recordId) ? "one" : "all",
+      );
       if (!absorbed) continue;
-      const sources = absorbed.length === 0 ? [null] : absorbed.map((id) => snapshot.get(id) ?? null);
+      const sources =
+        absorbed.length === 0 ? [null] : absorbed.map((id) => snapshot.get(id) ?? null);
       for (const seriesId of to) hold(seriesId, fields, sources);
     }
     for (const [seriesId, floor] of floors) {
       const state = await seriesStateOf(ctx, userId, seriesId);
       const patch: VisibilityOverrides = {};
-      for (const field of VISIBILITY_FIELDS) Object.assign(patch, stricterVisibility(state, floor[field], [field]));
+      for (const field of VISIBILITY_FIELDS)
+        Object.assign(patch, stricterVisibility(state, floor[field], [field]));
       if (Object.keys(patch).length > 0) await scratch.write(userId, seriesId, state, patch);
     }
   }
@@ -2005,8 +2139,9 @@ async function keepSplitVisibility(
  * Split, the only reversal of a mistaken merge: replay the merge's
  * manifests backward (delete what they inserted, reinsert what they removed
  * unless its User is gone, repoint every reference still where the merge
- * left it) and reactivate the loser. The touched Editions' Release Series
- * are then derived afresh from the restored links (recomputeReleaseDenorms).
+ * left it; RETIRED_FIELDS are neither reinserted nor repointed) and
+ * reactivate the loser. The touched Editions' Release Series are then
+ * derived afresh from the restored links (recomputeReleaseDenorms).
  * No profile shows more afterwards than just before (keepSplitVisibility):
  * an override the merge narrowed stays narrow, as the User may have tracked
  * more under it in the meantime.
@@ -2018,7 +2153,10 @@ export async function applySplit(
 ): Promise<Id<"revisions">[]> {
   const doc = await requireRecord(ctx, ref);
   if (doc.status !== "merged" || !doc.mergedIntoId) {
-    fail("badState", `Only merged records can be split back out; this ${ref.type} is ${doc.status}.`);
+    fail(
+      "badState",
+      `Only merged records can be split back out; this ${ref.type} is ${doc.status}.`,
+    );
   }
   // Newest first: a chunked merge's manifests are undone in reverse order.
   const manifests = await reversibleManifestsOf(ctx, ref);
@@ -2043,9 +2181,10 @@ export async function applySplit(
     }
     for (const row of manifest.removed) {
       if (!(await ownerExists(ctx, row.doc))) continue;
-      await ctx.db.insert(row.table as TableNames, row.doc as never);
+      await ctx.db.insert(row.table as TableNames, liveSnapshot(row.table, row.doc) as never);
     }
     for (const entry of [...manifest.repointed].reverse()) {
+      if (entry.field === RETIRED_FIELDS[entry.table]) continue;
       const id = ctx.db.normalizeId(entry.table as TableNames, entry.docId);
       if (!id) continue;
       const target = (await ctx.db.get(id)) as Record<string, unknown> | null;
@@ -2078,7 +2217,8 @@ export async function applySplit(
   // from the links just restored; like every write a Split makes, the
   // re-derivation is final (a scratch log).
   const derived: TransferLog = { repointed: [], removed: [], inserted: [] };
-  for (const editionId of governed.records.editions) await recomputeReleaseDenorms(ctx, derived, editionId);
+  for (const editionId of governed.records.editions)
+    await recomputeReleaseDenorms(ctx, derived, editionId);
   await keepSplitVisibility(ctx, governed);
   await recountMergedRatings(ctx, ref, survivor);
   for (const target of ratingTargetsIn(manifests)) await recountRatings(ctx, target);
@@ -2137,10 +2277,7 @@ export const IMPRINT_PREVIEW_CAP = 100;
  * every Hide/Restore/Merge/Split/Lock as the required impact preview
  * (spec §5). Counts use the same lookups the merge transfer walks.
  */
-export async function impactOf(
-  ctx: QueryCtx | MutationCtx,
-  ref: RecordRef,
-): Promise<ImpactRow[]> {
+export async function impactOf(ctx: QueryCtx | MutationCtx, ref: RecordRef): Promise<ImpactRow[]> {
   const rows: ImpactRow[] = [];
   const add = (label: string, count: number) => rows.push({ label, count });
   // Most rows are the size of one indexed query.
@@ -2151,9 +2288,7 @@ export async function impactOf(
     "Source observations",
     ctx.db
       .query("sourceObservations")
-      .withIndex("by_record", (q) =>
-        q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id),
-      ),
+      .withIndex("by_record", (q) => q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id)),
   );
   add("Public revisions", (await revisionsOf(ctx, ref)).length);
 
@@ -2172,26 +2307,23 @@ export async function impactOf(
           (capped
             ? ` — more than ${IMPRINT_PREVIEW_CAP} child rows, first ${IMPRINT_PREVIEW_CAP} counted`
             : ""),
-        children
-          .slice(0, IMPRINT_PREVIEW_CAP)
-          .filter((row) => row.status !== "merged").length,
+        children.slice(0, IMPRINT_PREVIEW_CAP).filter((row) => row.status !== "merged").length,
       );
       add(
         "Edition lines",
-        (await ctx.db.query("editionLines").collect()).filter(
-          (l) => l.publisherId === id,
-        ).length,
+        (await ctx.db.query("editionLines").collect()).filter((l) => l.publisherId === id).length,
       );
-      await count("Editions", ctx.db.query("editions").withIndex("by_publisher", (q) => q.eq("publisherId", id)));
+      await count(
+        "Editions",
+        ctx.db.query("editions").withIndex("by_publisher", (q) => q.eq("publisherId", id)),
+      );
       await count(
         "Releases",
         ctx.db.query("releases").withIndex("by_publisher_date", (q) => q.eq("publisherId", id)),
       );
       add(
         "Bundles",
-        (await ctx.db.query("releaseBundles").collect()).filter(
-          (b) => b.publisherId === id,
-        ).length,
+        (await ctx.db.query("releaseBundles").collect()).filter((b) => b.publisherId === id).length,
       );
       break;
     }
@@ -2204,8 +2336,15 @@ export async function impactOf(
     }
     case "series": {
       const id = ref.id;
-      await count("Volumes", ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", id)));
-      await count("Edition lines", ctx.db.query("editionLines").withIndex("by_series", (q) => q.eq("seriesId", id)));
+      const volumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", id))
+        .collect();
+      add("Volumes", volumes.length);
+      await count(
+        "Edition lines",
+        ctx.db.query("editionLines").withIndex("by_series", (q) => q.eq("seriesId", id)),
+      );
       const fromEdges = await ctx.db
         .query("seriesRelationships")
         .withIndex("by_from", (q) => q.eq("fromSeriesId", id))
@@ -2223,10 +2362,17 @@ export async function impactOf(
         "Reading passes",
         ctx.db.query("releaseProgress").withIndex("by_series", (q) => q.eq("seriesId", id)),
       );
-      await count(
-        "Volume read counts",
-        ctx.db.query("volumeProgress").withIndex("by_series", (q) => q.eq("seriesId", id)),
-      );
+      // Read counts follow their Volumes, as trackersIn finds them.
+      let reads = 0;
+      for (const volume of volumes) {
+        reads += (
+          await ctx.db
+            .query("volumeProgress")
+            .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+            .collect()
+        ).length;
+      }
+      add("Volume read counts", reads);
       add("Ratings", (await ratingsOf(ctx, { kind: "series", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "series", id })).length);
       await count(
@@ -2255,8 +2401,14 @@ export async function impactOf(
         "Ratings, reviews and favorites of two-volume omnibuses (move to the survivor if the other Volume is merged)",
         await collapsibleTakes(ctx, id),
       );
-      await count("Favorites", ctx.db.query("favorites").withIndex("by_volume", (q) => q.eq("volumeId", id)));
-      await count("Comments", ctx.db.query("comments").withIndex("by_volume", (q) => q.eq("volumeId", id)));
+      await count(
+        "Favorites",
+        ctx.db.query("favorites").withIndex("by_volume", (q) => q.eq("volumeId", id)),
+      );
+      await count(
+        "Comments",
+        ctx.db.query("comments").withIndex("by_volume", (q) => q.eq("volumeId", id)),
+      );
       break;
     }
     case "editionLine": {
@@ -2272,12 +2424,18 @@ export async function impactOf(
       add("Releases", (await releasesOf(ctx, id)).length);
       add("Ratings", (await ratingsOf(ctx, { kind: "edition", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "edition", id })).length);
-      await count("Favorites", ctx.db.query("favorites").withIndex("by_edition", (q) => q.eq("editionId", id)));
+      await count(
+        "Favorites",
+        ctx.db.query("favorites").withIndex("by_edition", (q) => q.eq("editionId", id)),
+      );
       break;
     }
     case "release": {
       const id = ref.id;
-      await count("Variants", ctx.db.query("releaseVariants").withIndex("by_release", (q) => q.eq("releaseId", id)));
+      await count(
+        "Variants",
+        ctx.db.query("releaseVariants").withIndex("by_release", (q) => q.eq("releaseId", id)),
+      );
       await count(
         "Bundle memberships",
         ctx.db.query("bundleMemberships").withIndex("by_release", (q) => q.eq("releaseId", id)),
@@ -2293,19 +2451,16 @@ export async function impactOf(
       break;
     }
     case "releaseVariant": {
-      const id = ref.id;
-      add(
-        "Collection entries pinning this variant",
-        (await ctx.db.query("collectionEntries").collect()).filter(
-          (e) => e.variantId === id,
-        ).length,
-      );
-      add(
-        "Bundle memberships pinning this variant",
-        (await ctx.db.query("bundleMemberships").collect()).filter(
-          (m) => m.variantId === id,
-        ).length,
-      );
+      // The rows a merge of this variant repoints, counted only as far as
+      // a merge may move them.
+      const pins = await variantPinCounts(ctx, ref.id);
+      const limit = VARIANT_MERGE_PIN_LIMIT;
+      const pinRow = (label: string, count: number) =>
+        count > limit
+          ? add(`${label} — more than ${limit}, first ${limit} counted`, limit)
+          : add(label, count);
+      pinRow("Collection entries pinning this variant", pins.entries);
+      pinRow("Bundle memberships pinning this variant", pins.memberships);
       break;
     }
     case "releaseBundle": {

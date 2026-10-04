@@ -24,8 +24,8 @@ function SignInPage() {
     return (
       <main>
         <p className="notice">
-          Sign-in is not configured. Set <code>VITE_CLERK_PUBLISHABLE_KEY</code>{" "}
-          and <code>CLERK_SECRET_KEY</code> (see the README) to enable Clerk.
+          Sign-in is not configured. Set <code>VITE_CLERK_PUBLISHABLE_KEY</code> and{" "}
+          <code>CLERK_SECRET_KEY</code> (see the README) to enable Clerk.
         </p>
       </main>
     );
@@ -35,14 +35,12 @@ function SignInPage() {
       <div className="auth-card">
         <div className="auth-head">
           <h1>Welcome back</h1>
-          <p>Sign in to pick up your shelf: what you own, what you are reading, and what is on the way.</p>
+          <p>
+            Sign in to pick up your shelf: what you own, what you are reading, and what is on the
+            way.
+          </p>
         </div>
-        <SignIn
-          routing="path"
-          path="/sign-in"
-          signUpUrl="/sign-up"
-          fallbackRedirectUrl="/me"
-        />
+        <SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/me" />
       </div>
     </main>
   );

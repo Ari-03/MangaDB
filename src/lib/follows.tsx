@@ -5,17 +5,15 @@
 // there is no visibility control to render.
 
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate, plural } from "~/lib/format";
-import { sortKeyMonth, todaySortKey } from "~/lib/month";
-import { convexClient } from "~/providers";
-import { useReadyViewer } from "~/lib/viewer";
+import { sortKeyMonth } from "~/lib/month";
+import { useReadyViewer, useViewerQuery } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
 /** A Series a collection write suggests following (collection.setReleaseEntry and kin). */
@@ -33,21 +31,8 @@ export type FollowSuggestion = FunctionReturnType<
  * Favorite with the hint under both (and stays empty, and hidden, for
  * signed-out viewers).
  */
-export function SeriesFollowControls({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  if (!convexClient) return null;
-  return <SeriesFollowControlsInner seriesPublicId={seriesPublicId} />;
-}
-
-function SeriesFollowControlsInner({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  const data = useQuery(api.follows.seriesFollow, { seriesPublicId });
+export function SeriesFollowControls({ seriesPublicId }: { seriesPublicId: number }) {
+  const data = useViewerQuery(api.follows.seriesFollow, { seriesPublicId });
   const setFollow = useMutation(api.follows.setSeriesFollow);
   if (!data) return null; // loading, signed out, or username pending
   return (
@@ -123,8 +108,7 @@ export function FollowPrompt({
     <span className="prompt" role="status">
       {suggestions.map((suggestion) => (
         <span key={suggestion.seriesId} className="prompt-line">
-          Follow “{suggestion.title}” to see its announced releases in your
-          Upcoming?{" "}
+          Follow “{suggestion.title}” to see its announced releases in your Upcoming?{" "}
           <button
             type="button"
             onClick={() => {
@@ -179,17 +163,11 @@ function sortDate(sort: number, day: number | null): string | null {
  * of covers (each with its next announced date, unfollowable in place), the
  * format preference that scopes them, and My Upcoming Releases —
  * follows.myUpcoming, computed live — as a shelf of covers, nearest first.
+ * `todaySort` comes from the page, so its tab count shares this query.
  */
-export function LibraryUpcoming() {
-  if (!convexClient) return null;
-  return <LibraryUpcomingInner />;
-}
-
-function LibraryUpcomingInner() {
-  // Computed once per mount so the reactive query key stays stable.
-  const [todaySort] = useState(() => todaySortKey());
-  const upcoming = useQuery(api.follows.myUpcoming, { todaySort });
-  const following = useQuery(api.follows.myFollowing, {});
+export function LibraryUpcoming({ todaySort }: { todaySort: number }) {
+  const upcoming = useViewerQuery(api.follows.myUpcoming, { todaySort });
+  const following = useViewerQuery(api.follows.myFollowing);
   const viewer = useReadyViewer();
   const setPreference = useMutation(api.users.setFormatPreference);
   const setFollow = useMutation(api.follows.setSeriesFollow);
@@ -283,8 +261,7 @@ function LibraryUpcomingInner() {
                 value={viewer.formatPreference}
                 onChange={(event) =>
                   void setPreference({
-                    preference: event.currentTarget
-                      .value as keyof typeof PREFERENCE_LABELS,
+                    preference: event.currentTarget.value as keyof typeof PREFERENCE_LABELS,
                   })
                 }
               >
@@ -300,8 +277,8 @@ function LibraryUpcomingInner() {
         </div>
         {upcoming.items.length === 0 ? (
           <p className="placeholder">
-            Follow a series, or mark a release or box set Wanted or Ordered, and
-            its announced future releases will appear here.
+            Follow a series, or mark a release or box set Wanted or Ordered, and its announced
+            future releases will appear here.
           </p>
         ) : (
           <div className="shelf">
@@ -320,9 +297,7 @@ function LibraryUpcomingInner() {
   );
 }
 
-type UpcomingData = NonNullable<
-  FunctionReturnType<typeof api.follows.myUpcoming>
->;
+type UpcomingData = NonNullable<FunctionReturnType<typeof api.follows.myUpcoming>>;
 
 /** One announced release (or box set) as a book on the Upcoming shelf. */
 function UpcomingItem({ item }: { item: UpcomingData["items"][number] }) {
@@ -396,9 +371,7 @@ function UpcomingItem({ item }: { item: UpcomingData["items"][number] }) {
           <span className="caption-date">{date}</span>
           <span className="dot" />
           <span>
-            {item.format === "physical"
-              ? (item.binding ?? "Print")
-              : "Digital"}
+            {item.format === "physical" ? (item.binding ?? "Print") : "Digital"}
             {item.publisher ? ` · ${item.publisher.name}` : ""}
           </span>
         </div>

@@ -49,9 +49,7 @@ describe("title templates (issue #19 formulas)", () => {
     expect(publisherTitleTag("VIZ Media")).toBe(
       "VIZ Media – Manga Releases & Upcoming Books | MangaDB",
     );
-    expect(monthTitleTag("August 2026")).toBe(
-      "English Manga Releases – August 2026 | MangaDB",
-    );
+    expect(monthTitleTag("August 2026")).toBe("English Manga Releases – August 2026 | MangaDB");
   });
 
   it("titles an unlabeled oneshot Volume without a Vol. segment", () => {
@@ -90,20 +88,14 @@ describe("pageHead", () => {
       path: "/series/1/berserk",
       image: "https://files.example/cover.jpg",
     });
-    expect(head.links).toEqual([
-      { rel: "canonical", href: `${ORIGIN}/series/1/berserk` },
-    ]);
-    const byKey = new Map(
-      head.meta.map((m) => [m.name ?? m.property ?? "title", m]),
-    );
+    expect(head.links).toEqual([{ rel: "canonical", href: `${ORIGIN}/series/1/berserk` }]);
+    const byKey = new Map(head.meta.map((m) => [m.name ?? m.property ?? "title", m]));
     expect(head.meta[0]).toEqual({ title: "T" });
     expect(byKey.get("og:url")?.content).toBe(`${ORIGIN}/series/1/berserk`);
     expect(byKey.get("og:image")?.content).toBe("https://files.example/cover.jpg");
     // Cover-led card (spec §11): a cover upgrades to the large-image card.
     expect(byKey.get("twitter:card")?.content).toBe("summary_large_image");
-    expect(byKey.get("twitter:image")?.content).toBe(
-      "https://files.example/cover.jpg",
-    );
+    expect(byKey.get("twitter:image")?.content).toBe("https://files.example/cover.jpg");
     expect(byKey.get("robots")).toBeUndefined();
   });
 
@@ -143,6 +135,7 @@ describe("JSON-LD builders", () => {
     const html = renderToString(
       createElement(RouterContextProvider, {
         router,
+        // biome-ignore lint/correctness/noChildrenProp: RouterContextProvider's props type requires children, so createElement takes it here rather than as a third argument
         children: createElement(Asset, { tag: "script", attrs: { type }, children }),
       }),
     );
@@ -188,9 +181,7 @@ describe("JSON-LD builders", () => {
   });
 
   it("Organization names the publisher at its canonical URL", () => {
-    expect(
-      organizationJsonLd({ name: "VIZ Media", path: "/publisher/viz-media" }),
-    ).toEqual({
+    expect(organizationJsonLd({ name: "VIZ Media", path: "/publisher/viz-media" })).toEqual({
       "@context": "https://schema.org",
       "@type": "Organization",
       name: "VIZ Media",
@@ -207,12 +198,8 @@ describe("JSON-LD builders", () => {
 
   it("schemaBookFormat maps Format/Binding to schema.org types", () => {
     expect(schemaBookFormat("digital", null)).toBe("https://schema.org/EBook");
-    expect(schemaBookFormat("physical", "hardcover")).toBe(
-      "https://schema.org/Hardcover",
-    );
-    expect(schemaBookFormat("physical", "paperback")).toBe(
-      "https://schema.org/Paperback",
-    );
+    expect(schemaBookFormat("physical", "hardcover")).toBe("https://schema.org/Hardcover");
+    expect(schemaBookFormat("physical", "paperback")).toBe("https://schema.org/Paperback");
     expect(schemaBookFormat("physical", null)).toBe("https://schema.org/Paperback");
   });
 

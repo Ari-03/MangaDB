@@ -95,7 +95,9 @@ export const mapEditionCoverage = mutation({
     if (!edition.editionLineId) fail("noLine", "Only Edition Line members can be mapped here.");
     const line = await ctx.db.get(edition.editionLineId);
     if (!line) fail("notFound", "The Edition's line vanished.");
-    const volumes = (await activeVolumes(ctx, line.seriesId)).sort((a, b) => a.position - b.position);
+    const volumes = (await activeVolumes(ctx, line.seriesId)).sort(
+      (a, b) => a.position - b.position,
+    );
     const pick = (label: string): Doc<"volumes"> => {
       const matches = volumes.filter((volume) => sameLabel(volume.label, label));
       if (matches.length !== 1) {
@@ -152,7 +154,9 @@ export const booklessQueue = query({
       // The source that built the backbone: its series-level observation.
       const links = await ctx.db
         .query("sourceObservations")
-        .withIndex("by_record", (q) => q.eq("recordRef.type", "series").eq("recordRef.id", series._id))
+        .withIndex("by_record", (q) =>
+          q.eq("recordRef.type", "series").eq("recordRef.id", series._id),
+        )
         .collect();
       rows.push({
         seriesId: series._id,

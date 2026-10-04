@@ -24,7 +24,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
-import { retireLapsedCancellation } from "./observations";
+import { anchoredOn, currentOps, retireLapsedCancellation } from "./observations";
 import {
   authorityRank,
   decideField,
@@ -37,7 +37,8 @@ import { sameValue, valueHash } from "./values";
 
 /** The record types imports reconcile field-level today. */
 export type ReconcileRef =
-  { type: "release"; id: Id<"releases"> } | { type: "series"; id: Id<"series"> };
+  | { type: "release"; id: Id<"releases"> }
+  | { type: "series"; id: Id<"series"> };
 
 type FieldChange = { field: string; before: unknown; after: unknown };
 
@@ -332,8 +333,10 @@ export async function reconcileFields(
       result.queued = changes.map((c) => c.field);
     } else {
       // An outdated or stale open conflict from this observation is the
-      // importer's own — withdraw and replace it with the current diff.
-      if (open?.state === "inReview") {
+      // importer's own — withdraw and replace it with the current diff. A
+      // member's Proposal (a held book's placement) is never the importer's
+      // to withdraw.
+      if (open?.state === "inReview" && open.author.kind === "source") {
         await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
       }
       const reasons = unsuppressed.map((c) => `${c.field} (${c.decision.reason})`).join("; ");
@@ -356,17 +359,11 @@ export async function reconcileFields(
       open.author.kind === "source" &&
       open.author.sourceKey === args.sourceKey
     ) {
-      const version = await ctx.db
-        .query("proposalVersions")
-        .withIndex("by_proposal", (q) =>
-          q.eq("proposalId", open._id).eq("versionNo", open.currentVersionNo),
-        )
-        .unique();
-      const op = version?.ops.length === 1 ? version.ops[0] : undefined;
+      const ops = await currentOps(ctx, open);
       // Only retire this record's field correction, or a cancellation review
       // the relisted observation no longer supports. Creation proposals may
       // share the observation and have their own review rules.
-      if (op?.kind === "update" && op.ref.type === ref.type && op.ref.id === ref.id) {
+      if (ops.length === 1 && anchoredOn(ops[0], ref)) {
         await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
         result.changed = true;
       } else if (await retireLapsedCancellation(ctx, observation, now)) {
@@ -378,7 +375,10 @@ export async function reconcileFields(
   // ----- recordOnly bucket: on the observation, nothing canonical -----
   if (recordOnly.length > 0) {
     const replaced = new Set(recordOnly.map((c) => c.field));
-    const kept = (observation.conflicts ?? []).filter((c) => !replaced.has(c.field));
+    // Stored, not the caller's copy: a link earlier in this mutation may
+    // have cleared its placement note.
+    const stored = (await ctx.db.get(observation._id))?.conflicts ?? [];
+    const kept = stored.filter((c) => !replaced.has(c.field));
     await ctx.db.patch(observation._id, {
       conflicts: [
         ...kept,

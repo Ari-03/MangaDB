@@ -14,9 +14,7 @@ import { sleep } from "./http";
 const RESEND_URL = "https://api.resend.com/emails";
 const DEFAULT_FROM = "MangaDB imports <alerts@mangadb.org>";
 
-export type SendResult =
-  | { sent: true }
-  | { sent: false; reason: string };
+export type SendResult = { sent: true } | { sent: false; reason: string };
 
 /**
  * Send one plain-text email to the Administrator. Transient failures (5xx,
@@ -24,10 +22,7 @@ export type SendResult =
  * transition is the caller's job — the mutation that detects the health
  * transition schedules exactly one send.
  */
-export async function sendAdminEmail(args: {
-  subject: string;
-  text: string;
-}): Promise<SendResult> {
+export async function sendAdminEmail(args: { subject: string; text: string }): Promise<SendResult> {
   const apiKey = process.env.RESEND_API_KEY;
   const to = process.env.IMPORT_ALERT_EMAIL_TO;
   if (!apiKey || !to) {

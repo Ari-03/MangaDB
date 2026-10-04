@@ -24,7 +24,9 @@ describe("politeFetch", () => {
   it("waits out a rate limit and then succeeds", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: { "Retry-After": "30" } }))
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "Retry-After": "30" } }),
+      )
       .mockResolvedValueOnce(new Response("<ann/>", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
@@ -39,7 +41,9 @@ describe("politeFetch", () => {
 
   it("retries a body that fails to read", async () => {
     const broken = new Response("x", { status: 200 });
-    vi.spyOn(broken, "arrayBuffer").mockRejectedValueOnce(new Error("error decoding response body"));
+    vi.spyOn(broken, "arrayBuffer").mockRejectedValueOnce(
+      new Error("error decoding response body"),
+    );
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(broken)
@@ -64,5 +68,36 @@ describe("politeFetch", () => {
     const { error } = await fetchWithClock("https://example.test/busy");
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(String(error)).toMatch(/HTTP 429/);
+  });
+});
+
+// vitest.setup.ts: a test that has not stubbed fetch gets this refusal, and
+// vi.unstubAllGlobals() brings it back, never the real fetch.
+describe("an unstubbed fetch", () => {
+  const ANN_PAGE = "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=9001";
+
+  it("gets a 400 refusal", async () => {
+    const res = await fetch(ANN_PAGE);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("no fetch stub installed");
+  });
+
+  it("gets the refusal again once a stub is removed", async () => {
+    vi.stubGlobal("fetch", async () => new Response("<ann/>"));
+    expect(await (await fetch(ANN_PAGE)).text()).toBe("<ann/>");
+    vi.unstubAllGlobals();
+    const res = await fetch(ANN_PAGE);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("no fetch stub installed");
+  });
+
+  it("ends politeFetch at once, without retrying", async () => {
+    await expect(politeFetch(ANN_PAGE, 0)).rejects.toThrow(`HTTP 400 for ${ANN_PAGE}`);
+  });
+
+  it("comes with a WebSocket that refuses to open", () => {
+    expect(() => new WebSocket("wss://example.test/api/sync")).toThrow(
+      "no WebSocket stub installed",
+    );
   });
 });

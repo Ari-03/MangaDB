@@ -37,19 +37,31 @@ async function entryRows(t: TestT) {
 
 describeNoViewer(setup, {
   queries: [
-    ["entryForRelease", (as, { r1 }) => as.query(api.collection.entryForRelease, { releaseId: r1 })],
+    [
+      "entryForRelease",
+      (as, { r1 }) => as.query(api.collection.entryForRelease, { releaseId: r1 }),
+    ],
     ["entryForBundle", (as, { bundleId }) => as.query(api.collection.entryForBundle, { bundleId })],
     ["volumeOwnership", (as) => as.query(api.collection.volumeOwnership, { volumePublicId: 11 })],
     ["seriesEntries", (as) => as.query(api.collection.seriesEntries, { seriesPublicId: 1 })],
     ["myLibrary", (as) => as.query(api.collection.myLibrary, {})],
   ],
   mutations: [
-    ["setReleaseEntry", (as, { r1 }) => as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" })],
+    [
+      "setReleaseEntry",
+      (as, { r1 }) =>
+        as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" }),
+    ],
     [
       "setManyReleaseEntries",
-      (as, { r1, r2 }) => as.mutation(api.collection.setManyReleaseEntries, { releaseIds: [r1, r2], state: "owned" }),
+      (as, { r1, r2 }) =>
+        as.mutation(api.collection.setManyReleaseEntries, { releaseIds: [r1, r2], state: "owned" }),
     ],
-    ["setBundleEntry", (as, { bundleId }) => as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" })],
+    [
+      "setBundleEntry",
+      (as, { bundleId }) =>
+        as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" }),
+    ],
   ],
 });
 
@@ -58,9 +70,7 @@ describe("collection.entryForRelease", () => {
     const { as, r1, r2, variantId } = await setup();
     const forR1 = await as.query(api.collection.entryForRelease, { releaseId: r1 });
     expect(forR1?.entry).toBeNull();
-    expect(forR1?.variants).toEqual([
-      { variantId, name: "Bookstore exclusive" },
-    ]);
+    expect(forR1?.variants).toEqual([{ variantId, name: "Bookstore exclusive" }]);
     const forR2 = await as.query(api.collection.entryForRelease, { releaseId: r2 });
     expect(forR2?.variants).toEqual([]);
   });
@@ -206,9 +216,7 @@ describe("collection follow suggestions (#29)", () => {
       releaseId: r1,
       state: "wanted",
     });
-    expect(result.suggestFollow).toEqual([
-      { seriesId, title: "Witch Hat Atelier" },
-    ]);
+    expect(result.suggestFollow).toEqual([{ seriesId, title: "Witch Hat Atelier" }]);
     // Nothing followed until the explicit confirmation.
     const follow = await as.query(api.follows.seriesFollow, { seriesPublicId: 1 });
     expect(follow?.following).toBe(false);
@@ -267,9 +275,7 @@ describe("collection follow suggestions (#29)", () => {
       bundleId,
       state: "wanted",
     });
-    expect(result.suggestFollow).toEqual([
-      { seriesId, title: "Witch Hat Atelier" },
-    ]);
+    expect(result.suggestFollow).toEqual([{ seriesId, title: "Witch Hat Atelier" }]);
   });
 });
 
@@ -492,9 +498,7 @@ describe("collection pinned variants that were hidden later (B27)", () => {
       variantId,
     });
     const rows = await entryRows(t);
-    expect(rows.map((row) => [row.state, row.variantId ?? null])).toEqual([
-      ["owned", variantId],
-    ]);
+    expect(rows.map((row) => [row.state, row.variantId ?? null])).toEqual([["owned", variantId]]);
   });
 
   it("selecting a hidden variant as a new pin is still refused", async () => {
@@ -533,8 +537,12 @@ describe("collection entries belong to one user", () => {
       entry: null,
       derived: [],
     });
-    expect(await other.query(api.collection.entryForBundle, { bundleId })).toMatchObject({ entry: null });
-    expect((await other.query(api.collection.volumeOwnership, { volumePublicId: 11 }))?.owned).toEqual([]);
+    expect(await other.query(api.collection.entryForBundle, { bundleId })).toMatchObject({
+      entry: null,
+    });
+    expect(
+      (await other.query(api.collection.volumeOwnership, { volumePublicId: 11 }))?.owned,
+    ).toEqual([]);
     expect(await other.query(api.collection.seriesEntries, { seriesPublicId: 1 })).toMatchObject({
       entries: [],
       derivedOwned: [],
@@ -565,7 +573,9 @@ describe("collection batch cost (E01)", () => {
       const releaseIds: Array<Id<"releases">> = [];
       for (let i = 0; i < count; i++) {
         const editionId = await insertEdition(ctx, { publicId: 100 + i, publisherId });
-        releaseIds.push(await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] }));
+        releaseIds.push(
+          await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] }),
+        );
       }
       return releaseIds;
     });
@@ -581,9 +591,7 @@ describe("collection batch cost (E01)", () => {
       state: "owned",
     });
     expect(result.changed).toBe(200);
-    expect(result.suggestFollow).toEqual([
-      { seriesId: expect.anything(), title: "Long Runner" },
-    ]);
+    expect(result.suggestFollow).toEqual([{ seriesId: expect.anything(), title: "Long Runner" }]);
     expect(await entryRows(t)).toHaveLength(200);
   });
 

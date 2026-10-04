@@ -2,21 +2,30 @@
 // Volume Progress): the status picker, passes, read counts and the /me
 // reading shelf. Only setSeriesReadingStatus writes a status; the
 // start-reading and completed-series prompts are suggestions the client
-// renders. Undo identifies a completion by its timestamp, so a later reread
-// makes an older undo a no-op for that Volume.
+// renders. A completion returns what it changed and Undo takes that back, so
+// a later reread or count increase on a Volume makes an older undo a no-op
+// there.
 
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { activeVolumes, resolveActiveSeries } from "./catalog";
 import { editionCoverage } from "./catalogPages";
-import { getActive, requireActive } from "./lib/merges";
+import { getActive, mergeSurvivor, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { releaseCover } from "./lib/covers";
+import { boundedReads } from "./lib/boundedReads";
+import { releaseCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf } from "./lib/editionRows";
 import { releaseAnchor } from "./lib/titles";
-import { seriesStatsRow } from "./seriesBrowse";
+import { seriesStatsRow } from "./lib/seriesStats";
 
 // Mirrors the userSeriesStates.readingStatus union in schema.ts.
 const readingStatusValidator = v.union(
@@ -37,22 +46,14 @@ export async function volumeProgressRow(
 ) {
   return await ctx.db
     .query("volumeProgress")
-    .withIndex("by_user_volume", (q) =>
-      q.eq("userId", userId).eq("volumeId", volumeId),
-    )
+    .withIndex("by_user_volume", (q) => q.eq("userId", userId).eq("volumeId", volumeId))
     .unique();
 }
 
-async function passRowFor(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  releaseId: Id<"releases">,
-) {
+async function passRowFor(ctx: QueryCtx, userId: Id<"users">, releaseId: Id<"releases">) {
   return await ctx.db
     .query("releaseProgress")
-    .withIndex("by_user_release", (q) =>
-      q.eq("userId", userId).eq("releaseId", releaseId),
-    )
+    .withIndex("by_user_release", (q) => q.eq("userId", userId).eq("releaseId", releaseId))
     .unique();
 }
 
@@ -78,17 +79,22 @@ export async function completelyCoveredVolumes(
 
 /**
  * The denormalized seriesId for a new releaseProgress row: the Release's
- * first covered Series, merge-resolved. A Release without any coverage has
- * no Series to attribute the pass to, so tracking it is rejected.
+ * first covered Series, merge-resolved. A new pass needs that Series active;
+ * a pass Undo restores (`allowHidden`) may sit under a Series hidden since,
+ * as the pass it replaces did. A Release without any coverage has no Series
+ * to attribute the pass to, so tracking it is rejected.
  */
 async function passSeriesId(
   ctx: QueryCtx,
   release: Doc<"releases">,
+  allowHidden = false,
 ): Promise<Id<"series">> {
   const first = release.seriesIds[0];
   if (first) {
-    const series = await getActive(ctx, "series", first);
-    if (series) return series._id;
+    const series = await mergeSurvivor(ctx, "series", await ctx.db.get(first));
+    if (series?.status === "active" || (allowHidden && series?.status === "hidden")) {
+      return series._id;
+    }
   }
   throw new ConvexError({
     code: "noCoverage",
@@ -161,10 +167,7 @@ async function passEntry(
   };
 }
 
-/**
- * Store one user's read count for a Volume: patch their row, or create it
- * under the Volume and (denormalized) its Series.
- */
+/** Store one user's read count for a Volume: patch their row, or create it. */
 async function putVolumeProgress(
   ctx: MutationCtx,
   userId: Id<"users">,
@@ -178,7 +181,6 @@ async function putVolumeProgress(
     await ctx.db.insert("volumeProgress", {
       userId,
       volumeId: volume._id,
-      seriesId: volume.seriesId,
       ...fields,
     });
   }
@@ -197,36 +199,42 @@ export const seriesTracking = query({
     const user = await viewerOrNull(ctx);
     if (!user) return null;
     const series = await resolveActiveSeries(ctx, seriesPublicId);
-    if (!series) return null;
+    return series ? await seriesTrackingOf(ctx, user._id, series._id) : null;
+  },
+});
 
-    const state = await seriesStateRow(ctx, user._id, series._id);
-    const volumes = [];
-    for (const volume of await activeVolumes(ctx, series._id)) {
-      const progress = await volumeProgressRow(ctx, user._id, volume._id);
-      volumes.push({
+/** seriesTracking for a known viewer and Series; exported for its cost tests. */
+export async function seriesTrackingOf(ctx: QueryCtx, userId: Id<"users">, seriesId: Id<"series">) {
+  // Volume Progress rows carry no usable Series (schema.ts), so each
+  // Volume is looked up by (user, volume); the lookups go out together
+  // through one bounded queue (boundedReads), however long the Series runs.
+  const bounded = boundedReads(ctx);
+  const [state, active, passRows] = await Promise.all([
+    seriesStateRow(bounded, userId, seriesId),
+    activeVolumes(bounded, seriesId),
+    bounded.db
+      .query("releaseProgress")
+      .withIndex("by_user_series", (q) => q.eq("userId", userId).eq("seriesId", seriesId))
+      .collect(),
+  ]);
+  const volumes = await Promise.all(
+    active.map(async (volume) => {
+      const progress = await volumeProgressRow(bounded, userId, volume._id);
+      return {
         volumeId: volume._id,
         volumePublicId: volume.publicId,
         readCount: progress?.readCount ?? 0,
         lastCompletedAt: progress?.lastCompletedAt ?? null,
-      });
-    }
-    const passes = (
-      await ctx.db
-        .query("releaseProgress")
-        .withIndex("by_user_series", (q) =>
-          q.eq("userId", user._id).eq("seriesId", series._id),
-        )
-        .collect()
-    ).map((pass) => ({ releaseId: pass.releaseId, percent: pass.percent ?? null }));
-
-    return {
-      seriesId: series._id,
-      readingStatus: state?.readingStatus ?? null,
-      volumes,
-      passes,
-    };
-  },
-});
+      };
+    }),
+  );
+  return {
+    seriesId,
+    readingStatus: state?.readingStatus ?? null,
+    volumes,
+    passes: passRows.map((pass) => ({ releaseId: pass.releaseId, percent: pass.percent ?? null })),
+  };
+}
 
 /**
  * The viewer's pass state for one Release row. Null without a viewer or for
@@ -266,7 +274,7 @@ export const myReading = query({
       volumesRead: number;
       totalVolumes: number;
       coverUrl: string | null;
-      coverIsbn: string | null;
+      coverIsbn: string[];
       passes: Array<Awaited<ReturnType<typeof passEntry>>>;
     };
     const rows = new Map<Id<"series">, Row>();
@@ -290,7 +298,7 @@ export const myReading = query({
         volumesRead,
         totalVolumes: active.length,
         coverUrl: stats?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? null,
+        coverIsbn: statsCoverIsbns(stats),
         passes: [],
       };
       rows.set(series._id, row);
@@ -321,14 +329,15 @@ export const myReading = query({
       row.passes.push(await passEntry(ctx, pass, release, edition));
     }
 
-    // Read Volumes without a status or pass still put the Series here.
+    // Read Volumes without a status or pass still put their Series here.
     const progressRows = await ctx.db
       .query("volumeProgress")
       .withIndex("by_user_volume", (q) => q.eq("userId", user._id))
       .collect();
     for (const progress of progressRows) {
       if (progress.readCount < 1) continue;
-      await rowFor(progress.seriesId);
+      const volume = await getActive(ctx, "volumes", progress.volumeId);
+      if (volume) await rowFor(volume.seriesId);
     }
 
     const series = [...rows.values()];
@@ -341,6 +350,19 @@ export const myReading = query({
 });
 
 // ---------- mutations ----------
+
+/** The most Volumes one completion may count, and so one Undo may take back. */
+export const PASS_VOLUMES_CAP = 500;
+
+/** A pass's optional 0–100% estimate, as setPassPercent and Undo accept it. */
+function checkPercent(percent: number) {
+  if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+    throw new ConvexError({
+      code: "badPercent",
+      message: "Progress must be between 0 and 100.",
+    });
+  }
+}
 
 /**
  * The one write path for Series Reading Status (spec §3): an explicit user
@@ -408,12 +430,7 @@ export const setPassPercent = mutation({
   handler: async (ctx, { releaseId, percent }) => {
     const user = await requireUser(ctx);
     const release = await requireActive(ctx, "releases", releaseId, "Release");
-    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
-      throw new ConvexError({
-        code: "badPercent",
-        message: "Progress must be between 0 and 100.",
-      });
-    }
+    checkPercent(percent);
     const pass = await passRowFor(ctx, user._id, release._id);
     if (!pass) {
       throw new ConvexError({ code: "noPass", message: "No active reading pass." });
@@ -426,12 +443,15 @@ export const setPassPercent = mutation({
 /**
  * Complete the pass — only ever called after explicit confirmation. Every
  * completely covered Volume's read count increments (a reread when > 1),
- * stamped with one shared completedAt so the completion can be undone as a
- * unit; partially covered Volumes are untouched. The pass row is removed.
+ * stamped with one shared completedAt; partially covered Volumes are
+ * untouched. The pass row is removed. An Edition covering more than
+ * PASS_VOLUMES_CAP Volumes is refused before anything is written.
  *
- * Returns `suggestCompleted`: covered Series where every active Volume now
- * has a read and the Reading Status is not already "Completed" — material
- * for the completed-series prompt, which only setSeriesReadingStatus acts on.
+ * Returns what undoCompletion takes back — `completedAt`, the `volumeIds`
+ * incremented, and the pass's `percent` (absent when it had none) — and
+ * `suggestCompleted`: covered Series where every active Volume now has a
+ * read and the Reading Status is not already "Completed", material for the
+ * completed-series prompt, which only setSeriesReadingStatus acts on.
  */
 export const completePass = mutation({
   args: { releaseId: v.id("releases") },
@@ -443,8 +463,14 @@ export const completePass = mutation({
       throw new ConvexError({ code: "noPass", message: "No active reading pass." });
     }
 
-    const completedAt = Date.now();
     const covered = await completelyCoveredVolumes(ctx, release.editionId);
+    if (covered.length > PASS_VOLUMES_CAP) {
+      throw new ConvexError({
+        code: "tooMany",
+        message: `A pass can count at most ${PASS_VOLUMES_CAP} volumes.`,
+      });
+    }
+    const completedAt = Date.now();
     for (const volume of covered) {
       const progress = await volumeProgressRow(ctx, user._id, volume._id);
       await putVolumeProgress(ctx, user._id, volume, progress, {
@@ -455,27 +481,65 @@ export const completePass = mutation({
     await ctx.db.delete(pass._id);
 
     const suggestCompleted = await completedSuggestions(ctx, user._id, covered);
-    return { completedAt, suggestCompleted };
+    return {
+      completedAt,
+      volumeIds: covered.map((volume) => volume._id),
+      percent: pass.percent,
+      suggestCompleted,
+    };
   },
 });
 
 /**
- * Undo a pass completion, identified by its completedAt stamp. Decrements
- * exactly the Volumes whose most recent completion is still that stamp — a
- * reread since then leaves the newer count alone (its own undo carries the
- * newer stamp). A count reaching zero removes the row; otherwise the prior
- * completion time is unknown, so lastCompletedAt clears. When anything was
- * undone and no new pass has started, the pass is restored at 100% — the
- * exact state before the confirmation being reversed.
+ * Undo a pass completion with what completePass returned. Decrements the
+ * given Volumes (merge-resolved) whose most recent completion is still
+ * `completedAt`, whatever the Edition covers today. A reread or count
+ * increase since then restamps the Volume, so Undo leaves the newer count
+ * alone. A count reaching zero removes the row; otherwise the prior
+ * completion time is unknown, so lastCompletedAt clears, which also means
+ * a survivor two merged ids lead to is decremented once. The pass comes
+ * back at its original `percent` when something was undone, or when the
+ * completion had counted no Volume, unless a pass has been started since.
+ * Repeating the same Undo with nothing changed in between does nothing:
+ * the stamps no longer match, and the restored pass is there. For a
+ * completion that counted no Volume, an Undo replayed after the restored
+ * pass was cancelled restores it again.
+ *
+ * Known limit: writeVolumeReadCount keeps the stamp on a decrease, since
+ * it is also the displayed last-read date, so after a decrease Undo still
+ * matches and takes off one read more than the completion added: complete
+ * (2 reads to 3), −1 by hand (2), then Undo leaves 1.
+ *
+ * The arguments come from the client, but every row read or written is the
+ * caller's own: Volume ids only lower the caller's own counts, as the
+ * direct edits can. Called directly with an empty Volume list, Undo creates
+ * a pass at a chosen percent, which startPass and setPassPercent also
+ * allow, except on a Release whose Series is hidden, where startPass
+ * refuses and Undo does not. The effect is one private row of the
+ * caller's own.
  */
 export const undoCompletion = mutation({
-  args: { releaseId: v.id("releases"), completedAt: v.number() },
-  handler: async (ctx, { releaseId, completedAt }) => {
+  args: {
+    releaseId: v.id("releases"),
+    completedAt: v.number(),
+    volumeIds: v.array(v.id("volumes")),
+    percent: v.optional(v.number()),
+  },
+  handler: async (ctx, { releaseId, completedAt, volumeIds, percent }) => {
     const user = await requireUser(ctx);
     const release = await requireActive(ctx, "releases", releaseId, "Release");
+    if (volumeIds.length > PASS_VOLUMES_CAP) {
+      throw new ConvexError({
+        code: "tooMany",
+        message: `An undo can take back at most ${PASS_VOLUMES_CAP} volumes.`,
+      });
+    }
+    if (percent !== undefined) checkPercent(percent);
 
     let decremented = 0;
-    for (const volume of await completelyCoveredVolumes(ctx, release.editionId)) {
+    for (const volumeId of volumeIds) {
+      const volume = await getActive(ctx, "volumes", volumeId);
+      if (!volume) continue;
       const progress = await volumeProgressRow(ctx, user._id, volume._id);
       if (!progress || progress.lastCompletedAt !== completedAt) continue;
       if (progress.readCount <= 1) {
@@ -489,12 +553,13 @@ export const undoCompletion = mutation({
       decremented += 1;
     }
 
-    if (decremented > 0 && !(await passRowFor(ctx, user._id, release._id))) {
+    const restore = decremented > 0 || volumeIds.length === 0;
+    if (restore && !(await passRowFor(ctx, user._id, release._id))) {
       await ctx.db.insert("releaseProgress", {
         userId: user._id,
         releaseId: release._id,
-        seriesId: await passSeriesId(ctx, release),
-        percent: 100,
+        seriesId: await passSeriesId(ctx, release, true),
+        percent,
       });
     }
     return { decremented };
@@ -571,9 +636,7 @@ export const adjustVolumeReadCount = mutation({
         message: "Read count must change by a whole number of completed reads.",
       });
     }
-    return await writeVolumeReadCount(ctx, volumeId, (current) =>
-      Math.max(0, current + delta),
-    );
+    return await writeVolumeReadCount(ctx, volumeId, (current) => Math.max(0, current + delta));
   },
 });
 
@@ -608,7 +671,10 @@ async function writeEditionRead(
     const progress = await volumeProgressRow(ctx, userId, volume._id);
     if (read) {
       if (progress && progress.readCount >= 1) continue;
-      await putVolumeProgress(ctx, userId, volume, progress, { readCount: 1, lastCompletedAt: now });
+      await putVolumeProgress(ctx, userId, volume, progress, {
+        readCount: 1,
+        lastCompletedAt: now,
+      });
     } else {
       if (!progress) continue;
       await ctx.db.delete(progress._id);
@@ -660,5 +726,42 @@ export const setEditionsRead = mutation({
         ? await completedSuggestions(ctx, user._id, [...covered.values()])
         : [],
     };
+  },
+});
+
+// ---------- maintenance ----------
+
+/** Volume Progress rows one unsetProgressSeries page reads. */
+export const UNSET_SERIES_PAGE = 200;
+
+/**
+ * Clear the Series older Volume Progress rows still store (a row's Series
+ * is its Volume's; nothing reads the field). One page per transaction, the
+ * next scheduled after it; rows written meanwhile carry no Series and are
+ * left alone, so it is safe beside live reading and safe to rerun.
+ *
+ *   npx convex run reading:unsetProgressSeries '{}'
+ */
+export const unsetProgressSeries = internalMutation({
+  args: { cursor: v.optional(v.string()), unset: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    let unset = args.unset ?? 0;
+    const { page, isDone, continueCursor } = await ctx.db
+      .query("volumeProgress")
+      .paginate({ numItems: UNSET_SERIES_PAGE, cursor: args.cursor ?? null });
+    for (const row of page) {
+      if (row.seriesId === undefined) continue;
+      await ctx.db.patch(row._id, { seriesId: undefined });
+      unset++;
+    }
+    if (!isDone) {
+      await ctx.scheduler.runAfter(0, internal.reading.unsetProgressSeries, {
+        cursor: continueCursor,
+        unset,
+      });
+    } else {
+      console.log(`[reading.unsetProgressSeries] done: ${unset} rows cleared`);
+    }
+    return { unset, done: isDone };
   },
 });

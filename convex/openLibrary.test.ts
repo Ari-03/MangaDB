@@ -18,7 +18,14 @@ import {
   insertSourceRevision,
   insertVolume,
 } from "./test.factories";
-import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import {
+  drain,
+  expectStampedAtHandOff,
+  makeT,
+  seedRegistry,
+  tickingClock,
+  type TestT,
+} from "./test.helpers";
 
 const DUMP_URL = "https://dumps.example.org/filtered.txt";
 
@@ -27,7 +34,7 @@ function dumpLine(edition: Record<string, unknown>): string {
 }
 
 function stubDump(editions: Array<Record<string, unknown>>) {
-  const body = editions.map(dumpLine).join("\n") + "\n";
+  const body = `${editions.map(dumpLine).join("\n")}\n`;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url === DUMP_URL) {
@@ -44,6 +51,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -58,7 +66,9 @@ async function buildSkeleton(t: TestT, opts: { withRelease: boolean }) {
     const seriesId = await insertSeries(ctx, { publicId: 1, title: "Chainsaw Man" });
     const volumeIds: Id<"volumes">[] = [];
     for (const label of ["21", "22"]) {
-      volumeIds.push(await insertVolume(ctx, { publicId: Number(label), seriesId, position: Number(label) }));
+      volumeIds.push(
+        await insertVolume(ctx, { publicId: Number(label), seriesId, position: Number(label) }),
+      );
     }
     let releaseId: Id<"releases"> | null = null;
     if (opts.withRelease) {
@@ -87,6 +97,19 @@ describe("openLibrary.sync — configuration", () => {
       const t = makeT();
       await seedRegistry(t);
       await expect(sync(t, { maxLines })).rejects.toThrow("maxLines must be an integer");
+      await t.run(async (ctx) => {
+        expect(await ctx.db.query("importRuns").collect()).toHaveLength(0);
+      });
+    },
+  );
+
+  it.each([-1, 10 * 60 * 1000 + 1])(
+    "rejects link budget %s before starting a run",
+    async (linkBudgetMs) => {
+      const t = makeT();
+      await seedRegistry(t);
+      await expect(sync(t, { linkBudgetMs })).rejects.toThrow("linkBudgetMs must be between");
+      await drain(t);
       await t.run(async (ctx) => {
         expect(await ctx.db.query("importRuns").collect()).toHaveLength(0);
       });
@@ -132,6 +155,38 @@ describe("openLibrary.sync — configuration", () => {
     await seedRegistry(t);
     stubDump([]);
     expect(await sync(t)).toEqual({ skipped: "unconfigured" });
+  });
+});
+
+describe("openLibrary.sync — disabling the source mid-run", () => {
+  // The gate is checked before every 1,000th line, the dump's unterminated
+  // last line included.
+  it.each([
+    ["ends with a newline", "\n"],
+    ["ends without a newline", ""],
+  ])("stops before line 1,000 when the dump %s", async (_, end) => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    // 1,000 lines with no title (each processed, none seen), then a record.
+    const { title: _title, ...untitled } = CHAINSAW_22;
+    const body =
+      [...Array.from({ length: 1000 }, () => dumpLine(untitled)), dumpLine(CHAINSAW_22)].join(
+        "\n",
+      ) + end;
+    vi.stubGlobal("fetch", async () => {
+      await t.mutation(internal.importSources.setEnabledInternal, {
+        key: "openlibrary",
+        enabled: false,
+      });
+      return new Response(body);
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 0, nextLine: 1000 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+      expect((await ctx.db.get(releaseId!))?.isbn13).toBeUndefined();
+    });
   });
 });
 
@@ -314,6 +369,36 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 
+  it("a leaf Release under an adult-only publisher makes its Series mature in the same run", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const seriesId = await t.run(async (ctx) => {
+      await insertPublisher(ctx, {
+        name: "Ghost Ship",
+        slug: "ghost-ship",
+        contentRating: "mature",
+      });
+      const seriesId = await insertSeries(ctx, { publicId: 1, title: "Peter Grill" });
+      await insertVolume(ctx, { seriesId, position: 15 });
+      return seriesId;
+    });
+    // The record names only the publisher: no rating, no imprint.
+    stubDump([
+      {
+        key: "/books/OL997M",
+        title: "Peter Grill, Vol. 15",
+        publishers: ["Ghost Ship"],
+        isbn_13: ["9798893739541"],
+        languages: [{ key: "/languages/eng" }],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      expect((await ctx.db.get(seriesId))!.mature).toBe(true);
+    });
+  });
+
   it("creates nothing for an ISBN Yen Press holds out of scope", async () => {
     const t = makeT();
     await seedRegistry(t);
@@ -408,8 +493,11 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
       },
       CHAINSAW_22,
     ]);
+    const clock = tickingClock();
     const first = await sync(t, { maxLines: 2 });
     expect(first).toMatchObject({ continued: true, nextLine: 2 });
+    await expectStampedAtHandOff(t);
+    clock.mockRestore();
     await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
@@ -426,8 +514,18 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     await buildSkeleton(t, { withRelease: true });
     const english = { languages: [{ key: "/languages/eng" }] };
     stubDump([
-      { key: "/books/OL1M", title: "Nothing Interesting 1", isbn_13: ["9780000000002"], ...english },
-      { key: "/books/OL2M", title: "Nothing Interesting 2", isbn_13: ["9780000000019"], ...english },
+      {
+        key: "/books/OL1M",
+        title: "Nothing Interesting 1",
+        isbn_13: ["9780000000002"],
+        ...english,
+      },
+      {
+        key: "/books/OL2M",
+        title: "Nothing Interesting 2",
+        isbn_13: ["9780000000019"],
+        ...english,
+      },
       CHAINSAW_22,
     ]);
     const result = await sync(t, { maxLines: 2, noContinue: true });
@@ -436,6 +534,198 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
       expect(await ctx.db.system.query("_scheduled_functions").collect()).toHaveLength(0);
       const releases = await ctx.db.query("releases").collect();
       expect(releases[0]!.isbn13).toBeUndefined();
+    });
+  });
+});
+
+describe("openLibrary.sync — a link's time budget", () => {
+  const english = { languages: [{ key: "/languages/eng" }] };
+  const NOTHING_1 = {
+    key: "/books/OL1M",
+    title: "Nothing Interesting 1",
+    isbn_13: ["9780000000002"],
+    ...english,
+  };
+  const NOTHING_2 = {
+    key: "/books/OL2M",
+    title: "Nothing Interesting 2",
+    isbn_13: ["9780000000019"],
+    ...english,
+  };
+
+  /** The run's totals as stored, the one run there is. */
+  const storedRun = (t: TestT) =>
+    t.run(async (ctx) => {
+      const runs = await ctx.db.query("importRuns").collect();
+      expect(runs).toHaveLength(1);
+      const { status, recordsSeen, recordsChanged, errors } = runs[0]!;
+      return { status, recordsSeen, recordsChanged, errors };
+    });
+
+  // Out of time at the dump's unterminated last line, a link hands it on too.
+  it.each([
+    ["ends with a newline", "\n"],
+    ["ends without a newline", ""],
+  ])(
+    "hands off after the first line out of time, and the chain applies every line once, in order, when the dump %s",
+    async (_, end) => {
+      // Two editions that match nothing, a malformed line, and one that
+      // fills the skeleton's Release.
+      const body =
+        [dumpLine(NOTHING_1), "not a dump", dumpLine(NOTHING_2), dumpLine(CHAINSAW_22)].join("\n") +
+        end;
+      let fetches = 0;
+      vi.stubGlobal("fetch", async () => {
+        fetches++;
+        return new Response(body);
+      });
+      const single = makeT();
+      await seedRegistry(single);
+      await buildSkeleton(single, { withRelease: true });
+      expect(await sync(single)).toMatchObject({ continued: false, recordsSeen: 3 });
+      await drain(single);
+
+      fetches = 0;
+      const t = makeT();
+      await seedRegistry(t);
+      await buildSkeleton(t, { withRelease: true });
+      const clock = tickingClock();
+      expect(await sync(t, { linkBudgetMs: 0 })).toMatchObject({
+        continued: true,
+        nextLine: 1,
+        recordsSeen: 1,
+      });
+      await expectStampedAtHandOff(t);
+      clock.mockRestore();
+      await drain(t);
+      // One link per line, each applying the line its predecessor left.
+      expect(fetches).toBe(4);
+      expect(await storedRun(t)).toEqual(await storedRun(single));
+      expect(await storedRun(t)).toMatchObject({
+        status: "failed",
+        recordsSeen: 3,
+        recordsChanged: 1,
+        errors: [expect.stringContaining("dump line 1:")],
+      });
+      await t.run(async (ctx) => {
+        const observations = await ctx.db.query("sourceObservations").collect();
+        expect(observations.map((o) => o.sourceRecordId)).toEqual([
+          NOTHING_1.key,
+          NOTHING_2.key,
+          CHAINSAW_22.key,
+        ]);
+        expect((await ctx.db.query("releases").collect())[0]!.isbn13).toBe("9781974766512");
+      });
+    },
+  );
+
+  it("stops at the gate rather than handing off when both fall due on one line", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    // 1,000 lines with no title, then a record in a chunk read only once
+    // they are applied: the source is disabled and the link out of time
+    // before the gate's line.
+    const { title: _title, ...untitled } = CHAINSAW_22;
+    const chunks = [
+      Array.from({ length: 1000 }, () => `${dumpLine(untitled)}\n`).join(""),
+      `${dumpLine(CHAINSAW_22)}\n`,
+    ];
+    const realNow = Date.now;
+    let late = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + late);
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              async pull(controller) {
+                const chunk = chunks.shift();
+                if (chunk === undefined) return controller.close();
+                if (chunks.length === 0) {
+                  await t.mutation(internal.importSources.setEnabledInternal, {
+                    key: "openlibrary",
+                    enabled: false,
+                  });
+                  late = 11 * 60_000;
+                }
+                controller.enqueue(new TextEncoder().encode(chunk));
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+        ),
+    );
+    expect(await sync(t)).toMatchObject({ stopped: true, continued: false, nextLine: 1000 });
+    vi.restoreAllMocks();
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_scheduled_functions").collect()).toHaveLength(0);
+    });
+    await drain(t);
+    expect(await storedRun(t)).toMatchObject({ status: "stopped" });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))?.isbn13).toBeUndefined();
+    });
+  });
+
+  it("with noContinue, closes the run where its time ran out", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: true });
+    stubDump([NOTHING_1, NOTHING_2, CHAINSAW_22]);
+    expect(await sync(t, { linkBudgetMs: 0, noContinue: true })).toMatchObject({
+      continued: false,
+      nextLine: 1,
+      recordsSeen: 1,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_scheduled_functions").collect()).toHaveLength(0);
+    });
+    await drain(t);
+    expect(await storedRun(t)).toMatchObject({ status: "succeeded", recordsSeen: 1 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("releases").collect())[0]!.isbn13).toBeUndefined();
+    });
+  });
+
+  it("with no budget passed, hands off at the first line it reaches ten minutes into the link", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: true });
+    const realNow = Date.now;
+    let late = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + late);
+    let fetches = 0;
+    // One line per read; in the first link the third arrives ten minutes in.
+    vi.stubGlobal("fetch", async () => {
+      const first = ++fetches === 1;
+      const lines = [NOTHING_1, NOTHING_2, CHAINSAW_22].map((edition) => `${dumpLine(edition)}\n`);
+      return new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              const line = lines.shift();
+              if (line === undefined) return controller.close();
+              if (first && lines.length === 0) late = 10 * 60_000;
+              controller.enqueue(new TextEncoder().encode(line));
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      );
+    });
+    expect(await sync(t)).toMatchObject({ continued: true, nextLine: 2, recordsSeen: 2 });
+    vi.restoreAllMocks();
+    await drain(t);
+    expect(fetches).toBe(2);
+    expect(await storedRun(t)).toMatchObject({
+      status: "succeeded",
+      recordsSeen: 3,
+      recordsChanged: 1,
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("releases").collect())[0]!.isbn13).toBe("9781974766512");
     });
   });
 });
@@ -585,6 +875,42 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
   );
 
   it.each(splits)(
+    "$title + $subtitle: with the sequel hidden, the parent gains no ISBN and the book is held",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { parentReleaseId, sequelReleaseId } = await buildKingdomHearts(t, {
+        parent: true,
+        sequel: true,
+      });
+      await t.run(async (ctx) => {
+        const sequel = (await ctx.db.query("series").collect()).find(
+          (s) => s.title === "Kingdom Hearts II",
+        )!;
+        await ctx.db.patch(sequel._id, { status: "hidden" });
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(parentReleaseId!))!.isbn13).toBeUndefined();
+        expect((await ctx.db.get(sequelReleaseId!))!.isbn13).toBeUndefined();
+        expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+        const [obs] = await ctx.db.query("sourceObservations").collect();
+        expect(obs!.recordRef).toBeUndefined();
+        const hold = await ctx.db
+          .query("placementHolds")
+          .withIndex("by_observation", (q) => q.eq("observationId", obs!._id))
+          .unique();
+        expect(hold?.kind).toBe("series");
+        expect(obs!.conflicts?.find((c) => c.field === "placement")?.reason).toContain(
+          "which an Editor hid",
+        );
+      });
+    },
+  );
+
+  it.each(splits)(
     "$title + $subtitle: with only the sequel, the sequel claims the book",
     async (split) => {
       const t = makeT();
@@ -631,7 +957,10 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
 
 describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
   const proposalsInReview = (t: TestT) =>
-    t.run(async (ctx) => (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview").length);
+    t.run(
+      async (ctx) =>
+        (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview").length,
+    );
 
   /** Unlinked editions first, then ANN's Releases carrying their ISBNs. */
   async function lateReleases(t: TestT, editions: Array<Record<string, unknown>>) {
@@ -671,7 +1000,9 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
       });
       await ctx.db.patch(releaseId!, { description: "ANN's text." });
     });
-    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({ linked: 1 });
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      linked: 1,
+    });
     expect(await proposalsInReview(t)).toBe(0);
     await t.run(async (ctx) => {
       expect((await ctx.db.get(releaseId!))!.description).toBe("ANN's text.");
@@ -737,8 +1068,12 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
     expect(await description()).toBe("Edition one's blurb.");
     expect(await proposalsInReview(t)).toBe(0);
     await t.run(async (ctx) => {
-      const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === OTHER.key)!;
-      expect(obs.conflicts?.find((c) => c.field === "description")?.reason).toContain("another weak record");
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === OTHER.key,
+      )!;
+      expect(obs.conflicts?.find((c) => c.field === "description")?.reason).toContain(
+        "another weak record",
+      );
     });
     // The edition that wrote the text revises it: an own fact, applied.
     stubDump([{ ...CHAINSAW_22, description: "Edition one, revised." }]);
@@ -884,7 +1219,12 @@ describe("openLibrary.repairDescriptions — stored catalogue text, no network",
     await seedRegistry(t);
     stubDump([
       { ...CHAINSAW_22, description: "Denji is back." },
-      { ...CHAINSAW_22, key: "/books/OL2M", isbn_13: ["9781974766529"], description: "Edition two." },
+      {
+        ...CHAINSAW_22,
+        key: "/books/OL2M",
+        isbn_13: ["9781974766529"],
+        description: "Edition two.",
+      },
     ]);
     await sync(t);
     const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
@@ -903,8 +1243,12 @@ describe("openLibrary.repairDescriptions — stored catalogue text, no network",
     // What production stored before the cleaner: a citation and a collation.
     const storeOld = (key: string, release: Id<"releases">, text: string) =>
       t.run(async (ctx) => {
-        const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === key)!;
-        await ctx.db.patch(obs._id, { snapshot: { ...(obs.snapshot as object), description: text } });
+        const obs = (await ctx.db.query("sourceObservations").collect()).find(
+          (o) => o.sourceRecordId === key,
+        )!;
+        await ctx.db.patch(obs._id, {
+          snapshot: { ...(obs.snapshot as object), description: text },
+        });
         await ctx.db.patch(release, { description: text });
       });
     await storeOld(CHAINSAW_22.key, releaseId!, '"Denji is back."--P. [4] of cover.');
@@ -927,7 +1271,11 @@ describe("openLibrary.repairDescriptions — stored catalogue text, no network",
     expect(await description(releaseId!)).toBe("Denji is back.");
     expect(await description(second)).toBeNull();
     // Rerun: nothing left.
-    expect(await repair()).toMatchObject({ snapshotFixed: 0, releaseUpdated: 0, releaseCleared: 0 });
+    expect(await repair()).toMatchObject({
+      snapshotFixed: 0,
+      releaseUpdated: 0,
+      releaseCleared: 0,
+    });
 
     // A publisher's text is never Open Library's to repair.
     await t.run(async (ctx) => {

@@ -88,7 +88,13 @@ function MonthStrip({ anchor, today }: { anchor: YearMonth; today: YearMonth }) 
   // small read (convex/publisher.ts).
   return (
     <nav className="month-strip" aria-label="Month">
-      <MonthLink month={prev} today={today} className="month-step" label={`Previous month, ${monthTitle(prev)}`} preload="viewport">
+      <MonthLink
+        month={prev}
+        today={today}
+        className="month-step"
+        label={`Previous month, ${monthTitle(prev)}`}
+        preload="viewport"
+      >
         ‹
       </MonthLink>
       <ol className="month-strip-list">
@@ -110,7 +116,12 @@ function MonthStrip({ anchor, today }: { anchor: YearMonth; today: YearMonth }) 
                   {text}
                 </span>
               ) : (
-                <MonthLink month={month} today={today} className="month-strip-item" label={monthTitle(month)}>
+                <MonthLink
+                  month={month}
+                  today={today}
+                  className="month-strip-item"
+                  label={monthTitle(month)}
+                >
                   {text}
                 </MonthLink>
               )}
@@ -118,7 +129,13 @@ function MonthStrip({ anchor, today }: { anchor: YearMonth; today: YearMonth }) 
           );
         })}
       </ol>
-      <MonthLink month={next} today={today} className="month-step" label={`Next month, ${monthTitle(next)}`} preload="viewport">
+      <MonthLink
+        month={next}
+        today={today}
+        className="month-step"
+        label={`Next month, ${monthTitle(next)}`}
+        preload="viewport"
+      >
         ›
       </MonthLink>
       {todayInStrip ? null : (
@@ -132,8 +149,7 @@ function MonthStrip({ anchor, today }: { anchor: YearMonth; today: YearMonth }) 
 
 /**
  * The whole page for one month. `anchor` is the month shown, `today` the
- * current month (UTC, from the loader so SSR and hydration agree); `data` is
- * null when Convex is not configured.
+ * current month (UTC, from the loader so SSR and hydration agree).
  */
 export function PublishersBoard({
   anchor,
@@ -142,9 +158,9 @@ export function PublishersBoard({
 }: {
   anchor: YearMonth;
   today: YearMonth;
-  data: PublishersBoardData | null;
+  data: PublishersBoardData;
 }) {
-  const board = data?.board ?? [];
+  const board = data.board;
   const totalReleases = board.reduce((n, card) => n + card.releases, 0);
   const totalNew = board.reduce((n, card) => n + card.newSeries, 0);
 
@@ -161,19 +177,13 @@ export function PublishersBoard({
         <MonthStrip anchor={anchor} today={today} />
         {board.length > 0 ? (
           <p className="result-count">
-            {plural(board.length, "publisher")} ·{" "}
-            {plural(totalReleases, "release")} ·{" "}
+            {plural(board.length, "publisher")} · {plural(totalReleases, "release")} ·{" "}
             {plural(totalNew, "new series", "new series")}
           </p>
         ) : null}
       </div>
 
-      {data === null ? (
-        <p className="notice">
-          Convex is not configured. Set <code>VITE_CONVEX_URL</code> (see the
-          README) and restart to see what publishers are releasing.
-        </p>
-      ) : board.length === 0 ? (
+      {board.length === 0 ? (
         <p className="notice">
           No publisher has releases on file for {monthTitle(anchor)}.
           {sameMonth(anchor, today) ? null : (
@@ -199,7 +209,7 @@ export function PublishersBoard({
         </section>
       )}
 
-      {data ? <Directory directory={data.directory} anchor={anchor} /> : null}
+      <Directory directory={data.directory} anchor={anchor} />
     </main>
   );
 }
@@ -260,22 +270,18 @@ function BoardCardItem({ card, anchor }: { card: BoardCard; anchor: YearMonth })
           <span className="chip chip--digital">{card.digital} digital</span>
         ) : null}
         {card.newSeries > 0 ? (
-          <span
-            className="chip chip--new"
-            title="Series whose first volume comes out this month"
-          >
+          <span className="chip chip--new" title="Series whose first volume comes out this month">
             {card.newSeries} new series
           </span>
         ) : null}
-        {continuing > 0 ? (
-          <span className="chip">{continuing} continuing</span>
-        ) : null}
+        {continuing > 0 ? <span className="chip">{continuing} continuing</span> : null}
         <Delta card={card} anchor={anchor} />
       </p>
 
       <div className="pub-card-shelf">
         {card.covers.map((release) => {
-          const title = `${release.series.map((s) => s.title).join(" × ")} ${release.volumeLabel}`.trim();
+          const title =
+            `${release.series.map((s) => s.title).join(" × ")} ${release.volumeLabel}`.trim();
           return (
             <Link
               key={release.id}
@@ -362,11 +368,7 @@ function DirectoryLine({
 }) {
   return (
     <span className="pub-dir-line">
-      <Link
-        className="pub-dir-name"
-        to="/publisher/$slug"
-        params={{ slug: entry.slug }}
-      >
+      <Link className="pub-dir-name" to="/publisher/$slug" params={{ slug: entry.slug }}>
         {entry.name}
       </Link>
       {entry.defunct ? <span className="chip pub-dir-defunct">Defunct</span> : null}

@@ -325,7 +325,10 @@ export const createReleaseEntry = v.object({
   price: v.union(money, v.null()),
   publisherId: v.id("publishers"),
   coverage: v.array(
-    v.object({ volumeId: v.id("volumes"), extent: v.union(v.literal("complete"), v.literal("partial")) }),
+    v.object({
+      volumeId: v.id("volumes"),
+      extent: v.union(v.literal("complete"), v.literal("partial")),
+    }),
   ),
   line: v.union(v.object({ name: v.string(), position: nullableString }), v.null()),
   sources: v.array(v.string()),
@@ -367,7 +370,10 @@ export const setCoverageEntry = v.object({
       extent: v.union(v.literal("complete"), v.literal("partial")),
     }),
   ),
-  line: v.union(v.object({ seriesId: v.id("series"), name: v.string(), position: nullableString }), v.null()),
+  line: v.union(
+    v.object({ seriesId: v.id("series"), name: v.string(), position: nullableString }),
+    v.null(),
+  ),
   retireVolumeIds: v.array(v.id("volumes")),
 });
 

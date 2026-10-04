@@ -5,7 +5,11 @@
 declare module "cloudflare:workers" {
   interface R2ObjectBody {
     arrayBuffer(): Promise<ArrayBuffer>;
+    etag: string;
+    /** `etag` quoted, for an ETag header. */
+    httpEtag: string;
     httpMetadata?: { contentType?: string };
+    customMetadata?: Record<string, string>;
   }
   interface R2Bucket {
     get(key: string): Promise<R2ObjectBody | null>;
@@ -17,6 +21,8 @@ declare module "cloudflare:workers" {
       options?: {
         httpMetadata?: { contentType?: string; cacheControl?: string };
         customMetadata?: Record<string, string>;
+        /** Write only if the stored object still has this etag. */
+        onlyIf?: { etagMatches?: string };
       },
     ): Promise<unknown>;
   }

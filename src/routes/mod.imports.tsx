@@ -1,17 +1,21 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { mutationErrorMessage } from "~/lib/errors";
 import { ModGate, ModTools, timestamp } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
+import { slugParams } from "~/lib/slug";
 
 /**
  * The Data Team imports dashboard (spec §6): every Approved
  * Source with its cadence and health flag — an unhealthy source (three
  * consecutive failed runs) is flagged loudly — plus inspectable Import Run
- * history: source, timing, records seen/changed, and errors. Never indexed.
+ * history: source, timing, records seen/changed, and errors, and the Held
+ * Books imports could not place (convex/imports.ts heldBooks), each with
+ * "Prepare placement" (convex/placement.ts). Never indexed.
  */
 export const Route = createFileRoute("/mod/imports")({
   head: () => ({ meta: [{ title: "Imports — MangaDB" }] }),
@@ -19,16 +23,6 @@ export const Route = createFileRoute("/mod/imports")({
 });
 
 function ImportsPage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          The imports dashboard needs a configured Convex deployment (see the
-          README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"
@@ -59,9 +53,8 @@ function Imports() {
       <Breadcrumbs trail={["Imports"]} />
       <h1>Imports</h1>
       <p className="section-hint">
-        Every Approved Source runs unattended on its registry cadence; three
-        consecutive failed runs flag it unhealthy here (and email the
-        Administrator once per transition).
+        Every Approved Source runs unattended on its registry cadence; three consecutive failed runs
+        flag it unhealthy here (and email the Administrator once per transition).
       </p>
       <ModTools current="/mod/imports" />
 
@@ -83,9 +76,7 @@ function Imports() {
                 <strong>{source.name}</strong>
                 {source.healthState === "unhealthy" ? (
                   <>
-                    <span className="chip mod-chip mod-chip--bad">
-                      Unhealthy
-                    </span>
+                    <span className="chip mod-chip mod-chip--bad">Unhealthy</span>
                     <strong className="import-flag">
                       {source.consecutiveFailures} consecutive failed runs
                     </strong>
@@ -113,6 +104,8 @@ function Imports() {
         </ul>
       )}
 
+      <HeldBooks sources={sources ?? []} />
+
       <h2>Run history</h2>
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>
         <label>
@@ -136,11 +129,7 @@ function Imports() {
           {runs.map((run) => (
             <li
               key={run._id}
-              className={
-                run.status === "failed"
-                  ? "import-run mod-flagged"
-                  : "import-run"
-              }
+              className={run.status === "failed" ? "import-run mod-flagged" : "import-run"}
             >
               <div className="import-run-head">
                 <strong>{run.sourceKey}</strong>
@@ -170,7 +159,10 @@ function Imports() {
                   </summary>
                   <ul>
                     {run.errors.map((error, i) => (
-                      <li key={i}>
+                      <li
+                        // biome-ignore lint/suspicious/noArrayIndexKey: each error is a plain string, so a key by position only re-renders in place
+                        key={i}
+                      >
                         <code>{error}</code>
                       </li>
                     ))}
@@ -182,5 +174,191 @@ function Imports() {
         </ol>
       )}
     </main>
+  );
+}
+
+type HoldKind = NonNullable<FunctionArgs<typeof api.imports.heldBooks>["kind"]>;
+
+const HOLD_KINDS = {
+  volumeMissing: "Volume missing",
+  packaging: "Packaging",
+  series: "No single Series",
+  isbn: "ISBN or slot taken",
+  other: "Other",
+} satisfies Record<HoldKind, string>;
+
+function isHoldKind(value: string): value is HoldKind {
+  return value in HOLD_KINDS;
+}
+
+const HELD_PAGE = 25;
+
+type HeldBook = FunctionReturnType<typeof api.imports.heldBooks>["page"][number];
+
+/**
+ * A held book's placement: a link to its open placement Proposal, marked
+ * Draft or awaiting review, and "Prepare placement" unless that Proposal is
+ * in review or the viewer's own Draft. Preparing opens the Draft it writes
+ * (withdrawing another member's unsubmitted Draft) or says why the book
+ * cannot be prepared.
+ */
+function Placement({ book }: { book: HeldBook }) {
+  const prepare = useMutation(api.placement.preparePlacement);
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const open = book.proposal;
+  const marked =
+    open === null ? null : (
+      <>
+        <span className="chip mod-chip mod-chip--info">
+          {open.state === "draft" ? "Placement Draft" : "Placement awaiting review"}
+        </span>
+        <Link to="/mod/proposal/$id" params={{ id: open.id }}>
+          Open the Proposal
+        </Link>
+      </>
+    );
+  if (open !== null && (open.state === "inReview" || open.mine)) {
+    return <div className="mod-actions">{marked}</div>;
+  }
+  const onPrepare = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      const result = await prepare({ observationId: book.observationId });
+      if (result.status === "unavailable") setRefusal(result.reason);
+      else await navigate({ to: "/mod/proposal/$id", params: { id: result.proposalId } });
+    } catch (err) {
+      setRefusal(mutationErrorMessage(err, "Preparing the placement failed."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mod-actions">
+      {marked}
+      <button className="btn btn-sm" type="button" disabled={busy} onClick={() => void onPrepare()}>
+        {busy ? "Preparing…" : "Prepare placement"}
+      </button>
+      {refusal !== null ? <p className="form-error">Cannot prepare: {refusal}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Held Books (CONTEXT.md), most recently held first: what an import
+ * observed but could not place, with the source's own facts, the reason,
+ * and its placement (Placement). Filters by kind and source; pages through
+ * the list on demand.
+ */
+function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> }) {
+  const [kind, setKind] = useState<HoldKind | "">("");
+  const [sourceKey, setSourceKey] = useState("");
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.imports.heldBooks,
+    {
+      ...(kind !== "" ? { kind } : {}),
+      ...(sourceKey !== "" ? { sourceKey } : {}),
+    },
+    { initialNumItems: HELD_PAGE },
+  );
+  const sourceName = (key: string) => sources.find((source) => source.key === key)?.name ?? key;
+
+  return (
+    <section>
+      <h2>Held books</h2>
+      <p className="section-hint">
+        Books a source lists that its import could not place: the Volume they name is missing, their
+        packaging cannot be mapped, no single Series fits, or their ISBN or slot is taken. A book
+        leaves this list once it is linked, an import queues a creation Proposal for it, or its
+        source stops listing it. Prepare placement drafts a Proposal of your own that creates what a
+        missing-Volume or packaging book needs under its Series; the book stays here, marked, until
+        that Proposal is approved. Preparing a book another member has an unsubmitted Draft for
+        withdraws their Draft.
+      </p>
+      <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>
+        <label>
+          Kind
+          <select
+            value={kind}
+            onChange={(e) => setKind(isHoldKind(e.target.value) ? e.target.value : "")}
+          >
+            <option value="">all kinds</option>
+            {Object.entries(HOLD_KINDS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Source
+          <select value={sourceKey} onChange={(e) => setSourceKey(e.target.value)}>
+            <option value="">all sources</option>
+            {sources.map((source) => (
+              <option key={source.key} value={source.key}>
+                {source.key}
+              </option>
+            ))}
+          </select>
+        </label>
+      </form>
+      {status === "LoadingFirstPage" ? (
+        <p className="notice">Loading…</p>
+      ) : results.length === 0 ? (
+        <p className="notice">No held books for this selection.</p>
+      ) : (
+        <ol className="import-runs">
+          {results.map((row) => (
+            <li key={row.holdId} className="import-run">
+              <div className="import-run-head">
+                <strong>{row.title ?? row.sourceRecordId}</strong>
+                <span className="chip mod-chip mod-chip--warn">{HOLD_KINDS[row.kind]}</span>
+                <span>{sourceName(row.sourceKey)}</span>
+                <span>held {timestamp(row.heldAt)}</span>
+                {row.lastSeenAt !== null ? (
+                  <span>last listed {timestamp(row.lastSeenAt)}</span>
+                ) : null}
+              </div>
+              <div className="import-source-meta">
+                {row.isbn13 !== null ? <span>ISBN {row.isbn13}</span> : null}
+                {row.seriesTitle !== null || row.volumeLabel !== null ? (
+                  <span>
+                    proposes {row.seriesTitle ?? "a Series"}
+                    {row.volumeLabel !== null ? `, vol. ${row.volumeLabel}` : ""}
+                  </span>
+                ) : null}
+                {row.series !== null ? (
+                  <Link
+                    to="/series/$publicId/$slug"
+                    params={slugParams(row.series.publicId, row.series.title)}
+                  >
+                    {row.series.title}
+                  </Link>
+                ) : null}
+                {row.url !== null ? (
+                  <a href={row.url} target="_blank" rel="noreferrer">
+                    Source record
+                  </a>
+                ) : null}
+              </div>
+              {row.reason !== null ? <p className="import-hold-reason">{row.reason}</p> : null}
+              <Placement book={row} />
+            </li>
+          ))}
+        </ol>
+      )}
+      {status === "CanLoadMore" || status === "LoadingMore" ? (
+        <button
+          className="btn btn-sm import-holds-more"
+          type="button"
+          disabled={status === "LoadingMore"}
+          onClick={() => loadMore(HELD_PAGE)}
+        >
+          {status === "LoadingMore" ? "Loading…" : "Load more"}
+        </button>
+      ) : null}
+    </section>
   );
 }

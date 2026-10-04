@@ -76,9 +76,7 @@ export async function primaryVolumeSeries(
  * or line Series. Exported for moderation.ts (edit-form display titles).
  */
 export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
-  const storedLine = edition.editionLineId
-    ? await ctx.db.get(edition.editionLineId)
-    : null;
+  const storedLine = edition.editionLineId ? await ctx.db.get(edition.editionLineId) : null;
   const line = storedLine && storedLine.status === "active" ? storedLine : null;
   const lineName = line?.name ?? null;
 
@@ -117,7 +115,11 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const series =
     coverage[0]?.series ??
     (lineSeries && lineSeries.status === "active"
-      ? { publicId: lineSeries.publicId, title: lineSeries.title, mature: lineSeries.mature === true }
+      ? {
+          publicId: lineSeries.publicId,
+          title: lineSeries.title,
+          mature: lineSeries.mature === true,
+        }
       : null);
   const title = editionTitle({
     seriesTitle: series?.title ?? null,
@@ -332,7 +334,10 @@ export const volumePage = query({
     // defunct, so the current licensee's blurb leads), and the Editions they
     // belong to.
     const lendingReleases = [];
-    const lenders = new Map<Id<"editions">, { publicId: number; title: string; publisherName: string | null }>();
+    const lenders = new Map<
+      Id<"editions">,
+      { publicId: number; title: string; publisherName: string | null }
+    >();
     for (const row of coveringRows) {
       const edition = await ctx.db.get(row.editionId);
       if (!edition || edition.status !== "active") continue;
@@ -435,8 +440,7 @@ export const editionPage = query({
         lineName,
         linePosition: edition.linePosition ?? null,
         coverageUnmapped,
-        publisher:
-          publisherLink(publisher),
+        publisher: publisherLink(publisher),
       },
       series,
       /** Collects a Mature Series (lib/mature.ts): art hidden from viewers who have not opted in. */
@@ -540,8 +544,7 @@ export const bundlePage = query({
         pubDate: bundle.pubDate ?? null,
         price: bundle.price ?? null,
         description: bundle.description ?? null,
-        publisher:
-          publisherLink(publisher),
+        publisher: publisherLink(publisher),
         coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
       },
       /** Art hidden from viewers who have not opted in (lib/mature.ts). */

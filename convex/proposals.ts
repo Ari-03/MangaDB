@@ -15,25 +15,26 @@ import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
 import { ConvexError, v } from "convex/values";
 import { components } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import {
-  mutation,
-  query,
-  type MutationCtx,
-  type QueryCtx,
-} from "./_generated/server";
-import {
+  applyClearOverride,
   applyUpdate,
   displayInfo,
   getCanonical,
   insertRevision,
+  requireOverridden,
   revisionsOf,
   validateChanges,
+  writtenBy,
   type FieldChange,
   type RecordRef,
 } from "./moderation";
 import { evidence, recordRef } from "./schema";
 import {
   applyCreatePlan,
+  carriesPlacement,
+  checkOpCount,
+  marksJoin,
   planCreateOps,
   unavailableCreateRefs,
   CREATABLE_TABLES,
@@ -42,7 +43,9 @@ import {
 } from "./lib/proposalCreates";
 import { fail } from "./lib/errors";
 import { fieldDescriptor } from "./lib/moderationFields";
+import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
+import type { ProposalWarning } from "./lib/proposalWarnings";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   applyMerge,
@@ -52,11 +55,9 @@ import {
 } from "./lib/sensitiveOps";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
+import { checkPlacement, placementView } from "./placement";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
-
-/** Bulk-operation cap: one coherent intent, not a mass migration. */
-export const MAX_OPS_PER_PROPOSAL = 25;
 
 // Token buckets per user (Convex rate-limiter component): steady editing
 // never hits these; scripted abuse does.
@@ -79,8 +80,9 @@ type Evidence = Doc<"proposalVersions">["evidence"][number];
 type Draft = NonNullable<Doc<"proposals">["draft"]>;
 
 // What clients submit when drafting: creates carry raw fields (validated by
-// the creation registry); updates carry field/value pairs — the server
-// computes before/after and captures the base Revision.
+// the creation registry); updates carry field/value pairs and a
+// clearOverride names one overridden field — the server computes
+// before/after and captures the base Revision.
 const opInput = v.union(
   v.object({
     kind: v.literal("create"),
@@ -92,6 +94,11 @@ const opInput = v.union(
     kind: v.literal("update"),
     ref: recordRef,
     changes: v.array(v.object({ field: v.string(), value: v.any() })),
+  }),
+  v.object({
+    kind: v.literal("clearOverride"),
+    ref: recordRef,
+    field: v.string(),
   }),
 );
 
@@ -109,31 +116,44 @@ type OpInput =
       kind: "update";
       ref: RecordRef;
       changes: Array<{ field: string; value: unknown }>;
-    };
+    }
+  | { kind: "clearOverride"; ref: RecordRef; field: string };
 
 /**
  * Validate submitted draft ops against the current database and return the
  * stored form: update ops get normalized before/after changes and the
- * record's current base Revision (the staleness anchor); create ops keep
- * their validated raw fields so temp-ID references survive verbatim.
+ * record's current base Revision (the staleness anchor); a clearOverride
+ * must name an editable field the record has overridden and gets the base
+ * Revision too; create ops keep their validated raw fields so temp-ID
+ * references survive verbatim, except a held book's `placement` and the
+ * `joinExisting` mark, which only placement.ts and the importers write. A
+ * record takes one update and any number of clears, but never a change to
+ * a field and the clear of its override together: the change is itself a
+ * human correction, and which of the two applied last would decide the
+ * outcome.
  */
-async function buildDraftOps(
-  ctx: MutationCtx,
-  submitted: OpInput[],
-): Promise<StoredOp[]> {
+async function buildDraftOps(ctx: MutationCtx, submitted: OpInput[]): Promise<StoredOp[]> {
   if (submitted.length === 0) {
     fail("noOps", "A proposal needs at least one operation.");
   }
-  if (submitted.length > MAX_OPS_PER_PROPOSAL) {
-    fail(
-      "bulkCap",
-      `One proposal carries at most ${MAX_OPS_PER_PROPOSAL} operations — split unrelated work.`,
-    );
-  }
+  checkOpCount(submitted.length);
   const ops: StoredOp[] = [];
   const updatedRecords = new Set<string>();
+  const clearedFields = new Set<string>();
   for (const op of submitted) {
     if (op.kind === "create") {
+      if (carriesPlacement(op)) {
+        fail(
+          "invalidCreate",
+          "A held book's placement is prepared from its observation: use Prepare placement.",
+        );
+      }
+      if (marksJoin(op)) {
+        fail(
+          "invalidCreate",
+          "A create op joins an existing record only in a placement or an import: reference the record by ID.",
+        );
+      }
       ops.push({
         kind: "create",
         table: op.table,
@@ -143,26 +163,51 @@ async function buildDraftOps(
       continue;
     }
     const ref = op.ref;
-    if (updatedRecords.has(ref.id as string)) {
-      fail("duplicateRecord", "One proposal may update each record only once.");
+    if (op.kind === "update") {
+      if (updatedRecords.has(ref.id as string)) {
+        fail("duplicateRecord", "One proposal may update each record only once.");
+      }
+      updatedRecords.add(ref.id as string);
+    } else {
+      const key = `${ref.id}:${op.field}`;
+      if (clearedFields.has(key)) {
+        fail("duplicateRecord", "One proposal may clear each override only once.");
+      }
+      clearedFields.add(key);
     }
-    updatedRecords.add(ref.id as string);
     const doc = await getCanonical(ctx, ref);
-    if (!doc) fail("notFound", "A record this proposal updates does not exist.");
+    if (!doc) fail("notFound", "A record this proposal changes does not exist.");
     if (doc.status !== "active" || doc.locked) {
-      fail(
-        "locked",
-        `A record this proposal updates is ${doc.locked ? "locked" : doc.status}.`,
-      );
+      fail("locked", `A record this proposal changes is ${doc.locked ? "locked" : doc.status}.`);
     }
-    const changes = validateChanges(ref.type, doc, op.changes);
     const latest = (await revisionsOf(ctx, ref))[0];
-    ops.push({
-      kind: "update",
-      ref,
-      baseRevisionId: latest?._id,
-      changes,
-    });
+    if (op.kind === "update") {
+      ops.push({
+        kind: "update",
+        ref,
+        baseRevisionId: latest?._id,
+        changes: validateChanges(ref.type, doc, op.changes),
+      });
+    } else {
+      requireOverridden(ref.type, doc, op.field);
+      ops.push({
+        kind: "clearOverride",
+        ref,
+        field: op.field,
+        baseRevisionId: latest?._id,
+      });
+    }
+  }
+  for (const op of ops) {
+    if (op.kind !== "update") continue;
+    for (const { field } of op.changes) {
+      if (clearedFields.has(`${op.ref.id}:${field}`)) {
+        fail(
+          "clearsChangedField",
+          `This proposal changes "${field}" and clears its override: a changed field stays a human correction. Clear the override on its own.`,
+        );
+      }
+    }
   }
   await planOps(ctx, ops);
   return ops;
@@ -213,14 +258,6 @@ async function checkEvidence(ctx: MutationCtx, rows: Evidence[]): Promise<void> 
 
 // ---------- warnings (surfaced at submit, acknowledged explicitly) ----------
 
-export const PROPOSAL_WARNINGS = {
-  newSeries: "Creates a brand-new Series",
-  bulk: "Bulk change: more than 10 operations",
-  partialCoverage: "Declares partial Volume Coverage",
-} as const;
-
-export type ProposalWarning = keyof typeof PROPOSAL_WARNINGS;
-
 function computeWarnings(ops: StoredOp[]): ProposalWarning[] {
   const warnings = new Set<ProposalWarning>();
   if (ops.length > 10) warnings.add("bulk");
@@ -253,16 +290,22 @@ function needsSourceEvidence(ops: StoredOp[]): boolean {
 
 // ---------- staleness ----------
 
-type StaleRecord = { type: string; id: string; reason: "baseChanged" | "unavailable" };
+type StaleRecord = {
+  type: string;
+  id: string;
+  reason: "baseChanged" | "unavailable" | "notOverridden";
+};
 
 /**
  * Which records an op set can no longer be applied to as reviewed: the base
  * Revision moved (someone else's change landed first), the record itself
- * left ordinary editing (hidden, merged, locked, deleted), or a record a
- * create op references by ID — an importer's coverage over existing Volumes,
- * a new volume's series — is no longer active. Spec §5: any base change
- * before approval makes the version stale — explicit rebase and resubmit,
- * never a silent rebase.
+ * left ordinary editing (hidden, merged, locked, deleted), a field a
+ * clearOverride names is no longer overridden, or a record a create op
+ * references by ID — an importer's coverage over existing Volumes, a new
+ * volume's series — is no longer active. Spec §5: any base change before
+ * approval makes the version stale — explicit rebase and resubmit, never a
+ * silent rebase. Each record is listed once per reason, however many of
+ * its ops are stale.
  */
 async function staleRecordsOf(
   ctx: QueryCtx | MutationCtx,
@@ -270,7 +313,7 @@ async function staleRecordsOf(
 ): Promise<StaleRecord[]> {
   const stale: StaleRecord[] = [];
   for (const op of ops) {
-    if (op.kind !== "update") continue;
+    if (op.kind !== "update" && op.kind !== "clearOverride") continue;
     const ref = op.ref;
     const doc = await getCanonical(ctx, ref);
     if (!doc || doc.status !== "active" || doc.locked) {
@@ -280,13 +323,21 @@ async function staleRecordsOf(
     const latest = (await revisionsOf(ctx, ref))[0];
     if ((latest?._id ?? null) !== (op.baseRevisionId ?? null)) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "baseChanged" });
+    } else if (op.kind === "clearOverride" && !(doc.overriddenFields ?? []).includes(op.field)) {
+      stale.push({ type: ref.type, id: ref.id as string, reason: "notOverridden" });
     }
   }
   const creates = ops.filter((op): op is CreateOpInput => op.kind === "create");
   for (const ref of await unavailableCreateRefs(ctx, creates)) {
     stale.push({ ...ref, reason: "unavailable" });
   }
-  return stale;
+  const seen = new Set<string>();
+  return stale.filter(({ type, id, reason }) => {
+    const key = `${type}:${id}:${reason}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // ---------- the Editor lifecycle: draft → submit → withdraw/rebase ----------
@@ -294,7 +345,9 @@ async function staleRecordsOf(
 /**
  * Create or update a Draft proposal — the mutable working copy. Validation
  * runs now so problems surface while drafting, and again at submission and
- * approval. Any data-team member may author proposals.
+ * approval. Any data-team member may author proposals. A Draft that places
+ * a held book is refused (`placementDraft`): its author states it through
+ * placement.setPlacement, which rebuilds its ops from the observation.
  */
 export const saveDraft = mutation({
   args: {
@@ -323,6 +376,12 @@ export const saveDraft = mutation({
       requireAuthor(proposal, user);
       if (proposal.state !== "draft") {
         fail("badState", "Only Draft proposals can be edited.");
+      }
+      if (proposal.draft?.ops.some((op) => op.kind === "create" && carriesPlacement(op))) {
+        fail(
+          "placementDraft",
+          "This Draft places a held book: state its coverage, line and comment in its placement form.",
+        );
       }
       await ctx.db.patch(args.proposalId, { draft });
       return { proposalId: args.proposalId };
@@ -380,7 +439,7 @@ export const submitProposal = mutation({
         stale,
       });
     }
-    await planOps(ctx, draft.ops);
+    await checkPlacement(ctx, args.proposalId, await planOps(ctx, draft.ops));
     for (const op of draft.ops) {
       if (op.kind !== "update") continue;
       const ref = op.ref;
@@ -460,8 +519,10 @@ export const withdrawProposal = mutation({
  * version (or an outdated draft) back to Draft against today's records.
  * Every update op re-anchors on the current base Revision with refreshed
  * before-values; changes the world already made become no-ops and drop out;
- * ops whose record vanished drop entirely (reported back). The author then
- * reviews the rebased draft and resubmits as a new immutable version.
+ * a clearOverride re-anchors too, or drops when its field is no longer
+ * overridden; ops whose record vanished drop entirely (reported back). The
+ * author then reviews the rebased draft and resubmits as a new immutable
+ * version.
  */
 export const rebaseProposal = mutation({
   args: { proposalId: v.id("proposals") },
@@ -479,9 +540,7 @@ export const rebaseProposal = mutation({
       const version = await ctx.db
         .query("proposalVersions")
         .withIndex("by_proposal", (q) =>
-          q
-            .eq("proposalId", args.proposalId)
-            .eq("versionNo", proposal.currentVersionNo),
+          q.eq("proposalId", args.proposalId).eq("versionNo", proposal.currentVersionNo),
         )
         .unique();
       if (!version) fail("notFound", "The submitted version is missing.");
@@ -497,7 +556,7 @@ export const rebaseProposal = mutation({
     const ops: StoredOp[] = [];
     const dropped: string[] = [];
     for (const op of source.ops) {
-      if (op.kind !== "update") {
+      if (op.kind !== "update" && op.kind !== "clearOverride") {
         ops.push(op);
         continue;
       }
@@ -505,6 +564,15 @@ export const rebaseProposal = mutation({
       const doc = await getCanonical(ctx, ref);
       if (!doc || doc.status !== "active" || doc.locked) {
         dropped.push(`${ref.type} is no longer editable`);
+        continue;
+      }
+      if (op.kind === "clearOverride") {
+        if (!(doc.overriddenFields ?? []).includes(op.field)) {
+          dropped.push(`${ref.type} no longer overrides ${op.field}`);
+          continue;
+        }
+        const latest = (await revisionsOf(ctx, ref))[0];
+        ops.push({ ...op, baseRevisionId: latest?._id });
         continue;
       }
       const changes: FieldChange[] = [];
@@ -615,13 +683,20 @@ export const addNote = mutation({
  * Request Changes: the proposal returns to Draft seeded with the reviewed
  * version, alongside a required note telling the author what to fix.
  * Resubmission creates the next immutable version — reviewers never edit a
- * version themselves.
+ * version themselves. Refused for an import's proposal: no one revises an
+ * import's Draft, and no list shows one, so it would strand the book.
  */
 export const requestChanges = mutation({
   args: { proposalId: v.id("proposals"), note: v.string() },
   handler: async (ctx, args) => {
     const user = await requireModerator(ctx);
     const proposal = await requireInReview(ctx, args.proposalId);
+    if (proposal.author.kind === "source") {
+      fail(
+        "importAuthored",
+        "An import wrote this proposal, so no one can revise it: approve it, reject it, or edit the record directly.",
+      );
+    }
     const note = args.note.trim();
     if (note === "") {
       fail("noteRequired", "Tell the author what needs to change.");
@@ -710,11 +785,14 @@ export const rejectProposal = mutation({
 
 /**
  * Approve the exact reviewed version and apply every op in this one
- * mutation — creates in temp-ID order, then updates through the same
- * `applyUpdate` path as direct edits — producing one public Revision per
- * affected record. Stale-base detection blocks approval: instead of
- * applying, the proposal is flagged stale and the caller is told which
- * records moved; the author must explicitly rebase and resubmit.
+ * mutation — creates in temp-ID order, then updates and clearOverrides
+ * through the same `applyUpdate` and `applyClearOverride` paths as direct
+ * edits — producing one public Revision per update or clear. Stale-base
+ * detection blocks approval: instead of applying, the proposal is flagged
+ * stale and the caller is told which records moved; the author must
+ * explicitly rebase and resubmit. A new Release that places a held book
+ * (placement.ts) gets that book's observation linked to it here, which
+ * takes it off the Held Books list and applies its 18+ evidence.
  */
 export const approveProposal = mutation({
   args: { proposalId: v.id("proposals") },
@@ -733,8 +811,10 @@ export const approveProposal = mutation({
     }
 
     // Approval re-runs validation (spec §5) before anything is written; a
-    // throw here rolls back the whole approval.
+    // throw here rolls back the whole approval. A held book's placement is
+    // checked against the book as it is now (placement.ts checkPlacement).
     const plans = await planOps(ctx, version.ops);
+    await checkPlacement(ctx, args.proposalId, plans);
 
     const temp = new Map<string, string>();
     const created: Array<{
@@ -750,6 +830,12 @@ export const approveProposal = mutation({
       approvedBy: user._id,
       comment: version.changeComment,
     };
+    // The stale gate checked every op's base before anything was written; a
+    // record this approval has already revised is checked against that
+    // Revision instead, so its update and clears apply in op order.
+    const revisedHere = new Map<string, Id<"revisions">>();
+    const baseOf = (op: { ref: RecordRef; baseRevisionId?: Id<"revisions"> }) =>
+      revisedHere.get(op.ref.id) ?? op.baseRevisionId ?? null;
     let planCursor = 0;
     for (const op of version.ops) {
       if (op.kind === "create") {
@@ -758,6 +844,14 @@ export const approveProposal = mutation({
         const record = await applyCreatePlan(ctx, plan, temp);
         // A joined existing record was not created: no creation Revision.
         if (record.existing) continue;
+        if (
+          plan.table === "releases" &&
+          plan.placement !== undefined &&
+          record.ref.type === "release"
+        ) {
+          // Linking clears the hold and applies the book's 18+ evidence.
+          await linkObservation(ctx, plan.placement.observationId, record.ref);
+        }
         const changes = Object.entries(record.revisionFields)
           .filter(([, value]) => value !== undefined)
           .map(([field, after]) => ({ field, after }));
@@ -780,33 +874,31 @@ export const approveProposal = mutation({
         const { revisionId } = await applyUpdate(ctx, {
           ref,
           doc: doc!,
-          baseRevisionId: op.baseRevisionId ?? null,
+          baseRevisionId: baseOf(op),
           changes,
           proposalId: args.proposalId,
           author: proposal.author,
           approvedBy: user._id,
           comment: version.changeComment,
         });
+        revisedHere.set(ref.id, revisionId);
         revisionIds.push(revisionId);
       } else if (op.kind === "clearOverride") {
-        return fail(
-          "unsupportedOp",
-          `"${op.kind}" operations are not approvable yet.`,
-        );
+        const { revisionId } = await applyClearOverride(ctx, {
+          ref: op.ref,
+          field: op.field,
+          baseRevisionId: baseOf(op),
+          meta,
+        });
+        revisedHere.set(op.ref.id, revisionId);
+        revisionIds.push(revisionId);
       } else {
         // Sensitive catalog operations: the same apply
         // functions as the direct Moderator mutations (sensitiveOps.ts) —
         // each validates the record's current state and throws (rolling the
         // whole approval back) when the world moved.
         if (op.kind === "merge") {
-          revisionIds.push(
-            ...(await applyMerge(
-              ctx,
-              op.survivor,
-              op.merged,
-              meta,
-            )),
-          );
+          revisionIds.push(...(await applyMerge(ctx, op.survivor, op.merged, meta)));
         } else {
           revisionIds.push(...(await SINGLE_RECORD_OPS[op.kind](ctx, op.ref, meta)));
         }
@@ -902,10 +994,14 @@ async function describeCreate(
               "publishers",
               (doc: Doc<"publishers">) => `publisher "${doc.name}"`,
             );
-      const coverage = Array.isArray(fields.volumeCoverage)
-        ? fields.volumeCoverage.length
-        : 0;
+      const coverage = Array.isArray(fields.volumeCoverage) ? fields.volumeCoverage.length : 0;
       tempLabels.set(op.tempId, "the new edition");
+      if (fields.coverageUnmapped === true) {
+        return `Create an edition at ${publisher} as Unmapped Packaging of its line`;
+      }
+      if (coverage === 0) {
+        return `Create an edition at ${publisher} whose coverage is not stated yet`;
+      }
       return `Create an edition at ${publisher} covering ${coverage} volume${coverage === 1 ? "" : "s"}`;
     }
     case "releases": {
@@ -918,7 +1014,8 @@ async function describeCreate(
       if (fields.binding) bits.push(String(fields.binding));
       if (fields.isbn13) bits.push(`ISBN ${String(fields.isbn13)}`);
       tempLabels.set(op.tempId, "the new release");
-      return `Create a ${bits.join(", ")} release of ${edition}`;
+      const placed = fields.placement === undefined ? "" : ", linked to the held book it places";
+      return `Create a ${bits.join(", ")} release of ${edition}${placed}`;
     }
     default:
       return `Create a ${op.table} record`;
@@ -928,9 +1025,13 @@ async function describeCreate(
 /**
  * Render an op set for review: grouped before/after per record, the base
  * Revision each update anchors on, per-record staleness, and structural
- * summaries for creates (the temp-ID graph made readable).
+ * summaries for creates (the temp-ID graph made readable). Staleness and a
+ * clear's kept value compare against the live record, so they are reported
+ * only for `live` ops (the working copy or current version of a Proposal
+ * still in Draft or review); a decided Proposal's approval itself moved the
+ * base, and the live value is not what it reviewed.
  */
-async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
+async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boolean) {
   const rendered = [];
   const tempLabels = new Map<string, string>();
   for (const op of ops) {
@@ -945,9 +1046,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
     } else if (op.kind === "update") {
       const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
-      const title = doc
-        ? (await displayInfo(ctx, ref.type, doc)).title
-        : "(missing record)";
+      const title = doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)";
       const latest = (await revisionsOf(ctx, ref))[0];
       const base = op.baseRevisionId ? await ctx.db.get(op.baseRevisionId) : null;
       rendered.push({
@@ -956,14 +1055,40 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
         recordId: ref.id as string,
         recordTitle: title,
         changes: op.changes,
-        base: base
-          ? { seq: base.seq, comment: base.comment }
-          : { seq: 0, comment: null },
+        base: base ? { seq: base.seq, comment: base.comment } : { seq: 0, comment: null },
         stale:
-          !doc ||
-          doc.status !== "active" ||
-          Boolean(doc.locked) ||
-          (latest?._id ?? null) !== (op.baseRevisionId ?? null),
+          live &&
+          (!doc ||
+            doc.status !== "active" ||
+            Boolean(doc.locked) ||
+            (latest?._id ?? null) !== (op.baseRevisionId ?? null)),
+      });
+    } else if (op.kind === "clearOverride") {
+      const ref = op.ref;
+      const doc = await getCanonical(ctx, ref);
+      const history = await revisionsOf(ctx, ref);
+      const base = op.baseRevisionId ? await ctx.db.get(op.baseRevisionId) : null;
+      rendered.push({
+        kind: "clearOverride" as const,
+        recordType: ref.type,
+        recordId: ref.id as string,
+        recordTitle: doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)",
+        field: op.field,
+        fieldLabel: fieldDescriptor(ref.type, op.field)?.label ?? op.field,
+        kept: live
+          ? {
+              value: doc ? (doc as Record<string, unknown>)[op.field] : undefined,
+              writtenBy: writtenBy(history, op.field),
+            }
+          : null,
+        base: base ? { seq: base.seq, comment: base.comment } : { seq: 0, comment: null },
+        stale:
+          live &&
+          (!doc ||
+            doc.status !== "active" ||
+            Boolean(doc.locked) ||
+            !(doc.overriddenFields ?? []).includes(op.field) ||
+            (history[0]?._id ?? null) !== (op.baseRevisionId ?? null)),
       });
     } else if (op.kind === "merge") {
       rendered.push({
@@ -981,20 +1106,16 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
 }
 
 /** How a summary line names each single-record op. */
-const OP_VERBS: Record<SingleRecordOp | "clearOverride", string> = {
+const OP_VERBS: Record<SingleRecordOp, string> = {
   hide: "Hide",
   restore: "Restore",
   split: "Split out",
   lock: "Lock",
   unlock: "Unlock",
-  clearOverride: "Clear an override on",
 };
 
 /** `type "title"` label for a sensitive-op summary line. */
-async function refLabel(
-  ctx: QueryCtx | MutationCtx,
-  ref: RecordRef,
-): Promise<string> {
+async function refLabel(ctx: QueryCtx | MutationCtx, ref: RecordRef): Promise<string> {
   const doc = await getCanonical(ctx, ref);
   const title = doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)";
   return `${ref.type} "${title}"`;
@@ -1054,8 +1175,7 @@ export const reviewQueue = query({
     for (const proposal of proposals) {
       const version = await currentVersionOf(ctx, proposal);
       if (!version) continue;
-      const stale =
-        proposal.stale || (await staleRecordsOf(ctx, version.ops)).length > 0;
+      const stale = proposal.stale || (await staleRecordsOf(ctx, version.ops)).length > 0;
       rows.push({
         proposalId: proposal._id as string,
         versionNo: proposal.currentVersionNo,
@@ -1082,16 +1202,12 @@ export const reviewQueue = query({
       }
       if (args.authorKind === "humans" && row.author.kind !== "user") return false;
       if (args.author) {
-        const name =
-          row.author.kind === "user" ? row.author.username : row.author.sourceKey;
+        const name = row.author.kind === "user" ? row.author.username : row.author.sourceKey;
         if (name !== args.author) return false;
       }
       if (args.staleOnly && !row.stale) return false;
       if (args.warningsOnly && row.warnings.length === 0) return false;
-      if (
-        args.minAgeHours !== undefined &&
-        row.ageMs < args.minAgeHours * 60 * 60 * 1000
-      ) {
+      if (args.minAgeHours !== undefined && row.ageMs < args.minAgeHours * 60 * 60 * 1000) {
         return false;
       }
       return true;
@@ -1119,14 +1235,16 @@ export const proposalDetail = query({
       .collect();
     versions.sort((a, b) => a.versionNo - b.versionNo);
 
+    const undecided = proposal.state === "draft" || proposal.state === "inReview";
     const renderedVersions = [];
     for (const version of versions) {
+      const current = version.versionNo === proposal.currentVersionNo;
       renderedVersions.push({
         versionNo: version.versionNo,
-        current: version.versionNo === proposal.currentVersionNo,
+        current,
         changeComment: version.changeComment,
         warnings: version.warningsAcknowledged ?? [],
-        ops: await renderOps(ctx, version.ops),
+        ops: await renderOps(ctx, version.ops, undecided && current),
         evidence: await renderEvidence(ctx, version.evidence),
         submittedAt: version._creationTime,
       });
@@ -1147,9 +1265,7 @@ export const proposalDetail = query({
       });
     }
 
-    const current = versions.find(
-      (version) => version.versionNo === proposal.currentVersionNo,
-    );
+    const current = versions.find((version) => version.versionNo === proposal.currentVersionNo);
     const stale =
       proposal.state === "inReview" && current
         ? (await staleRecordsOf(ctx, current.ops)).length > 0
@@ -1168,19 +1284,18 @@ export const proposalDetail = query({
       versions: renderedVersions,
       draft: proposal.draft
         ? {
-            ops: await renderOps(ctx, proposal.draft.ops),
+            ops: await renderOps(ctx, proposal.draft.ops, undecided),
             evidence: await renderEvidence(ctx, proposal.draft.evidence),
             comment: proposal.draft.comment,
             warnings: computeWarnings(proposal.draft.ops),
           }
         : null,
       notes: renderedNotes,
+      // A held book's placement (placement.ts): the Draft's, else the current version's.
+      placement: await placementView(ctx, proposal.draft?.ops ?? current?.ops ?? []),
       viewer: {
-        isAuthor:
-          proposal.author.kind === "user" &&
-          proposal.author.userId === viewer._id,
-        canReview:
-          viewer.role === "moderator" || viewer.role === "administrator",
+        isAuthor: proposal.author.kind === "user" && proposal.author.userId === viewer._id,
+        canReview: viewer.role === "moderator" || viewer.role === "administrator",
       },
     };
   },

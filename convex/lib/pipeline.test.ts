@@ -39,7 +39,10 @@ const CITATION = {
 type Shared = "sourceKey" | "citation" | "importComment" | "tagBootstrapUnreviewed" | "now";
 
 /** createCanonicalRecords with the shared fields defaulted; a case overrides the source or the tag. */
-const create = (ctx: MutationCtx, args: Omit<CreationArgs, Shared> & Partial<Pick<CreationArgs, Shared>>) =>
+const create = (
+  ctx: MutationCtx,
+  args: Omit<CreationArgs, Shared> & Partial<Pick<CreationArgs, Shared>>,
+) =>
   createCanonicalRecords(ctx, {
     sourceKey: "prh",
     citation: CITATION,
@@ -208,6 +211,64 @@ describe("queueCreationProposal", () => {
         before.find((volume) => volume.label === "1")!._id,
         before.find((volume) => volume.label === "2")!._id,
         after.find((volume) => volume.label === "3")!._id,
+      ]);
+    });
+  });
+
+  it("queues no placement marks: an import's Volume and Edition never join records created meanwhile", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Noragami", ["1"]);
+      const volume1 = (await ctx.db.query("volumes").collect())[0]!._id;
+      const proposalId = await queueCreationProposal(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, "omnibus"),
+        seriesId,
+        seriesTitle: "Noragami",
+        labels: ["1", "2"],
+        editionLine: { name: "Omnibus", position: "1" },
+        release: { format: "physical", publisherSlug: "kodansha", isbn13: "9781646510001" },
+        comment: "Review omnibus coverage",
+        now: 1,
+      });
+      const version = (await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique())!;
+      expect(version.ops).toEqual([
+        { kind: "create", table: "volumes", tempId: "volume-2", fields: { seriesId, label: "2" } },
+        {
+          kind: "create",
+          table: "editionLines",
+          tempId: "edition-line",
+          fields: { seriesId, publisherSlug: "kodansha", name: "Omnibus", joinExisting: true },
+        },
+        {
+          kind: "create",
+          table: "editions",
+          tempId: "edition",
+          fields: {
+            publisherSlug: "kodansha",
+            editionLineId: "edition-line",
+            linePosition: "1",
+            volumeCoverage: [
+              { volume: volume1, order: 1, extent: "complete" },
+              { volume: "volume-2", order: 2, extent: "complete" },
+            ],
+          },
+        },
+        {
+          kind: "create",
+          table: "releases",
+          tempId: "release",
+          fields: {
+            editionId: "edition",
+            format: "physical",
+            language: "en",
+            isbn13: "9781646510001",
+          },
+        },
       ]);
     });
   });
@@ -565,7 +626,10 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
           publisher: { name: "Kodansha", slug: "kodansha" },
         },
       });
-      for (const patch of [{ status: "hidden" as const }, { status: "active" as const, locked: true }]) {
+      for (const patch of [
+        { status: "hidden" as const },
+        { status: "active" as const, locked: true },
+      ]) {
         await ctx.db.patch(early.bundleId, patch);
         await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
         expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(0);
@@ -596,13 +660,13 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
       const one = await vol("1", "9780000000019");
       const three = await vol("3", "9780000000033");
       await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
-      expect(
-        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
-      ).toEqual([
-        [one, 1],
-        [two, 2],
-        [three, 3],
-      ]);
+      expect((await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order])).toEqual(
+        [
+          [one, 1],
+          [two, 2],
+          [three, 3],
+        ],
+      );
     });
   });
 
@@ -650,13 +714,13 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
 
       const one = await vol("1", "9780000000019");
       await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
-      expect(
-        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
-      ).toEqual([
-        [three, 1],
-        [two, 2],
-        [one, 3],
-      ]);
+      expect((await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order])).toEqual(
+        [
+          [three, 1],
+          [two, 2],
+          [one, 3],
+        ],
+      );
     });
   });
 
@@ -684,13 +748,13 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
 
       const one = await vol("1", "9780000000019");
       await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
-      expect(
-        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
-      ).toEqual([
-        [bonus, 1],
-        [two, 2],
-        [one, 3],
-      ]);
+      expect((await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order])).toEqual(
+        [
+          [bonus, 1],
+          [two, 2],
+          [one, 3],
+        ],
+      );
     });
   });
 });
@@ -796,7 +860,10 @@ describe("createCanonicalRecords — repairs stand", () => {
       const hidden = await publishedSeries(ctx, "Cells at Work! Picture Book", vertical);
       await ctx.db.patch(hidden, { status: "hidden" });
 
-      const result = await create(ctx, bookArgs(await observation(ctx, "9798888778449"), "kodansha"));
+      const result = await create(
+        ctx,
+        bookArgs(await observation(ctx, "9798888778449"), "kodansha"),
+      );
       expect(result.blocked).toBeUndefined();
       expect(result.seriesId).not.toBe(hidden);
       expect(result.releaseId).toBeDefined();

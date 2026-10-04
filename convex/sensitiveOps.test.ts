@@ -10,7 +10,18 @@ import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { insertEdition, insertPublisher, insertSeries, insertVolume } from "./test.factories";
-import { EDITOR, PLAIN, alice, bob, carol, dave, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import {
+  EDITOR,
+  PLAIN,
+  alice,
+  bob,
+  carol,
+  dave,
+  makeT,
+  seedTeam,
+  signedIn,
+  type TestT,
+} from "./test.helpers";
 import { insertBook, mergeAs, moderate, splitAs } from "./test.moderation";
 
 async function userIdOf(t: TestT, username: string): Promise<Id<"users">> {
@@ -46,7 +57,11 @@ async function seedMergeFixture(t: TestT) {
         publisherId,
         seriesId,
         volumeId,
-        release: { binding: "paperback", isbn13, pubDate: { year: 2026, month: 3, day: 10, sort: 20260310 } },
+        release: {
+          binding: "paperback",
+          isbn13,
+          pubDate: { year: 2026, month: 3, day: 10, sort: 20260310 },
+        },
       });
       return { volumeId, ...book };
     };
@@ -100,7 +115,6 @@ async function seedMergeFixture(t: TestT) {
     await ctx.db.insert("volumeProgress", {
       userId: daveId,
       volumeId: loserBook.volumeId,
-      seriesId: loser,
       readCount: 2,
     });
 
@@ -137,9 +151,9 @@ describe("sensitiveOps — authorization, reason, and confirmation", () => {
       ).rejects.toMatchObject({ data: { code: "forbidden" } });
     }
     // A reason is required.
-    await expect(
-      moderate(t, "hideRecord", ref, "   "),
-    ).rejects.toMatchObject({ data: { code: "reasonRequired" } });
+    await expect(moderate(t, "hideRecord", ref, "   ")).rejects.toMatchObject({
+      data: { code: "reasonRequired" },
+    });
     // The impact preview must be explicitly confirmed.
     await expect(
       asMod(t).mutation(api.sensitiveOps.hideRecord, {
@@ -169,7 +183,7 @@ describe("sensitiveOps — authorization, reason, and confirmation", () => {
     expect(form!.splitAvailable).toBe(false);
     const counts = Object.fromEntries(form!.impact.map((r) => [r.label, r.count]));
     expect(counts["Source observations"]).toBe(1);
-    expect(counts["Volumes"]).toBe(1);
+    expect(counts.Volumes).toBe(1);
     expect(counts["Relationship edges"]).toBe(2);
     expect(counts["User series states (follows, reading, visibility)"]).toBe(2);
     expect(counts["Volume read counts"]).toBe(1);
@@ -236,14 +250,14 @@ describe("sensitiveOps — hide and restore", () => {
     const { survivor } = await seedMergeFixture(t);
     const ref = { type: "series" as const, id: survivor };
 
-    await expect(
-      moderate(t, "restoreRecord", ref, "Not hidden."),
-    ).rejects.toMatchObject({ data: { code: "badState" } });
+    await expect(moderate(t, "restoreRecord", ref, "Not hidden.")).rejects.toMatchObject({
+      data: { code: "badState" },
+    });
 
     await moderate(t, "hideRecord", ref, "Hide once.");
-    await expect(
-      moderate(t, "hideRecord", ref, "Hide twice."),
-    ).rejects.toMatchObject({ data: { code: "badState" } });
+    await expect(moderate(t, "hideRecord", ref, "Hide twice.")).rejects.toMatchObject({
+      data: { code: "badState" },
+    });
   });
 });
 
@@ -265,26 +279,22 @@ describe("sensitiveOps — temporary locks", () => {
     ).rejects.toMatchObject({ data: { code: "locked" } });
     await expect(
       t.withIdentity({ subject: EDITOR }).mutation(api.proposals.saveDraft, {
-        ops: [
-          { kind: "update", ref, changes: [{ field: "title", value: "Beta" }] },
-        ],
+        ops: [{ kind: "update", ref, changes: [{ field: "title", value: "Beta" }] }],
         evidence: [],
         comment: "Nope.",
       }),
     ).rejects.toMatchObject({ data: { code: "locked" } });
 
     // Locking twice is refused; unlock lifts the freeze.
-    await expect(
-      moderate(t, "lockRecord", ref, "Again."),
-    ).rejects.toMatchObject({ data: { code: "badState" } });
+    await expect(moderate(t, "lockRecord", ref, "Again.")).rejects.toMatchObject({
+      data: { code: "badState" },
+    });
     await moderate(t, "unlockRecord", ref, "Dispute resolved.");
     const edit = await asMod(t).mutation(api.moderation.submitDirectEdit, {
       ref,
       baseRevisionId: await t.run(async (ctx) => {
         const revisions = await ctx.db.query("revisions").collect();
-        return revisions
-          .filter((r) => r.ref.id === survivor)
-          .sort((a, b) => b.seq - a.seq)[0]?._id;
+        return revisions.filter((r) => r.ref.id === survivor).sort((a, b) => b.seq - a.seq)[0]?._id;
       }),
       changes: [{ field: "title", value: "Beta" }],
       comment: "Resolved rename.",
@@ -342,7 +352,8 @@ describe("sensitiveOps — merge", () => {
       readingStatus: "planToRead",
     });
     const progress = await t.run((ctx) => ctx.db.query("volumeProgress").collect());
-    expect(progress[0]).toMatchObject({ seriesId: survivor, readCount: 2 });
+    expect(progress[0]).toMatchObject({ volumeId: fixture.loserBook.volumeId, readCount: 2 });
+    expect(progress[0]?.seriesId).toBeUndefined();
 
     // The loser's volume joined the survivor's reading path after its own.
     const movedVolume = await t.run((ctx) => ctx.db.get(fixture.loserBook.volumeId));
@@ -389,7 +400,12 @@ describe("sensitiveOps — merge", () => {
       mergeAs(t, { type: "series", id: survivor }, { type: "series", id: survivor }, "Self."),
     ).rejects.toMatchObject({ data: { code: "badMerge" } });
     await expect(
-      mergeAs(t, { type: "series", id: survivor }, { type: "volume", id: loserBook.volumeId }, "Cross-type."),
+      mergeAs(
+        t,
+        { type: "series", id: survivor },
+        { type: "volume", id: loserBook.volumeId },
+        "Cross-type.",
+      ),
     ).rejects.toMatchObject({ data: { code: "badMerge" } });
 
     await moderate(t, "hideRecord", { type: "series", id: loser }, "Hidden first.");
@@ -456,7 +472,12 @@ describe("sensitiveOps — split", () => {
 
     const before = await t.run((ctx) => ctx.db.query("userSeriesStates").collect());
 
-    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser }, "Mistaken duplicate.");
+    await mergeAs(
+      t,
+      { type: "series", id: survivor },
+      { type: "series", id: loser },
+      "Mistaken duplicate.",
+    );
 
     // Restore is not the reversal of a merge.
     await expect(
@@ -501,25 +522,19 @@ describe("sensitiveOps — split", () => {
           readingStatus: s.readingStatus,
           following: s.following,
         }))
-        .sort((a, b) =>
-          `${a.userId}${a.seriesId}`.localeCompare(`${b.userId}${b.seriesId}`),
-        );
+        .sort((a, b) => `${a.userId}${a.seriesId}`.localeCompare(`${b.userId}${b.seriesId}`));
     expect(shape(states)).toEqual(shape(before));
 
     // Both relationship edges exist again with their original endpoints.
     const edges = await t.run((ctx) => ctx.db.query("seriesRelationships").collect());
     expect(edges).toHaveLength(2);
-    expect(
-      edges.some((e) => e.fromSeriesId === loser && e.toSeriesId === survivor),
-    ).toBe(true);
-    expect(
-      edges.some((e) => e.fromSeriesId === loser && e.toSeriesId === bystander),
-    ).toBe(true);
+    expect(edges.some((e) => e.fromSeriesId === loser && e.toSeriesId === survivor)).toBe(true);
+    expect(edges.some((e) => e.fromSeriesId === loser && e.toSeriesId === bystander)).toBe(true);
 
     // The manifest is consumed: a second split has nothing to reverse.
-    await expect(
-      splitAs(t, { type: "series", id: loser }, "Again."),
-    ).rejects.toMatchObject({ data: { code: "badState" } });
+    await expect(splitAs(t, { type: "series", id: loser }, "Again.")).rejects.toMatchObject({
+      data: { code: "badState" },
+    });
     const manifests = await t.run((ctx) => ctx.db.query("mergeManifests").collect());
     expect(manifests).toHaveLength(1);
     expect(manifests[0].reversedAt).toBeDefined();
@@ -529,7 +544,12 @@ describe("sensitiveOps — split", () => {
     const t = makeT();
     const fixture = await seedMergeFixture(t);
     const { survivor, loser } = fixture;
-    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser }, "Merge in two chunks.");
+    await mergeAs(
+      t,
+      { type: "series", id: survivor },
+      { type: "series", id: loser },
+      "Merge in two chunks.",
+    );
     // A second chunk of the same merge (same Proposal) moved an Edition from
     // one publisher to another, as the data repair's chunked merge does.
     const { editionId, from } = await t.run(async (ctx) => {
@@ -541,7 +561,9 @@ describe("sensitiveOps — split", () => {
         loserRef: first!.loserRef,
         survivorRef: first!.survivorRef,
         proposalId: first!.proposalId,
-        repointed: [{ table: "editions", docId: editionId, field: "publisherId", before: from, after: to }],
+        repointed: [
+          { table: "editions", docId: editionId, field: "publisherId", before: from, after: to },
+        ],
         removed: [],
         inserted: [],
       });
@@ -561,7 +583,12 @@ describe("sensitiveOps — split", () => {
     const fixture = await seedMergeFixture(t);
     const { survivor, loser, bystander } = fixture;
 
-    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser }, "Merge first.");
+    await mergeAs(
+      t,
+      { type: "series", id: survivor },
+      { type: "series", id: loser },
+      "Merge first.",
+    );
     // Someone re-links the observation to the bystander before the split.
     await t.run((ctx) =>
       ctx.db.patch(fixture.observationId, {

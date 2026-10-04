@@ -14,10 +14,13 @@ import type { WithoutSystemFields } from "convex/server";
 
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { PACK_SPAN, type PackEntry } from "./lib/seriesStats";
 
 type Fields<T extends TableNames> = WithoutSystemFields<Doc<T>>;
 /** A table's fields: those in `Required` must be given, the rest default. */
-export type Overrides<T extends TableNames, Required extends keyof Fields<T> = never> = Partial<Fields<T>> &
+export type Overrides<T extends TableNames, Required extends keyof Fields<T> = never> = Partial<
+  Fields<T>
+> &
   Pick<Fields<T>, Required>;
 
 let lastPublicId = 1_000_000;
@@ -26,7 +29,12 @@ const nextPublicId = () => ++lastPublicId;
 /** A Publisher. `name` defaults to the slug or "Publisher N"; `slug` to the name, slugified. */
 export async function insertPublisher(ctx: MutationCtx, fields: Overrides<"publishers"> = {}) {
   const name = fields.name ?? fields.slug ?? `Publisher ${nextPublicId()}`;
-  const slug = fields.slug ?? name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const slug =
+    fields.slug ??
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
   return await ctx.db.insert("publishers", { status: "active", ...fields, name, slug });
 }
 
@@ -66,7 +74,10 @@ export async function insertEditionLine(
 }
 
 /** An active Edition. Its coverage is separate rows (insertCoverage). */
-export async function insertEdition(ctx: MutationCtx, fields: Overrides<"editions", "publisherId">) {
+export async function insertEdition(
+  ctx: MutationCtx,
+  fields: Overrides<"editions", "publisherId">,
+) {
   return await ctx.db.insert("editions", { status: "active", publicId: nextPublicId(), ...fields });
 }
 
@@ -83,16 +94,27 @@ export async function insertRelease(
   ctx: MutationCtx,
   fields: Overrides<"releases", "editionId" | "publisherId" | "seriesIds">,
 ) {
-  return await ctx.db.insert("releases", { status: "active", format: "physical", language: "en", ...fields });
+  return await ctx.db.insert("releases", {
+    status: "active",
+    format: "physical",
+    language: "en",
+    ...fields,
+  });
 }
 
 /** An active Release Variant, named "Variant" unless given. */
-export async function insertVariant(ctx: MutationCtx, fields: Overrides<"releaseVariants", "releaseId">) {
+export async function insertVariant(
+  ctx: MutationCtx,
+  fields: Overrides<"releaseVariants", "releaseId">,
+) {
   return await ctx.db.insert("releaseVariants", { status: "active", name: "Variant", ...fields });
 }
 
 /** An active Release Bundle named "Box Set N", with no format unless given. */
-export async function insertBundle(ctx: MutationCtx, fields: Overrides<"releaseBundles", "publisherId">) {
+export async function insertBundle(
+  ctx: MutationCtx,
+  fields: Overrides<"releaseBundles", "publisherId">,
+) {
   const publicId = fields.publicId ?? nextPublicId();
   return await ctx.db.insert("releaseBundles", {
     status: "active",
@@ -111,7 +133,10 @@ export async function insertBundleMember(
     .query("bundleMemberships")
     .withIndex("by_bundle", (q) => q.eq("bundleId", fields.bundleId))
     .collect();
-  return await ctx.db.insert("bundleMemberships", { order: (members.at(-1)?.order ?? 0) + 1, ...fields });
+  return await ctx.db.insert("bundleMemberships", {
+    order: (members.at(-1)?.order ?? 0) + 1,
+    ...fields,
+  });
 }
 
 /** A Source Observation: unlinked, not withdrawn, seen at 0, with an empty snapshot unless given. */
@@ -119,7 +144,40 @@ export async function insertObservation(
   ctx: MutationCtx,
   fields: Overrides<"sourceObservations", "sourceKey" | "sourceRecordId">,
 ) {
-  return await ctx.db.insert("sourceObservations", { snapshot: {}, lastSeenAt: 0, withdrawn: false, ...fields });
+  return await ctx.db.insert("sourceObservations", {
+    snapshot: {},
+    lastSeenAt: 0,
+    withdrawn: false,
+    ...fields,
+  });
+}
+
+/**
+ * Library pack 0 with an entry for each of its PACK_SPAN publicIds, about
+ * 1 KB each, so the pack is 1.02 MB, near the 1 MiB document limit
+ * (production's run 470 to 500 KB): the most one projection rewrites.
+ */
+export async function insertFullPack(ctx: MutationCtx) {
+  const entries = Array.from(
+    { length: PACK_SPAN },
+    (_, publicId): PackEntry => ({
+      publicId,
+      titleSort: `series ${publicId}`,
+      searchKey: `series ${publicId} `.padEnd(720, "its title and alternative titles "),
+      sourceStatus: "ongoing",
+      publishers: [{ name: "Kodansha", slug: "kodansha" }],
+      hasPhysical: true,
+      hasDigital: true,
+      volumeCount: 12,
+      latestReleaseSort: 20260101,
+      nextReleaseSort: 20261101,
+      lastReleasedSort: 20260101,
+      followers: 3,
+      collectors: 7,
+      ratingRank: 0.5,
+    }),
+  );
+  return await ctx.db.insert("seriesStatsPacks", { block: 0, entries });
 }
 
 /**
@@ -138,7 +196,11 @@ export async function insertSourceRevision(
     .query("revisions")
     .withIndex("by_record", (q) => q.eq("ref.type", args.ref.type).eq("ref.id", args.ref.id))
     .collect();
-  const proposalId = await ctx.db.insert("proposals", { author, state: "approved", currentVersionNo: 1 });
+  const proposalId = await ctx.db.insert("proposals", {
+    author,
+    state: "approved",
+    currentVersionNo: 1,
+  });
   const revisionId = await ctx.db.insert("revisions", {
     seq: history.length + 1,
     comment: `Imported from ${sourceKey}.`,
@@ -153,7 +215,9 @@ export async function insertSourceRevision(
  * A seriesStats row (not inserted): an empty Series' figures, `titleSort`
  * the lower-cased title and `letter` its first letter (or "#").
  */
-export function seriesStatsRow(fields: Overrides<"seriesStats", "seriesId" | "publicId" | "title">): Fields<"seriesStats"> {
+export function seriesStatsRow(
+  fields: Overrides<"seriesStats", "seriesId" | "publicId" | "title">,
+): Fields<"seriesStats"> {
   const titleSort = fields.titleSort ?? fields.title.toLowerCase();
   const first = titleSort.charAt(0);
   return {
@@ -198,10 +262,16 @@ export async function seedCatalog(ctx: MutationCtx, overrides: CatalogOverrides 
   const publisherId = await catalogPublisher(ctx, overrides.publisher);
   const seriesId = await insertSeries(ctx, overrides.series);
   const volumeId = await insertVolume(ctx, { seriesId, ...overrides.volume });
-  const editionLineId = overrides.line && (await insertEditionLine(ctx, { seriesId, publisherId, ...overrides.line }));
+  const editionLineId =
+    overrides.line && (await insertEditionLine(ctx, { seriesId, publisherId, ...overrides.line }));
   const editionId = await insertEdition(ctx, { publisherId, editionLineId, ...overrides.edition });
   await insertCoverage(ctx, { editionId, volumeId, ...overrides.coverage });
-  const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], ...overrides.release });
+  const releaseId = await insertRelease(ctx, {
+    editionId,
+    publisherId,
+    seriesIds: [seriesId],
+    ...overrides.release,
+  });
   return { publisherId, seriesId, volumeId, editionLineId, editionId, releaseId };
 }
 

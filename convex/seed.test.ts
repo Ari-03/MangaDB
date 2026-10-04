@@ -1,6 +1,6 @@
 // The dev seed (seed.ts): it allocates public ids from the counters, refuses
-// a non-empty catalog unless wiping, dates a live month window from the
-// clock, and leaves a browsable catalog. These tests pin what the app, the
+// any catalog that is not empty, dates a live month window from the clock,
+// and leaves a browsable catalog. These tests pin what the app, the
 // dev workflow and docs/operations.md rely on, not every row the seed holds.
 
 import { describe, expect, it, vi } from "vitest";
@@ -46,7 +46,12 @@ describe("seed.run", () => {
       const variants = await ctx.db.query("releaseVariants").collect();
       expect(variants).toHaveLength(1);
       const memberships = await ctx.db.query("bundleMemberships").collect();
-      expect(memberships.map((m) => m.variantId)).toEqual([variants[0]!._id, undefined, undefined, undefined]);
+      expect(memberships.map((m) => m.variantId)).toEqual([
+        variants[0]!._id,
+        undefined,
+        undefined,
+        undefined,
+      ]);
       expect(variants[0]!.releaseId).toBe(memberships[0]!.releaseId);
       expect(await ctx.db.query("editionLines").collect()).toHaveLength(1);
       const series = await ctx.db.query("series").collect();
@@ -55,20 +60,48 @@ describe("seed.run", () => {
         "One Rainy Evening",
       ]);
       const coverages = await ctx.db.query("volumeCoverages").collect();
-      expect(coverages.filter((c) => c.extent === "partial").map((c) => Boolean(c.note))).toEqual([true]);
+      expect(coverages.filter((c) => c.extent === "partial").map((c) => Boolean(c.note))).toEqual([
+        true,
+      ]);
       const volumes = await ctx.db.query("volumes").collect();
       expect(volumes.filter((v) => v.label === undefined)).toHaveLength(1);
     });
   });
 
-  it("refuses to run on a non-empty catalog unless wiping, and reseeds from 1 after a wipe", async () => {
+  it("refuses a second run and leaves the seeded catalog as it was", async () => {
     const { t } = await seeded();
-    await expect(t.mutation(internal.seed.run, {})).rejects.toThrow(/wipe/);
-    const ids = await t.mutation(internal.seed.run, { wipe: true });
-    expect(ids.seriesPublicIds.tokyoGhoul).toBe(1);
+    const snapshot = () =>
+      t.run(async (ctx) => ({
+        series: await ctx.db.query("series").collect(),
+        releases: await ctx.db.query("releases").collect(),
+        counters: await ctx.db.query("counters").collect(),
+      }));
+    const before = await snapshot();
+    await expect(t.mutation(internal.seed.run, {})).rejects.toThrow(/already has data/);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("refuses a partly populated catalog with no Series and writes nothing", async () => {
+    const t = makeT();
+    await t.run((ctx) =>
+      ctx.db.insert("publishers", { status: "active", name: "VIZ Media", slug: "viz-media" }),
+    );
+    await expect(t.mutation(internal.seed.run, {})).rejects.toThrow(/publishers is not empty/);
     await t.run(async (ctx) => {
-      const series = await ctx.db.query("series").collect();
-      expect(series.filter((s) => s.publicId === 1)).toHaveLength(1);
+      expect(await ctx.db.query("publishers").collect()).toHaveLength(1);
+      expect(await ctx.db.query("series").collect()).toEqual([]);
+      expect(await ctx.db.query("counters").collect()).toEqual([]);
+    });
+  });
+
+  it("has no wipe option", async () => {
+    const { t } = await seeded();
+    // @ts-expect-error The validator accepts no arguments.
+    await expect(t.mutation(internal.seed.run, { wipe: true })).rejects.toThrow(
+      /Unexpected field `wipe`/,
+    );
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("series").collect()).toHaveLength(4);
     });
   });
 });
@@ -82,7 +115,8 @@ describe("releases.monthBrowse over the seed", () => {
     vi.setSystemTime(new Date("2027-01-15T12:00:00Z"));
     try {
       const { t } = await seeded();
-      const month = (year: number, month: number) => t.query(api.releases.monthBrowse, { year, month });
+      const month = (year: number, month: number) =>
+        t.query(api.releases.monthBrowse, { year, month });
       const current = await month(2027, 1);
       // Quiet Cartographer Vol. 4 in both formats, Tokyo Ghoul:re Vol. 3
       // in print and with a day-TBA digital date.
@@ -115,10 +149,7 @@ describe("catalog.seriesPage over the seed", () => {
 
     // Family with both member Series and the rendered sequel edge.
     expect(page.family?.name).toBe("Tokyo Ghoul");
-    expect(page.family?.members.map((m) => m.title)).toEqual([
-      "Tokyo Ghoul",
-      "Tokyo Ghoul:re",
-    ]);
+    expect(page.family?.members.map((m) => m.title)).toEqual(["Tokyo Ghoul", "Tokyo Ghoul:re"]);
     expect(page.family?.relationships).toEqual([
       expect.objectContaining({
         type: "sequel",

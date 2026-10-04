@@ -26,10 +26,16 @@ export type FixtureBook = {
   coverFile?: string;
   /** The listing's `content.rendered` blurb HTML. */
   blurb?: string;
+  /** The book page as the site serves it (a saved fixture), instead of the generated one. */
+  page?: string;
 };
 
-/** The book's page (`/books/{slug}/`): cover, series link, credits, date, price, format, ISBN. */
+/**
+ * The book's page (`/books/{slug}/`): cover, series link, credits, date,
+ * price, format, ISBN; no age rating. `page` replaces it.
+ */
 export function bookPageHtml(b: FixtureBook): string {
+  if (b.page !== undefined) return b.page;
   const file = b.coverFile ?? `${b.slug}.jpg`;
   const cover =
     b.cover === false

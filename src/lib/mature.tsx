@@ -10,11 +10,14 @@
 // - `<MatureProvider>` holds it for components; `useMature()` reads and
 //   changes it. A change rewrites the cookie and reloads every route's data.
 // - It is chosen in three places: the welcome question (`<MatureWelcome>`,
-//   asked once per browser, only on the Series library and Series pages;
-//   the home page stays non-mature without asking), Library → Settings
-//   (`<MatureSettings>`), and the Series filters (`<MatureFilter>`); plus
-//   the notice on a Mature Series' own page. Turning it on always asks for
-//   the 18+ confirmation, except in the welcome, which is that question.
+//   asked once per browser, only on the Series library and Series pages),
+//   Library → Settings (`<MatureSettings>`), and the Series filters
+//   (`<MatureFilter>`); plus the notice on a Mature Series' own page.
+//   Turning it on always asks for the 18+ confirmation, except in the
+//   welcome, which is that question.
+// - The home page's shelves always leave Mature Series out
+//   (lib/catalogData.ts `fetchHomeCatalog`); the header search still
+//   follows the choice.
 // - `<ConcealArt>` wraps a Mature Series' page for viewers who have not
 //   opted in: every <Cover> inside draws cloth marked 18+ instead of art.
 
@@ -104,10 +107,12 @@ function MatureNotice() {
   return (
     <div className="container">
       <aside className="mature-notice" role="note">
-        <span className="mature-badge" aria-hidden="true">18+</span>
+        <span className="mature-badge" aria-hidden="true">
+          18+
+        </span>
         <p>
-          Rated 18+ by the publisher. Covers and listings stay hidden until you choose to see
-          mature titles.
+          Rated 18+ by the publisher. Covers and listings stay hidden until you choose to see mature
+          titles.
         </p>
         <button className="btn btn-sm" type="button" onClick={() => setAsking(true)}>
           Show mature titles
@@ -143,8 +148,9 @@ function AgeConfirm({ onClose }: { onClose: () => void }) {
     >
       <h2 id="age-confirm-title">Show mature titles?</h2>
       <p>
-        Mature titles are rated 18+ by their publishers and can include explicit sexual content
-        or extreme violence. They will appear across the catalog, with their covers.
+        Mature titles are rated 18+ by their publishers and can include explicit sexual content or
+        extreme violence. They will appear across the catalog, with their covers. The home page's
+        shelves still leave them out.
       </p>
       <div className="age-confirm-actions">
         <button className="btn" type="button" onClick={close}>
@@ -179,7 +185,8 @@ export function MatureSettings() {
     <div className="sharing-settings">
       <p className="sharing-lede">
         Titles rated 18+ by their publishers stay out of browsing, search, and the calendars, and
-        their covers are hidden, until you choose to show them. This is saved in this browser.
+        their covers are hidden, until you choose to show them. The home page's shelves always leave
+        them out. This is saved in this browser.
       </p>
       <div className="vis-field">
         <span className="vis-legend" id="mature-titles-label">
@@ -230,7 +237,10 @@ export function MatureFilter() {
           </label>
         ))}
       </div>
-      <p className="filter-hint">Titles rated 18+ by their publishers. Applies across the site.</p>
+      <p className="filter-hint">
+        Titles rated 18+ by their publishers. Applies across the site, except the home page's
+        shelves, which always leave them out.
+      </p>
       {asking ? <AgeConfirm onClose={() => setAsking(false)} /> : null}
     </fieldset>
   );
@@ -241,11 +251,11 @@ const WELCOME_PATHS = /^\/series(\/|$)/;
 
 /**
  * Asked once per browser, the first time the viewer reaches the Series
- * library or a Series page: allow mature content or keep it hidden. The
- * home page and everything else stay non-mature without asking. Either
- * answer (or dismissing it) is remembered, and either can be changed later
- * in Settings or the Series filters. Opened after hydration, so the server
- * render never depends on it.
+ * library or a Series page: allow mature content or keep it hidden.
+ * Elsewhere it never asks, and the home page's shelves leave Mature Series
+ * out whatever the answer. Either answer (or dismissing it) is remembered,
+ * and either can be changed later in Settings or the Series filters.
+ * Opened after hydration, so the server render never depends on it.
  */
 function MatureWelcome() {
   const { setShowMature } = useMature();
@@ -272,8 +282,8 @@ function MatureWelcome() {
       <h2 id="mature-welcome-title">Allow mature content?</h2>
       <p>
         Some manga are rated 18+ by their publishers, from graphic violence to explicit sexual
-        content. They are hidden unless you allow them. You can change this any time in the
-        Series filters or your settings.
+        content. They are hidden unless you allow them. You can change this any time in the Series
+        filters or your settings.
       </p>
       <div className="age-confirm-actions">
         <button className="btn" type="button" onClick={() => answer(false)}>

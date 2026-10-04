@@ -1,0 +1,7 @@
+# Cloudflare static-asset headers (Workers static assets read this file; it
+# never applies to responses the Worker renders). Vite names every file under
+# /assets/ by a hash of its content, so a deploy that changes one changes its
+# URL: they can be cached for a year without asking again. The favicons sit
+# at fixed URLs and keep the default revalidation.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

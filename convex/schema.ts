@@ -119,6 +119,26 @@ export const recordRef = v.union(
   v.object({ type: v.literal("releaseBundle"), id: v.id("releaseBundles") }),
 );
 
+// Why an import holds a book it could not place (a Held Book, CONTEXT.md).
+// The reason itself is the observation's `placement` note.
+export const holdKind = v.union(
+  // The Volume it names does not exist under a known Series and Publisher.
+  v.literal("volumeMissing"),
+  // Packaging whose covered Volumes no source states, or states as a list
+  // no range holds, or a line member or box set that steady state leaves
+  // to an Editor.
+  v.literal("packaging"),
+  // No unique active Series to place it under: hidden, ambiguous, locked, or
+  // not linked.
+  v.literal("series"),
+  // Its ISBN is already held elsewhere, or its Volume already has the
+  // publisher's Release in that format.
+  v.literal("isbn"),
+  // Anything else a person could act on: ANN names no distributor, or one
+  // with no publisher row.
+  v.literal("other"),
+);
+
 // Human authors record their role at authorship; promotions never rewrite it.
 const authorRef = v.union(
   v.object({
@@ -272,7 +292,11 @@ export default defineSchema({
     followers: v.number(),
     collectors: v.number(),
     coverUrl: v.union(v.string(), v.null()),
+    // The ISBNs the jacket is looked up by, best first (lib/covers.ts
+    // seriesCoverIsbns), and the first of them. Optional only until every
+    // row has been rebuilt; readers fall back to coverIsbn (statsCoverIsbns).
     coverIsbn: v.union(v.string(), v.null()),
+    coverIsbns: v.optional(v.array(v.string())),
     // Copied from series.mature, so the library can leave Mature Series out.
     mature: v.optional(v.literal(true)),
     // Copied from the Series' ratingStats row by the rebuild and, at once, by
@@ -351,12 +375,49 @@ export default defineSchema({
     // lists (used only where PRH credits nothing). Absent for rows derived
     // from ANN.
     source: v.optional(v.union(v.literal("prh"), v.literal("creators"))),
-    // Publisher rows only: the role the observations of the rebuild that
-    // last stamped the row gave it. `role` may show a fuller role from an
-    // earlier run until that rebuild settles (people.ts settleRoles), so a
-    // role the run has yet to reach doesn't flicker away and back.
+    // Legacy: the rebuild's run fields, kept here before they moved to
+    // `seriesCreditRuns`. The first rebuild to see a row moves them there
+    // and clears them; one it never sees is swept by its `rebuiltAt`
+    // (people.ts sweepCredits). Rows written since have none of them.
     runRole: v.optional(creditRole),
-    // PRH rows only: the names this rebuild's observations gave this credit,
+    runNames: v.optional(
+      v.array(
+        v.object({ name: v.string(), role: creditRole, count: v.number(), seenAt: v.number() }),
+      ),
+    ),
+    runApart: v.optional(v.array(v.string())),
+    runVariants: v.optional(
+      v.array(v.object({ personId: v.id("people"), count: v.number(), seenAt: v.number() })),
+    ),
+    rebuiltAt: v.optional(v.number()),
+  })
+    .index("by_series", ["seriesId"])
+    .index("by_person", ["personId"])
+    // The sweep of legacy rows (above) a rebuild never reached.
+    .index("by_rebuiltAt", ["rebuiltAt"])
+    .index("by_source_and_rebuiltAt", ["source", "rebuiltAt"]),
+
+  // What the author-credit rebuild (people.ts rebuild) last did with each
+  // `seriesCredits` row: one row per credit, deleted with it. Kept apart so
+  // stamping a credit every run never writes the credit itself, which every
+  // page showing its Series' byline reads; a credit is written only when
+  // what it shows (person, role) changes.
+  seriesCreditRuns: defineTable({
+    creditId: v.id("seriesCredits"),
+    seriesId: v.id("series"),
+    // The credit's `source`, which never changes, for the sweep of ANN's
+    // rows alone.
+    source: v.optional(v.union(v.literal("prh"), v.literal("creators"))),
+    // The `startedAt` of the latest rebuild whose observations gave the
+    // credit. One older than a finished run's is no longer given and is
+    // swept with its credit.
+    rebuiltAt: v.number(),
+    // Publisher rows only: the role that rebuild's observations gave the
+    // credit. Its `role` may show a fuller role from an earlier run until
+    // the rebuild settles (people.ts settleRoles), so a role the run has
+    // yet to reach doesn't flicker away and back.
+    runRole: v.optional(creditRole),
+    // PRH rows only: the names that rebuild's observations gave the credit,
     // one per spelling key, near spellings of one name among them ("Choe
     // Gyu-Seok", "Choi Gyu-Seok"), each with its roles, how many
     // observations named it, and the latest of those observations'
@@ -367,19 +428,12 @@ export default defineSchema({
         v.object({ name: v.string(), role: creditRole, count: v.number(), seenAt: v.number() }),
       ),
     ),
-    // PRH rows only: pairs of spelling keys ("a|b") one line of this
+    // PRH rows only: pairs of spelling keys ("a|b") one line of that
     // rebuild named together, so settle keeps them two people. A line names
     // a handful of people, so a Series has a few pairs.
     runApart: v.optional(v.array(v.string())),
-    // Superseded by runNames; left by a staging rehearsal of the previous
-    // rule and cleared from each row the next time a rebuild stamps it.
-    runVariants: v.optional(
-      v.array(v.object({ personId: v.id("people"), count: v.number(), seenAt: v.number() })),
-    ),
-    rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])
-    .index("by_person", ["personId"])
     .index("by_rebuiltAt", ["rebuiltAt"])
     // The sweep of ANN's rows alone, when a rebuild's publisher pass failed.
     .index("by_source_and_rebuiltAt", ["source", "rebuiltAt"]),
@@ -570,6 +624,10 @@ export default defineSchema({
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
     .index("by_date", ["pubDate.sort"])
+    // The month window of the Releases browser (releases.monthBrowse) and
+    // the Publishers board (publisher.ts visibleMonth): active rows only, so
+    // hidden and merged ones neither cost reads nor crowd the cap.
+    .index("by_status_date", ["status", "pubDate.sort"])
     .index("by_publisher_date", ["publisherId", "pubDate.sort"])
     .index("by_bootstrap", ["bootstrapUnreviewed"])
     // Who shows a stored cover, so replacing one never strands a sharer.
@@ -609,7 +667,9 @@ export default defineSchema({
     order: v.number(),
   })
     .index("by_bundle", ["bundleId", "order"])
-    .index("by_release", ["releaseId"]),
+    .index("by_release", ["releaseId"])
+    // Variant merges and their previews find pins by the variant alone.
+    .index("by_variantId", ["variantId"]),
 
   // ---------- provenance & moderation ----------
 
@@ -665,6 +725,26 @@ export default defineSchema({
     // sweep did not touch have disappeared at the source (retained,
     // never deleted; absence is never evidence).
     .index("by_source_seen", ["sourceKey", "lastSeenAt"]),
+
+  // Held Books (CONTEXT.md): one row per unlinked, non-withdrawn
+  // observation with no queued Proposal that an import holds
+  // (lib/observations.ts recordUnplaced), removed when it is linked,
+  // withdrawn, or queued for review. A table of its own, so the list
+  // has small indexes and adding them never backfills sourceObservations.
+  placementHolds: defineTable({
+    observationId: v.id("sourceObservations"),
+    sourceKey: v.string(),
+    kind: holdKind,
+    // When it was first held under this kind; a re-sighting keeps it.
+    heldAt: v.number(),
+    // The active Series the import resolved for it, when it found one.
+    seriesId: v.optional(v.id("series")),
+  })
+    .index("by_observation", ["observationId"])
+    .index("by_held", ["heldAt"])
+    .index("by_kind_held", ["kind", "heldAt"])
+    .index("by_source_held", ["sourceKey", "heldAt"])
+    .index("by_source_kind_held", ["sourceKey", "kind", "heldAt"]),
 
   observationSnapshots: defineTable({
     observationId: v.id("sourceObservations"),
@@ -724,11 +804,7 @@ export default defineSchema({
     proposalId: v.id("proposals"),
     versionNo: v.number(),
     authorId: v.id("users"),
-    kind: v.union(
-      v.literal("comment"),
-      v.literal("requestChanges"),
-      v.literal("reject"),
-    ),
+    kind: v.union(v.literal("comment"), v.literal("requestChanges"), v.literal("reject")),
     text: v.string(),
   }).index("by_proposal", ["proposalId"]),
 
@@ -815,14 +891,26 @@ export default defineSchema({
 
   importRuns: defineTable({
     sourceKey: v.string(),
-    // "stopped": an automatic run closed early because its source was disabled.
-    status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("stopped")),
-    // Set only by the syncs on the shared gate (lib/importRuns.ts), on a run
-    // they open themselves (the cadence dispatcher, or an operator's bare
-    // `sync '{}'`): such a run stops at its next link once its source is
-    // disabled, and an operator's explicit run (imports:startRun) carries
-    // on. PRH and the single-link syncs never set it.
+    // "stopped": an automatic run closed early because its source was
+    // disabled. It never counts toward the source's health.
+    status: v.union(
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("stopped"),
+    ),
+    // Set on a run a sync opens itself (the cadence dispatcher, or an
+    // operator's bare `sync '{}'`): once its source is disabled, it stops at
+    // the next link, page, batch or withdrawal boundary (lib/importRuns.ts).
+    // An operator's forced run (imports:startRun) lacks it and carries on.
     automatic: v.optional(v.boolean()),
+    // Stamped when the run opens, at every gate pass and at every hand-off to
+    // a continuation, each storing the counts so far (lib/importRuns.ts).
+    // A "running" run quiet for longer than STRANDED_AFTER_MS lost its chain:
+    // the hourly tick closes it as "failed" so the source can run again. A
+    // run opened before the field has none and counts as stranded only once
+    // it is 12 hours old (isStranded).
+    lastActivityAt: v.optional(v.number()),
     finishedAt: v.optional(v.number()),
     recordsSeen: v.number(),
     recordsChanged: v.number(),
@@ -905,11 +993,7 @@ export default defineSchema({
     seriesId: v.id("series"),
     publicId: v.number(),
     title: v.string(),
-    status: v.union(
-      v.literal("pending"),
-      v.literal("verified"),
-      v.literal("failed"),
-    ),
+    status: v.union(v.literal("pending"), v.literal("verified"), v.literal("failed")),
     note: v.optional(v.string()),
     checkedBy: v.optional(v.id("users")),
     checkedAt: v.optional(v.number()),
@@ -946,11 +1030,7 @@ export default defineSchema({
     usernameNormalized: v.string(),
     role: v.optional(dataRole),
     suspended: v.optional(v.boolean()),
-    formatPreference: v.union(
-      v.literal("physical"),
-      v.literal("digital"),
-      v.literal("both"),
-    ),
+    formatPreference: v.union(v.literal("physical"), v.literal("digital"), v.literal("both")),
     // Private by default; per-Series overrides live on userSeriesStates.
     ownershipVisibility: visibility,
     readingVisibility: visibility,
@@ -960,9 +1040,25 @@ export default defineSchema({
     // Rating Format (CONTEXT.md): how this User enters and reads scores.
     // Absent means DEFAULT_SCORE_FORMAT (lib/scoreFormat.ts).
     scoreFormat: v.optional(scoreFormatValidator),
+    // True when this User opted out of analytics (users.setAnalyticsOptOut):
+    // lib/posthog.ts sends nothing under their id and the browser client
+    // neither loads nor identifies them. Absent means never chosen, which
+    // tracks as before; a browser sending Do Not Track sets it once.
+    analyticsOptOut: v.optional(v.boolean()),
+    // When the User asked to delete their account (users.deleteAccount).
+    // From then on they count as gone (lib/auth.ts) while the purge empties
+    // their personal rows; the row itself goes last, a day after Clerk
+    // confirms the sign-in is deleted (users.removePurgedUser).
+    deletingSince: v.optional(v.number()),
+    // When the purge found every personal table empty (users.purgeUser).
+    // Set only on a deleting User, whose row then holds nothing but itself
+    // and stays until a day after the Clerk deletion.
+    purgedAt: v.optional(v.number()),
   })
     .index("by_clerkSubject", ["clerkSubject"])
-    .index("by_username", ["usernameNormalized"]),
+    .index("by_username", ["usernameNormalized"])
+    // Role holders, for the governance checks and /mod/roles (lib/roles.ts).
+    .index("by_role", ["role"]),
 
   // Exactly one of releaseId/bundleId is set (enforced in mutations — the
   // two-optional-fields shape keeps both sides indexable). One entry per
@@ -979,7 +1075,8 @@ export default defineSchema({
     .index("by_user_bundle", ["userId", "bundleId"])
     // Reverse lookups for merge transfer + impact previews.
     .index("by_release", ["releaseId"])
-    .index("by_bundle", ["bundleId"]),
+    .index("by_bundle", ["bundleId"])
+    .index("by_variantId", ["variantId"]),
 
   // One row per (user, series) combining every per-series fact; a row exists
   // once the user touches the series in any way.
@@ -1020,10 +1117,12 @@ export default defineSchema({
     .index("by_release", ["releaseId"])
     .index("by_series", ["seriesId"]),
 
+  // A row's Series is its Volume's; nothing reads or writes `seriesId`, which
+  // older rows still hold until reading:unsetProgressSeries clears them.
   volumeProgress: defineTable({
     userId: v.id("users"),
     volumeId: v.id("volumes"),
-    seriesId: v.id("series"),
+    seriesId: v.optional(v.id("series")),
     readCount: v.number(),
     // Supports undoing the most recent completion.
     lastCompletedAt: v.optional(v.number()),

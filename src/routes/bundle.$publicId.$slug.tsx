@@ -1,9 +1,4 @@
-import {
-  createFileRoute,
-  Link,
-  notFound,
-  redirect,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery, type BundlePageData } from "~/lib/catalogData";
@@ -12,12 +7,7 @@ import { Cover } from "~/lib/cover";
 import { formatPartialDate, formatPrice, plural } from "~/lib/format";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
-import {
-  bundleTitleTag,
-  isoPartialDate,
-  pageHead,
-  truncateDescription,
-} from "~/lib/seo";
+import { bundleTitleTag, isoPartialDate, pageHead, truncateDescription } from "~/lib/seo";
 import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
 
@@ -61,9 +51,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
     return pageHead({
       title: bundleTitleTag(bundle.name, bundle.publisher?.name ?? null),
       description: `${bundle.name} ${facts.join(", ")}.${
-        bundle.description
-          ? ` ${truncateDescription(bundle.description, 80)}`
-          : ""
+        bundle.description ? ` ${truncateDescription(bundle.description, 80)}` : ""
       }`,
       path,
       image: bundle.coverUrl,
@@ -101,10 +89,7 @@ function BundlePage() {
               src={bundle.coverUrl}
               isbn13={bundle.isbn13}
               title={bundle.name}
-              foot={[
-                plural(members.length, "book"),
-                bundle.publisher?.name,
-              ]}
+              foot={[plural(members.length, "book"), bundle.publisher?.name]}
               lazy={false}
             />
           </div>
@@ -117,11 +102,7 @@ function BundlePage() {
           <h1 className="detail-title">{bundle.name}</h1>
           <p className="fact-chips">
             {bundle.publisher ? (
-              <Link
-                className="chip"
-                to="/publisher/$slug"
-                params={{ slug: bundle.publisher.slug }}
-              >
+              <Link className="chip" to="/publisher/$slug" params={{ slug: bundle.publisher.slug }}>
                 {bundle.publisher.name}
               </Link>
             ) : null}
@@ -131,9 +112,7 @@ function BundlePage() {
               <span className="chip chip--digital">Digital</span>
             ) : null}
             <span className="chip">
-              {members.length === 1
-                ? "1 book inside"
-                : `${members.length} books inside`}
+              {members.length === 1 ? "1 book inside" : `${members.length} books inside`}
             </span>
           </p>
 
@@ -157,12 +136,10 @@ function BundlePage() {
               ) : null}
             </p>
           ) : null}
-          {bundle.description ? (
-            <p className="detail-blurb">{bundle.description}</p>
-          ) : null}
+          {bundle.description ? <p className="detail-blurb">{bundle.description}</p> : null}
           <p className="detail-note">
-            A box set has its own publication facts. Each book inside keeps its
-            own release identity — and its own place in your collection.
+            A box set has its own publication facts. Each book inside keeps its own release identity
+            — and its own place in your collection.
           </p>
 
           <div className="section-head detail-section-head">
@@ -189,9 +166,7 @@ function BundlePage() {
           <section className="section">
             <div className="section-head">
               <h2 className="section-title">Keep browsing</h2>
-              <p className="section-note">
-                Who made this box set, and what they ship next.
-              </p>
+              <p className="section-note">Who made this box set, and what they ship next.</p>
             </div>
             <div className="directory">
               <Link
@@ -216,11 +191,7 @@ function BundlePage() {
   );
 }
 
-function BundleMember({
-  member,
-}: {
-  member: BundlePageData["members"][number];
-}) {
+function BundleMember({ member }: { member: BundlePageData["members"][number] }) {
   const date = formatPartialDate(member.pubDate);
   const binding = member.format === "physical" ? member.binding : null;
   // Member link: the Edition page anchored at this Release's row (spec §11 —

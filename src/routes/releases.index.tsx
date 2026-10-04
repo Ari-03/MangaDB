@@ -34,7 +34,10 @@ export const Route = createFileRoute("/releases/")({
     // The Agenda anchors on the month containing today (UTC), computed on the
     // server so SSR and hydration agree.
     const anchor = currentMonth();
-    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, showMature: showMature() });
+    const data = await catalogQuery(api.releases.monthBrowse, {
+      ...anchor,
+      showMature: showMature(),
+    });
     await followPublisherSlug(location, data);
     return { anchor, data };
   },
@@ -59,8 +62,7 @@ function ReleasesAgendaPage() {
   const { anchor, data } = Route.useLoaderData();
   const filters = Route.useSearch();
   const navigate = Route.useNavigate();
-  const onFiltersChange = (next: BrowseFilters) =>
-    void navigate({ search: next, replace: true });
+  const onFiltersChange = (next: BrowseFilters) => void navigate({ search: next, replace: true });
 
   return (
     <ReleasesBrowser

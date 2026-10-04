@@ -49,8 +49,14 @@ export async function resolveActor(ctx: MutationCtx, username: string): Promise<
     .query("users")
     .withIndex("by_username", (q) => q.eq("usernameNormalized", username.toLowerCase()))
     .unique();
-  if (!user || (user.role !== "administrator" && user.role !== "moderator")) {
-    throw new ConvexError(`Repair actor "${username}" must be an existing Moderator or Administrator.`);
+  if (
+    !user ||
+    user.deletingSince !== undefined ||
+    (user.role !== "administrator" && user.role !== "moderator")
+  ) {
+    throw new ConvexError(
+      `Repair actor "${username}" must be an existing Moderator or Administrator.`,
+    );
   }
   return { userId: user._id, role: user.role };
 }
@@ -101,9 +107,17 @@ export function createAudit(
       if (rows.length === 0) return;
       const { proposalId } = await this.meta();
       for (let i = 0; i < rows.length; i += TRAIL_CHUNK) {
-        await ctx.db.insert("repairTrails", { proposalId, ref, rows: rows.slice(i, i + TRAIL_CHUNK) });
+        await ctx.db.insert("repairTrails", {
+          proposalId,
+          ref,
+          rows: rows.slice(i, i + TRAIL_CHUNK),
+        });
       }
-      ops.push({ kind: "update", ref, changes: [{ field: "personalTracking", after: rows.length }] });
+      ops.push({
+        kind: "update",
+        ref,
+        changes: [{ field: "personalTracking", after: rows.length }],
+      });
     },
     /** Append the next Revision to one record's public history. */
     async revise(ref: Ref, changes: Change[]) {
@@ -114,13 +128,19 @@ export function createAudit(
     /** Freeze the Proposal's immutable version once the entry is done. */
     async finish() {
       if (!meta) return;
-      await insertFirstVersion(ctx, meta.proposalId, { ops, evidence: evidenceRows, changeComment: comment });
+      await insertFirstVersion(ctx, meta.proposalId, {
+        ops,
+        evidence: evidenceRows,
+        changeComment: comment,
+      });
     },
   };
 }
 
 /** Patch a record and write the Revision for exactly the fields that changed. */
-export async function updateRecord<T extends "publishers" | "series" | "volumes" | "editions" | "releases">(
+export async function updateRecord<
+  T extends "publishers" | "series" | "volumes" | "editions" | "releases",
+>(
   ctx: MutationCtx,
   audit: Audit,
   ref: Ref & { id: Id<T> },
@@ -138,7 +158,10 @@ export async function updateRecord<T extends "publishers" | "series" | "volumes"
   await audit.meta();
   await ctx.db.patch(ref.id, patch);
   audit.op({ kind: "update", ref, changes });
-  await audit.revise(ref, changes.filter((c) => c.field !== "searchText"));
+  await audit.revise(
+    ref,
+    changes.filter((c) => c.field !== "searchText"),
+  );
   return true;
 }
 
@@ -184,7 +207,9 @@ export async function settlePositions(
     .filter((vol) => labelNumber(vol.label) === null)
     .sort((a, b) => a.position - b.position);
   const target = new Map(volumes.map((vol) => [vol._id, labelNumber(vol.label)]));
-  unnumbered.forEach((vol, i) => target.set(vol._id, maxNumber + 1 + i));
+  unnumbered.forEach((vol, i) => {
+    target.set(vol._id, maxNumber + 1 + i);
+  });
   for (const vol of volumes) {
     const position = target.get(vol._id);
     if (position === undefined || position === null || position === vol.position) continue;
@@ -203,12 +228,18 @@ export async function ensureVolume(
   seriesId: Id<"series">,
   label: string | null,
 ): Promise<Doc<"volumes">> {
-  const existing = (await activeVolumes(ctx, seriesId)).filter((vol) => sameLabel(vol.label, label));
-  if (existing.length > 1) skip(`series has ${existing.length} volumes labelled "${label ?? "(none)"}"`);
+  const existing = (await activeVolumes(ctx, seriesId)).filter((vol) =>
+    sameLabel(vol.label, label),
+  );
+  if (existing.length > 1)
+    skip(`series has ${existing.length} volumes labelled "${label ?? "(none)"}"`);
   if (existing[0]) return existing[0];
   await audit.meta();
   const canonical = canonicalLabel(label);
-  const last = (await activeVolumes(ctx, seriesId)).reduce((max, vol) => Math.max(max, vol.position), 0);
+  const last = (await activeVolumes(ctx, seriesId)).reduce(
+    (max, vol) => Math.max(max, vol.position),
+    0,
+  );
   const fields = {
     status: "active" as const,
     publicId: await allocatePublicId(ctx, "volume"),
@@ -252,7 +283,8 @@ export async function refreshReleaseDenorms(ctx: MutationCtx, editionId: Id<"edi
   if (!edition) return;
   const seriesIds = await editionSeriesIds(ctx, edition);
   for (const release of await releasesOf(ctx, editionId)) {
-    if (sameValue(release.seriesIds, seriesIds) && release.publisherId === edition.publisherId) continue;
+    if (sameValue(release.seriesIds, seriesIds) && release.publisherId === edition.publisherId)
+      continue;
     await ctx.db.patch(release._id, { seriesIds, publisherId: edition.publisherId });
   }
 }
@@ -292,7 +324,12 @@ export async function replaceCoverage(
   const before = await describeCoverage(ctx, editionId);
   for (const row of current) await ctx.db.delete(row._id);
   for (const [i, row] of rows.entries()) {
-    await ctx.db.insert("volumeCoverages", { editionId, volumeId: row.volumeId, order: i + 1, extent: row.extent });
+    await ctx.db.insert("volumeCoverages", {
+      editionId,
+      volumeId: row.volumeId,
+      order: i + 1,
+      extent: row.extent,
+    });
   }
   const after = await describeCoverage(ctx, editionId);
   const ref = { type: "edition" as const, id: editionId };

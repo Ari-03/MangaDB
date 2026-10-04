@@ -11,11 +11,7 @@ import {
   validateBrowseFilters,
   type BrowseFilters,
 } from "~/lib/releasesBrowser";
-import {
-  itemListJsonLd,
-  monthTitleTag,
-  pageHead,
-} from "~/lib/seo";
+import { itemListJsonLd, monthTitleTag, pageHead } from "~/lib/seo";
 import { editionPath } from "~/lib/slug";
 
 /**
@@ -30,9 +26,7 @@ import { editionPath } from "~/lib/slug";
  * a canonical pointing at the bare month URL.
  */
 export const Route = createFileRoute("/releases/$month")({
-  validateSearch: (
-    search: Record<string, unknown>,
-  ): BrowseFilters & { view?: "agenda" } => ({
+  validateSearch: (search: Record<string, unknown>): BrowseFilters & { view?: "agenda" } => ({
     ...validateBrowseFilters(search),
     view: search.view === "agenda" ? "agenda" : undefined,
   }),
@@ -42,7 +36,10 @@ export const Route = createFileRoute("/releases/$month")({
   loader: async ({ params, location }) => {
     const anchor = parseMonthParam(params.month);
     if (!anchor) throw notFound();
-    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, showMature: showMature() });
+    const data = await catalogQuery(api.releases.monthBrowse, {
+      ...anchor,
+      showMature: showMature(),
+    });
     await followPublisherSlug(location, data);
     return { anchor, today: currentMonth(), data };
   },
@@ -66,13 +63,11 @@ export const Route = createFileRoute("/releases/$month")({
       // The ItemList describes the canonical month page, so it is built
       // only from the unfiltered window.
       jsonLd:
-        !filtered && data && data.releases.length > 0
+        !filtered && data.releases.length > 0
           ? [
               itemListJsonLd(
                 data.releases.map((release) => ({
-                  name: [release.series[0]?.title, release.volumeLabel]
-                    .filter(Boolean)
-                    .join(" "),
+                  name: [release.series[0]?.title, release.volumeLabel].filter(Boolean).join(" "),
                   path: editionPath(release.edition.publicId, release.edition.title),
                   anchor: release.anchor,
                 })),

@@ -9,11 +9,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { bundleReleases } from "./collection";
+import { statsCoverIsbns } from "./lib/covers";
 import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { joinBrowseRows } from "./releases";
-import { seriesStatsRow } from "./seriesBrowse";
+import { seriesStatsRow } from "./lib/seriesStats";
 
 // My Upcoming scans the uncapped future horizon (spec §7) over by_date; the
 // cap guards pathology and is surfaced as `capped` so the view can say so.
@@ -91,7 +92,7 @@ export const myFollowing = query({
         seriesPublicId: doc.publicId,
         title: doc.title,
         coverUrl: stats?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? null,
+        coverIsbn: statsCoverIsbns(stats),
         nextReleaseSort: stats?.nextReleaseSort ?? 0,
         volumeCount: stats?.volumeCount ?? null,
       });
@@ -150,8 +151,7 @@ export const myUpcoming = query({
       const series = await getActive(ctx, "series", state.seriesId);
       if (series) followed.add(series._id);
     }
-    const inFollowed = (doc: Doc<"releases">) =>
-      doc.seriesIds.some((id) => followed.has(id));
+    const inFollowed = (doc: Doc<"releases">) => doc.seriesIds.some((id) => followed.has(id));
     const matchesPreference = (doc: Doc<"releases">) =>
       user.formatPreference === "both" || doc.format === user.formatPreference;
 
@@ -208,8 +208,7 @@ export const myUpcoming = query({
     }
 
     const included = [...candidates.values()].filter(
-      (doc) =>
-        releaseEntries.get(doc._id)?.state !== "owned" && !derivedOwned.has(doc._id),
+      (doc) => releaseEntries.get(doc._id)?.state !== "owned" && !derivedOwned.has(doc._id),
     );
     const rows = await joinBrowseRows(ctx, included);
     const annotations = new Map(
@@ -250,12 +249,8 @@ export const myUpcoming = query({
         : [],
     );
 
-    const name = (
-      item: (typeof releaseItems)[number] | (typeof bundleItems)[number],
-    ) =>
-      item.kind === "release"
-        ? (item.series[0]?.title ?? item.edition.title)
-        : item.name;
+    const name = (item: (typeof releaseItems)[number] | (typeof bundleItems)[number]) =>
+      item.kind === "release" ? (item.series[0]?.title ?? item.edition.title) : item.name;
     const items = [...releaseItems, ...bundleItems].sort(
       (a, b) => a.sort - b.sort || name(a).localeCompare(name(b)),
     );

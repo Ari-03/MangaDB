@@ -23,9 +23,7 @@ describe("findDuplicatePairs", () => {
       { id: "b", title: "Tokyo Ghoul re", altTitles: [] },
       { id: "c", title: "Dungeon Meshi", altTitles: [] },
     ]);
-    expect(pairs).toEqual([
-      { aId: "a", bId: "b", reason: "identical normalized title" },
-    ]);
+    expect(pairs).toEqual([{ aId: "a", bId: "b", reason: "identical normalized title" }]);
   });
 
   it("flags a title colliding with another Series' alt title", () => {
@@ -42,9 +40,7 @@ describe("findDuplicatePairs", () => {
       { id: "a", title: "Fullmetal Alchemist", altTitles: [] },
       { id: "b", title: "The Fullmetal Alchemist Manga", altTitles: [] },
     ]);
-    expect(pairs).toEqual([
-      { aId: "a", bId: "b", reason: "same title tokens" },
-    ]);
+    expect(pairs).toEqual([{ aId: "a", bId: "b", reason: "same title tokens" }]);
   });
 
   it("never pairs a Series with itself and dedups each pair", () => {

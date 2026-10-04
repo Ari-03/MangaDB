@@ -4,7 +4,6 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { CommentsQueueLink, ModGate, ProposalStateChip } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * The viewer's own proposals: drafts to return to, In-Review
@@ -16,15 +15,6 @@ export const Route = createFileRoute("/mod/proposals")({
 });
 
 function MyProposalsPage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Proposals need a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"
@@ -42,8 +32,7 @@ function MyProposals() {
       <Breadcrumbs trail={["My proposals"]} />
       <h1>My proposals</h1>
       <p className="section-hint">
-        Drafts to return to, submissions waiting on a Moderator, and
-        decisions — newest first.
+        Drafts to return to, submissions waiting on a Moderator, and decisions — newest first.
       </p>
       <nav className="mod-tools" aria-label="Data team tools">
         <Link to="/mod/queue">Shared review queue</Link>
@@ -53,16 +42,12 @@ function MyProposals() {
         <p className="notice">Loading…</p>
       ) : rows.length === 0 ? (
         <p className="notice">
-          You have no proposals yet. Find a record and use its "Propose a
-          change" link.
+          You have no proposals yet. Find a record and use its "Propose a change" link.
         </p>
       ) : (
         <ol className="queue-list">
           {rows.map((row) => (
-            <li
-              key={row.proposalId}
-              className={row.stale ? "queue-row mod-flagged" : "queue-row"}
-            >
+            <li key={row.proposalId} className={row.stale ? "queue-row mod-flagged" : "queue-row"}>
               <Link to="/mod/proposal/$id" params={{ id: row.proposalId }}>
                 {row.comment || "(no comment yet)"}
               </Link>
@@ -72,9 +57,7 @@ function MyProposals() {
                   {row.opCount} op{row.opCount === 1 ? "" : "s"}
                 </span>
                 <span>{row.recordTypes.join(", ") || "no records yet"}</span>
-                {row.stale ? (
-                  <span className="chip mod-chip mod-chip--bad">stale</span>
-                ) : null}
+                {row.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
               </div>
             </li>
           ))}

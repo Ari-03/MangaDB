@@ -15,6 +15,20 @@
 // queued before either is approved each create the same line, so at
 // approval such an op resolves to the line when it exists by then.
 //
+// A member's placement of a held book (placement.ts) marks its Volume and
+// Edition creates `joinExisting` too: a Volume of that label an import
+// created meanwhile, or the sibling Edition it filed a Release under (same
+// publisher, line, position and coverage), is reused, never duplicated. A
+// matching record the placement may not join (a hidden Volume, one merged
+// away, a hidden, merged or locked Edition, a hidden or merged line) is
+// never read as absent: the plan names it `unavailable` and the Proposal is
+// stale. Its
+// Edition may be Unmapped Packaging (`coverageUnmapped`, under a line, no
+// coverage rows), and its Release names the observation it places
+// (`placement`), which approval links to the new Release (proposals.ts).
+// Only placement.ts writes `placement`, and only it and the importers write
+// `joinExisting` (proposals.ts refuses both in a member's own ops).
+//
 // Hard invariants checked with every plan: no ISBN the proposal assigns — to
 // a new Release or, through an update op, an existing one — ends up on two
 // active Releases, and an Edition joins only a line of its own publisher
@@ -23,18 +37,16 @@
 // Validation (`planCreateOps`) runs at draft save, submission, and approval;
 // application (`applyCreatePlan`) runs only inside the approval mutation.
 
+import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { editionSeriesIds } from "./editionRows";
 import { fail } from "./errors";
-import { volumePositionFor } from "./pipeline";
+import { labelsEqual } from "./matching";
+import { joinableEdition, siblingEditions, unmappedSiblings, volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
 import { seriesSearchText } from "./searchMatch";
-import {
-  fieldDescriptor,
-  normalizeFieldValue,
-  type RecordType,
-} from "./moderationFields";
+import { fieldDescriptor, normalizeFieldValue, type RecordType } from "./moderationFields";
 
 // ---------- shapes ----------
 
@@ -79,6 +91,9 @@ export type CreatePlan =
       tempId: string;
       series: RefTo<"series">;
       fields: { label?: string; synopsis?: string };
+      /** Set when a `joinExisting` op resolved to this stored Volume: nothing is created. */
+      existingId?: Id<"volumes">;
+      unavailable?: Unjoinable;
     }
   | {
       table: "editionLines";
@@ -88,6 +103,7 @@ export type CreatePlan =
       fields: { name: string };
       /** Set when a `joinExisting` op resolved to this stored line: nothing is created. */
       existingId?: Id<"editionLines">;
+      unavailable?: Unjoinable;
     }
   | {
       table: "editions";
@@ -95,7 +111,10 @@ export type CreatePlan =
       publisherId: Id<"publishers">;
       coverage: CoveragePlan[];
       editionLine?: RefTo<"editionLines">;
-      fields: { linePosition?: string };
+      fields: { linePosition?: string; coverageUnmapped?: true };
+      /** Set when a `joinExisting` op resolved to this stored sibling Edition: nothing is created. */
+      existingId?: Id<"editions">;
+      unavailable?: Unjoinable;
     }
   | {
       table: "releases";
@@ -111,7 +130,42 @@ export type CreatePlan =
         price?: { amountCents: number; currency: string };
         description?: string;
       };
+      /** The held book this Release places, linked to it at approval, under that Series. */
+      placement?: { observationId: Id<"sourceObservations">; seriesId: Id<"series"> };
     };
+
+/** Bulk-operation cap: one coherent intent, not a mass migration. */
+export const MAX_OPS_PER_PROPOSAL = 25;
+
+/** Refuse an op set over the bulk cap (`bulkCap`). */
+export function checkOpCount(count: number): void {
+  if (count > MAX_OPS_PER_PROPOSAL) {
+    fail(
+      "bulkCap",
+      `One proposal carries at most ${MAX_OPS_PER_PROPOSAL} operations — split unrelated work.`,
+    );
+  }
+}
+
+/** A stored record a placement's op matches but may not join (hidden, locked, merged away). */
+type Unjoinable = { type: RecordType; id: string };
+
+/** What a placement's `joinExisting` op resolves to: a stored record, one it may not join, or nothing. */
+type Join<Table extends TableNames> = { existingId?: Id<Table>; unavailable?: Unjoinable };
+
+/** Whether a create op carries a held book's `placement` (only placement.ts writes one). */
+export const carriesPlacement = (op: CreateOpInput): boolean =>
+  typeof op.fields === "object" && op.fields !== null && "placement" in op.fields;
+
+/** Whether a create op is marked `joinExisting` (only placement.ts and the importers mark one). */
+export const marksJoin = (op: CreateOpInput): boolean =>
+  typeof op.fields === "object" && op.fields !== null && "joinExisting" in op.fields;
+
+/** The records a plan's placement joins matched but may not join: the Proposal is stale. */
+export const unjoinable = (plans: CreatePlan[]): Unjoinable[] =>
+  plans.flatMap((plan) =>
+    "unavailable" in plan && plan.unavailable !== undefined ? [plan.unavailable] : [],
+  );
 
 /** Refuse a malformed create op. */
 function bad(message: string): never {
@@ -207,6 +261,7 @@ export async function planCreateOps(
   const tempIds = new Map<string, CreatableTable>();
   const planByTemp = new Map<string, CreatePlan>();
   const isbnClaims: IsbnClaim[] = [];
+  const placing = ops.some(carriesPlacement);
   for (const op of ops) {
     if (!(op.table in CREATABLE_TABLES)) {
       bad(`Proposals cannot create "${op.table}" records.`);
@@ -226,13 +281,10 @@ export async function planCreateOps(
           tempId: op.tempId,
           fields: {
             title: title as string,
-            altTitles: (viaRegistry("series", "altTitles", fields.altTitles) ??
-              []) as string[],
-            sourceStatus: viaRegistry(
-              "series",
-              "sourceStatus",
-              fields.sourceStatus,
-            ) as string | undefined,
+            altTitles: (viaRegistry("series", "altTitles", fields.altTitles) ?? []) as string[],
+            sourceStatus: viaRegistry("series", "sourceStatus", fields.sourceStatus) as
+              | string
+              | undefined,
           },
         });
         break;
@@ -245,18 +297,21 @@ export async function planCreateOps(
           tempIds,
           "New volume's series",
         );
+        const label = viaRegistry("volume", "label", fields.label) as string | undefined;
+        // A placement's Volume an import created meanwhile is that Volume.
+        const join =
+          fields.joinExisting === true && series.kind === "id"
+            ? await joinedVolume(ctx, series.id, label)
+            : {};
         plans.push({
           table,
           tempId: op.tempId,
           series,
           fields: {
-            label: viaRegistry("volume", "label", fields.label) as
-              | string
-              | undefined,
-            synopsis: viaRegistry("volume", "synopsis", fields.synopsis) as
-              | string
-              | undefined,
+            label,
+            synopsis: viaRegistry("volume", "synopsis", fields.synopsis) as string | undefined,
           },
+          ...join,
         });
         break;
       }
@@ -280,20 +335,18 @@ export async function planCreateOps(
             plan.publisherId === publisherId &&
             plan.fields.name.toLowerCase() === wanted,
         );
-        const stored =
+        const named =
           series.kind === "id"
             ? (
                 await ctx.db
                   .query("editionLines")
                   .withIndex("by_series", (q) => q.eq("seriesId", series.id))
                   .collect()
-              ).find(
-                (line) =>
-                  line.status === "active" &&
-                  line.publisherId === publisherId &&
-                  line.name.toLowerCase() === wanted,
+              ).filter(
+                (line) => line.publisherId === publisherId && line.name.toLowerCase() === wanted,
               )
-            : undefined;
+            : [];
+        const stored = named.find((line) => line.status === "active");
         // An op flagged `joinExisting` (the importer's queued guesses) names
         // its line by identity: when a sibling proposal's approval created
         // that line meanwhile, the op resolves to it instead of a twin.
@@ -313,12 +366,22 @@ export async function planCreateOps(
             `The edition line "${name}" already exists for this series and publisher — reference it instead.`,
           );
         }
-        plans.push({ table, tempId: op.tempId, series, publisherId, fields: { name } });
+        // A placement never creates a twin of a hidden or merged line.
+        const closed = placing ? named[0] : undefined;
+        plans.push({
+          table,
+          tempId: op.tempId,
+          series,
+          publisherId,
+          fields: { name },
+          ...(closed !== undefined ? { unavailable: { type: "editionLine", id: closed._id } } : {}),
+        });
         break;
       }
       case "editions": {
         const publisherId = await resolvePublisher(ctx, fields, "edition");
-        const coverage = await planCoverage(ctx, fields, tempIds);
+        const unmapped = fields.coverageUnmapped === true;
+        const coverage = await planCoverage(ctx, fields, tempIds, unmapped);
         const editionLine =
           fields.editionLineId === undefined
             ? undefined
@@ -331,20 +394,28 @@ export async function planCreateOps(
               );
         if (editionLine !== undefined) {
           await checkLineFits(ctx, editionLine, publisherId, coverage, planByTemp);
+        } else if (unmapped) {
+          bad("Unmapped Packaging is a member of an Edition Line: name its line.");
         }
+        const linePosition = viaRegistry("edition", "linePosition", fields.linePosition) as
+          | string
+          | undefined;
+        const join =
+          fields.joinExisting === true
+            ? await storedSibling(
+                ctx,
+                { publisherId, coverage, editionLine, linePosition, unmapped },
+                planByTemp,
+              )
+            : {};
         plans.push({
           table,
           tempId: op.tempId,
           publisherId,
           coverage,
           editionLine,
-          fields: {
-            linePosition: viaRegistry(
-              "edition",
-              "linePosition",
-              fields.linePosition,
-            ) as string | undefined,
-          },
+          fields: { linePosition, ...(unmapped ? { coverageUnmapped: true as const } : {}) },
+          ...join,
         });
         break;
       }
@@ -360,9 +431,7 @@ export async function planCreateOps(
         if (format !== "physical" && format !== "digital") {
           bad('A new release needs a format: "physical" or "digital".');
         }
-        const binding = viaRegistry("release", "binding", fields.binding) as
-          | string
-          | undefined;
+        const binding = viaRegistry("release", "binding", fields.binding) as string | undefined;
         // Hard invariant (CONTEXT.md): Binding applies only to physical.
         if (format === "digital" && binding !== undefined) {
           bad("Binding applies only to physical releases.");
@@ -372,10 +441,13 @@ export async function planCreateOps(
         const isbn10 = viaRegistry("release", "isbn10", fields.isbn10) as string | undefined;
         if (isbn13 !== undefined) isbnClaims.push({ field: "isbn13", isbn: isbn13, by: "create" });
         if (isbn10 !== undefined) isbnClaims.push({ field: "isbn10", isbn: isbn10, by: "create" });
+        const placement =
+          fields.placement === undefined ? undefined : await planPlacement(ctx, fields.placement);
         plans.push({
           table,
           tempId: op.tempId,
           edition,
+          ...(placement !== undefined ? { placement } : {}),
           fields: {
             format,
             binding,
@@ -388,11 +460,9 @@ export async function planCreateOps(
             price: viaRegistry("release", "price", fields.price) as
               | { amountCents: number; currency: string }
               | undefined,
-            description: viaRegistry(
-              "release",
-              "description",
-              fields.description,
-            ) as string | undefined,
+            description: viaRegistry("release", "description", fields.description) as
+              | string
+              | undefined,
           },
         });
         break;
@@ -551,6 +621,110 @@ async function resolvePublisher(
   return bad(`A new ${what} needs publisherId or publisherSlug.`);
 }
 
+/**
+ * What a placement's Volume of `label` joins in its Series: the active
+ * Volume of the label. A Volume of the label that is hidden, or merged
+ * into another (whose survivor, keeping the label in this Series, would be
+ * the active one), is never read as absent: it is `unavailable`. The
+ * reviewer saw a new Volume of that label, so a survivor of another label
+ * is the author's to restate, not approval's to follow.
+ */
+async function joinedVolume(
+  ctx: QueryCtx | MutationCtx,
+  seriesId: Id<"series">,
+  label: string | undefined,
+): Promise<Join<"volumes">> {
+  const sameLabel = (
+    await ctx.db
+      .query("volumes")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .collect()
+  ).filter((volume) => labelsEqual(volume.label, label ?? null));
+  const active = sameLabel.find((volume) => volume.status === "active");
+  if (active !== undefined) return { existingId: active._id };
+  return sameLabel[0] !== undefined
+    ? { unavailable: { type: "volume", id: sameLabel[0]._id } }
+    : {};
+}
+
+/**
+ * The stored Edition a placement's `joinExisting` Edition resolves to: the
+ * sibling an import created meanwhile under the same publisher, line and
+ * position, covering exactly these Volumes (pipeline.ts siblingEditions),
+ * or the line's unmapped member at that position (unmappedSiblings). A
+ * sibling that is hidden, merged or locked, with no open one beside it, is
+ * `unavailable`. Nothing while any covered Volume or the line is still to
+ * be created: no stored Edition can cover a record that does not exist yet.
+ */
+async function storedSibling(
+  ctx: QueryCtx | MutationCtx,
+  edition: {
+    publisherId: Id<"publishers">;
+    coverage: CoveragePlan[];
+    editionLine: RefTo<"editionLines"> | undefined;
+    linePosition: string | undefined;
+    unmapped: boolean;
+  },
+  planByTemp: Map<string, CreatePlan>,
+): Promise<Join<"editions">> {
+  let lineId: Id<"editionLines"> | null = null;
+  if (edition.editionLine?.kind === "id") lineId = edition.editionLine.id;
+  else if (edition.editionLine?.kind === "temp") {
+    const plan = planByTemp.get(edition.editionLine.tempId);
+    if (plan?.table !== "editionLines" || plan.existingId === undefined) return {};
+    lineId = plan.existingId;
+  }
+  const line = lineId !== null ? { id: lineId, position: edition.linePosition ?? null } : null;
+  let siblings: Doc<"editions">[] = [];
+  if (edition.unmapped) {
+    if (line !== null) siblings = await unmappedSiblings(ctx, edition.publisherId, line);
+  } else {
+    const volumeIds: Id<"volumes">[] = [];
+    for (const row of [...edition.coverage].sort((a, b) => a.order - b.order)) {
+      if (row.extent !== "complete") return {};
+      if (row.volume.kind === "id") {
+        volumeIds.push(row.volume.id);
+        continue;
+      }
+      const plan = planByTemp.get(row.volume.tempId);
+      if (plan?.table !== "volumes" || plan.existingId === undefined) return {};
+      volumeIds.push(plan.existingId);
+    }
+    siblings = await siblingEditions(ctx, edition.publisherId, volumeIds, line);
+  }
+  const open = siblings.find(joinableEdition);
+  if (open !== undefined) return { existingId: open._id };
+  return siblings[0] !== undefined ? { unavailable: { type: "edition", id: siblings[0]._id } } : {};
+}
+
+/**
+ * Validate a Release op's `placement`: it names an observation that exists
+ * and a Series. Whether that book can still be placed under that Series by
+ * these ops is placement.ts's question (checkPlacement), asked at
+ * submission and approval; whether the Series is still active and unlocked
+ * is a staleness question (unavailableCreateRefs).
+ */
+async function planPlacement(
+  ctx: QueryCtx | MutationCtx,
+  raw: unknown,
+): Promise<{ observationId: Id<"sourceObservations">; seriesId: Id<"series"> }> {
+  const placement = asObject(raw, "release's placement");
+  const observationId =
+    typeof placement.observationId === "string"
+      ? ctx.db.normalizeId("sourceObservations", placement.observationId)
+      : null;
+  const seriesId =
+    typeof placement.seriesId === "string"
+      ? ctx.db.normalizeId("series", placement.seriesId)
+      : null;
+  if (observationId === null || seriesId === null) {
+    return bad("A placed release names its observation and Series by ID.");
+  }
+  if ((await ctx.db.get(observationId)) === null)
+    return bad("The observation this release places no longer exists.");
+  return { observationId, seriesId };
+}
+
 // ---------- staleness ----------
 
 const REFERENCED_TYPES: Record<ReferencedTable, RecordType> = {
@@ -600,7 +774,8 @@ function referencesOf(op: CreateOpInput): Array<{ table: ReferencedTable; raw: u
  * ops in the same proposal are skipped; strings that resolve to nothing are
  * left for `planCreateOps` to reject as structural errors. Approval checks
  * this first so a vanished reference reads as a stale proposal instead of a
- * thrown `resolveRef`.
+ * thrown `resolveRef`. A placement's joins count too (`unjoinable`): a
+ * record it matches but may not join is unavailable the same way.
  */
 export async function unavailableCreateRefs(
   ctx: QueryCtx | MutationCtx,
@@ -615,7 +790,11 @@ export async function unavailableCreateRefs(
       if (stored !== null && !stored.active) unavailable.set(stored.id, REFERENCED_TYPES[table]);
     }
     // The importer's form names the publisher by slug; ID wins when both are set.
-    const fields = op.fields as { publisherId?: unknown; publisherSlug?: unknown } | null;
+    const fields = op.fields as {
+      publisherId?: unknown;
+      publisherSlug?: unknown;
+      placement?: unknown;
+    } | null;
     const byId = typeof fields?.publisherId === "string" && fields.publisherId !== "";
     const slug = fields?.publisherSlug;
     const namesPublisher = op.table === "editions" || op.table === "editionLines";
@@ -626,19 +805,55 @@ export async function unavailableCreateRefs(
         .unique();
       if (doc && doc.status !== "active") unavailable.set(doc._id, "publisher");
     }
+    // A placement goes under its Series only while the Series is open to
+    // edits: hidden, merged or locked since, it is stale like any record.
+    const placement = fields?.placement;
+    const placed =
+      typeof placement === "object" && placement !== null && "seriesId" in placement
+        ? placement.seriesId
+        : undefined;
+    if (op.table === "releases" && typeof placed === "string") {
+      const seriesId = ctx.db.normalizeId("series", placed);
+      const series = seriesId !== null ? await ctx.db.get(seriesId) : null;
+      if (series !== null && (series.status !== "active" || series.locked)) {
+        unavailable.set(series._id, "series");
+      }
+    }
+  }
+  if (ops.some(carriesPlacement)) {
+    // Ops that cannot be planned at all are planOps' to refuse, not stale.
+    let plans: CreatePlan[] = [];
+    try {
+      plans = await planCreateOps(ctx, ops);
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+    }
+    for (const { type, id } of unjoinable(plans)) unavailable.set(id, type);
   }
   return [...unavailable].map(([id, type]) => ({ type, id }));
 }
 
-/** Validate the ordered Volume Coverage of a new edition (≥ 1 row). */
+/**
+ * Validate the ordered Volume Coverage of a new edition: at least one row,
+ * or none for Unmapped Packaging (`unmapped`).
+ */
 async function planCoverage(
   ctx: QueryCtx | MutationCtx,
   fields: Record<string, unknown>,
   tempIds: Map<string, CreatableTable>,
+  unmapped: boolean,
 ): Promise<CoveragePlan[]> {
-  const raw = fields.volumeCoverage;
+  const raw = fields.volumeCoverage ?? [];
+  if (unmapped) {
+    if (Array.isArray(raw) && raw.length === 0) return [];
+    return bad(
+      "Unmapped Packaging covers no Volumes yet: drop its coverage rows or its unmapped mark.",
+    );
+  }
   if (!Array.isArray(raw) || raw.length === 0) {
-    return bad("A new edition needs at least one volume coverage row.");
+    return bad(
+      "A new edition needs at least one volume coverage row: state the Volumes it covers, or mark it Unmapped Packaging under its line.",
+    );
   }
   const coverage: CoveragePlan[] = [];
   const orders = new Set<number>();
@@ -661,9 +876,7 @@ async function planCoverage(
       return bad('Coverage extent must be "complete" or "partial".');
     }
     const note =
-      typeof row.note === "string" && row.note.trim() !== ""
-        ? row.note.trim()
-        : undefined;
+      typeof row.note === "string" && row.note.trim() !== "" ? row.note.trim() : undefined;
     coverage.push({ volume, order, extent: row.extent, note });
   }
   return coverage;
@@ -684,7 +897,8 @@ export type CreatedRecord = {
   revisionFields: Record<string, unknown>;
   /**
    * The op resolved to a record that already existed (a `joinExisting`
-   * Edition Line): nothing was inserted, so it gets no creation Revision.
+   * Edition Line, or a placement's Volume or Edition): nothing was
+   * inserted, so it gets no creation Revision.
    */
   existing?: true;
 };
@@ -713,6 +927,12 @@ export async function applyCreatePlan(
   plan: CreatePlan,
   temp: Map<string, string>,
 ): Promise<CreatedRecord> {
+  // The stale gate stops these first; never create a twin of one.
+  if ("unavailable" in plan && plan.unavailable !== undefined) {
+    return bad(
+      `A ${plan.unavailable.type} this placement matches is hidden, locked or merged away.`,
+    );
+  }
   switch (plan.table) {
     case "series": {
       const publicId = await allocatePublicId(ctx, "series");
@@ -722,9 +942,7 @@ export async function applyCreatePlan(
         title: plan.fields.title,
         altTitles: plan.fields.altTitles,
         searchText: seriesSearchText(plan.fields.title, plan.fields.altTitles),
-        sourceStatus: plan.fields.sourceStatus as
-          | Doc<"series">["sourceStatus"]
-          | undefined,
+        sourceStatus: plan.fields.sourceStatus as Doc<"series">["sourceStatus"] | undefined,
       });
       temp.set(plan.tempId, id);
       return {
@@ -735,6 +953,16 @@ export async function applyCreatePlan(
       };
     }
     case "volumes": {
+      if (plan.existingId !== undefined) {
+        temp.set(plan.tempId, plan.existingId);
+        return {
+          tempId: plan.tempId,
+          ref: { type: "volume", id: plan.existingId },
+          publicId: null,
+          revisionFields: {},
+          existing: true,
+        };
+      }
       const seriesId = resolved(plan.series, temp);
       // Volume Position: the volume number when the label is one (spec §2),
       // else just after the last whole number — counting volumes this same
@@ -790,6 +1018,16 @@ export async function applyCreatePlan(
       };
     }
     case "editions": {
+      if (plan.existingId !== undefined) {
+        temp.set(plan.tempId, plan.existingId);
+        return {
+          tempId: plan.tempId,
+          ref: { type: "edition", id: plan.existingId },
+          publicId: null,
+          revisionFields: {},
+          existing: true,
+        };
+      }
       const publicId = await allocatePublicId(ctx, "edition");
       const editionLineId = plan.editionLine && resolved(plan.editionLine, temp);
       const id = await ctx.db.insert("editions", {
@@ -798,6 +1036,7 @@ export async function applyCreatePlan(
         publisherId: plan.publisherId,
         editionLineId,
         linePosition: plan.fields.linePosition,
+        ...(plan.fields.coverageUnmapped ? { coverageUnmapped: true as const } : {}),
       });
       const coverage = [];
       for (const row of [...plan.coverage].sort((a, b) => a.order - b.order)) {

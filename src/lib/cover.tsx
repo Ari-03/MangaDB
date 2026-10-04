@@ -11,16 +11,28 @@ import { useArtConcealed } from "~/lib/mature";
 // Cloth colours for coverless books. Picked deterministically from the title
 // so the same book is always the same colour across pages and reloads.
 const CLOTH = [
-  "#8a4426", "#6b2f4a", "#2b5d5b", "#3d5a3a", "#5a3d7a", "#7a5a2b",
-  "#2f4d6b", "#7a2f2f", "#4a5a2b", "#6b4a2f", "#2b6b5a", "#7a3d5a",
+  "#8a4426",
+  "#6b2f4a",
+  "#2b5d5b",
+  "#3d5a3a",
+  "#5a3d7a",
+  "#7a5a2b",
+  "#2f4d6b",
+  "#7a2f2f",
+  "#4a5a2b",
+  "#6b4a2f",
+  "#2b6b5a",
+  "#7a3d5a",
 ];
 
 /**
  * Cover art by ISBN-13, served from our own domain (src/server/covers.ts):
  * the Worker fetches it from a publisher-distribution CDN or OpenLibrary on
  * first request and keeps it. A Release with an ISBN therefore always has a
- * cover URL; the 404 for art nobody has is caught by <Cover>, which tries its
- * next candidate and ends at cloth.
+ * cover URL; the 404 for art nobody has, and the 503 for art not fetched
+ * within the Worker's 3 s wait, are caught by <Cover>, which tries its next
+ * candidate and ends at cloth. So a cover settles within about 3 s per
+ * candidate; the art the wait cut short is there on the next view.
  */
 function coverPath(isbn13: string): string {
   return `/covers/${isbn13}.jpg`;
@@ -60,23 +72,53 @@ export type CollectionState = "owned" | "ordered" | "wanted" | "read";
 
 const BADGE_ICONS: Record<CollectionState, ReactNode> = {
   owned: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M2.6 8.4 6.2 12 13.4 4.4" />
     </svg>
   ),
   ordered: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M2 5.2 8 2.3l6 2.9v5.6L8 13.7 2 10.8z" />
       <path d="M2 5.2 8 8l6-2.8M8 8v5.7" />
     </svg>
   ),
   wanted: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M4 2.6h8v11l-4-3-4 3z" />
     </svg>
   ),
   read: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M2.6 8.4 6.2 12 13.4 4.4" />
     </svg>
   ),
@@ -158,6 +200,7 @@ export function Cover({
   // A server-rendered <img> can fail before React hydrates, and that error
   // event is gone by the time onError is attached; a finished image with no
   // pixels is the tell.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `fail` is new each render but only calls the stable setFailed, so `art` alone decides when to look
   useEffect(() => {
     const el = img.current;
     if (art && el && el.complete && el.naturalWidth === 0) fail(art);
@@ -177,14 +220,26 @@ export function Cover({
           onError={() => fail(art)}
         />
       ) : numbered ? (
-        <span className="cover-ph cover-ph--numbered" style={style} role="img" aria-label={`${title} (no cover on file)`}>
+        <span
+          className="cover-ph cover-ph--numbered"
+          style={style}
+          role="img"
+          aria-label={`${title} (no cover on file)`}
+        >
           <span className="cover-ph-series">{numbered.series}</span>
           <span className="cover-ph-num">{numbered.number}</span>
         </span>
       ) : (
-        <span className="cover-ph" style={style} role="img" aria-label={`${title} (no cover on file)`}>
+        <span
+          className="cover-ph"
+          style={style}
+          role="img"
+          aria-label={`${title} (no cover on file)`}
+        >
           <span className="cover-ph-title">{title}</span>
-          <span className="cover-ph-mark" aria-hidden="true">{foot?.[0] ?? ""}</span>
+          <span className="cover-ph-mark" aria-hidden="true">
+            {foot?.[0] ?? ""}
+          </span>
           {foot ? (
             <span className="cover-ph-foot">
               <span>{foot[0] ?? ""}</span>
@@ -200,7 +255,12 @@ export function Cover({
         </span>
       ) : null}
       {followed ? (
-        <span className="cover-flag" title="You follow this series" role="img" aria-label="You follow this series">
+        <span
+          className="cover-flag"
+          title="You follow this series"
+          role="img"
+          aria-label="You follow this series"
+        >
           ★
         </span>
       ) : null}

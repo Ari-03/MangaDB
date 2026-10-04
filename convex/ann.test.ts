@@ -24,7 +24,8 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import { linkObservation } from "./lib/observations";
+import { drain, expectStampedAtHandOff, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 type FixtureRelease = {
   annId: number;
@@ -37,12 +38,14 @@ type FixtureRelease = {
 type FixtureManga = {
   id: number;
   title: string;
+  /** The report row's type; defaults to "manga". */
+  type?: string;
   altTitles?: Array<{ lang: string; text: string }>;
   /** The Plot Summary's XML text (already escaped, as ANN serves it). */
   plot?: string;
   releases: FixtureRelease[];
   /** Staff rows; defaults to one "Story & Art" person. */
-  staff?: Array<{ id: number; name: string }>;
+  staff?: Array<{ id: number; name: string; task?: string }>;
 };
 
 function reportXml(manga: FixtureManga[], nskip: number, nlist: number) {
@@ -50,7 +53,7 @@ function reportXml(manga: FixtureManga[], nskip: number, nlist: number) {
   const items = page
     .map(
       (m) =>
-        `<item><id>${m.id}</id><gid>1</gid><type>manga</type><name>${m.title}</name><precision>manga</precision></item>`,
+        `<item><id>${m.id}</id><gid>1</gid><type>${m.type ?? "manga"}</type><name>${m.title}</name><precision>manga</precision></item>`,
     )
     .join("\n");
   return `<report skipped="${nskip}" listed="${page.length}"><args><type>manga</type></args>\n${items}</report>`;
@@ -79,7 +82,10 @@ ${alts}
 ${plot}
 ${releases}
 ${(m.staff ?? [{ id: 1, name: "Some One" }])
-  .map((p) => `<staff gid="3"><task>Story &amp; Art</task><person id="${p.id}">${p.name}</person></staff>`)
+  .map(
+    (p) =>
+      `<staff gid="3"><task>${p.task ?? "Story &amp; Art"}</task><person id="${p.id}">${p.name}</person></staff>`,
+  )
   .join("\n")}</manga>`;
     })
     .join("\n");
@@ -141,7 +147,10 @@ async function insertBook(
   ctx: MutationCtx,
   publisherId: Id<"publishers">,
   labels: string[],
-  { release, extent = "complete" }: { release?: CatalogOverrides["release"]; extent?: Doc<"volumeCoverages">["extent"] } = {},
+  {
+    release,
+    extent = "complete",
+  }: { release?: CatalogOverrides["release"]; extent?: Doc<"volumeCoverages">["extent"] } = {},
 ) {
   const series = (await ctx.db.query("series").collect())[0]!;
   const volumes = await ctx.db.query("volumes").collect();
@@ -222,6 +231,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs.map((run) => run.status)).toEqual(["succeeded", "running"]);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("links release observations to canonical Releases and reconciles dates at standard authority", async () => {
@@ -281,34 +291,60 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       expect(obs9002!.conflicts).toHaveLength(1);
       expect(obs9002!.conflicts![0]!.reason).toContain("lower authority");
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("mirrors in chained links and withdraws entries a complete mirror stopped seeing", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    // 510 entries: a full 500-item report page (10 batches) + a short second
-    // page. Budget is page-aligned, so with maxBatches 10 the first link
-    // stops at the page boundary and hands the run to a continuation.
-    const many: FixtureManga[] = Array.from({ length: 510 }, (_, i) => ({
+    // A full 500-row report page, then a short second page. Paging counts
+    // every row but only manga rows are mirrored, so anime rows fill the
+    // first page around 51 manga (two detail batches); 2 manga follow on the
+    // second. Budget is page-aligned, so with maxBatches 1 the first link
+    // still finishes both batches of its page, stops at the page boundary
+    // and hands the run to a continuation.
+    const manga = (i: number): FixtureManga => ({
       id: 1000 + i,
       title: `Chain Series ${i}`,
       releases: [{ annId: 20000 + i, date: "2026-03-03", designator: "GN 1" }],
-    }));
+    });
+    const anime = (i: number): FixtureManga => ({
+      id: 5000 + i,
+      title: `Chain Anime ${i}`,
+      type: "anime",
+      releases: [],
+    });
+    const many: FixtureManga[] = [
+      ...Array.from({ length: 51 }, (_, i) => manga(i)),
+      ...Array.from({ length: 449 }, (_, i) => anime(i)),
+      manga(51),
+      manga(52),
+    ];
     stubAnn(many);
-    const first = await sync(t, { maxBatches: 10 });
-    expect(first).toMatchObject({ continued: true, recordsSeen: 500 });
+    const first = await sync(t, { maxBatches: 1 });
+    expect(first).toMatchObject({ continued: true, recordsSeen: 51 });
     // The run stays open across the chain.
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs).toHaveLength(1);
       expect(runs[0]!.status).toBe("running");
     });
-    // The scheduled continuation link finishes the mirror.
+    // The scheduled continuation link finishes the mirror, paging on by
+    // the report's raw row count (anime rows included), not its manga.
     await drain(t);
+    expect(reportRequests.map((url) => new URL(url).searchParams.get("nskip"))).toEqual([
+      "0",
+      "500",
+    ]);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
-      expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 510 });
-      expect(await ctx.db.query("series").collect()).toHaveLength(510);
+      expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 53 });
+      expect(await ctx.db.query("series").collect()).toHaveLength(53);
+      // The continuation kept the run's start: what the first link saw is
+      // not withdrawn as unseen.
+      expect(
+        (await ctx.db.query("sourceObservations").collect()).filter((o) => o.withdrawn),
+      ).toEqual([]);
     });
 
     // Now drop one entry from ANN and mirror again: it withdraws.
@@ -322,10 +358,8 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       const kept = observations.find((o) => o.sourceRecordId === "manga:1001")!;
       expect(kept.withdrawn).toBe(false);
     });
-    // 510 fixture records across three mirror passes; each new Series costs
-    // two title searches (candidates, then the hidden-Series check), which
-    // convex-test simulates by scanning the table.
-  }, 60000);
+    await drain(t); // the page passes its syncs chained, under this test's stub
+  });
 
   it.each(["html report", "missing detail", "failed detail", "malformed report item"])(
     "preserves observations and fails an incomplete sweep: %s",
@@ -503,6 +537,11 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     }) as unknown as typeof setTimeout);
     stubAnn([BETA]);
     await sync(t, { politeDelayMs: undefined });
+    // The completed mirror chains the page pass, which the stub has already
+    // started: finish it here, so its pause is counted and its fetch never
+    // reaches a later test's stub after a real 1.1 s sleep.
+    await t.finishInProgressScheduledFunctions();
+    expect(await obsFor(t, 9101)).toMatchObject({ snapshot: { page: { status: "notFound" } } });
     expect(waits.length).toBeGreaterThan(0);
     expect(Math.min(...waits.filter((w) => w > 0))).toBeGreaterThanOrEqual(1000);
   });
@@ -559,6 +598,7 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
     await t.run(async (ctx) => {
       expect((await ctx.db.get(release))!.pubDate!.year).toBe(2005);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never links a line years away from the Release's own date", async () => {
@@ -574,6 +614,7 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
     await releaseFor(t, "5", { year: 2005, month: 3, day: 1, sort: 20050301 });
     await sync(t);
     expect(await linkOf(t, 9201)).toBeNull();
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("builds no placeholder Volume for an omnibus-only entry and dedupes labels", async () => {
@@ -609,6 +650,7 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
       expect(await volumesOf("Homunculus")).toHaveLength(0);
       expect((await volumesOf("Sand Land")).map((v) => [v.label, v.position])).toEqual([["1", 1]]);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 });
 
@@ -628,6 +670,7 @@ describe("ann.sync — steady state", () => {
       const tables = versions[0]!.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
       expect(tables).toEqual(["series", "volumes"]);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 });
 
@@ -915,6 +958,124 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
   });
 });
 
+describe("ann — disabling the source mid-run", () => {
+  const disableAnn = (t: TestT) =>
+    t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
+
+  /** Wrap the stub stubAnn installed: disable ANN on the first request `when` picks. */
+  function disableOn(t: TestT, when: (url: string) => boolean) {
+    const inner = globalThis.fetch;
+    let done = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (!done && when(String(input))) {
+        done = true;
+        await disableAnn(t);
+      }
+      return await inner(input);
+    });
+  }
+
+  it("finishes the report page under way and stops before the next", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // A first report page of 500 anime rows (read, none mirrored), then Alpha.
+    const anime = Array.from({ length: 500 }, (_, i) => ({
+      id: 5000 + i,
+      title: `Anime ${i}`,
+      type: "anime",
+      releases: [],
+    }));
+    stubAnn([...anime, ALPHA]);
+    disableOn(t, (url) => url.includes("reports.xml"));
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 0, continued: false });
+    expect(reportRequests).toHaveLength(1);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+      expect(await ctx.db.query("series").collect()).toHaveLength(0);
+    });
+  });
+
+  it("withdraws nothing and chains no page pass when disabled during a clean mirror's last report page", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // An entry an earlier mirror saw, which this sweep no longer lists.
+    await t.run((ctx) => insertObservation(ctx, { sourceKey: "ann", sourceRecordId: "manga:999" }));
+    stubAnn([ALPHA]);
+    disableOn(t, (url) => url.includes("reports.xml"));
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 1 });
+    await drain(t);
+    await t.run(async (ctx) => {
+      const runs = await ctx.db.query("importRuns").collect();
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 1 });
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.find((o) => o.sourceRecordId === "manga:999")?.withdrawn).toBe(false);
+      expect(observations.find((o) => o.sourceRecordId === "manga:100")?.withdrawn).toBe(false);
+    });
+    expect(pageRequests).toHaveLength(0);
+  });
+
+  it("finishes the batch of release pages under way and stops before the next", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // 26 unlinked lines: a candidate page of 25, then one more.
+    const long: FixtureManga = {
+      id: 400,
+      title: "Long Saga",
+      releases: Array.from({ length: 26 }, (_, i) => ({
+        annId: 30000 + i,
+        date: "2026-01-06",
+        designator: `GN ${i + 1}`,
+      })),
+    };
+    stubAnn([long]);
+    await sync(t, { releasePages: false });
+    disableOn(t, (url) => url.includes("releases.php"));
+    expect(await syncPages(t)).toMatchObject({ stopped: true, fetched: 25, continued: false });
+    expect(pageRequests).toHaveLength(25);
+    await t.run(async (ctx) => {
+      const runs = await ctx.db.query("importRuns").collect();
+      expect(runs.at(-1)).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 25 });
+    });
+  });
+});
+
+describe("ann — a slow chain is not stranded", () => {
+  it("stamps at hand-off, so a slow last page and a delayed continuation do not strand the run", async () => {
+    // Fake timers: the clock moves only when the test moves it, and the
+    // continuation stays queued.
+    vi.useFakeTimers();
+    const t = makeT();
+    await seedRegistry(t, true);
+    // A full report page of entries with no English release: ten detail
+    // batches, after which a one-batch budget hands off.
+    const quiet = Array.from({ length: 500 }, (_, i) => ({
+      id: 6000 + i,
+      title: `Quiet ${i}`,
+      releases: [],
+    }));
+    stubAnn(quiet);
+    const inner = globalThis.fetch;
+    const minute = 60_000;
+    const opened = Date.now();
+    // The report page takes 28 minutes after the gate stamped before it.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).includes("reports.xml")) vi.setSystemTime(Date.now() + 28 * minute);
+      return await inner(input);
+    });
+    expect(await sync(t, { maxBatches: 1, releasePages: false })).toMatchObject({
+      continued: true,
+    });
+    const [run] = await t.run((ctx) => ctx.db.query("importRuns").collect());
+    expect(run).toMatchObject({ status: "running", lastActivityAt: opened + 28 * minute });
+    // The continuation waits 35 minutes: 63 since the stamp before the page.
+    vi.setSystemTime(opened + 63 * minute);
+    expect(await t.mutation(internal.imports.closeStrandedRun, { runId: run!._id })).toBe(false);
+    expect(await t.run((ctx) => ctx.db.get(run!._id))).toMatchObject({ status: "running" });
+  });
+});
+
 // Catalog repairs hide and merge records; the next weekly mirror must not
 // undo them (stage 13: hidden Series recreated; Summer Ghost / Qualia the
 // Purple regained an empty unlabeled placeholder after a merge).
@@ -942,12 +1103,15 @@ describe("ann — repairs stand across mirrors", () => {
     expect(all.map((s) => s.status)).toEqual(["hidden"]);
     expect(await volumesOf(t, alpha!._id)).toHaveLength(3);
     expect((await obsFor(t, 9004))?.recordRef).toBeUndefined();
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never creates a Series whose title names a hidden one", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 77, title: "Alpha Saga" }));
+    await t.run((ctx) =>
+      insertSeries(ctx, { status: "hidden", publicId: 77, title: "Alpha Saga" }),
+    );
     stubAnn([ALPHA]);
     await sync(t);
     expect((await seriesTitled(t, "Alpha Saga")).map((s) => s.status)).toEqual(["hidden"]);
@@ -964,6 +1128,7 @@ describe("ann — repairs stand across mirrors", () => {
         "Series 77",
       );
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("follows a merged Series to its survivor and builds the backbone there", async () => {
@@ -973,7 +1138,10 @@ describe("ann — repairs stand across mirrors", () => {
     await sync(t);
     const [loser] = await seriesTitled(t, "Alpha Saga");
     const survivorId = await t.run(async (ctx) => {
-      const survivorId = await insertSeries(ctx, { title: "Alpha Saga: Complete", altTitles: ["Alpha Saga"] });
+      const survivorId = await insertSeries(ctx, {
+        title: "Alpha Saga: Complete",
+        altTitles: ["Alpha Saga"],
+      });
       await ctx.db.patch(loser!._id, {
         status: "merged",
         mergedIntoId: survivorId,
@@ -1002,6 +1170,7 @@ describe("ann — repairs stand across mirrors", () => {
       expect(mangaObs?.recordRef?.id).toBe(survivorId);
     });
     expect((await volumesOf(t, survivorId)).map((v) => v.label).sort()).toEqual(["1", "2", "3"]);
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   const GHOST: FixtureManga = {
@@ -1033,6 +1202,7 @@ describe("ann — repairs stand across mirrors", () => {
     });
     await sync(t);
     expect((await volumesOf(t, ghost!._id)).map((v) => v.label)).toEqual(["1", "2"]);
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never recreates a numbered Volume a repair merged or hid", async () => {
@@ -1059,6 +1229,7 @@ describe("ann — repairs stand across mirrors", () => {
       ["2", "merged"],
       ["3", "hidden"],
     ]);
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never places a release line whose ISBN is on a Release an Editor hid", async () => {
@@ -1157,14 +1328,19 @@ describe("ann.sync — a publisher's Series under the full title", () => {
     await seedRegistry(t, true);
     // A publisher feed (PRH) already created the Series under the full title.
     const seriesId = await t.run((ctx) =>
-      insertSeries(ctx, { title: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!" }),
+      insertSeries(ctx, {
+        title: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
+      }),
     );
     stubAnn([
       {
         id: 26068,
         title: "7th Time Loop: The Villainess Enjoys a Carefree Life",
         altTitles: [
-          { lang: "EN", text: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!" },
+          {
+            lang: "EN",
+            text: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
+          },
           { lang: "JA", text: "ループ7回目の悪役令嬢は" },
         ],
         releases: [{ annId: 43861, date: "2022-03-08", designator: "GN 1" }],
@@ -1179,7 +1355,9 @@ describe("ann.sync — a publisher's Series under the full title", () => {
       );
       expect(link?.recordRef).toEqual({ type: "series", id: seriesId });
       // The backbone Volume lands under the publisher's Series.
-      expect((await ctx.db.query("volumes").collect()).map((v) => [v.seriesId, v.label])).toEqual([[seriesId, "1"]]);
+      expect((await ctx.db.query("volumes").collect()).map((v) => [v.seriesId, v.label])).toEqual([
+        [seriesId, "1"],
+      ]);
     });
   });
 });
@@ -1205,10 +1383,38 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
     ],
   };
   const pages = {
-    9101: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "1", distributor: "Viz Media", date: "2011-05-03", isbn13: "9781421539898", mangaId: 1825 }),
-    9102: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "2", distributor: "Viz Media", date: "2011-08-02", isbn13: "9781421539904", mangaId: 1825 }),
-    9201: releasePage({ title: "Naruto [Omnibus]", volume: "1", distributor: "Viz Media", date: "2020-01-07", isbn13: "9781974700004", mangaId: 1825 }),
-    9103: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "9", distributor: "Viz Media", date: "2012-02-07", isbn13: "9781421554891", mangaId: 1825 }),
+    9101: releasePage({
+      title: "Naruto [3-in-1 Edition]",
+      volume: "1",
+      distributor: "Viz Media",
+      date: "2011-05-03",
+      isbn13: "9781421539898",
+      mangaId: 1825,
+    }),
+    9102: releasePage({
+      title: "Naruto [3-in-1 Edition]",
+      volume: "2",
+      distributor: "Viz Media",
+      date: "2011-08-02",
+      isbn13: "9781421539904",
+      mangaId: 1825,
+    }),
+    9201: releasePage({
+      title: "Naruto [Omnibus]",
+      volume: "1",
+      distributor: "Viz Media",
+      date: "2020-01-07",
+      isbn13: "9781974700004",
+      mangaId: 1825,
+    }),
+    9103: releasePage({
+      title: "Naruto [3-in-1 Edition]",
+      volume: "9",
+      distributor: "Viz Media",
+      date: "2012-02-07",
+      isbn13: "9781421554891",
+      mangaId: 1825,
+    }),
   };
 
   it("places a line by the range its designator states — One Piece's omnibus shape", async () => {
@@ -1222,21 +1428,37 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
         { annId: 8097, date: "2020-11-03", designator: "GN 97" },
         { annId: 8098, date: "2021-02-02", designator: "GN 98" },
         { annId: 8099, date: "2021-05-04", designator: "GN 99" },
-        { annId: 8833, date: "2022-01-04", designator: "GN 97-99", title: "One Piece - [Omnibus] 33 - Wano" },
+        {
+          annId: 8833,
+          date: "2022-01-04",
+          designator: "GN 97-99",
+          title: "One Piece - [Omnibus] 33 - Wano",
+        },
       ],
     };
     stubAnn([ONE_PIECE], {
-      8833: releasePage({ title: "One Piece - [Omnibus] 33 - Wano", volume: "33", distributor: "Viz Media", date: "2022-01-04", isbn13: "9781974726585", mangaId: 1223 }),
+      8833: releasePage({
+        title: "One Piece - [Omnibus] 33 - Wano",
+        volume: "33",
+        distributor: "Viz Media",
+        date: "2022-01-04",
+        isbn13: "9781974726585",
+        mangaId: 1223,
+      }),
     });
     await sync(t, { releasePages: false });
     await syncPages(t);
     await t.run(async (ctx) => {
       const [line] = await ctx.db.query("editionLines").collect();
       expect(line).toMatchObject({ name: "Omnibus" });
-      const [edition] = (await ctx.db.query("editions").collect()).filter((e) => e.editionLineId === line!._id);
+      const [edition] = (await ctx.db.query("editions").collect()).filter(
+        (e) => e.editionLineId === line!._id,
+      );
       expect(edition).toMatchObject({ linePosition: "33" });
       expect(edition!.coverageUnmapped).toBeUndefined();
-      const volumes = new Map((await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]));
+      const volumes = new Map(
+        (await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]),
+      );
       const covered = (await ctx.db.query("volumeCoverages").collect())
         .filter((c) => c.editionId === edition!._id)
         .sort((a, b) => a.order - b.order)
@@ -1254,12 +1476,16 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
     await sync(t, { releasePages: false });
     await syncPages(t);
     await t.run(async (ctx) => {
-      const volumes = new Map((await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]));
+      const volumes = new Map(
+        (await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]),
+      );
       expect([...volumes.values()].sort()).toEqual(["1", "2", "3", "4", "5", "6"]);
       const lines = await ctx.db.query("editionLines").collect();
       expect(lines.map((l) => l.name).sort()).toEqual(["3-in-1 Edition", "Omnibus"]);
       const threeIn1 = lines.find((l) => l.name === "3-in-1 Edition")!;
-      const members = (await ctx.db.query("editions").collect()).filter((e) => e.editionLineId === threeIn1._id);
+      const members = (await ctx.db.query("editions").collect()).filter(
+        (e) => e.editionLineId === threeIn1._id,
+      );
       expect(members.map((e) => e.linePosition).sort()).toEqual(["1", "2"]);
       const coverage = await ctx.db.query("volumeCoverages").collect();
       const covered = (position: string) =>
@@ -1271,15 +1497,282 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
       expect(covered("2")).toEqual(["4", "5", "6"]);
       // The size-less "[Omnibus]" line is an Unmapped Packaging member.
       const omnibus = lines.find((l) => l.name === "Omnibus")!;
-      const unmapped = (await ctx.db.query("editions").collect()).find((e) => e.editionLineId === omnibus._id)!;
+      const unmapped = (await ctx.db.query("editions").collect()).find(
+        (e) => e.editionLineId === omnibus._id,
+      )!;
       expect(unmapped).toMatchObject({ coverageUnmapped: true, linePosition: "1" });
       // Position 9 would cover 25–27; the backbone stops at 6.
       const releases = await ctx.db.query("releases").collect();
-      expect(releases.map((r) => r.isbn13).sort()).toEqual(["9781421539898", "9781421539904", "9781974700004"]);
+      expect(releases.map((r) => r.isbn13).sort()).toEqual([
+        "9781421539898",
+        "9781421539904",
+        "9781974700004",
+      ]);
     });
     const held = await obsFor(t, 9103);
     expect(held?.recordRef).toBeUndefined();
     expect(held?.conflicts?.[0]?.reason).toMatch(/would cover Volumes 25–27/);
+  });
+});
+
+// A designator listing Volumes no range holds ("(GN 1, 3)") states the
+// book's coverage in a way no Edition can hold: the page pass holds it, and
+// the line's name ("3-in-1") never sizes it. A contiguous list places as the
+// range it spans.
+describe("ann.syncReleasePages — Volume lists (C5)", () => {
+  const KAPPA: FixtureManga = {
+    id: 1900,
+    title: "Kappa",
+    releases: [
+      ...["1", "2", "3", "4", "5", "6"].map((n) => ({
+        annId: 9300 + Number(n),
+        date: "2010-01-05",
+        designator: `GN ${n}`,
+      })),
+      { annId: 9401, date: "2012-03-06", designator: "GN 1, 3", title: "Kappa [3-in-1 Edition]" },
+      {
+        annId: 9402,
+        date: "2012-06-05",
+        designator: "GN 4, 5, 6",
+        title: "Kappa [3-in-1 Edition]",
+      },
+    ],
+  };
+  const GAPPED_ISBN = "9781421500010";
+  const pages = (gapped = "GN 1, 3") => ({
+    9401: releasePage({
+      title: "Kappa [3-in-1 Edition]",
+      volume: gapped,
+      distributor: "Viz Media",
+      date: "2012-03-06",
+      isbn13: GAPPED_ISBN,
+      mangaId: 1900,
+    }),
+    9402: releasePage({
+      title: "Kappa [3-in-1 Edition]",
+      volume: "GN 4, 5, 6",
+      distributor: "Viz Media",
+      date: "2012-06-05",
+      isbn13: "9781421500027",
+      mangaId: 1900,
+    }),
+  });
+
+  /** The Volume labels an Edition covers, in order. */
+  const coveredBy = (t: TestT, editionId: Id<"editions">) =>
+    t.run(async (ctx) => {
+      const coverages = (await ctx.db.query("volumeCoverages").collect())
+        .filter((c) => c.editionId === editionId)
+        .sort((a, b) => a.order - b.order);
+      return await Promise.all(coverages.map(async (c) => (await ctx.db.get(c.volumeId))!.label));
+    });
+  const holdFor = (t: TestT, observationId: Id<"sourceObservations">) =>
+    t.run((ctx) =>
+      ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", observationId))
+        .unique(),
+    );
+
+  async function mirrorAndPlace(t: TestT, gapped = "GN 1, 3") {
+    stubAnn(
+      [
+        {
+          ...KAPPA,
+          releases: KAPPA.releases.map((r) =>
+            r.annId === 9401 ? { ...r, designator: gapped } : r,
+          ),
+        },
+      ],
+      pages(gapped),
+    );
+    await sync(t, { releasePages: false });
+    return await syncPages(t);
+  }
+
+  /** The held line is noted and listed as packaging, and nothing was made for it. */
+  async function expectHeldUnplaced(t: TestT, designator: string) {
+    const held = (await obsFor(t, 9401))!;
+    expect(held.snapshot).toMatchObject({ multi: true, coverageGapped: true });
+    expect(held.snapshot.label).toBeUndefined();
+    expect(held.snapshot.coverRange).toBeUndefined();
+    expect(held.recordRef).toBeUndefined();
+    expect(held.conflicts?.find((c) => c.field === "placement")?.reason).toBe(
+      `"Kappa [3-in-1 Edition]" (${designator}) is packaging whose Volume list no range holds — an Editor maps it.`,
+    );
+    const series = await t.run(async (ctx) => (await ctx.db.query("series").collect())[0]!);
+    expect(await holdFor(t, held._id)).toMatchObject({
+      kind: "packaging",
+      sourceKey: "ann",
+      seriesId: series._id,
+    });
+    await t.run(async (ctx) => {
+      // Only the plain lines' Volumes: none from the held list.
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual([
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+      ]);
+      expect((await ctx.db.query("releases").collect()).map((r) => r.isbn13)).not.toContain(
+        GAPPED_ISBN,
+      );
+      // The one 3-in-1 member is the contiguous list's.
+      expect(
+        (await ctx.db.query("editions").collect()).filter((e) => e.editionLineId !== undefined),
+      ).toHaveLength(1);
+      // No Proposal, approved or queued, cites the held line.
+      const cited = (await ctx.db.query("proposalVersions").collect()).flatMap((version) =>
+        version.evidence.flatMap((e) => (e.kind === "observation" ? [e.observationId] : [])),
+      );
+      expect(cited).not.toContain(held._id);
+    });
+  }
+
+  it("holds a gapped list on a 3-in-1 line, creating no Volume, Edition, Release or Proposal for it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    // Volumes no plain line supplies, so a Volume made for the list would show.
+    await mirrorAndPlace(t, "GN 7, 9");
+    await expectHeldUnplaced(t, "GN 7, 9");
+  });
+
+  // Each reads as a shorter list or a single Volume if only its first
+  // numbers are taken: "1, 2" (Volumes 1–2), "1" (sized 1–3 by "3-in-1").
+  it.each(["GN 1, 2, and 4", "GN 1, and 3", "GN 1-2 + 3"])(
+    "holds %s whole: no prefix of the list is placed",
+    async (designator) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      await seedPublisher(t, "VIZ Media", "viz-media");
+      await mirrorAndPlace(t, designator);
+      await expectHeldUnplaced(t, designator);
+    },
+  );
+
+  it("never reads a number before the format marker as a Volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const lambda: FixtureManga = {
+      id: 1901,
+      title: "Lambda",
+      releases: [
+        { annId: 9501, date: "2010-01-05", designator: "GN 1" },
+        { annId: 9503, date: "2010-03-05", designator: "GN 3" },
+        { annId: 9510, date: "2012-03-06", designator: "2nd Edition GN 1-3" },
+      ],
+    };
+    stubAnn([lambda], {
+      9510: releasePage({
+        title: "Lambda",
+        volume: "2nd Edition GN 1-3",
+        distributor: "Viz Media",
+        date: "2012-03-06",
+        isbn13: GAPPED_ISBN,
+        mangaId: 1901,
+      }),
+    });
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    expect((await obsFor(t, 9510))!.snapshot).toMatchObject({
+      multi: true,
+      coverRange: { from: "1", to: "3" },
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual([
+        "1",
+        "3",
+      ]);
+    });
+  });
+
+  it("places a contiguous list as the range it spans", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const placed = (await obsFor(t, 9402))!;
+    expect(placed.snapshot).toMatchObject({ multi: true, coverRange: { from: "4", to: "6" } });
+    expect(placed.recordRef?.type).toBe("release");
+    const release = await t.run(
+      async (ctx) => (await ctx.db.get(placed.recordRef!.id as Id<"releases">))!,
+    );
+    expect(await coveredBy(t, release.editionId)).toEqual(["4", "5", "6"]);
+  });
+
+  it("releases the hold when ANN corrects the designator", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const held = (await obsFor(t, 9401))!;
+    expect(await holdFor(t, held._id)).not.toBeNull();
+    // ANN corrects the line to a range: the next mirror stores it and the
+    // page pass places it from the stored page.
+    await mirrorAndPlace(t, "GN 1-3");
+    const placed = (await obsFor(t, 9401))!;
+    expect(placed.snapshot.coverageGapped).toBeUndefined();
+    expect(placed.recordRef?.type).toBe("release");
+    expect(placed.conflicts?.find((c) => c.field === "placement")).toBeUndefined();
+    expect(await holdFor(t, placed._id)).toBeNull();
+    const release = await t.run(
+      async (ctx) => (await ctx.db.get(placed.recordRef!.id as Id<"releases">))!,
+    );
+    expect(await coveredBy(t, release.editionId)).toEqual(["1", "2", "3"]);
+  });
+
+  it("an Editor placing a held line clears its hold, and later syncs keep the link", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const viz = await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const held = (await obsFor(t, 9401))!;
+    const releaseId = await t.run(async (ctx) => {
+      const id = await insertBook(ctx, viz, ["1", "3"], { release: { isbn13: GAPPED_ISBN } });
+      await linkObservation(ctx, held._id, { type: "release", id });
+      return id;
+    });
+    expect(await holdFor(t, held._id)).toBeNull();
+    // A line linked before this rule (placed by its line's size) is the
+    // same: an import never moves an existing link.
+    await mirrorAndPlace(t);
+    const linked = (await obsFor(t, 9401))!;
+    expect(linked.recordRef).toEqual({ type: "release", id: releaseId });
+    expect(linked.snapshot.coverageGapped).toBe(true);
+    expect(linked.conflicts?.find((c) => c.field === "placement")).toBeUndefined();
+    expect(await holdFor(t, held._id)).toBeNull();
+    expect(await coveredBy(t, (await t.run((ctx) => ctx.db.get(releaseId)))!.editionId)).toEqual([
+      "1",
+      "3",
+    ]);
+  });
+
+  it("a second unchanged sync rewrites neither the held line nor its hold", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const before = (await obsFor(t, 9401))!;
+    const hold = (await holdFor(t, before._id))!;
+    expect(hold).not.toBeNull();
+    const history = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query("observationSnapshots").collect()).filter(
+          (s) => s.observationId === before._id,
+        ),
+      );
+    const stored = await history();
+    const second = await mirrorAndPlace(t);
+    const after = (await obsFor(t, 9401))!;
+    // The mirror bumps last-seen only; the page pass writes nothing.
+    expect({ ...after, lastSeenAt: 0 }).toEqual({ ...before, lastSeenAt: 0 });
+    expect(await holdFor(t, before._id)).toEqual(hold);
+    expect(second).toMatchObject({ recordsChanged: 0 });
+    expect(await history()).toEqual(stored);
   });
 });
 
@@ -1316,14 +1809,30 @@ describe("ann.syncReleasePages — non-English distributors (#48)", () => {
       ],
     };
     stubAnn([KANA], {
-      7002: releasePage({ title: "Some Manga", volume: "1", distributor: "Kana", date: "2011-01-01", isbn13: "9782505000013", mangaId: 777 }),
-      7001: releasePage({ title: "Some Manga", volume: "1", distributor: "Toyspress, Inc.", date: "2010-01-01", isbn13: "9784900000001", mangaId: 777 }),
+      7002: releasePage({
+        title: "Some Manga",
+        volume: "1",
+        distributor: "Kana",
+        date: "2011-01-01",
+        isbn13: "9782505000013",
+        mangaId: 777,
+      }),
+      7001: releasePage({
+        title: "Some Manga",
+        volume: "1",
+        distributor: "Toyspress, Inc.",
+        date: "2010-01-01",
+        isbn13: "9784900000001",
+        mangaId: 777,
+      }),
     });
     await sync(t, { releasePages: false });
     // Without the publisher rows, nothing places; seed them as the cadence tick would.
     await t.mutation(internal.launch.seedPublishers, {});
     await syncPages(t);
-    expect((await obsFor(t, 7002))?.conflicts?.[0]?.reason).toMatch(/another language: out of English scope/);
+    expect((await obsFor(t, 7002))?.conflicts?.[0]?.reason).toMatch(
+      /another language: out of English scope/,
+    );
     // The Toyspress line places now that the row exists.
     expect((await obsFor(t, 7001))?.recordRef?.type).toBe("release");
   });
@@ -1331,12 +1840,7 @@ describe("ann.syncReleasePages — non-English distributors (#48)", () => {
 
 describe("ann.sync — a title match that is another work", () => {
   /** A publisher-fed Series with one Release carrying `isbn13`. */
-  async function seedSeriesWithBook(
-    t: TestT,
-    title: string,
-    altTitles: string[],
-    isbn13: string,
-  ) {
+  async function seedSeriesWithBook(t: TestT, title: string, altTitles: string[], isbn13: string) {
     const { seriesId } = await t.run((ctx) =>
       seedCatalog(ctx, {
         publisher: { name: "Seven Seas Entertainment", slug: "seven-seas" },
@@ -1348,10 +1852,11 @@ describe("ann.sync — a title match that is another work", () => {
   }
 
   const linkOf = (t: TestT, mangaId: number) =>
-    t.run(async (ctx) =>
-      (await ctx.db.query("sourceObservations").collect()).find(
-        (o) => o.sourceRecordId === `manga:${mangaId}`,
-      )?.recordRef,
+    t.run(
+      async (ctx) =>
+        (await ctx.db.query("sourceObservations").collect()).find(
+          (o) => o.sourceRecordId === `manga:${mangaId}`,
+        )?.recordRef,
     );
 
   it("never links a parent work to its spinoff through an alt title when their books differ", async () => {
@@ -1432,6 +1937,258 @@ describe("ann.sync — a title match that is another work", () => {
     await sync(t, { releasePages: false });
     expect(await linkOf(t, 15835)).toEqual({ type: "series", id: series });
   });
+
+  /** An ANN entry with one GN 1 line. */
+  const entry = (
+    id: number,
+    title: string,
+    ean?: string,
+    altTitles: string[] = [],
+  ): FixtureManga => ({
+    id,
+    title,
+    altTitles: altTitles.map((text) => ({ lang: "EN", text })),
+    releases: [{ annId: id + 1, date: "2016-01-12", designator: "GN 1", ...(ean ? { ean } : {}) }],
+  });
+
+  it("links a second ANN entry of the title when one of its ISBNs is already a book of the Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const series = await seedSeriesWithBook(t, "Citrus", [], "9781626922617");
+    stubAnn([entry(15835, "Citrus", "9781626922617"), entry(15837, "Citrus", "9781626922617")]);
+    await sync(t, { releasePages: false });
+    expect(await linkOf(t, 15835)).toEqual({ type: "series", id: series });
+    expect(await linkOf(t, 15837)).toEqual({ type: "series", id: series });
+  });
+
+  it("links by title a Series whose other ANN entry is withdrawn", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([entry(15835, "Citrus")]);
+    await sync(t, { releasePages: false });
+    const held = await linkOf(t, 15835);
+    // ANN drops the entry; a complete mirror withdraws it.
+    stubAnn([BETA]);
+    await sync(t, { releasePages: false });
+    stubAnn([BETA, entry(15837, "Citrus")]);
+    await sync(t, { releasePages: false });
+    expect(await linkOf(t, 15837)).toEqual(held);
+  });
+
+  it("links by title a Series nobody holds whose only ISBN is digital, for a print-only entry", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const { seriesId } = await t.run((ctx) =>
+      seedCatalog(ctx, {
+        publisher: { name: "Seven Seas Entertainment", slug: "seven-seas" },
+        series: { title: "Citrus", altTitles: [] },
+        release: { isbn13: "9781626922617", format: "digital" },
+      }),
+    );
+    // workMatch compares books of a format both list; a digital book says
+    // nothing about a print-only entry, so the title links.
+    stubAnn([entry(15835, "Citrus", "9781626922600")]);
+    await sync(t, { releasePages: false });
+    expect(await linkOf(t, 15835)).toEqual({ type: "series", id: seriesId });
+  });
+
+  it("never links through an alt title a Series another live ANN entry holds", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([entry(20001, "Citrus Plus")]);
+    await sync(t, { releasePages: false });
+    const held = await linkOf(t, 20001);
+    stubAnn([entry(20001, "Citrus Plus"), entry(15835, "Citrus", undefined, ["Citrus Plus"])]);
+    await sync(t, { releasePages: false });
+    const link = await linkOf(t, 15835);
+    expect(link?.id).not.toBe(held?.id);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(link!.id as Id<"series">))?.title).toBe("Citrus");
+      // The title names no Series, so nothing is flagged.
+      expect(await ctx.db.query("duplicateCandidates").collect()).toEqual([]);
+    });
+  });
+
+  describe("two entries of one title by one creator (the Alchemist)", () => {
+    // ANN's two entries as they stand: the first manga and its sequel,
+    // which has an entry of its own under the same main title. Both credit
+    // Usata Nonohara as the original creator, so only their books tell them
+    // apart. Line ids, dates and person ids are stand-ins.
+    const TITLE = "The Alchemist Who Survived Now Dreams of a Quiet City Life";
+    const SEQUEL_LINE = `${TITLE} II: Cycle of the Elixir`;
+    const FIRST: FixtureManga = {
+      id: 22380,
+      title: TITLE,
+      altTitles: [
+        { lang: "JA", text: "Ikinokori Renkinjutsushi wa Machi de Shizuka ni Karashitai" },
+        { lang: "EN", text: "The Survived Alchemist With a Dream of Quiet Town Life" },
+        { lang: "JA", text: "生き残り錬金術師は街で静かに暮らしたい" },
+      ],
+      staff: [
+        { id: 5001, name: "Usata Nonohara", task: "Original creator" },
+        { id: 5002, name: "Guru Mizoguchi", task: "Art" },
+      ],
+      releases: [
+        { annId: 60001, date: "2021-01-19", designator: "eBook 1", ean: "9781975331306" },
+        { annId: 60002, date: "2021-03-23", designator: "GN 1", ean: "9781975384272" },
+        { annId: 60003, date: "2021-09-21", designator: "GN 2", ean: "9781975308537" },
+      ],
+    };
+    const SEQUEL: FixtureManga = {
+      id: 30340,
+      title: TITLE,
+      altTitles: [
+        {
+          lang: "JA",
+          text: "Ikinokori Renkinjutsushi wa Machi de Shizuka ni Kurashitai: Rinkan no Mahōyaku",
+        },
+        { lang: "JA", text: "生き残り錬金術師は街で静かに暮らしたい ～輪環の魔法薬～" },
+      ],
+      staff: [
+        { id: 5001, name: "Usata Nonohara", task: "Original creator" },
+        { id: 5003, name: "Aya Obara", task: "Art" },
+      ],
+      releases: [
+        {
+          annId: 60011,
+          date: "2024-03-26",
+          designator: "GN 1",
+          ean: "9781975393489",
+          title: SEQUEL_LINE,
+        },
+        {
+          annId: 60012,
+          date: "2024-12-10",
+          designator: "GN 2",
+          ean: "9781975396923",
+          title: SEQUEL_LINE,
+        },
+        {
+          annId: 60013,
+          date: "2025-08-19",
+          designator: "GN 3",
+          ean: "9798855416176",
+          title: SEQUEL_LINE,
+        },
+      ],
+    };
+    const FIRST_ISBNS = FIRST.releases.map((r) => r.ean!);
+    const SEQUEL_ISBNS = SEQUEL.releases.map((r) => r.ean!);
+    const PAGES = Object.fromEntries(
+      [FIRST, SEQUEL].flatMap((entry) =>
+        entry.releases.map((r) => [
+          r.annId,
+          releasePage({
+            title: r.title ?? entry.title,
+            volume: r.designator,
+            distributor: "Yen Press",
+            date: r.date,
+            isbn13: r.ean!,
+            mangaId: entry.id,
+          }),
+        ]),
+      ),
+    );
+
+    /** Import `entries` (the ones already imported stay listed), then its page pass and credits. */
+    async function importEntries(t: TestT, entries: FixtureManga[]) {
+      stubAnn(entries, PAGES);
+      await sync(t, { releasePages: false });
+      await syncPages(t);
+      await t.action(internal.people.rebuild, {});
+    }
+
+    /** Each entry's Series, and the ISBNs on the Volumes of that Series. */
+    const placement = (t: TestT) =>
+      t.run(async (ctx) => {
+        const seriesOf = async (entry: FixtureManga) => {
+          const ref = (await ctx.db.query("sourceObservations").collect()).find(
+            (o) => o.sourceRecordId === `manga:${entry.id}`,
+          )?.recordRef;
+          return ref?.type === "series" ? ref.id : null;
+        };
+        const isbnsOn = async (seriesId: Id<"series"> | null) => {
+          const isbns: string[] = [];
+          for (const release of await ctx.db.query("releases").collect()) {
+            const coverage = await ctx.db
+              .query("volumeCoverages")
+              .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
+              .collect();
+            for (const row of coverage) {
+              const volume = await ctx.db.get(row.volumeId);
+              if (volume?.seriesId === seriesId && release.isbn13) isbns.push(release.isbn13);
+            }
+          }
+          return isbns.sort();
+        };
+        const first = await seriesOf(FIRST);
+        const sequel = await seriesOf(SEQUEL);
+        return {
+          series: (await ctx.db.query("series").collect()).length,
+          first,
+          sequel,
+          onFirst: await isbnsOn(first),
+          onSequel: await isbnsOn(sequel),
+        };
+      });
+
+    it.each([
+      ["the first work, then the sequel", [FIRST, SEQUEL]],
+      ["the sequel, then the first work", [SEQUEL, FIRST]],
+    ] as const)(
+      "keeps them apart when %s arrives with its books placed",
+      async (_, [earlier, later]) => {
+        const t = makeT();
+        await seedRegistry(t, true);
+        await seedPublisher(t, "Yen Press", "yen-press");
+        await importEntries(t, [earlier]);
+        await importEntries(t, [earlier, later]);
+
+        // workMatch: one creator in common decides nothing, and the two
+        // entries' print ISBNs share none, so the later one is another work.
+        const placed = await placement(t);
+        expect(placed.series).toBe(2);
+        expect(placed.sequel).not.toBe(placed.first);
+        expect(placed.onFirst).toEqual([...FIRST_ISBNS].sort());
+        expect(placed.onSequel).toEqual([...SEQUEL_ISBNS].sort());
+        // The pair is on the Data Team's duplicate list.
+        expect(await t.run((ctx) => ctx.db.query("duplicateCandidates").collect())).toHaveLength(1);
+      },
+    );
+
+    // A fresh seed: ANN's Series has no book until the page pass after the
+    // mirror, so the later entry finds the earlier one's Series by title
+    // with nothing on it. Only the ANN entry already holding that Series
+    // keeps them apart.
+    it.each([
+      ["the first work, then the sequel", [FIRST, SEQUEL]],
+      ["the sequel, then the first work", [SEQUEL, FIRST]],
+    ] as const)(
+      "keeps them apart on an empty catalog when one mirror lists %s",
+      async (_, [earlier, later]) => {
+        const t = makeT();
+        await seedRegistry(t, true);
+        await seedPublisher(t, "Yen Press", "yen-press");
+        await importEntries(t, [earlier, later]);
+
+        const placed = await placement(t);
+        expect(placed.series).toBe(2);
+        expect(placed.sequel).not.toBe(placed.first);
+        expect(placed.onFirst).toEqual([...FIRST_ISBNS].sort());
+        expect(placed.onSequel).toEqual([...SEQUEL_ISBNS].sort());
+        const held = earlier === FIRST ? placed.first : placed.sequel;
+        await t.run(async (ctx) => {
+          const { publicId } = (await ctx.db.get(held!))!;
+          expect(await ctx.db.query("duplicateCandidates").collect()).toEqual([
+            expect.objectContaining({
+              aId: held,
+              reason: `ANN entry ${later.id} has this title, but ANN entry ${earlier.id} already holds Series ${publicId}, so the import created a Series of its own. Merge them if ANN lists one work twice.`,
+            }),
+          ]);
+        });
+      },
+    );
+  });
 });
 
 describe("ann — a single-volume line never lands on packaging or a split part (B07)", () => {
@@ -1465,8 +2222,12 @@ describe("ann — a single-volume line never lands on packaging or a split part 
         .query("publishers")
         .withIndex("by_slug", (q) => q.eq("slug", "viz-media"))
         .unique();
-      const publisherId = publisher?._id ?? (await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" }));
-      return await insertBook(ctx, publisherId, labels, { extent: opts.extent, release: { isbn13: opts.isbn13 } });
+      const publisherId =
+        publisher?._id ?? (await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" }));
+      return await insertBook(ctx, publisherId, labels, {
+        extent: opts.extent,
+        release: { isbn13: opts.isbn13 },
+      });
     });
   }
 
@@ -1595,7 +2356,9 @@ describe("ann — release-page descriptions", () => {
       return made;
     });
     await sync(t, { releasePages: false });
-    for (const r of LINES.releases.filter((line) => books.some((b) => `GN ${b.label}` === line.designator))) {
+    for (const r of LINES.releases.filter((line) =>
+      books.some((b) => `GN ${b.label}` === line.designator),
+    )) {
       expect((await obsFor(t, r.annId))!.recordRef?.type).toBe("release");
     }
     pageRequests.length = 0;
@@ -1701,7 +2464,11 @@ describe("ann — release-page descriptions", () => {
 
   it("the backfill fetches up to its limit, finishes on rerun, and targets given ids", async () => {
     const t = makeT();
-    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    const ids = await linkedCatalog(t, describedPages, [
+      { label: "1" },
+      { label: "2" },
+      { label: "3" },
+    ]);
     // An operator command: it runs on a disabled source too.
     await t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
 
@@ -1753,12 +2520,17 @@ describe("ann — release-page descriptions", () => {
     await sync(t, { releasePages: false });
     // No publisher row yet: the pages are read and held, text stored.
     await syncPages(t);
-    expect(await pageOf(t, 10949)).toMatchObject({ description: "Volume two.", descriptionChecked: true });
+    expect(await pageOf(t, 10949)).toMatchObject({
+      description: "Volume two.",
+      descriptionChecked: true,
+    });
     expect((await obsFor(t, 10949))!.recordRef).toBeUndefined();
 
     // Another source creates the book; the next mirror links it by ISBN.
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
-    const releaseId = await t.run((ctx) => insertBook(ctx, vizId, ["2"], { release: { isbn13: "9781569319024" } }));
+    const releaseId = await t.run((ctx) =>
+      insertBook(ctx, vizId, ["2"], { release: { isbn13: "9781569319024" } }),
+    );
     pageRequests.length = 0;
     await sync(t, { releasePages: false });
     expect((await obsFor(t, 10949))!.recordRef).toEqual({ type: "release", id: releaseId });
@@ -1774,13 +2546,19 @@ describe("ann — release-page descriptions", () => {
 
   it("caps description refetches per page-pass run", async () => {
     const t = makeT();
-    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    const ids = await linkedCatalog(t, describedPages, [
+      { label: "1" },
+      { label: "2" },
+      { label: "3" },
+    ]);
     await syncPages(t, { maxRefetches: 2, maxFetches: 1 });
     await drain(t);
     // Across the run's links: two refetches, the third waits for the next run.
     expect(pageRequests).toHaveLength(2);
     const blank = async () =>
-      (await Promise.all(Object.values(ids).map((id) => descriptionOf(t, id)))).filter((d) => d === null);
+      (await Promise.all(Object.values(ids).map((id) => descriptionOf(t, id)))).filter(
+        (d) => d === null,
+      );
     expect(await blank()).toHaveLength(1);
     pageRequests.length = 0;
     await syncPages(t, { maxRefetches: 2 });
@@ -1790,9 +2568,14 @@ describe("ann — release-page descriptions", () => {
 
   it("the page pass hands off when a link runs out of time", async () => {
     const t = makeT();
-    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    const ids = await linkedCatalog(t, describedPages, [
+      { label: "1" },
+      { label: "2" },
+      { label: "3" },
+    ]);
     slowClock();
     expect(await syncPages(t)).toMatchObject({ continued: true, fetched: 1 });
+    await expectStampedAtHandOff(t);
     await runScheduled(t);
     // Each of this test's pages exactly once (a late timer from an earlier
     // test can add another fixture's id to the shared log).
@@ -1801,12 +2584,17 @@ describe("ann — release-page descriptions", () => {
       "10949",
       "10950",
     ]);
-    for (const [label, id] of Object.entries(ids)) expect(await descriptionOf(t, id), label).toBe(FILLED[label]);
+    for (const [label, id] of Object.entries(ids))
+      expect(await descriptionOf(t, id), label).toBe(FILLED[label]);
   });
 
   it("the backfill continues after its time budget without repeating a page", async () => {
     const t = makeT();
-    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    const ids = await linkedCatalog(t, describedPages, [
+      { label: "1" },
+      { label: "2" },
+      { label: "3" },
+    ]);
     slowClock();
     expect(await backfill(t)).toMatchObject({ fetched: 1, filled: 1, continued: true });
     await runScheduled(t);
@@ -1817,7 +2605,8 @@ describe("ann — release-page descriptions", () => {
       "10949",
       "10950",
     ]);
-    for (const [label, id] of Object.entries(ids)) expect(await descriptionOf(t, id), label).toBe(FILLED[label]);
+    for (const [label, id] of Object.entries(ids))
+      expect(await descriptionOf(t, id), label).toBe(FILLED[label]);
   });
 
   it("the backfill refuses to run beside an ANN Import Run", async () => {
@@ -1826,21 +2615,74 @@ describe("ann — release-page descriptions", () => {
     await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
     const result = await backfill(t);
     expect(result).toMatchObject({ fetched: 0, filled: 0, continued: false });
-    expect(result.stopped).toMatch(/ANN Import Run .*started \d+ min ago\) is running/);
+    expect(result.stopped).toMatch(/ANN Import Run .*last active \d+ min ago\) is running/);
     expect(pageRequests).toEqual([]);
   });
 
-  it("the backfill treats a run older than 12 hours as stranded", async () => {
+  // The shared policy (lib/importRuns.ts isStranded): quiet time since the
+  // run's last gate pass, not its age.
+  it("the backfill holds off for an hours-old run that passed the gate recently", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const later = Date.now() + 13 * 60 * 60 * 1000;
+    await t.run((ctx) => ctx.db.patch(runId, { lastActivityAt: later - 5 * 60_000 }));
+    vi.spyOn(Date, "now").mockImplementation(() => later);
+    const result = await backfill(t);
+    expect(result.stopped).toMatch(/ANN Import Run .*last active 5 min ago\) is running/);
+    expect(pageRequests).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("the backfill treats a run quiet for over 60 minutes as stranded", async () => {
     const t = makeT();
     await linkedCatalog(t, describedPages, [{ label: "1" }]);
     await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
-    const later = Date.now() + 13 * 60 * 60 * 1000;
+    const later = Date.now() + 61 * 60_000;
     vi.spyOn(Date, "now").mockImplementation(() => later);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await backfill(t);
     expect(result).toMatchObject({ fetched: 1, filled: 1 });
     expect(result.stopped).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ignoring stranded ANN Import Run .* \(started 13 h 0 min ago\)/));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/ignoring stranded ANN Import Run .* \(last active 1 h 1 min ago\)/),
+    );
+    vi.restoreAllMocks();
+  });
+
+  // A backfill action deployed before heartbeats passes `now` and holds off
+  // while `ageMs` is at most 12 hours.
+  it("answers a backfill deployed before heartbeats with the time since the run was last active", async () => {
+    const t = makeT();
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const opened = Date.now();
+    await t.run((ctx) => ctx.db.patch(runId, { lastActivityAt: opened + 20 * 60 * 60_000 }));
+    const now = opened + 20 * 60 * 60_000 + 5 * 60_000;
+    expect(await t.query(internal.ann.annRunInProgress, { now })).toMatchObject({
+      runId,
+      ageMs: 5 * 60_000,
+    });
+    expect(await t.query(internal.ann.annRunInProgress, {})).not.toHaveProperty("ageMs");
+  });
+
+  it("the backfill treats a run opened before heartbeats as stranded only past 12 hours", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    const opened = Date.now();
+    await t.run((ctx) =>
+      ctx.db.insert("importRuns", {
+        sourceKey: "ann",
+        status: "running",
+        recordsSeen: 0,
+        recordsChanged: 0,
+        errors: [],
+      }),
+    );
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => opened + 11 * 60 * 60 * 1000);
+    expect((await backfill(t)).stopped).toMatch(/last active 11 h 0 min ago\) is running/);
+    clock.mockImplementation(() => opened + 13 * 60 * 60 * 1000);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await backfill(t)).toMatchObject({ fetched: 1, filled: 1 });
     vi.restoreAllMocks();
   });
 
@@ -1860,7 +2702,13 @@ describe("ann — release-page descriptions", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await drain(t);
     // One failure in the first link, four in the next: five in a row, stop.
-    expect(pageRequests).toHaveLength(5);
+    // Only this test's pages: a page pass another test left scheduled can
+    // fetch its own fixture's page through this stub.
+    expect(pageRequests.filter((url) => /\?id=[1-7]$/.test(url))).toEqual(
+      ["1", "2", "3", "4", "5"].map(
+        (id) => `https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${id}`,
+      ),
+    );
     expect(warn).toHaveBeenCalledWith(
       expect.stringMatching(/backfillDescriptions\] stopped: ANN looks down: 5 page fetches/),
     );
@@ -1920,7 +2768,13 @@ describe("ann — release-page descriptions", () => {
       await ctx.db.patch(obs._id, {
         snapshot: {
           ...snapshot,
-          page: { status: "ok", fetchedAt: 1, descriptionChecked: true, ...snapshot.page, description: text },
+          page: {
+            status: "ok",
+            fetchedAt: 1,
+            descriptionChecked: true,
+            ...snapshot.page,
+            description: text,
+          },
         },
       });
       if (release !== undefined) await ctx.db.patch(release, { description: text });
@@ -1928,7 +2782,10 @@ describe("ann — release-page descriptions", () => {
   }
   const repair = (t: TestT) => t.action(internal.ann.repairDescriptions, {});
   const inReview = (t: TestT) =>
-    t.run(async (ctx) => (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview").length);
+    t.run(
+      async (ctx) =>
+        (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview").length,
+    );
 
   it("a stale stored Description is cleaned before the link path writes it", async () => {
     const t = makeT();
@@ -1939,7 +2796,9 @@ describe("ann — release-page descriptions", () => {
     // Stored before the cleaner dropped credit sentences.
     await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.");
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
-    const releaseId = await t.run((ctx) => insertBook(ctx, vizId, ["2"], { release: { isbn13: "9781569319024" } }));
+    const releaseId = await t.run((ctx) =>
+      insertBook(ctx, vizId, ["2"], { release: { isbn13: "9781569319024" } }),
+    );
     await sync(t, { releasePages: false });
     expect(await descriptionOf(t, releaseId)).toBe("Volume two.");
   });
@@ -1956,8 +2815,12 @@ describe("ann — release-page descriptions", () => {
     await storeOldText(t, 10948, `${BLURB} Story and art by Eiichiro Oda.`, ids["1"]);
     await storeOldText(t, 10949, "Submit your own review of this item.", ids["2"]);
     await storeOldText(t, 10950, "Story and art by Yonezou Nekota.");
-    await t.run(async (ctx) => ctx.db.patch(ids["3"]!, { description: "Story and art by Yonezou Nekota." }));
-    const proposalsBefore = await t.run(async (ctx) => (await ctx.db.query("proposals").collect()).length);
+    await t.run(async (ctx) =>
+      ctx.db.patch(ids["3"]!, { description: "Story and art by Yonezou Nekota." }),
+    );
+    const proposalsBefore = await t.run(
+      async (ctx) => (await ctx.db.query("proposals").collect()).length,
+    );
 
     expect(await repair(t)).toEqual({
       scanned: 3,
@@ -1989,7 +2852,11 @@ describe("ann — release-page descriptions", () => {
     });
 
     // Rerun: clean text cleans to itself.
-    expect(await repair(t)).toMatchObject({ snapshotFixed: 0, releaseUpdated: 0, releaseCleared: 0 });
+    expect(await repair(t)).toMatchObject({
+      snapshotFixed: 0,
+      releaseUpdated: 0,
+      releaseCleared: 0,
+    });
     // A publisher's text (its own Revision), even one ending in a credit
     // the cleaner would drop, is never ANN's to repair.
     const publisherCopy = "The publisher's copy. Story and art by Eiichiro Oda.";
@@ -2032,7 +2899,9 @@ describe("ann — release-page descriptions", () => {
     // its own stored text cleans to nothing.
     await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.", ids["2"]);
     const shared = (await obsFor(t, 10948))!;
-    await t.run(async (ctx) => ctx.db.patch(shared._id, { recordRef: { type: "release", id: ids["2"]! } }));
+    await t.run(async (ctx) =>
+      ctx.db.patch(shared._id, { recordRef: { type: "release", id: ids["2"]! } }),
+    );
     await storeOldText(t, 10948, "Story and art by Yonezou Nekota.");
     expect(await repair(t)).toMatchObject({ releaseUpdated: 1, releaseCleared: 0, errors: 0 });
     expect(await descriptionOf(t, ids["2"]!)).toBe("Volume two.");
@@ -2048,7 +2917,10 @@ describe("ann — release-page descriptions", () => {
     const broken = (await obsFor(t, 10948))!;
     await t.run(async (ctx) =>
       ctx.db.patch(broken._id, {
-        snapshot: { ...(broken.snapshot as object), page: { status: "ok", fetchedAt: 1, description: 42 } },
+        snapshot: {
+          ...(broken.snapshot as object),
+          page: { status: "ok", fetchedAt: 1, description: 42 },
+        },
       }),
     );
     await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.", ids["2"]);
@@ -2084,7 +2956,11 @@ describe("ann — release-page descriptions", () => {
     // The chain's final counts reach the logs, not just the first link's CLI.
     const done = logs.at(-1)!;
     expect(done).toMatch(/^\[ann\.repairDescriptions\] done: /);
-    expect(JSON.parse(done.slice(done.indexOf("{")))).toMatchObject({ scanned: 123, releaseUpdated: 1, errors: 0 });
+    expect(JSON.parse(done.slice(done.indexOf("{")))).toMatchObject({
+      scanned: 123,
+      releaseUpdated: 1,
+      errors: 0,
+    });
   });
 
   describe("refresh, page bytes and refresh candidates", () => {
@@ -2099,11 +2975,16 @@ describe("ann — release-page descriptions", () => {
       // Cut by the old credit rule, as production stored it.
       await storeOldText(t, 10948, `${BLURB} Based on the series`, ids["1"]);
       stubAnn([LINES], {
-        10948: pageFor(10948, `${BLURB} Based on the series created by Jon Favreau and written by Dave Filoni.`),
+        10948: pageFor(
+          10948,
+          `${BLURB} Based on the series created by Jon Favreau and written by Dave Filoni.`,
+        ),
         10949: pageFor(10949, "ANN's text for two."),
         10950: pageFor(10950),
       });
-      expect(await backfill(t, { annIds: ["10948", "10949", "10950"], refresh: true })).toMatchObject({
+      expect(
+        await backfill(t, { annIds: ["10948", "10949", "10950"], refresh: true }),
+      ).toMatchObject({
         fetched: 3,
         refreshed: 1,
         cleared: 0,
@@ -2117,7 +2998,9 @@ describe("ann — release-page descriptions", () => {
       // ANN's text stays until an operator allows clearing.
       expect(await descriptionOf(t, ids["2"]!)).toBe("The publisher's copy.");
       expect(await descriptionOf(t, ids["3"]!)).toBe("Volume three.");
-      expect(await backfill(t, { annIds: ["10950"], refresh: true, allowClear: true })).toMatchObject({
+      expect(
+        await backfill(t, { annIds: ["10950"], refresh: true, allowClear: true }),
+      ).toMatchObject({
         cleared: 1,
         refreshed: 0,
       });
@@ -2127,7 +3010,9 @@ describe("ann — release-page descriptions", () => {
       // A Human Override is never refreshed.
       await t.run(async (ctx) => ctx.db.patch(ids["1"]!, { overriddenFields: ["description"] }));
       stubAnn([LINES], { 10948: pageFor(10948, "Newer text.") });
-      expect(await backfill(t, { annIds: ["10948"], refresh: true })).toMatchObject({ refreshed: 0 });
+      expect(await backfill(t, { annIds: ["10948"], refresh: true })).toMatchObject({
+        refreshed: 0,
+      });
       expect(await descriptionOf(t, ids["1"]!)).toContain("Jon Favreau");
     });
 
@@ -2135,25 +3020,35 @@ describe("ann — release-page descriptions", () => {
       const t = makeT();
       await seedRegistry(t, true);
       await expect(backfill(t, { refresh: true })).rejects.toThrow(/refresh needs annIds/);
-      await expect(backfill(t, { annIds: ["1"], allowClear: true })).rejects.toThrow(/only applies with refresh/);
+      await expect(backfill(t, { annIds: ["1"], allowClear: true })).rejects.toThrow(
+        /only applies with refresh/,
+      );
     });
 
     it("refresh holds much shorter text, and skips locks, other lines, failed and missing pages", async () => {
       const t = makeT();
-      const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+      const ids = await linkedCatalog(t, describedPages, [
+        { label: "1" },
+        { label: "2" },
+        { label: "3" },
+      ]);
       await syncPages(t);
       // 10948: a degraded page with a stub of the text.
       // 10949: its Release is locked.
       // 10950: its Release's text came from another line (10948).
       await t.run(async (ctx) => ctx.db.patch(ids["2"]!, { locked: true }));
       const other = (await obsFor(t, 10950))!;
-      await t.run(async (ctx) => ctx.db.patch(other._id, { recordRef: { type: "release", id: ids["1"]! } }));
+      await t.run(async (ctx) =>
+        ctx.db.patch(other._id, { recordRef: { type: "release", id: ids["1"]! } }),
+      );
       stubAnn([LINES], {
         10948: pageFor(10948, "In a world."),
         10949: pageFor(10949, "A newer text for volume two."),
         10950: pageFor(10950, "A newer text for volume three, from the other line."),
       });
-      expect(await backfill(t, { annIds: ["10948", "10949", "10950"], refresh: true })).toMatchObject({
+      expect(
+        await backfill(t, { annIds: ["10948", "10949", "10950"], refresh: true }),
+      ).toMatchObject({
         refreshed: 0,
         cleared: 0,
         held: 1,
@@ -2166,7 +3061,9 @@ describe("ann — release-page descriptions", () => {
       await t.run(async (ctx) => ctx.db.patch(ids["2"]!, { locked: false }));
       const storedPage = await pageOf(t, 10949);
       vi.stubGlobal("fetch", async () => new Response("Forbidden", { status: 403 }));
-      expect(await backfill(t, { annIds: ["10949"], refresh: true, allowClear: true })).toMatchObject({
+      expect(
+        await backfill(t, { annIds: ["10949"], refresh: true, allowClear: true }),
+      ).toMatchObject({
         refreshed: 0,
         cleared: 0,
       });
@@ -2176,7 +3073,9 @@ describe("ann — release-page descriptions", () => {
         refetchFailed: { status: "error" },
       });
       stubAnn([LINES], {});
-      expect(await backfill(t, { annIds: ["10949"], refresh: true, allowClear: true })).toMatchObject({
+      expect(
+        await backfill(t, { annIds: ["10949"], refresh: true, allowClear: true }),
+      ).toMatchObject({
         refreshed: 0,
         cleared: 0,
       });
@@ -2188,17 +3087,34 @@ describe("ann — release-page descriptions", () => {
       await linkedCatalog(t, describedPages, [{ label: "1" }]);
       const encode = (text: string) => [...new TextEncoder().encode(text)];
       const [head, tail] = pageFor(10948, "Against Ber@hren.").split("@");
-      vi.stubGlobal("fetch", async () => new Response(new Uint8Array([...encode(head!), 0xfc, ...encode(tail!)])));
+      vi.stubGlobal(
+        "fetch",
+        async () => new Response(new Uint8Array([...encode(head!), 0xfc, ...encode(tail!)])),
+      );
       await backfill(t, { annIds: ["10948"] });
       expect(await pageOf(t, 10948)).toMatchObject({ description: "Against Berühren." });
     });
 
     it("lists the ANN ids whose Release text a refresh could fix, by reason", async () => {
       const t = makeT();
-      const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+      const ids = await linkedCatalog(t, describedPages, [
+        { label: "1" },
+        { label: "2" },
+        { label: "3" },
+      ]);
       await syncPages(t);
-      await storeOldText(t, 10948, "To defeat his father! Created by Masashi Kishimoto and features", ids["1"]);
-      await storeOldText(t, 10950, "Their love cannot be fulfilled. Or will it? Originally", ids["3"]);
+      await storeOldText(
+        t,
+        10948,
+        "To defeat his father! Created by Masashi Kishimoto and features",
+        ids["1"],
+      );
+      await storeOldText(
+        t,
+        10950,
+        "Their love cannot be fulfilled. Or will it? Originally",
+        ids["3"],
+      );
       await storeOldText(t, 10949, "Pok\uFFFDmon game characters jump out.", ids["2"]);
       expect(await t.action(internal.ann.listRefreshCandidates, {})).toMatchObject({
         danglingEnd: ["10948", "10950"],
@@ -2217,7 +3133,12 @@ describe("ann — release-page descriptions", () => {
       const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }]);
       await syncPages(t);
       await storeOldText(t, 10948, "Book by Buronson", ids["1"]);
-      await storeOldText(t, 10949, 'Dark Schneider\u0092s foe. Notes: Published in left-to-right "flipped" format.', ids["2"]);
+      await storeOldText(
+        t,
+        10949,
+        'Dark Schneider\u0092s foe. Notes: Published in left-to-right "flipped" format.',
+        ids["2"],
+      );
       vi.stubGlobal("fetch", async () => {
         throw new Error("the repair never touches the network");
       });
@@ -2225,5 +3146,131 @@ describe("ann — release-page descriptions", () => {
       expect(await descriptionOf(t, ids["1"]!)).toBeNull();
       expect(await descriptionOf(t, ids["2"]!)).toBe("Dark Schneider’s foe.");
     });
+  });
+});
+
+describe("ann — a title match set aside is flagged", () => {
+  const ISBN = (n: number) => `97819753000${String(n).padStart(2, "0")}`;
+  // ANN's entry lists only Volumes 1 to 9.
+  const ENTRY: FixtureManga = {
+    id: 41000,
+    title: "Echo Garden",
+    releases: Array.from({ length: 9 }, (_, i) => ({
+      annId: 41001 + i,
+      date: "2020-01-07",
+      designator: `GN ${i + 1}`,
+      ean: ISBN(i + 1),
+    })),
+  };
+
+  /** A publisher feed's Series of the same title, built from its newest books, Volumes 10 to 12. */
+  async function seedNewest(t: TestT, bootstrap: boolean) {
+    await seedRegistry(t, bootstrap);
+    return await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
+      const seriesId = await insertSeries(ctx, { title: "Echo Garden" });
+      for (const position of [10, 11, 12]) {
+        const volumeId = await insertVolume(ctx, { seriesId, position });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, {
+          editionId,
+          publisherId,
+          seriesIds: [seriesId],
+          isbn13: ISBN(position),
+        });
+      }
+      return await ctx.db.get(seriesId);
+    });
+  }
+
+  it("creates the entry's Series and one duplicate candidate naming both, and a rerun adds none", async () => {
+    const t = makeT();
+    const existing = (await seedNewest(t, true))!;
+    stubAnn([ENTRY]);
+    await sync(t, { releasePages: false });
+
+    const state = () =>
+      t.run(async (ctx) => ({
+        series: await ctx.db.query("series").collect(),
+        candidates: await ctx.db.query("duplicateCandidates").collect(),
+      }));
+    const first = await state();
+    expect(first.series).toHaveLength(2);
+    const created = first.series.find((s) => s._id !== existing._id)!;
+    expect(first.candidates).toEqual([
+      expect.objectContaining({
+        aId: existing._id,
+        bId: created._id,
+        aTitle: "Echo Garden",
+        bTitle: "Echo Garden",
+        status: "open",
+      }),
+    ]);
+
+    await sync(t, { releasePages: false });
+    const second = await state();
+    expect(second.series).toHaveLength(2);
+    expect(second.candidates).toHaveLength(1);
+  });
+
+  it("names the set-aside Series on the creation Proposal it queues in steady state", async () => {
+    const t = makeT();
+    const existing = (await seedNewest(t, false))!;
+    stubAnn([ENTRY]);
+    await sync(t, { releasePages: false });
+    await t.run(async (ctx) => {
+      const [version] = await ctx.db.query("proposalVersions").collect();
+      expect(version?.changeComment).toContain(
+        `Series ${existing.publicId} ("Echo Garden") has this title, but its books share no ISBN with this entry's`,
+      );
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      expect(await ctx.db.query("duplicateCandidates").collect()).toEqual([]);
+    });
+  });
+
+  it("names the Series another ANN entry holds on the creation Proposal it queues in steady state", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const first: FixtureManga = {
+      id: 15835,
+      title: "Citrus",
+      releases: [{ annId: 15836, date: "2016-01-12", designator: "GN 1" }],
+    };
+    const second: FixtureManga = {
+      ...first,
+      id: 15837,
+      releases: [{ ...first.releases[0]!, annId: 15838 }],
+    };
+    stubAnn([first]);
+    await sync(t, { releasePages: false });
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    stubAnn([first, second]);
+    await sync(t, { releasePages: false });
+
+    const state = () =>
+      t.run(async (ctx) => ({
+        series: await ctx.db.query("series").collect(),
+        link: (await ctx.db.query("sourceObservations").collect()).find(
+          (o) => o.sourceRecordId === "manga:15837",
+        )?.recordRef,
+        comments: (await ctx.db.query("proposalVersions").collect()).map((v) => v.changeComment),
+        candidates: await ctx.db.query("duplicateCandidates").collect(),
+      }));
+    const queued = await state();
+    expect(queued.series).toHaveLength(1);
+    expect(queued.link).toBeUndefined();
+    const { publicId } = queued.series[0]!;
+    expect(
+      queued.comments.filter((c) =>
+        c.includes(
+          ` Series ${publicId} ("Citrus") has this title, but ANN entry 15835 already holds it, so the import did not link it: it may be one work ANN lists twice.`,
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(queued.candidates).toEqual([]);
+
+    await sync(t, { releasePages: false });
+    expect((await state()).comments).toHaveLength(queued.comments.length);
   });
 });

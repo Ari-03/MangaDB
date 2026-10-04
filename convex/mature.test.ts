@@ -41,7 +41,12 @@ describe("source age ratings", () => {
     expect(normalizeBook(listing, parseBookPage(page("mature"))).mature).toBe(true);
     expect(normalizeBook(listing, parseBookPage(page("olderteen17"))).mature).toBe(false);
     // A page without the badge was still read: false, not "unread".
-    expect(normalizeBook(listing, parseBookPage(page("x").replace(/<div class="age-rating"[^>]*><\/div>/, ""))).mature).toBe(false);
+    expect(
+      normalizeBook(
+        listing,
+        parseBookPage(page("x").replace(/<div class="age-rating"[^>]*><\/div>/, "")),
+      ).mature,
+    ).toBe(false);
   });
 
   it("reads Yen Press's Age Rating detail per format", () => {
@@ -85,7 +90,12 @@ async function seeded() {
       });
       return { seriesId, editionId, releaseId };
     };
-    return { publisher, adult, quiet: await mk(1, "Quiet Garden"), heat: await mk(2, "Heat Garden") };
+    return {
+      publisher,
+      adult,
+      quiet: await mk(1, "Quiet Garden"),
+      heat: await mk(2, "Heat Garden"),
+    };
   });
   const rebuild = () => t.action(internal.seriesBrowse.rebuild, {});
   const heat = () => t.run((ctx) => ctx.db.get(ids.heat.seriesId));
@@ -218,7 +228,8 @@ describe("public discovery without and with showMature", () => {
 
   it("leaves Mature Series out of the library, its facets, and search", async () => {
     const { t } = await matureHeat();
-    const browse = (showMature?: boolean) => t.query(api.seriesBrowse.browse, { sort: "title", showMature });
+    const browse = (showMature?: boolean) =>
+      t.query(api.seriesBrowse.browse, { sort: "title", showMature });
     expect(titles((await browse()).items)).toEqual(["Quiet Garden"]);
     expect(titles((await browse(true)).items)).toEqual(["Heat Garden", "Quiet Garden"]);
     // The filtered path reads the packs, which carry the flag too.
@@ -227,9 +238,18 @@ describe("public discovery without and with showMature", () => {
     expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(1);
     expect((await t.query(api.seriesBrowse.facets, { showMature: true })).total).toBe(2);
 
-    const search = (showMature?: boolean) => t.query(api.catalog.search, { query: "garden", showMature });
+    const search = (showMature?: boolean) =>
+      t.query(api.catalog.search, { query: "garden", showMature });
     expect(titles((await search()).series)).toEqual(["Quiet Garden"]);
     expect(titles((await search(true)).series)).toEqual(["Heat Garden", "Quiet Garden"]);
+  });
+
+  it("leaves Mature Series out of the newest Series shelf", async () => {
+    const { t } = await matureHeat();
+    const newest = async (showMature?: boolean) =>
+      titles(await t.query(api.catalog.recentSeries, { limit: 10, showMature }));
+    expect(await newest(false)).toEqual(["Quiet Garden"]);
+    expect(await newest(true)).toEqual(["Heat Garden", "Quiet Garden"]);
   });
 
   it("leaves a Mature Series' books out of the calendar and the Publishers board", async () => {

@@ -151,7 +151,8 @@ const DIGITAL_FORMAT = /e-?book|electronic|kindle|digital/i;
 
 // A library catalogue's physical description standing in for a blurb
 // ("1 volume (unpaged) : 19 cm", "146 p. : 19 cm", "v. : 19 cm").
-const COLLATION = /^(?:\d+\s*(?:volumes?|v\.|p\.|pages)|v\.)[^a-z]*(?:[a-z.]+[^a-z]*)?\b\d+\s*cm\.?$/i;
+const COLLATION =
+  /^(?:\d+\s*(?:volumes?|v\.|p\.|pages)|v\.)[^a-z]*(?:[a-z.]+[^a-z]*)?\b\d+\s*cm\.?$/i;
 // The source a cataloguer cites after quoting the blurb: `"…"--P. [4] of
 // cover.`, `"…"--Back cover.`, `"…" -- from publisher's web site.`, or a
 // bare `"--`. After a closing quote any of these; after a sentence's

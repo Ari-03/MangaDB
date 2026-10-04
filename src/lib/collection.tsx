@@ -35,8 +35,8 @@ import {
 } from "~/lib/quickActions";
 import { plural } from "~/lib/format";
 import { bookLabel, PathShelf } from "~/lib/seriesShelf";
-import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
+import { useViewerQuery } from "~/lib/viewer";
 
 /**
  * The three-state segmented control. Exactly one state can be active;
@@ -55,11 +55,7 @@ function StateButtons({
   disabled?: boolean;
 }) {
   return (
-    <span
-      className="collection-states"
-      role="group"
-      aria-label="Collection state"
-    >
+    <span className="collection-states" role="group" aria-label="Collection state">
       {ENTRY_STATES.map((state) => (
         <button
           key={state}
@@ -91,17 +87,8 @@ function StateButtons({
  * has this Release to write (useRunLock), so its later batch cannot
  * overwrite a choice made here meanwhile.
  */
-export function ReleaseCollectionControls({
-  releaseId,
-}: {
-  releaseId: Id<"releases">;
-}) {
-  if (!convexClient) return null;
-  return <ReleaseControlsInner releaseId={releaseId} />;
-}
-
-function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
-  const data = useQuery(api.collection.entryForRelease, { releaseId });
+export function ReleaseCollectionControls({ releaseId }: { releaseId: Id<"releases"> }) {
+  const data = useViewerQuery(api.collection.entryForRelease, { releaseId });
   const setEntry = useMutation(api.collection.setReleaseEntry);
   // The post-first-entry follow suggestion the last mutation returned;
   // ephemeral — following and permanent dismissal go through FollowPrompt.
@@ -131,10 +118,7 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
           });
         }}
       />
-      <FollowPrompt
-        suggestions={suggestFollow}
-        onDone={() => setSuggestFollow([])}
-      />
+      <FollowPrompt suggestions={suggestFollow} onDone={() => setSuggestFollow([])} />
       {entry && data.variants.length > 0 ? (
         <label className="variant-pick">
           <span className="variant-pick-label">Variant</span>
@@ -148,8 +132,7 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
               void setEntry({
                 releaseId: data.releaseId,
                 state: entry.state,
-                variantId:
-                  value === "" ? undefined : (value as Id<"releaseVariants">),
+                variantId: value === "" ? undefined : (value as Id<"releaseVariants">),
               });
             }}
           >
@@ -173,9 +156,7 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
           >
             {bundle.bundleName}
           </Link>
-          {bundle.pinnedVariantName
-            ? ` (${bundle.pinnedVariantName} variant)`
-            : ""}
+          {bundle.pinnedVariantName ? ` (${bundle.pinnedVariantName} variant)` : ""}
         </span>
       ))}
     </div>
@@ -186,12 +167,7 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
 
 /** Collection controls on the Bundle page; renders nothing signed out. */
 export function BundleCollectionControls({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
-  if (!convexClient) return null;
-  return <BundleControlsInner bundleId={bundleId} />;
-}
-
-function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
-  const data = useQuery(api.collection.entryForBundle, { bundleId });
+  const data = useViewerQuery(api.collection.entryForBundle, { bundleId });
   const setEntry = useMutation(api.collection.setBundleEntry);
   // Follow suggestions for the member Releases' Series.
   const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
@@ -210,10 +186,7 @@ function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
           })
         }
       />
-      <FollowPrompt
-        suggestions={suggestFollow}
-        onDone={() => setSuggestFollow([])}
-      />
+      <FollowPrompt suggestions={suggestFollow} onDone={() => setSuggestFollow([])} />
       {data.entry?.state === "owned" ? (
         <span className="derived-ownership">
           Owning this box set marks every book inside as owned.
@@ -230,24 +203,18 @@ function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
  * (direct or via an Owned Bundle), since no Volume-ownership state exists.
  * Renders nothing signed out or when nothing covering it is owned.
  */
-export function VolumeOwnership({
-  volumePublicId,
-}: {
-  volumePublicId: number;
-}) {
-  if (!convexClient) return null;
-  return <VolumeOwnershipInner volumePublicId={volumePublicId} />;
-}
-
-function VolumeOwnershipInner({ volumePublicId }: { volumePublicId: number }) {
-  const data = useQuery(api.collection.volumeOwnership, { volumePublicId });
+export function VolumeOwnership({ volumePublicId }: { volumePublicId: number }) {
+  const data = useViewerQuery(api.collection.volumeOwnership, { volumePublicId });
   if (!data || data.owned.length === 0) return null;
   return (
     <div className="volume-ownership" role="status">
       <p className="volume-ownership-lede">On your shelf through</p>
       <ul>
         {data.owned.map((item, i) => (
-          <li key={i}>
+          <li
+            // biome-ignore lint/suspicious/noArrayIndexKey: known defect, left for its own fix: a row removed above a focused link moves that focus to the next row's link (docs/known-issues.md, Interface)
+            key={i}
+          >
             <Link
               to="/edition/$publicId/$slug"
               params={slugParams(item.editionPublicId, item.editionTitle)}
@@ -268,10 +235,7 @@ function VolumeOwnershipInner({ volumePublicId }: { volumePublicId: number }) {
                 — via{" "}
                 <Link
                   to="/bundle/$publicId/$slug"
-                  params={slugParams(
-                    item.via.bundlePublicId,
-                    item.via.bundleName,
-                  )}
+                  params={slugParams(item.via.bundlePublicId, item.via.bundleName)}
                 >
                   {item.via.bundleName}
                 </Link>
@@ -311,12 +275,7 @@ export function countLibrary(library: Library): Record<EntryState, number> {
  * their covers or all at once.
  */
 export function LibraryCollection({ shelf }: { shelf: EntryState }) {
-  if (!convexClient) return null;
-  return <LibraryCollectionInner shelf={shelf} />;
-}
-
-function LibraryCollectionInner({ shelf }: { shelf: EntryState }) {
-  const library = useQuery(api.collection.myLibrary, {});
+  const library = useViewerQuery(api.collection.myLibrary);
   if (library === undefined) return <p className="placeholder">Loading…</p>;
   if (library === null) return null;
 
@@ -403,13 +362,7 @@ function LibraryCollectionInner({ shelf }: { shelf: EntryState }) {
 }
 
 /** One Series on the shelf: its cover and title, then each reading path. */
-function SeriesShelfCard({
-  series,
-  shelf,
-}: {
-  series: LibrarySeries;
-  shelf: EntryState;
-}) {
+function SeriesShelfCard({ series, shelf }: { series: LibrarySeries; shelf: EntryState }) {
   return (
     <article className="lib-series">
       <Link
@@ -480,11 +433,7 @@ function PathRow({
           aria-expanded={open}
           onClick={() => setOpen((prev) => !prev)}
         >
-          {open
-            ? "Close"
-            : rest !== null && rest > 0
-              ? `Add the other ${rest}`
-              : "Open the run"}
+          {open ? "Close" : rest !== null && rest > 0 ? `Add the other ${rest}` : "Open the run"}
         </button>
       </div>
       {open ? (
@@ -518,8 +467,7 @@ function LibraryBookItem({
   seriesTitle: string;
   onPrompt: (prompts: Partial<ShelfPromptState>) => void;
 }) {
-  const number =
-    book.lineName !== null ? book.linePosition : (book.coverage[0]?.label ?? null);
+  const number = book.lineName !== null ? book.linePosition : (book.coverage[0]?.label ?? null);
   const quick = {
     editionPublicId: book.editionPublicId,
     targetReleaseId: book.releaseId,
@@ -560,11 +508,7 @@ function LibraryBookItem({
           {bookLabel(book)}
         </Link>
         <div className="caption-meta">
-          <span>
-            {book.format === "physical"
-              ? (book.binding ?? "Print")
-              : "Digital"}
-          </span>
+          <span>{book.format === "physical" ? (book.binding ?? "Print") : "Digital"}</span>
           {book.variantName ? (
             <>
               <span className="dot" />
@@ -589,13 +533,7 @@ function LibraryBookItem({
  * whole-run buttons above it and the quick actions on each cover — the same
  * shelf the Series page shows.
  */
-function PathExpansion({
-  pathKey,
-  seriesPublicId,
-}: {
-  pathKey: string;
-  seriesPublicId: number;
-}) {
+function PathExpansion({ pathKey, seriesPublicId }: { pathKey: string; seriesPublicId: number }) {
   const page = useQuery(api.catalog.seriesPage, { publicId: seriesPublicId });
   if (page === undefined) return <p className="placeholder">Loading the run…</p>;
   const group = page?.editionGroups.find((candidate) => candidate.key === pathKey);

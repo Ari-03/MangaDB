@@ -1,8 +1,8 @@
 # Configuration
 
-Every environment variable, the Clerk setup, and analytics. Without any of
-them the app still runs locally, signed out, with the public catalog
-working.
+Every environment variable, the Clerk setup, and analytics. Only
+`VITE_CONVEX_URL` is required; without any of the others the app still runs
+locally, signed out, with the public catalog working.
 
 ## Clerk
 
@@ -12,9 +12,12 @@ a new user to `/claim-username`, and claiming a username inserts the row,
 keyed by the Clerk subject and never by email. Usernames are unique
 ignoring case, checked against the reserved list in
 `convex/lib/usernames.ts`, and can be changed, which frees the old one at
-once. Account deletion (`/me`, Settings, Account) is one Convex action that
-deletes the Clerk identity through Clerk's Backend API and then purges
-every MangaDB record of that user.
+once. Account deletion (`/me`, Settings, Account) is one Convex mutation
+that marks the user as deleting and schedules the rest: a batched purge of
+every MangaDB record of that user, then the deletion of the Clerk identity
+through Clerk's Backend API, retried if Clerk fails, then the user row a
+day later ([operations](operations.md#account-deletion)). A signed-in
+visitor with no username has no account to delete.
 
 On each server request `clerkMiddleware()` (`src/start.ts`) authenticates.
 The gated routes read a Convex token minted from the Clerk JWT template
@@ -29,14 +32,26 @@ One-time setup:
    Enable Google OAuth and email/password with email verification.
 2. Create a JWT template named `convex` (Clerk has a Convex preset) and
    note its issuer domain (`https://<slug>.clerk.accounts.dev` in dev).
-3. Set the variables below, and allow `mangadb.org` and the staging
+   Keep its token lifetime under a day: account deletion keeps the deleted
+   user's row a day after Clerk confirms, so a token issued before cannot
+   claim a username.
+3. Turn off the instance setting "Allow users to delete their accounts".
+   Account deletion goes through `/me`; with the setting on, the "Manage
+   account" window of `<UserButton />` offers a "Delete account" button
+   that deletes only the Clerk sign-in and leaves the user's MangaDB rows
+   ([known issues](known-issues.md)).
+4. Multi-session mode (several accounts signed in on one browser), which
+   nothing in this repo sets, widens an analytics limit: a tab whose
+   account is Off can record state from its pages for as long as another
+   tab's account is On ([Analytics](#analytics-posthog)).
+5. Set the variables below, and allow `mangadb.org` and the staging
    workers.dev origin in the Clerk dashboard.
 
 ## App and Worker
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `VITE_CONVEX_URL` | `.env.local` (written by `npx convex dev`); `vars` in `wrangler.jsonc` for deploys | The Convex deployment URL. Public. |
+| `VITE_CONVEX_URL` | `.env.local` (written by `npx convex dev`); `vars` in `wrangler.jsonc` for deploys | The Convex deployment URL. Public. Required: without it the app throws on load (`src/lib/convexUrl.ts`). |
 | `VITE_CLERK_PUBLISHABLE_KEY` | `.env.local`; the build environment and `vars` in `wrangler.jsonc` for deploys | Clerk publishable key (`pk_…`), inlined into the client bundle. Unset turns the auth UI off. |
 | `CLERK_SECRET_KEY` | `.dev.vars` locally (workerd reads Worker secrets there, not from `.env.local`); `npx wrangler secret put CLERK_SECRET_KEY` for deploys | Enables `clerkMiddleware()` and SSR auth. Unset treats everyone as signed out. |
 | `VITE_PUBLIC_POSTHOG_KEY` | the build environment only, never committed | PostHog project token (`phc_…`). Unset means no analytics script and no requests. |
@@ -55,7 +70,7 @@ Settings, Environment Variables.
 | Variable | Purpose |
 |---|---|
 | `CLERK_JWT_ISSUER_DOMAIN` | Issuer domain of the `convex` JWT template. Unset falls back to a placeholder so codegen and tests run, and sign-in tokens then fail to validate. |
-| `CLERK_SECRET_KEY` | The same Clerk secret key, used by account deletion to delete the Clerk identity. |
+| `CLERK_SECRET_KEY` | The same Clerk secret key, used by account deletion to delete the Clerk identity. Unset refuses account deletion. |
 | `PRH_API_KEY`, `PRH_IMPRINT_CODES` | The PRH adapter. Without the key or a non-empty imprint list, a fresh run skips as "unconfigured" and opens none. Removing the key mid-run closes the run as `failed`; removing the codes does not affect it. Setup: [imports](imports.md#penguin-random-house). |
 | `OPENLIBRARY_DUMP_URL` | The filtered Open Library dump. Unset makes those runs skip. Setup: [imports](imports.md#open-library). |
 | `RESEND_API_KEY`, `IMPORT_ALERT_EMAIL_TO`, optional `IMPORT_ALERT_EMAIL_FROM` | Source-health alert emails. Unset logs and skips. |
@@ -83,12 +98,117 @@ choice are in [decisions.md](decisions.md#analytics).
 **Browser.** `src/lib/analytics.tsx` loads posthog-js after hydration and
 never in the Worker bundle. Autocapture, session replay and feature flags
 are off, `respect_dnt` is on, and person profiles exist only for signed-in
-users. Pageviews and pageleaves are automatic. Signed-in users are
-identified by their Clerk user id with `username` and `role`, never email,
-and sign-out resets the session. The Deploy workflow reads
+users. Pageviews and pageleaves are automatic. posthog-js adds the full
+page address (`$current_url`) to every event and the document title to
+pageviews, so a search's text reaches PostHog through `/search?q=…` and
+the search page's title. Signed-in users are identified by their Clerk
+user id with `username` and `role`, never email. Before events go out
+under a signed-out visit or another account, the client calls `reset()`,
+so two accounts are never merged into one person and no event carries the
+other account's id. `reset()` keeps posthog-js's `$device_id`, so events
+from two accounts on one browser share it. The Deploy workflow reads
 `VITE_PUBLIC_POSTHOG_KEY` from the GitHub environment it deploys to, so
 staging and production can use separate projects. A local deploy reads it
 from `.env.local` or the shell.
+
+**Opt-out.** Settings, Analytics on `/me` stores `users.analyticsOptOut`
+(`users.setAnalyticsOptOut`, absent until chosen). For a signed-in user
+who opted out, the browser never loads posthog-js, and `capture` in
+`convex/lib/posthog.ts` sends none of their events, moderation included.
+A client already running when the user switches Off, or while a signed-in
+user's choice is still loading, calls posthog-js's `opt_out_capturing()`:
+`capture()` then returns before posthog-js records anything (its session
+and entry URL, the previous page), and its logs and metrics, which check
+`is_capturing()`, stop too. posthog-js stores the denial in localStorage,
+keeping the distinct id it holds.
+
+That store is shared by every tab, so another tab opting in turns
+capturing back on in this one; the client's `before_send` drops every
+event while Off or loading to cover that, but posthog-js has already
+updated its own state from the dropped event, and this tab's events
+carry that state once it sends again. A dropped pageview becomes the
+previous page: the events until the next pageview carry its
+`$pageview_id`, and the next pageview or `$pageleave` carries its
+`$prev_pageview_*` fields (pathname, id, duration, scroll and content
+measurements). Campaign parameters in a dropped page's address become
+the `utm_*` properties of the tab's later events until it reloads, even
+in a session that began earlier while On. If the session began on a
+dropped event (no session was live: the first event after 30 minutes
+idle or 24 hours into a session, or the browser's first), every later
+event of the session, across reloads, carries that event's address as
+`$session_entry_url`, query string and fragment included, with
+`$session_entry_pathname` and `$session_entry_utm_*`.
+
+This happens only while another tab of the same browser has opted in and
+this one is Off or still loading its choice. With one account in every
+tab, this tab catches up when Convex pushes it the changed choice (at
+once, or when its connection is restored) or Clerk syncs a sign-out to
+it. With Clerk's multi-session mode, two tabs can hold different
+accounts, and a tab whose account is Off can record this state for as
+long as another tab's account is On; which of the two holds depends on
+which tab applied its consent last: if the Off tab did, the On tab is
+paused instead, as below. The reverse holds too: a tab whose loaded
+client goes Off or back to loading (an in-page sign-in does, for one
+round trip) stores a denial that pauses capturing in every tab until it
+opts back in; the other tabs' events in that time are lost, not sent,
+and if that tab closes first they stay paused until their own consent
+next changes or they reload.
+
+Convex having no viewer yet for a new session counts as still loading. A
+render error or failed loader replaces the app with the router's error
+screen and unmounts the client. Once posthog-js has loaded, however soon
+the error comes after, `before_send` drops everything (the initial
+pageview too, if it was not yet sent) until the next navigation remounts
+the client and the session's consent is applied again; an error before
+that leaves posthog-js uninitialised until the remount. When
+posthog-js was initialised before the error, it captures the recovery
+navigation's pageview before React remounts, so that pageview is dropped
+for every viewer and counts as a dropped pageview above. When the error
+came before initialisation, `init` at the remount sends that page's
+pageview as the initial one, under the usual first-load consent rules.
+Remote config is off only because `advanced_disable_flags` is set. A
+browser sending Do Not Track or Global Privacy Control sets the opt-out
+once on an account that has never chosen, so server events stop too; a
+browser without it never clears one. Signed-out visitors have no toggle:
+`respect_dnt` covers them.
+
+Sending resumes (switching On, signing out, a sign-in's choice answering)
+in a fixed order. First the client notes whether a denial is stored. Then
+`reset()`, when posthog-js holds an identified id other than the one now
+signed in: on sign-out, or when a different user signs in. It clears the
+stored denial too. Then, if this tab opted out and has not opted in
+since, or a denial was stored before the reset,
+`opt_in_capturing({ captureEventName: false })`, which sends no `$opt_in`
+event. The tab keeps that record itself because the stored denial is
+shared by every tab, so another tab's reset or opt-in can clear it while
+this tab's send queue is still paused. Then `identify()`. The client
+does the same when it loads, so a denial stored on an earlier page load,
+by an account since signed out or before a reload, does not outlive the
+choice. Opting in starts
+posthog-js's send queue and sends the page's initial `$pageview` if this
+page load has not sent it (the client loaded while Off or loading);
+`reset()` does neither, which is why the opt-in follows a reset that has
+already cleared the denial. That pageview goes out under the id
+posthog-js holds at that moment: the account's, or an anonymous id that
+`identify()` then links to it. A sign-in from a signed-out visit does not
+reset, so that browsing stays with the account. `reset()` does not clear
+posthog-js's record of the last pageview it captured, so on the same page
+the events after a reset still refer to it: until the next pageview each
+carries its id as `$pageview_id`, and the next pageview carries
+`$prev_pageview_id`, `$prev_pageview_pathname` and that page's duration
+and scroll depth. That is how an account's last page reaches the first
+signed-out pageview after its sign-out, or one account's the next
+account's first pageview; no account id crosses. posthog-js sends
+captured events in batches, keeps a batch that fails to send and retries
+it with backoff, and nothing public clears one, so events captured before
+a switch to Off or a sign-out may still be delivered later, including
+after a lost connection is restored. Opting out
+stops new events; it deletes nothing PostHog already holds.
+
+`src/lib/analyticsClient.test.ts` pins this behaviour against the real
+posthog-js: it runs the client in happy-dom with the network stubbed and
+checks the events posthog-js would send, so an SDK upgrade that changes
+the opt-out, the opt-in or `reset()` fails the suite.
 
 **Proxy.** `src/server/posthogProxy.ts` forwards `/_s/*` from the site's
 own origin so ad blockers do not drop events. `/_s/static/*` and
@@ -99,7 +219,8 @@ EU cloud means changing `POSTHOG_REGION` in that file and setting
 `POSTHOG_HOST=https://eu.i.posthog.com` on each Convex deployment.
 
 **Browser events.** Capture only through the typed `track(event, props)`.
-Props are ids, enums and lengths, never free text or personal data.
+Props are ids, enums and lengths, never free text or personal data;
+posthog-js adds the page address and its own properties to each.
 
 | Event | Props |
 |---|---|
@@ -117,9 +238,10 @@ Props are ids, enums and lengths, never free text or personal data.
 in `convex/convex.config.ts` and wrapped by `convex/lib/posthog.ts`
 (`capture`, `captureModeration`, `withExceptionCapture`). A capture from a
 mutation commits or rolls back with it. User events use the Clerk id as
-distinct id, the same id the browser identifies with. System events use
-`server` and create no person. Server events carry `$lib: posthog-convex`;
-filter on it where a name also exists in the browser (`favorite_toggled`).
+distinct id, the same id the browser identifies with, and are not sent for
+a user who opted out. System events use `server`, create no person and are
+always sent. Server events carry `$lib: posthog-convex`; filter on it where
+a name also exists in the browser (`favorite_toggled`).
 
 ```sh
 npx convex env set POSTHOG_PROJECT_TOKEN ""                                       # local dev (off)

@@ -363,13 +363,15 @@ describe("cleanOlDescription", () => {
   );
 
   it("rejects a physical description at parse time", () => {
-    expect(parseEditionJson({ ...EDITION, description: "1 volume (unpaged) : 19 cm" })?.description).toBeUndefined();
+    expect(
+      parseEditionJson({ ...EDITION, description: "1 volume (unpaged) : 19 cm" })?.description,
+    ).toBeUndefined();
   });
 
   it.each([
     '"--P. [4] of cover.',
     '"--Back cover.',
-    '" -- from publisher\'s web site.',
+    "\" -- from publisher's web site.",
     '"--Page 4 of cover.',
     '"--Vol. 1, p. [4] of cover.',
     '"--Provided by publisher.',
@@ -382,14 +384,17 @@ describe("cleanOlDescription", () => {
 
   it("strips a page-of-cover or named-source citation after unquoted text, stacked ones in one call", () => {
     expect(cleanOlDescription("Denji is back. -- p.4 of cover.")).toBe("Denji is back.");
-    expect(cleanOlDescription("Why does she know so much?--Amazon.com")).toBe("Why does she know so much?");
+    expect(cleanOlDescription("Why does she know so much?--Amazon.com")).toBe(
+      "Why does she know so much?",
+    );
     // Stacked citations go in one call.
     const stacked = '"Denji is back."--Back cover."--P. [4] of cover.';
     expect(cleanOlDescription(stacked)).toBe("Denji is back.");
     expect(cleanOlDescription(cleanOlDescription(stacked)!)).toBe("Denji is back.");
-    expect(parseEditionJson({ ...EDITION, description: '"Denji is back."--P. [4] of cover.' })?.description).toBe(
-      "Denji is back.",
-    );
+    expect(
+      parseEditionJson({ ...EDITION, description: '"Denji is back."--P. [4] of cover.' })
+        ?.description,
+    ).toBe("Denji is back.");
   });
 
   it.each([

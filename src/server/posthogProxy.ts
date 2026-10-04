@@ -77,7 +77,9 @@ async function forwardRequest(request: Request, target: string): Promise<Respons
   const ip = request.headers.get("CF-Connecting-IP");
   if (ip) headers.set("X-Forwarded-For", ip);
   const body =
-    request.body && !Number.isFinite(declared) ? request.body.pipeThrough(uploadLimit()) : request.body;
+    request.body && !Number.isFinite(declared)
+      ? request.body.pipeThrough(uploadLimit())
+      : request.body;
   return fetch(target, {
     method: request.method,
     headers,

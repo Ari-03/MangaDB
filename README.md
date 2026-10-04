@@ -57,6 +57,8 @@ npm run dev      # terminal 2: the app, with SSR inside workerd
 On first run `npx convex dev` asks you to log in or create a project and
 writes `CONVEX_DEPLOYMENT` and `VITE_CONVEX_URL` to `.env.local`. Without an
 account, `CONVEX_AGENT_MODE=anonymous npx convex dev` runs a local backend.
+The app needs `VITE_CONVEX_URL`: without it every page fails with an error
+naming the variable.
 A push fails until the deployment has `POSTHOG_PROJECT_TOKEN`; set it
 empty to keep analytics off, then load a small fake catalog:
 
@@ -79,11 +81,38 @@ emails, and the [PRH](docs/imports.md#penguin-random-house) and
 
 ```sh
 npm run dev         # app on workerd, against the deployment in .env.local
+npm run check       # Biome: formatting and lint, writes nothing (CI runs this)
+npm run format      # Biome: rewrite files to the house format
 npm run typecheck   # tsc for src/, then for convex/
 npm test            # vitest
 npm run build       # production client and Worker bundles in dist/
 npm run preview     # serve the production build locally in workerd
 npm run deploy      # deploy production from this machine (see Deployment)
+```
+
+The test setup (`vitest.setup.ts`) refuses unstubbed global `fetch` calls
+with a 400, makes opening a `WebSocket` throw, and refuses requests from
+Vitest's happy-dom window.
+
+### Formatting and lint
+
+[Biome](https://biomejs.dev) formats and lints the TypeScript, JavaScript,
+JSON and CSS (`biome.jsonc`; 100 columns). `npm run format` rewrites files,
+`npm run lint` runs the linter alone, and `npm run check` checks both without
+writing, as CI does. `npm run check` fails on any file the formatter would
+change and on any lint error or warning; info-level lint suggestions are
+printed but do not fail it. The linter runs Biome's recommended rules less a
+few that only disagree with the code's deliberate style; `biome.jsonc` gives
+the reason for each one beside it. It also states the rule domains (React,
+test) that Biome would otherwise detect from `package.json`, which it skips
+under some paths, so a dependency that brings a new domain needs it added
+there. Generated files and the test fixtures in
+`convex/lib/__fixtures__/` are excluded. The commit that first formatted the
+repo is listed in `.git-blame-ignore-revs`; to have `git blame` skip it, run
+once per clone:
+
+```sh
+git config blame.ignoreRevsFile .git-blame-ignore-revs
 ```
 
 ## Repo layout
@@ -127,10 +156,10 @@ Staging has every import source disabled.
 
 ## Deployment
 
-Changes land on `main` by pull request. CI typechecks, tests and builds
-every pull request. A merge that touches more than docs queues a
-production deploy in GitHub Actions, which waits for the owner's approval.
-Any branch can go to staging:
+Changes land on `main` by pull request. CI checks formatting and lint,
+typechecks, tests and builds every pull request. A merge that touches more
+than docs queues a production deploy in GitHub Actions, which waits for the
+owner's approval. Any branch can go to staging:
 
 ```sh
 gh workflow run deploy.yml --ref <branch> -f environment=staging

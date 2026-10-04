@@ -1,8 +1,9 @@
 // Backend analytics (lib/posthog.ts) through PostHog's Convex component,
 // registered here from @posthog/convex/test: the no-op without
 // POSTHOG_PROJECT_TOKEN, the distinct-id rules, mutations scheduling the
-// component's send with the event, what the component delivers, and
-// $exception capture around unattended actions.
+// component's send with the event, what the component delivers, nothing
+// for a user who opted out, and $exception capture around unattended
+// actions.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -29,13 +30,16 @@ function stubPostHog(): Promise<WireEvent[]>[] {
   return posted;
 }
 
-const wireEvents = async (posted: ReturnType<typeof stubPostHog>) => (await Promise.all(posted)).flat();
+const wireEvents = async (posted: ReturnType<typeof stubPostHog>) =>
+  (await Promise.all(posted)).flat();
 
 /** An administrator, a reader, and one active Series (publicId 7). */
 async function seed() {
   const t = makeT();
   await seedTeam(t, [alice, reader]);
-  const seriesId = await t.run((ctx) => insertSeries(ctx, { publicId: 7, title: "Witch Hat Atelier" }));
+  const seriesId = await t.run((ctx) =>
+    insertSeries(ctx, { publicId: 7, title: "Witch Hat Atelier" }),
+  );
   return { t, target: { kind: "series" as const, id: seriesId } };
 }
 
@@ -91,14 +95,26 @@ describe("capture", () => {
     const jobs = await scheduled(t);
     expect(jobs.every((job) => job.name === "lib:capture")).toBe(true);
     expect(jobs.map((job) => job.args)).toMatchObject([
-      { event: "rating_set", distinctId: READER, properties: { kind: "series", score: 80, cleared: false } },
-      { event: "rating_set", distinctId: READER, properties: { kind: "series", score: null, cleared: true } },
+      {
+        event: "rating_set",
+        distinctId: READER,
+        properties: { kind: "series", score: 80, cleared: false },
+      },
+      {
+        event: "rating_set",
+        distinctId: READER,
+        properties: { kind: "series", score: null, cleared: true },
+      },
       {
         event: "review_saved",
         distinctId: READER,
         properties: { kind: "series", spoiler: true, length_bucket: "100_499", edited: false },
       },
-      { event: "favorite_toggled", distinctId: READER, properties: { kind: "series", favorite: true } },
+      {
+        event: "favorite_toggled",
+        distinctId: READER,
+        properties: { kind: "series", favorite: true },
+      },
     ]);
     // The mutation's time, not the send's.
     expect(jobs.every((job) => typeof job.args.timestamp === "number")).toBe(true);
@@ -121,7 +137,12 @@ describe("capture", () => {
       expect.arrayContaining([
         delivered("rating_set", { kind: "series", score: 80, cleared: false }),
         delivered("rating_set", { kind: "series", score: null, cleared: true }),
-        delivered("review_saved", { kind: "series", spoiler: true, length_bucket: "100_499", edited: false }),
+        delivered("review_saved", {
+          kind: "series",
+          spoiler: true,
+          length_bucket: "100_499",
+          edited: false,
+        }),
         delivered("favorite_toggled", { kind: "series", favorite: true }),
       ]),
     );
@@ -134,12 +155,54 @@ describe("capture", () => {
     const { proposalId } = await t
       .withIdentity({ subject: READER })
       .mutation(api.reports.submit, { seriesPublicId: 7, message: "Volume 12 is missing." });
-    await t.withIdentity({ subject: ADMIN }).mutation(api.proposals.rejectProposal, { proposalId, note: "Fixed." });
+    await t
+      .withIdentity({ subject: ADMIN })
+      .mutation(api.proposals.rejectProposal, { proposalId, note: "Fixed." });
     expect((await scheduled(t)).at(-1)?.args).toMatchObject({
       event: "moderation_action",
       distinctId: ADMIN,
       properties: { action: "reject", target_kind: "proposal", actor_role: "administrator" },
     });
+  });
+
+  it("sends nothing a user who opted out caused, moderation included, until they opt back in", async () => {
+    enableCapture();
+    const { t, target } = await seed();
+    const reader = t.withIdentity({ subject: READER });
+    const admin = t.withIdentity({ subject: ADMIN });
+    await reader.mutation(api.users.setAnalyticsOptOut, { optOut: true });
+    await admin.mutation(api.users.setAnalyticsOptOut, { optOut: true });
+
+    await reader.mutation(api.ratings.set, { target, score: 80 });
+    const { reviewId } = await reader.mutation(api.reviews.save, {
+      target,
+      body: "A".repeat(150),
+      spoiler: false,
+    });
+    await reader.mutation(api.favorites.toggle, { target });
+    await admin.mutation(api.reviews.setHidden, { reviewId, hidden: true });
+    expect(await scheduled(t)).toEqual([]);
+
+    // System events carry no person and still go.
+    await t.mutation(internal.importSources.seedRegistry, {});
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    await t.mutation(internal.imports.finishRun, {
+      runId,
+      status: "succeeded",
+      recordsSeen: 1,
+      recordsChanged: 0,
+      errors: [],
+    });
+    expect((await scheduled(t)).map((job) => job.args)).toMatchObject([
+      { event: "import_run_finished", distinctId: "server" },
+    ]);
+
+    await reader.mutation(api.users.setAnalyticsOptOut, { optOut: false });
+    await reader.mutation(api.ratings.set, { target, score: 60 });
+    await admin.mutation(api.reviews.setHidden, { reviewId, hidden: false });
+    expect((await scheduled(t)).map((job) => job.args).slice(1)).toMatchObject([
+      { event: "rating_set", distinctId: READER, properties: { score: 60 } },
+    ]);
   });
 
   it("import_run_finished and source_unhealthy are anonymous server events", async () => {
@@ -156,7 +219,9 @@ describe("capture", () => {
         errors: ["boom", "bang"],
       });
     }
-    const captures = (await scheduled(t)).filter((job) => job.name === "lib:capture").map((job) => job.args);
+    const captures = (await scheduled(t))
+      .filter((job) => job.name === "lib:capture")
+      .map((job) => job.args);
     expect(captures).toHaveLength(4);
     expect(captures[0]).toMatchObject({
       event: "import_run_finished",

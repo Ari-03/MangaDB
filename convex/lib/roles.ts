@@ -40,28 +40,44 @@ export async function requireRole(
 }
 
 /** Moderator-or-Administrator gate — the approval/direct-edit privilege. */
-export async function requireModerator(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"users">> {
+export async function requireModerator(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
   return await requireRole(ctx, ["moderator", "administrator"]);
 }
 
 /** Any data-team role — the propose/queue-visibility privilege (spec §5). */
-export async function requireDataTeam(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"users">> {
+export async function requireDataTeam(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
   return await requireRole(ctx, DATA_ROLES);
 }
 
+/** An Administrator who is neither suspended nor deleting their account. */
+function activeAdministrator(user: Doc<"users">): boolean {
+  return user.role === "administrator" && !user.suspended && user.deletingSince === undefined;
+}
+
 /**
- * Count of active (non-suspended) Administrators. Guards the lockout case:
- * the last Administrator can never be revoked or suspended.
+ * Count of active Administrators: not suspended and not deleting their
+ * account. Reads only the Administrators (by_role), a handful of rows.
  */
-export async function countActiveAdministrators(
-  ctx: QueryCtx | MutationCtx,
-): Promise<number> {
-  // The users table has no role index; the data team is a handful of people,
-  // so a filtered scan is fine and avoids an index that only this guard uses.
-  const users = await ctx.db.query("users").collect();
-  return users.filter((u) => u.role === "administrator" && !u.suspended).length;
+async function countActiveAdministrators(ctx: QueryCtx | MutationCtx): Promise<number> {
+  const admins = await ctx.db
+    .query("users")
+    .withIndex("by_role", (q) => q.eq("role", "administrator"))
+    .collect();
+  return admins.filter(activeAdministrator).length;
+}
+
+/**
+ * Refuse any change that would leave MangaDB without a working Administrator
+ * (spec §4 makes the Administrator the root of governance): revoking the
+ * last active one, moving them to another role, or deleting their account.
+ * Refuses with `message`; a no-op unless `target` is an active
+ * Administrator.
+ */
+export async function guardLastAdministrator(
+  ctx: MutationCtx,
+  target: Doc<"users">,
+  message = "Cannot remove the last active Administrator.",
+) {
+  if (!activeAdministrator(target)) return;
+  if ((await countActiveAdministrators(ctx)) <= 1) fail("lastAdministrator", message);
 }

@@ -58,12 +58,7 @@ const textarea = (
   extra: Partial<FieldDescriptor> = {},
 ): FieldDescriptor => ({ name, label, kind: "textarea", ...extra });
 
-export const SOURCE_STATUS_OPTIONS = [
-  "ongoing",
-  "completed",
-  "hiatus",
-  "cancelled",
-] as const;
+export const SOURCE_STATUS_OPTIONS = ["ongoing", "completed", "hiatus", "cancelled"] as const;
 
 export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
   publisher: [
@@ -74,7 +69,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
       label: "Content rating",
       kind: "select",
       options: ["mature"],
-      help: "\"mature\" when every book it issues is for adults (FAKKU, 801 Media, Ghost Ship): all its Series become Mature Series at the next library rebuild.",
+      help: '"mature" when every book it issues is for adults (FAKKU, 801 Media, Ghost Ship): all its Series become Mature Series at the next library rebuild.',
     },
   ],
   seriesFamily: [text("name", "Name", { required: true })],
@@ -99,19 +94,19 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
       label: "Content rating",
       kind: "select",
       options: ["mature", "general"],
-      help: "Leave empty to follow the publishers' own age ratings. \"mature\" or \"general\" overrides them.",
+      help: 'Leave empty to follow the publishers\' own age ratings. "mature" or "general" overrides them.',
     },
   ],
   volume: [
     text("label", "Volume label", {
-      help: "Publisher-facing designation (\"7.5\", \"Side Story\"). Clear for an unnumbered volume. Never the sort order.",
+      help: 'Publisher-facing designation ("7.5", "Side Story"). Clear for an unnumbered volume. Never the sort order.',
     }),
     textarea("synopsis", "Volume synopsis", { editorial: true }),
   ],
   editionLine: [text("name", "Line name", { required: true })],
   edition: [
     text("linePosition", "Edition line position", {
-      help: "Label within the edition line (\"Omnibus 1\"), independent of covered volumes.",
+      help: 'Label within the edition line ("Omnibus 1"), independent of covered volumes.',
     }),
   ],
   release: [
@@ -120,7 +115,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
     }),
     text("language", "Language", {
       required: true,
-      help: "ISO 639-1 code, e.g. \"en\".",
+      help: 'ISO 639-1 code, e.g. "en".',
     }),
     { name: "isbn13", label: "ISBN-13", kind: "isbn13" },
     { name: "isbn10", label: "ISBN-10", kind: "isbn10" },
@@ -139,10 +134,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
   ],
 };
 
-export function fieldDescriptor(
-  type: RecordType,
-  field: string,
-): FieldDescriptor | null {
+export function fieldDescriptor(type: RecordType, field: string): FieldDescriptor | null {
   return EDITABLE_FIELDS[type].find((d) => d.name === field) ?? null;
 }
 
@@ -157,16 +149,11 @@ export function factualOverrides(type: RecordType, overriddenFields: string[]): 
 
 // ---------- value validation & normalization ----------
 
-export type Normalized =
-  | { ok: true; value: unknown }
-  | { ok: false; message: string };
+export type Normalized = { ok: true; value: unknown } | { ok: false; message: string };
 
 const invalid = (message: string): Normalized => ({ ok: false, message });
 
-function normalizeString(
-  descriptor: FieldDescriptor,
-  raw: unknown,
-): Normalized {
+function normalizeString(descriptor: FieldDescriptor, raw: unknown): Normalized {
   if (raw === undefined || raw === null) {
     return descriptor.required
       ? invalid(`${descriptor.label} is required.`)
@@ -226,11 +213,7 @@ function normalizePrice(raw: unknown): Normalized {
   if (raw === undefined || raw === null) return { ok: true, value: undefined };
   if (typeof raw !== "object") return invalid("Malformed price.");
   const { amountCents, currency } = raw as Record<string, unknown>;
-  if (
-    typeof amountCents !== "number" ||
-    !Number.isInteger(amountCents) ||
-    amountCents < 0
-  ) {
+  if (typeof amountCents !== "number" || !Number.isInteger(amountCents) || amountCents < 0) {
     return invalid("Price must be a whole number of cents.");
   }
   if (typeof currency !== "string" || !/^[A-Za-z]{3}$/.test(currency)) {
@@ -243,10 +226,7 @@ function normalizePrice(raw: unknown): Normalized {
  * Validate and normalize one submitted field value against its descriptor.
  * `undefined` (or an empty string/list) clears an optional field.
  */
-export function normalizeFieldValue(
-  descriptor: FieldDescriptor,
-  raw: unknown,
-): Normalized {
+export function normalizeFieldValue(descriptor: FieldDescriptor, raw: unknown): Normalized {
   switch (descriptor.kind) {
     case "text":
     case "textarea":
@@ -255,7 +235,9 @@ export function normalizeFieldValue(
       const asString = normalizeString(descriptor, raw);
       if (!asString.ok || asString.value === undefined) return asString;
       if (!(descriptor.options ?? []).includes(asString.value as string)) {
-        return invalid(`${descriptor.label} must be one of: ${(descriptor.options ?? []).join(", ")}.`);
+        return invalid(
+          `${descriptor.label} must be one of: ${(descriptor.options ?? []).join(", ")}.`,
+        );
       }
       return asString;
     }

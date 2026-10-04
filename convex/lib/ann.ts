@@ -23,7 +23,7 @@
 // `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
-import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
+import { coverRangeValidator, statedList, WHOLE_VOLUME_LIST } from "./bookTitle";
 import { datePartsValidator, type DateParts } from "./dates";
 import { toIsbn13 } from "./isbn";
 import {
@@ -52,17 +52,25 @@ const annReleaseValidator = v.object({
   date: v.optional(datePartsValidator),
   /** The English release title before the "(GN n)" designator. */
   title: v.string(),
-  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot. */
+  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot or a list. */
   label: v.optional(v.string()),
-  /** A "(GN 1-3)" range or omnibus/box-set designator (multi-volume). */
+  /** A "(GN 1-3)" range or list designator (multi-volume). */
   multi: v.boolean(),
   format: v.union(v.literal("physical"), v.literal("digital")),
   /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
   editionLineHint: v.boolean(),
   /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
   isbn13: v.optional(v.string()),
-  /** The Volumes a "(GN 97-99)" designator says the book collects. */
+  /** The Volumes a "(GN 97-99)" or "(GN 1, 2, 3)" designator says the book collects. */
   coverRange: v.optional(coverRangeValidator),
+  /**
+   * The designator lists Volumes no range holds: a gap ("GN 1, 3", "GN 1-3,
+   * 5"), a numbered extra ("GN 1-2 + 3"), a backwards range, a dash chain, or
+   * text the list grammar does not read. Multi-volume with no label and no
+   * range, and never sized from the line's name: the page pass holds it.
+   * The same flag as a title's (lib/bookTitle.ts packagingValidator).
+   */
+  coverageGapped: v.optional(v.literal(true)),
 });
 export type AnnRelease = Infer<typeof annReleaseValidator>;
 
@@ -172,15 +180,56 @@ const DESIGNATOR_PACKAGING = /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s
 const TITLE_PACKAGING =
   /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1|complete (?:manga )?collection)\b/i;
 
+// The format markers: GN/OGN and "graphic novel" are print, eBook digital.
+// A designator's coverage follows its first marker; anything before it ("2nd
+// Edition", "3-in-1 Edition", "Omnibus") is never coverage.
+const EBOOK_MARKER = /\be-?book\b/i;
+const PRINT_MARKERS = [/\bO?GN\b/, /graphic novels?/i];
+/** A qualifier between the marker and its number: "GN box 2", "eBook ex 3". */
+const QUALIFIER = /^\s*(?:box(?:ed)?(?:\s+set)?|ex)\b/i;
+/** The release page's "of N" total after the coverage: "GN 4 / 8". */
+const TOTAL = /\s*\/\s*\d+\s*$/;
+/** One Volume, with a letter it may carry: "GN 1A" is Volume 1. */
+const SINGLE = /^(\d+(?:\.\d+)?)[a-z]?$/i;
+
+/**
+ * What a designator says after its marker, qualifier and total are taken
+ * off. No number ("GN", "GN A") is an unnumbered book; one number a label.
+ * Anything else is a list, read whole by the shared grammar
+ * (lib/bookTitle.ts statedList): a range or contiguous list ("97-99", "1, 2,
+ * 3", "1 & 2") is multi-volume with that range. One no range holds is
+ * multi-volume with `coverageGapped` and neither label nor range: a gap
+ * ("1, 3", "1, 2, and 4"), a numbered extra ("1-2 + 3"), a dash chain, a
+ * number smaller than the one before it ("3-1", "1-5, 6-2"), or text the
+ * grammar does not read ("3 Part 1-2", "1 and Vol. 3"). Its first numbers
+ * are never read as a shorter list or a label.
+ */
+function readCoverage(
+  afterMarker: string,
+): Pick<AnnRelease, "label" | "multi" | "coverRange" | "coverageGapped"> {
+  const text = afterMarker.replace(QUALIFIER, "").replace(TOTAL, "").trim();
+  if (!/\d/.test(text)) return { label: undefined, multi: false };
+  const single = SINGLE.exec(text)?.[1];
+  if (single !== undefined) return { label: single, multi: false };
+  const range = WHOLE_VOLUME_LIST.test(text) ? statedList(text) : null;
+  const numbers = (text.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
+  const ordered = numbers.every((n, i) => i === 0 || n >= numbers[i - 1]!);
+  return range && ordered
+    ? { label: undefined, multi: true, coverRange: range }
+    : { label: undefined, multi: true, coverageGapped: true };
+}
+
 /**
  * Split one release line's text: "Frieren: Beyond Journey's End (GN 14)" →
- * title + label + format. GN/OGN designators are print, eBook digital;
- * omnibus/box-set designators flag Edition Line packaging; "1-3" ranges are
- * multi-volume. Returns null for lines that are not book releases (DVDs and
- * other designators ANN mixes into other media types) and for single
- * chapters ("eBook ch 17") — chapters are never Volumes. `entryName` (the
- * manga's own title) lets packaging words in the line title count only when
- * they are not part of the series name.
+ * title + label + format. The designator is the line's last parenthesised
+ * group, so a year or edition in the title's own parentheses is never read.
+ * GN/OGN designators are print, eBook digital; omnibus/box-set designators
+ * flag Edition Line packaging. What follows the first format marker is the
+ * coverage (`readCoverage`). Returns null for lines that are not book
+ * releases (DVDs and other designators ANN mixes into other media types)
+ * and for single chapters ("eBook ch 17") — chapters are never Volumes.
+ * `entryName` (the manga's own title) lets packaging words in the line
+ * title count only when they are not part of the series name.
  */
 export function splitReleaseTitle(
   text: string,
@@ -191,23 +240,26 @@ export function splitReleaseTitle(
   const title = m[1]!.trim();
   const designator = m[2]!.trim();
   if (title === "") return null;
-  const isEbook = /\be-?book\b/i.test(designator);
-  const isPrint = /\bO?GN\b/.test(designator) || /graphic novel/i.test(designator);
-  if (!isEbook && !isPrint) return null;
+  const marker = [EBOOK_MARKER, ...PRINT_MARKERS]
+    .map((re) => re.exec(designator))
+    .filter((match) => match !== null)
+    .sort((a, b) => a.index - b.index)[0];
+  if (marker === undefined) return null;
   if (/\bch(?:apter)?\.?\s*\d/i.test(designator)) return null;
   const titleWord = TITLE_PACKAGING.exec(title)?.[1];
   const editionLineHint =
     DESIGNATOR_PACKAGING.test(designator) ||
     (titleWord !== undefined && !entryName.toLowerCase().includes(titleWord.toLowerCase()));
-  const range = /(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
-  const single = /(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
+  const { label, multi, ...stated } = readCoverage(
+    designator.slice(marker.index + marker[0].length),
+  );
   return {
     title,
-    label: range ? undefined : single?.[1],
-    multi: range !== undefined,
-    format: isEbook ? "digital" : "physical",
+    label,
+    multi,
+    format: EBOOK_MARKER.test(designator) ? "digital" : "physical",
     editionLineHint,
-    ...(range ? { coverRange: { from: canonicalLabel(range[1]!), to: canonicalLabel(range[2]!) } } : {}),
+    ...stated,
   };
 }
 
@@ -229,7 +281,9 @@ export type AnnManga = Omit<AnnMangaSnapshot, "kind" | "url" | "credits" | "matu
  * entries carry no rating at all, so its absence proves nothing.
  */
 export function isMatureEntry(body: string): boolean {
-  const rating = /<info[^>]*type="Objectionable content"[^>]*>\s*([A-Z]+)\s*<\/info>/.exec(body)?.[1];
+  const rating = /<info[^>]*type="Objectionable content"[^>]*>\s*([A-Z]+)\s*<\/info>/.exec(
+    body,
+  )?.[1];
   if (rating === "MA" || rating === "AO") return true;
   return /<info[^>]*type="(?:Genres|Themes)"[^>]*>\s*(?:erotica|hentai)\s*<\/info>/i.test(body);
 }
@@ -259,6 +313,7 @@ function parseReleases(body: string, entryName: string, mangaId: string): AnnRel
       editionLineHint: split.editionLineHint,
       ...(isbn13 !== undefined ? { isbn13 } : {}),
       ...(split.coverRange ? { coverRange: split.coverRange } : {}),
+      ...(split.coverageGapped ? { coverageGapped: true } : {}),
     });
   }
   return releases;
@@ -449,7 +504,16 @@ const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
  * accident.", "Script by day, art by night.") must stay. Extend it when a
  * new page needs a word.
  */
-const LOWERCASE_NAME_WORDS = new Set(["atsushi", "check", "em", "est", "great", "tartan", "ufotable", "und"]);
+const LOWERCASE_NAME_WORDS = new Set([
+  "atsushi",
+  "check",
+  "em",
+  "est",
+  "great",
+  "tartan",
+  "ufotable",
+  "und",
+]);
 const MAX_LOOSE_NAME_WORDS = 5;
 const NAME_JOINERS = new Set(["and", "&", "with", "/"]);
 const SENTENCE_END = /[.!?…"”’)]$/;
@@ -492,11 +556,19 @@ function creditTail(words: string[], start: number, loose = false): CreditClause
   for (let clause = 0; clause < MAX_CLAUSES; clause++) {
     const role = creditRoleAt(words, at);
     if (role === 0) return null;
-    const current = { role: words.slice(at, at + role).join(" ").toLowerCase(), names: 0, lower: false };
+    const current = {
+      role: words
+        .slice(at, at + role)
+        .join(" ")
+        .toLowerCase(),
+      names: 0,
+      lower: false,
+    };
     clauses.push(current);
     at += role;
     // ANN's doubled prefix: "Story and art by Written by Koji Kumeta."
-    for (let again = creditRoleAt(words, at); again > 0; again = creditRoleAt(words, at)) at += again;
+    for (let again = creditRoleAt(words, at); again > 0; again = creditRoleAt(words, at))
+      at += again;
     for (;;) {
       const word = words[at];
       if (word === undefined) return null;
@@ -520,7 +592,11 @@ function creditTail(words: string[], start: number, loose = false): CreditClause
       // follows is copy ("Story by X. Romance between …"). Only an initial
       // ("J. K.") or a name with a bang before its last word ("Oh! great.")
       // goes on.
-      if (/[.!?]$/.test(word) && !/^\p{L}\.$/u.test(word) && !(word.endsWith("!") && at === words.length - 1)) {
+      if (
+        /[.!?]$/.test(word) &&
+        !/^\p{L}\.$/u.test(word) &&
+        !(word.endsWith("!") && at === words.length - 1)
+      ) {
         return null;
       }
       // "X and Y", "X & Y": the list goes on.
@@ -540,7 +616,9 @@ function isNameList(words: string[]): boolean {
   return (
     words.length > 0 &&
     words.length <= MAX_NAME_WORDS &&
-    words.every((w) => NAME_WORD.test(w.replace(/[.,;:!?]+$/, "")) || NAME_JOINERS.has(w.toLowerCase()))
+    words.every(
+      (w) => NAME_WORD.test(w.replace(/[.,;:!?]+$/, "")) || NAME_JOINERS.has(w.toLowerCase()),
+    )
   );
 }
 
@@ -576,7 +654,8 @@ function stripCreditTail(text: string): string {
     const [first] = clauses;
     // One name word: only ANN's fused "Story and art by CLAMP.", and only
     // a capitalized one ("Story and art by everyone." is prose).
-    if (clauses.length === 1 && first!.names === 1 && (!isStoryAndArt(first!) || first!.lower)) continue;
+    if (clauses.length === 1 && first!.names === 1 && (!isStoryAndArt(first!) || first!.lower))
+      continue;
     return words.slice(0, at).join(" ");
   }
   return text;
@@ -675,8 +754,9 @@ function pageDescription(html: string): string | undefined {
       ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
       : /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*?)<\/div>/i
   ).exec(field)?.[1];
-  const inline =
-    bounded ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
+  const inline = bounded
+    ? field.replace(/<\/p>\s*$/i, "")
+    : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
   const text = cleanBlurb(div ?? inline);
   return text !== undefined ? cleanAnnDescription(text) : undefined;
 }

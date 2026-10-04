@@ -1,14 +1,10 @@
 import { ConvexHttpClient } from "convex/browser";
-import type {
-  FunctionArgs,
-  FunctionReference,
-  FunctionReturnType,
-} from "convex/server";
+import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
 import { convexUrl } from "~/lib/convexUrl";
 import { showMature } from "~/lib/mature";
-import { timingNeedsToday, todaySortKey } from "~/lib/month";
+import { addMonths, timingNeedsToday, todaySortKey, type YearMonth } from "~/lib/month";
 
 // Public catalog reads for route loaders (spec §9: SSR reads go through the
 // Convex HTTP client). They run wherever the loader runs: in the Worker for
@@ -20,27 +16,19 @@ import { timingNeedsToday, todaySortKey } from "~/lib/month";
 // Stateless without auth, so one client serves every read. Made on first
 // use: the Worker's `process.env` is read at request time, like
 // server/convex.ts does.
-let client: ConvexHttpClient | null | undefined;
+let client: ConvexHttpClient | undefined;
 
-/**
- * Run a public Convex query. Null when no deployment is configured, so pages
- * render a setup notice instead of crashing.
- */
+/** Run a public Convex query. */
 export async function catalogQuery<Query extends FunctionReference<"query">>(
   query: Query,
   args: FunctionArgs<Query>,
-): Promise<FunctionReturnType<Query> | null> {
-  if (client === undefined) {
-    const url = convexUrl();
-    client = url ? new ConvexHttpClient(url) : null;
-  }
-  return client ? await client.query(query, args) : null;
+): Promise<FunctionReturnType<Query>> {
+  client ??= new ConvexHttpClient(convexUrl());
+  return await client.query(query, args);
 }
 
-/** A query's result with the "unconfigured" and "not found" nulls taken out. */
-type Found<Query extends FunctionReference<"query">> = NonNullable<
-  FunctionReturnType<Query>
->;
+/** A query's result with its "not found" null taken out. */
+type Found<Query extends FunctionReference<"query">> = NonNullable<FunctionReturnType<Query>>;
 
 /** One month window of the Releases browser: Agenda and Month Grid. */
 export type MonthReleasesData = Found<typeof api.releases.monthBrowse>;
@@ -117,4 +105,28 @@ export function fetchSeriesBrowse(args: SeriesBrowseArgs) {
     todaySort: needsToday ? todaySortKey() : undefined,
     showMature: showMature(),
   });
+}
+
+/**
+ * The home page's catalog reads: the headline counts, the `seriesPool`
+ * newest Series, and the Releases of `month` and the month after it (the
+ * hero wall runs on into next month when this one is nearly done). The home
+ * page's shelves never show a Mature Series or its books, whatever the
+ * viewer chose (lib/mature.tsx), so every read asks for the non-mature pool.
+ * The header search is not one of these reads; it follows the choice.
+ * The newest Series' cover pick tells published books from forthcoming
+ * ones, so it gets today's date (UTC): the Convex query must not read a
+ * clock, which would expire its cached result within seconds.
+ */
+export function fetchHomeCatalog(month: YearMonth, seriesPool: number) {
+  return Promise.all([
+    catalogQuery(api.catalog.stats, {}),
+    catalogQuery(api.catalog.recentSeries, {
+      limit: seriesPool,
+      todaySort: todaySortKey(),
+      showMature: false,
+    }),
+    catalogQuery(api.releases.monthBrowse, { ...month, showMature: false }),
+    catalogQuery(api.releases.monthBrowse, { ...addMonths(month, 1), showMature: false }),
+  ]);
 }

@@ -70,11 +70,9 @@ export type SitemapData = {
   monthRange: () => Promise<{ from: YearMonth; to: YearMonth } | null>;
 };
 
-/** SitemapData backed by the Convex deployment; null when unconfigured. */
-export function convexSitemapData(): SitemapData | null {
-  const url = convexUrl();
-  if (!url) return null;
-  const convex = new ConvexHttpClient(url);
+/** SitemapData backed by the Convex deployment. */
+export function convexSitemapData(): SitemapData {
+  const convex = new ConvexHttpClient(convexUrl());
   return {
     sitemapPage: (entity, cursor) =>
       convex.query(api.seo.sitemapPage, {
@@ -102,15 +100,11 @@ export function lastmodDate(ms: number): string {
 }
 
 export function sitemapIndexXml(locs: string[]): string {
-  const body = locs
-    .map((loc) => `  <sitemap><loc>${xmlEscape(loc)}</loc></sitemap>`)
-    .join("\n");
+  const body = locs.map((loc) => `  <sitemap><loc>${xmlEscape(loc)}</loc></sitemap>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</sitemapindex>\n`;
 }
 
-export function urlsetXml(
-  urls: Array<{ loc: string; lastmod?: string }>,
-): string {
+export function urlsetXml(urls: Array<{ loc: string; lastmod?: string }>): string {
   const body = urls
     .map(
       (url) =>
@@ -186,12 +180,8 @@ export function robotsTxt(origin: string): string {
 async function childSitemapXml(
   child: SitemapChild,
   origin: string,
-  data: SitemapData | null,
+  data: SitemapData,
 ): Promise<string> {
-  // No Convex deployment configured: valid, empty sitemaps keep local and
-  // preview builds serving 200s.
-  if (!data) return urlsetXml([]);
-
   if (child === "months") {
     const paths = monthPaths(await data.monthRange());
     return urlsetXml(paths.map((path) => ({ loc: `${origin}${path}` })));
@@ -219,11 +209,11 @@ async function childSitemapXml(
  * Serve `/robots.txt`, `/sitemap.xml`, and `/sitemaps/{child}.xml`; null for
  * every other request so the Start handler takes over. All URLs are emitted
  * against the canonical origin (spec §11) regardless of the request host.
+ * Only a child sitemap reads Convex, so only it builds the client: a
+ * missing `VITE_CONVEX_URL` throws there, and every other request reaches
+ * the app, whose error screen shows the message.
  */
-export async function seoResponse(
-  request: Request,
-  data: SitemapData | null = convexSitemapData(),
-): Promise<Response | null> {
+export async function seoResponse(request: Request, data?: SitemapData): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") return null;
   const { pathname } = new URL(request.url);
   const origin = siteOrigin();
@@ -239,15 +229,13 @@ export async function seoResponse(
 
   if (pathname === "/sitemap.xml") {
     return xmlResponse(
-      sitemapIndexXml(
-        SITEMAP_CHILDREN.map((child) => `${origin}/sitemaps/${child}.xml`),
-      ),
+      sitemapIndexXml(SITEMAP_CHILDREN.map((child) => `${origin}/sitemaps/${child}.xml`)),
     );
   }
 
   const match = /^\/sitemaps\/([a-z]+)\.xml$/.exec(pathname);
   const child = match && SITEMAP_CHILDREN.find((name) => name === match[1]);
-  if (child) return cachedChildSitemap(request, child, origin, data);
+  if (child) return cachedChildSitemap(request, child, origin, data ?? convexSitemapData());
 
   return null;
 }
@@ -262,7 +250,7 @@ async function cachedChildSitemap(
   request: Request,
   child: SitemapChild,
   origin: string,
-  data: SitemapData | null,
+  data: SitemapData,
 ): Promise<Response> {
   const url = new URL(request.url);
   const cache = caches.default;

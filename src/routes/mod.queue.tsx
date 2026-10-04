@@ -3,10 +3,9 @@ import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import { CommentsQueueLink, ModGate } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
+import { warningLabel } from "~/lib/proposalDraft";
 
 /**
  * The shared review queue (spec §5): every In-Review Proposal,
@@ -32,16 +31,6 @@ const RECORD_TYPES = [
 ] as const;
 
 function QueuePage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          The review queue needs a configured Convex deployment (see the
-          README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"
@@ -71,10 +60,7 @@ function Queue() {
   const rows = useQuery(api.proposals.reviewQueue, {
     operation: operation || undefined,
     recordType: recordType || undefined,
-    authorKind:
-      authorKind === "imports" || authorKind === "humans"
-        ? authorKind
-        : undefined,
+    authorKind: authorKind === "imports" || authorKind === "humans" ? authorKind : undefined,
     author: author.trim() || undefined,
     staleOnly: staleOnly || undefined,
     warningsOnly: warningsOnly || undefined,
@@ -89,8 +75,8 @@ function Queue() {
       <Breadcrumbs trail={["Review queue"]} />
       <h1>Review queue</h1>
       <p className="section-hint">
-        In-Review proposals, oldest first. Claiming signals who is looking; it
-        never locks — any Moderator can decide.
+        In-Review proposals, oldest first. Claiming signals who is looking; it never locks — any
+        Moderator can decide.
       </p>
       <nav className="mod-tools" aria-label="Data team tools">
         <Link to="/mod/proposals">My proposals</Link>
@@ -107,6 +93,7 @@ function Queue() {
             <option value="">any</option>
             <option value="create">create</option>
             <option value="update">update</option>
+            <option value="clearOverride">clear override</option>
           </select>
         </label>
         <label>
@@ -169,10 +156,7 @@ function Queue() {
       ) : (
         <ol className="queue-list">
           {rows.map((row) => (
-            <li
-              key={row.proposalId}
-              className={row.stale ? "queue-row mod-flagged" : "queue-row"}
-            >
+            <li key={row.proposalId} className={row.stale ? "queue-row mod-flagged" : "queue-row"}>
               <Link to="/mod/proposal/$id" params={{ id: row.proposalId }}>
                 {row.comment || "(no comment)"}
               </Link>
@@ -189,20 +173,10 @@ function Queue() {
                 <span>{row.recordTypes.join(", ")}</span>
                 <span>waiting {formatAge(row.ageMs)}</span>
                 {row.claimedBy ? <span>claimed by @{row.claimedBy}</span> : null}
-                {row.stale ? (
-                  <span className="chip mod-chip mod-chip--bad">stale</span>
-                ) : null}
+                {row.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
                 {row.warnings.length > 0 ? (
                   <span className="queue-warnings">
-                    warnings:{" "}
-                    {row.warnings
-                      .map(
-                        (warning) =>
-                          PROPOSAL_WARNINGS[
-                            warning as keyof typeof PROPOSAL_WARNINGS
-                          ] ?? warning,
-                      )
-                      .join("; ")}
+                    warnings: {row.warnings.map(warningLabel).join("; ")}
                   </span>
                 ) : null}
               </div>

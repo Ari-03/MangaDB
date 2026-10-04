@@ -6,7 +6,6 @@ import { api } from "../../convex/_generated/api";
 import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
 import { ModGate } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * The atomic multi-record proposal (spec §5): one Proposal that
@@ -21,15 +20,6 @@ export const Route = createFileRoute("/mod/propose-new/$seriesPublicId")({
 
 function ProposeNewPage() {
   const { seriesPublicId } = Route.useParams();
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Proposals need a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   const publicId = Number(seriesPublicId);
   if (!Number.isInteger(publicId)) {
     return (
@@ -42,10 +32,7 @@ function ProposeNewPage() {
     );
   }
   return (
-    <ModGate
-      role="dataTeam"
-      refusal="Proposing new records needs an Editor (or stronger) role."
-    >
+    <ModGate role="dataTeam" refusal="Proposing new records needs an Editor (or stronger) role.">
       <ProposeNewForm publicId={publicId} />
     </ModGate>
   );
@@ -115,9 +102,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
           fields: {
             publisherId,
             linePosition: linePosition.trim() || undefined,
-            volumeCoverage: [
-              { volume: "volume-1", order: 1, extent: "complete" as const },
-            ],
+            volumeCoverage: [{ volume: "volume-1", order: 1, extent: "complete" as const }],
           },
         },
         {
@@ -127,10 +112,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
           fields: {
             editionId: "edition",
             format,
-            binding:
-              format === "physical" && binding.trim() !== ""
-                ? binding.trim()
-                : undefined,
+            binding: format === "physical" && binding.trim() !== "" ? binding.trim() : undefined,
             language: language.trim(),
             isbn13: isbn13.trim() || undefined,
             pubDate,
@@ -138,9 +120,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
         },
       ],
       evidence:
-        evidenceUrl.trim() !== ""
-          ? [{ kind: "url" as const, url: evidenceUrl.trim() }]
-          : [],
+        evidenceUrl.trim() !== "" ? [{ kind: "url" as const, url: evidenceUrl.trim() }] : [],
       comment,
     };
   };
@@ -150,9 +130,9 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
       <Breadcrumbs trail={["Propose new records"]} />
       <h1>New volume + edition + release: {form.title}</h1>
       <p className="section-hint">
-        One atomic proposal creates all three records together (temp-IDs wire
-        the references). The volume lands after the series' current{" "}
-        {form.volumeCount} volume{form.volumeCount === 1 ? "" : "s"}.
+        One atomic proposal creates all three records together (temp-IDs wire the references). The
+        volume lands after the series' current {form.volumeCount} volume
+        {form.volumeCount === 1 ? "" : "s"}.
       </p>
       <form
         className="mod-edit-form"
@@ -219,11 +199,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
         ) : null}
         <label>
           Language (required)
-          <input
-            value={language}
-            onChange={(event) => setLanguage(event.target.value)}
-            required
-          />
+          <input value={language} onChange={(event) => setLanguage(event.target.value)} required />
         </label>
         <label>
           ISBN-13

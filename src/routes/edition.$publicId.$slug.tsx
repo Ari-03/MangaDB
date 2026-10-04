@@ -1,9 +1,4 @@
-import {
-  createFileRoute,
-  Link,
-  notFound,
-  redirect,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
 import { Byline } from "~/lib/byline";
@@ -12,11 +7,7 @@ import { AboutSeriesNote, CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { ConcealArt } from "~/lib/mature";
-import {
-  ModEditLink,
-  ModReleaseEditLinks,
-  RecordHistory,
-} from "~/lib/moderation";
+import { ModEditLink, ModReleaseEditLinks, RecordHistory } from "~/lib/moderation";
 import { RatingAggregate } from "~/lib/ratings";
 import { TakePanel } from "~/lib/reviews";
 import {
@@ -58,9 +49,10 @@ import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
  * completely (`volume` then names it); else nothing. The server applies the
  * same rule (convex/lib/ratings.ts), refusing single-volume Editions.
  */
-function ratedAs<
-  Covered extends { volumePublicId: number; extent: "complete" | "partial" },
->(editionPublicId: number, coverage: ReadonlyArray<Covered>) {
+function ratedAs<Covered extends { volumePublicId: number; extent: "complete" | "partial" }>(
+  editionPublicId: number,
+  coverage: ReadonlyArray<Covered>,
+) {
   if (new Set(coverage.map((c) => c.volumePublicId)).size > 1) {
     return {
       target: { kind: "edition" as const, publicId: editionPublicId },
@@ -89,9 +81,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
     // The aggregate of what the book is rated as (its Volume, or itself as
     // an omnibus): rendered with the page, then live (lib/ratings.tsx).
     const rated = ratedAs(page.edition.publicId, page.coverage);
-    const rating = rated
-      ? await catalogQuery(api.ratings.summary, { target: rated.target })
-      : null;
+    const rating = rated ? await catalogQuery(api.ratings.summary, { target: rated.target }) : null;
     return { ...page, rating };
   },
   // Title/description formulas, cover-led social card, canonical link, and
@@ -202,6 +192,7 @@ function EditionPage() {
           ...(primarySeries
             ? [
                 <Link
+                  key="series"
                   to="/series/$publicId/$slug"
                   params={slugParams(primarySeries.publicId, primarySeries.title)}
                 >
@@ -221,9 +212,7 @@ function EditionPage() {
               isbn13={coverIsbns}
               title={edition.title}
               foot={[
-                single
-                  ? `Vol ${single.label ?? `#${single.position}`}`
-                  : "Edition",
+                single ? `Vol ${single.label ?? `#${single.position}`}` : "Edition",
                 edition.publisher?.name,
               ]}
               numbered={numbered}
@@ -246,10 +235,7 @@ function EditionPage() {
                   Rates the volume this book collects,{" "}
                   <Link
                     to="/volume/$publicId/$slug"
-                    params={slugParams(
-                      rated.volume.volumePublicId,
-                      rated.volume.volumeTitle,
-                    )}
+                    params={slugParams(rated.volume.volumePublicId, rated.volume.volumeTitle)}
                   >
                     {rated.volume.volumeTitle}
                   </Link>
@@ -283,31 +269,24 @@ function EditionPage() {
               <span className="chip chip--line">
                 {edition.lineName}
                 {edition.linePosition ? (
-                  <span
-                    className="line-position"
-                    title="Position within the edition line"
-                  >
+                  <span className="line-position" title="Position within the edition line">
                     position {edition.linePosition}
                   </span>
                 ) : null}
               </span>
             ) : null}
             <span className="chip">
-              {releases.length === 1
-                ? "1 release"
-                : `${releases.length} releases`}
+              {releases.length === 1 ? "1 release" : `${releases.length} releases`}
             </span>
-            {ratingTarget ? (
-              <RatingAggregate target={ratingTarget} initial={rating} />
-            ) : null}
+            {ratingTarget ? <RatingAggregate target={ratingTarget} initial={rating} /> : null}
           </p>
 
           {coverage.length > 0 ? (
             <CoverageChips coverage={coverage} />
           ) : edition.coverageUnmapped ? (
             <p className="detail-note">
-              Which volumes this book collects is not mapped yet — it is listed in the
-              publisher's own numbering until the data team maps it.
+              Which volumes this book collects is not mapped yet — it is listed in the publisher's
+              own numbering until the data team maps it.
             </p>
           ) : null}
 
@@ -322,8 +301,8 @@ function EditionPage() {
             </div>
           ) : (
             <p className="detail-note">
-              One publisher, one packaging of the content. Paste an ISBN into
-              search to land on its row below.
+              One publisher, one packaging of the content. Paste an ISBN into search to land on its
+              row below.
             </p>
           )}
 
@@ -388,9 +367,7 @@ function EditionPage() {
       {/* Public revision history + the moderator edit entry point. */}
       <RecordHistory type="edition" publicId={edition.publicId} />
       <ModEditLink type="edition" editKey={String(edition.publicId)} />
-      <ModReleaseEditLinks
-        releases={releases.map((r) => ({ id: r.id, anchor: r.anchor }))}
-      />
+      <ModReleaseEditLinks releases={releases.map((r) => ({ id: r.id, anchor: r.anchor }))} />
     </main>
   );
 }

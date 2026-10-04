@@ -86,9 +86,7 @@ export function authorityRank(
 
 function isPartialDate(value: unknown): value is DateParts {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as DateParts).year === "number"
+    typeof value === "object" && value !== null && typeof (value as DateParts).year === "number"
   );
 }
 
@@ -100,10 +98,7 @@ export function datePrecision(date: DateParts): number {
 }
 
 /** Do two partial dates agree on every part they both specify? */
-export function datesConsistent(
-  a: DateParts,
-  b: DateParts,
-): boolean {
+export function datesConsistent(a: DateParts, b: DateParts): boolean {
   if (a.year !== b.year) return false;
   if (a.month !== undefined && b.month !== undefined && a.month !== b.month) {
     return false;
