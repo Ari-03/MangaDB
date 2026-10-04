@@ -1517,6 +1517,14 @@ describe("merge — read counts follow their Volume", () => {
     );
     const loserVolume = { type: "volume", id: f.loser.volumeId } as const;
     await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, loserVolume);
+    // The merge moves the row by its Volume alone and stores no Series.
+    expect(
+      await t.run(async (ctx) => {
+        const manifest = (await ctx.db.query("mergeManifests").collect()).find((m) => m.loserRef.id === f.loser.volumeId)!;
+        return manifest.repointed.filter((entry) => entry.table === "volumeProgress").map((entry) => entry.field);
+      }),
+    ).toEqual(["volumeId"]);
+    expect(await t.run((ctx) => ctx.db.get(aliceRow))).not.toHaveProperty("seriesId");
     // As such a merge was logged when each row stored its Series, and alice's
     // row as it was left then.
     await t.run(async (ctx) => {

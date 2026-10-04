@@ -12,10 +12,20 @@ is fixed.
   deployment, a later deploy drops the field, its `by_series` and
   `by_user_series` indexes, and the migration itself. Split keeps
   skipping the field in older merge manifests (`RETIRED_FIELDS` in
-  `convex/lib/sensitiveOps.ts`).
+  `convex/lib/sensitiveOps.ts`). The migration is finished when its log
+  line `[reading.unsetProgressSeries] done: N rows cleared` appears, or
+  when a rerun logs 0; the value `npx convex run` prints counts only the
+  first page. The deploy that made the field optional is one-way: once a
+  row without `seriesId` exists, redeploying the earlier code fails schema
+  validation. An export taken before the migration ran still holds the
+  field, so importing it after the field is dropped fails schema
+  validation.
 - **Volume Favorites and Comments carry a stored `seriesId` that a Split
-  does not re-derive.** Display derives the Series from the Volume, but
-  merge bookkeeping and the Comments thread lookup use the stored value.
+  does not re-derive.** Favorites display derives the Series from the
+  Volume. Merge bookkeeping, the Comments thread lookup and the titles in
+  the Comments moderation queue (`comments.queue`) use the stored value,
+  so after merging B into A, commenting on a Volume of B and splitting B,
+  the queue labels that comment with A's title.
 - **A sign-in without a username cannot be deleted on the site.**
   `users.deleteAccount` refuses an identity with no `users` row: no page
   offers deletion before a username is claimed, and deleting the Clerk
