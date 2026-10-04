@@ -369,9 +369,9 @@ is fixed.
   of about 100 lookups per 5 minutes.
 - **A Yen Press link has no time bound.** `yenPress:sync` hands off after
   300 page fetches (`DEFAULT_MAX_FETCHES` in `convex/yenPress.ts`), never
-  by time. Each fetch waits 1.1 s first, so a link takes at least five and
-  a half minutes before its applies, the sitemap and its planning
-  queries. At about 6 s per fetch on average (a slow site, or rate
+  by time. Each fetch waits 1.1 s first, so a link that makes all 300
+  takes at least five and a half minutes before its applies, the sitemap
+  and its planning queries. At about 6 s per fetch on average (a slow site, or rate
   limiting, under which one fetch can retry for up to four minutes) a
   link reaches Convex's 30-minute limit. The action is then ended before
   it hands off and the run stays `running` until the hourly tick closes
@@ -379,6 +379,19 @@ is fixed.
   before its links got a ten-minute budget
   ([imports](imports.md#open-library)). A time budget beside the count is
   the fix.
+- **An Open Library link can still reach the action limit on a stalled
+  read or a slow download.** A link checks its ten minutes only between
+  dump lines (`LINK_BUDGET_MS` in `convex/openLibrary.ts`). The fetch of
+  the dump, each read of its stream, and the skip over the lines earlier
+  links processed have no deadline, so a download that stalls, or a prefix
+  that takes most of 30 minutes to arrive, ends the action before it
+  hands off. The run then stays `running` until the hourly tick closes it
+  as stranded, and the source starts again at its next cadence
+  ([imports](imports.md#open-library)). Starting over is the accepted cost
+  of reading the dump from its first byte
+  ([decisions](decisions.md#open-library-continuations-read-the-dump-from-the-start));
+  a deadline on the fetch and on each read
+  would turn a stall into a run that closes as failed at once.
 - **A Kodansha back-catalog link has no time bound.**
   `kodansha:backlistSync` hands off after 200 fetches
   (`DEFAULT_MAX_FETCHES` in `convex/kodansha.ts`), checked only before
@@ -425,10 +438,10 @@ is fixed.
   fetched or not, with the existing hand-off, is the fix.
 - **A Seven Seas run is one action with no time bound.**
   `sevenSeas:sync` reads every listing page (100 books each, 6,000+
-  books), runs `noteListing` for each listed book, then fetches up to
-  `maxDetailFetches` book pages (default 200) with their covers and up to
-  50 cover retries, waiting 0.35 s before each request, and never hands
-  off. If a `noteListing` call took as long as an Open Library line did
+  books) and, page by page, runs `noteListing` for each listed book and
+  fetches the book pages that need it, up to `maxDetailFetches` in all
+  (default 200), with their covers and up to 50 cover retries, waiting
+  0.35 s before each request. It never hands off. If a `noteListing` call took as long as an Open Library line did
   on staging on 2026-10-04 (about 0.17 s), the listing alone would take
   about 17 minutes. Step 4 of
   [After deploying the 2026-10 known-issues round](operations.md#after-deploying-the-2026-10-known-issues-round)

@@ -214,8 +214,11 @@ links to.
 4. Only where Seven Seas observations exist (not production): let the
    syncs re-read book pages stored under an older parser, or repeat
    `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'` until done.
-   Each call runs in one action and has finished when it returns, unless
-   it is ended at the 30-minute action limit first. Safe to rerun. Step 2
+   Each call runs in one action. The command stops waiting after about
+   five minutes and prints an error while the action goes on (see
+   [After deploying a change](#after-deploying-a-change)); the call has
+   finished when its Import Run is no longer `running`, unless the action
+   is ended at the 30-minute limit first. Safe to rerun. Step 2
    of the same section says why it can be, and how to tell the re-read is
    done.
 5. Rebuild the library: `npx convex run seriesBrowse:rebuild`. It sets
