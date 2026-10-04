@@ -144,7 +144,8 @@ export function ViewerAnalytics() {
   const setOptOut = useMutation(api.users.setAnalyticsOptOut);
   const dnt = doNotTrack();
 
-  // Do Not Track opts an account that never chose out, once per page load.
+  // Do Not Track opts an account that never chose out, once per mount: a
+  // remount can repeat the same write.
   const unchosen = viewer?.needsUsername === false && viewer.analyticsOptOut === null;
   const [optedOutForDnt, setOptedOutForDnt] = useState(false);
   useEffect(() => {

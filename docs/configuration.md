@@ -120,14 +120,16 @@ user's choice is still loading, calls posthog-js's `opt_out_capturing()`:
 `capture()` then returns before posthog-js records anything (its session
 and entry URL, the previous page), and its logs and metrics, which check
 `is_capturing()`, stop too. posthog-js stores the denial in localStorage,
-keeping the distinct id it holds. That store is shared by every tab, so
-another tab opting in turns capturing back on in this one; the client's
-`before_send` drops every event while Off or loading to cover that, but
-posthog-js has already updated its own state from the dropped event, and
-this tab's events carry that state once it sends again. A dropped
-pageview becomes the previous page: the events until the next pageview
-carry its `$pageview_id`, and the next pageview or `$pageleave` carries
-its `$prev_pageview_*` fields (pathname, id, duration, scroll and content
+keeping the distinct id it holds.
+
+That store is shared by every tab, so another tab opting in turns
+capturing back on in this one; the client's `before_send` drops every
+event while Off or loading to cover that, but posthog-js has already
+updated its own state from the dropped event, and this tab's events
+carry that state once it sends again. A dropped pageview becomes the
+previous page: the events until the next pageview carry its
+`$pageview_id`, and the next pageview or `$pageleave` carries its
+`$prev_pageview_*` fields (pathname, id, duration, scroll and content
 measurements). Campaign parameters in a dropped page's address become
 the `utm_*` properties of the tab's later events until it reloads, even
 in a session that began earlier while On. If the session began on a
@@ -135,28 +137,34 @@ dropped event (no session was live: the first event after 30 minutes
 idle or 24 hours into a session, or the browser's first), every later
 event of the session, across reloads, carries that event's address as
 `$session_entry_url`, query string and fragment included, with
-`$session_entry_pathname` and `$session_entry_utm_*`. This happens only
-while another tab of the same browser has opted in and this one is Off
-or still loading its choice. With one account in every tab, this tab
-catches up when Convex pushes it the changed choice (at once, or when its
-connection is restored) or Clerk syncs a sign-out to it. With Clerk's
-multi-session mode, two tabs can hold different accounts, and a tab whose
-account is Off records this state for as long as another tab's account
-is On. The reverse holds too: a tab whose loaded client goes Off or back to loading
-(an in-page sign-in does, for one round trip) stores a denial that
-pauses capturing in every tab until it opts back in; the other tabs'
-events in that time are lost, not sent, and if that tab closes first
-they stay paused until their own consent next changes or they reload.
-Convex having no viewer yet for a new session counts as still loading.
-A render error or failed loader replaces the app with the router's error
-screen and remounts the client on the next navigation; posthog-js
-captures that navigation's pageview in its history listener before React
-remounts, so that one pageview goes out under the last consent applied.
-Remote config is off only because
-`advanced_disable_flags` is set. A browser sending Do Not Track or Global
-Privacy Control sets the opt-out once on an account that has never chosen,
-so server events stop too; a browser without it never clears one.
-Signed-out visitors have no toggle: `respect_dnt` covers them.
+`$session_entry_pathname` and `$session_entry_utm_*`.
+
+This happens only while another tab of the same browser has opted in and
+this one is Off or still loading its choice. With one account in every
+tab, this tab catches up when Convex pushes it the changed choice (at
+once, or when its connection is restored) or Clerk syncs a sign-out to
+it. With Clerk's multi-session mode, two tabs can hold different
+accounts, and a tab whose account is Off can record this state for as
+long as another tab's account is On; which of the two holds depends on
+which tab applied its consent last: if the Off tab did, the On tab is
+paused instead, as below. The reverse holds too: a tab whose loaded
+client goes Off or back to loading (an in-page sign-in does, for one
+round trip) stores a denial that pauses capturing in every tab until it
+opts back in; the other tabs' events in that time are lost, not sent,
+and if that tab closes first they stay paused until their own consent
+next changes or they reload.
+
+Convex having no viewer yet for a new session counts as still loading. A
+render error or failed loader replaces the app with the router's error
+screen and unmounts the client; `before_send` drops everything until the
+next navigation remounts it and the session's consent is applied again.
+posthog-js captures that navigation's pageview before React remounts, so
+it is dropped for every viewer and counts as a dropped pageview above.
+Remote config is off only because `advanced_disable_flags` is set. A
+browser sending Do Not Track or Global Privacy Control sets the opt-out
+once on an account that has never chosen, so server events stop too; a
+browser without it never clears one. Signed-out visitors have no toggle:
+`respect_dnt` covers them.
 
 Sending resumes (switching On, signing out, a sign-in's choice answering)
 in a fixed order. First the client notes whether a denial is stored. Then

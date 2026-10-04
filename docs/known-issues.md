@@ -59,7 +59,7 @@ is fixed.
   signing out) turns capturing back on in a tab that is Off or still
   loading its choice. With one account in every tab that lasts until
   Convex pushes the tab the changed choice or Clerk syncs a sign-out;
-  with Clerk's multi-session mode, a tab whose account is Off records
+  with Clerk's multi-session mode, a tab whose account is Off can record
   this state for as long as another tab's account is On. `before_send` in
   `src/lib/analyticsClient.tsx` drops the events of that moment, but
   posthog-js has already updated its state from them. Once sending

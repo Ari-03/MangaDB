@@ -255,8 +255,8 @@ name it as the previous page, with how long it was open and how far it was
 scrolled, and carry any campaign tag in its address; if a visit began on
 it, every event of the visit carries its address, search text included.
 This tab catches up when the change reaches it, but if two tabs are signed
-in to different accounts at once, it lasts as long as the other account
-has analytics on. A browser that sends Do Not Track
+in to different accounts at once, it can last as long as the other
+account has analytics on. A browser that sends Do Not Track
 or Global Privacy Control sends nothing either way, and switches an account
 that has never chosen to Off, once; the panel says so. A browser without
 it never switches an account back on. Signed-out visitors have no toggle;

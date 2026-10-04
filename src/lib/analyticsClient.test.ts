@@ -187,6 +187,7 @@ async function mountPage(path: string) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   mounted.push(() => act(async () => root.unmount()));
   return {
+    posthog,
     render: async (consent: AnalyticsConsent) => {
       await act(async () => root.render(createElement(PostHogAnalytics, { apiKey: "phc_test", consent })));
       await settle();
@@ -607,7 +608,7 @@ describe("analyticsClient against posthog-js", () => {
       ["$pageview", "user_b"],
       ["$pageview", "user_b"],
     ]);
-    // Switched Off in another tab while this page showed an error screen.
+    // Switched Off elsewhere while this page showed an error screen.
     await page.unmount();
     const switched = requests.length;
     session.viewer = undefined;
@@ -633,5 +634,55 @@ describe("analyticsClient against posthog-js", () => {
     await page.renderGate();
     await page.go("/series/3");
     expect(requests.slice(remounted)).toEqual([]);
+  });
+
+  it("sends nothing while the consent gate is unmounted, nor after it remounts loading and then Off", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.go("/series/2");
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    // Switched Off elsewhere while this page showed an error screen.
+    await page.unmount();
+    const unmounted = requests.length;
+    await page.go(`/search?q=${OFF_TIME}`);
+    session.viewer = undefined;
+    await page.renderGate();
+    session.viewer = viewerB(true);
+    await page.renderGate();
+    await page.go("/series/3");
+    expect(requests.slice(unmounted)).toEqual([]);
+  });
+
+  it("resumes sending once as the user when the consent gate remounts with the account still On", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.unmount();
+    const unmounted = events.length;
+    await page.go("/series/2");
+    await page.renderGate();
+    await page.go("/series/3");
+    expect(since(unmounted).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", "user_b", "/series/3"],
+    ]);
+    expect(page.posthog.has_opted_out_capturing()).toBe(false);
+  });
+
+  it("sends no pageleave when the tab closes while the consent gate is unmounted", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.unmount();
+    const unmounted = events.length;
+    window.dispatchEvent(new Event("pagehide"));
+    await settle();
+    // Earlier tests' page loads still listen for pagehide; only this one's session counts.
+    const sessionId = page.posthog.get_session_id();
+    expect(since(unmounted).filter((e) => e.properties.$session_id === sessionId)).toEqual([]);
   });
 });

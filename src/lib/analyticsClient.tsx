@@ -135,6 +135,11 @@ function ConsentSync({ consent }: { consent: AnalyticsConsent }) {
 
   useEffect(() => {
     applyConsent(consent);
+    // Unmounted (the router's error screen replaced the app), nothing reads
+    // the session's consent, so nothing leaves until a remount applies it.
+    return () => {
+      sending = false;
+    };
     // `consent` is a new object each render; its fields are the dependencies.
   }, [status, userId, username, role]);
 
