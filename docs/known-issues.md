@@ -48,11 +48,15 @@ is fixed.
 
 - **Human Overrides cannot be lifted.** Approving a `clearOverride` op fails
   with `unsupportedOp` (`convex/proposals.ts`).
-- **A hidden sequel can lose its ISBN to the parent Series.**
-  `resolveBaseSeries` (`convex/lib/catalogTitle.ts`) only considers active
-  Series. With "Kingdom Hearts II" hidden, an Open Library record titled
-  "Kingdom" with subtitle "Hearts II" resolves to Kingdom Hearts Volume 2.
-  Observations already linked this way need a manual fix.
+- **Sequel books ANN filed under the first work stay there.** Before ANN
+  lines of another work were told apart (`sequelWork` in
+  `convex/lib/ann.ts`), such a line became a Volume of its entry's Series,
+  and Yen Press and Open Library then linked to that Release by ISBN. A
+  linked line keeps its link, so these Releases stay under the wrong
+  Series until a Data Team member moves each to the right Series' Volume.
+  `npx convex run ann:listMisplacedSequelLines '{}'` lists them; on staging
+  they include ISBNs 9781975393489 and 9781975396923 on Series 1229's
+  Volumes 1 and 2 ([imports](imports.md#anime-news-network)).
 - **ANN's title splitter has no rejected state.** `convex/lib/ann.ts` reads
   "(GN 97-99)" ranges but cannot mark a statement as unreadable, so a
   gapped list such as "(GN 1, 3)" on a 3-in-1 line is placed by the line's
@@ -86,10 +90,6 @@ is fixed.
 
 ## Decisions waiting on the owner
 
-- **Disjoint ISBNs as proof of another work.** `workMatch`
-  (`convex/lib/matching.ts`) calls a title match a different work when both
-  sides hold ISBNs in a shared format and share none. That is a policy
-  choice, not a fact.
 - **One-time code that may have finished.** The operator backfills
   `people:backfillAnnCredits`, `ann:backfillDescriptions` and
   `openLibrary:replayDescriptions`, the repair entry kinds used only by

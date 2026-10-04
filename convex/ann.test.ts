@@ -2379,3 +2379,257 @@ describe("ann — release-page descriptions", () => {
     });
   });
 });
+
+describe("ann — a sequel's lines under its first work's entry", () => {
+  const FIRST = "The Alchemist Who Survived Now Dreams of a Quiet City Life";
+  const SEQUEL = `${FIRST} II`;
+  const SEQUEL_ISBNS = { 54971: "9781975393489", 54972: "9781975396923" } as const;
+  // ANN's entry for the first work, as staging stored it: its own eBook
+  // lines, and the sequel's two books under the sequel's title.
+  const ENTRY: FixtureManga = {
+    id: 30340,
+    title: FIRST,
+    releases: [
+      { annId: 30341, date: "2019-12-17", designator: "eBook 1", ean: "9781975331306" },
+      { annId: 30342, date: "2020-08-18", designator: "eBook 2", ean: "9781975308544" },
+      { annId: 54971, date: "2024-03-26", designator: "GN 1", ean: SEQUEL_ISBNS[54971], title: `${SEQUEL}: Cycle of the Elixir` },
+      { annId: 54972, date: "2024-12-10", designator: "GN 2", ean: SEQUEL_ISBNS[54972], title: `${SEQUEL}: Cycle of the Elixir` },
+    ],
+  };
+  const PAGES = {
+    54971: releasePage({ title: `${SEQUEL}: Cycle of the Elixir`, volume: "GN 1", distributor: "Yen Press", date: "2024-03-26", isbn13: SEQUEL_ISBNS[54971], mangaId: 30340 }),
+    54972: releasePage({ title: `${SEQUEL}: Cycle of the Elixir`, volume: "GN 2", distributor: "Yen Press", date: "2024-12-10", isbn13: SEQUEL_ISBNS[54972], mangaId: 30340 }),
+  };
+
+  /**
+   * Yen Press, the first work's Series (publicId 1229) with Volumes 1 and 2
+   * and their digital Releases, and the sequel's Series (5358) with its two
+   * Volumes when `sequel` asks for it.
+   */
+  async function seed(t: TestT, sequel: "absent" | "active" | "hidden") {
+    await seedRegistry(t, true);
+    return await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
+      const firstId = await insertSeries(ctx, { publicId: 1229, title: FIRST });
+      for (const [position, isbn13] of [[1, "9781975331306"], [2, "9781975308544"]] as const) {
+        const volumeId = await insertVolume(ctx, { seriesId: firstId, position });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, { editionId, publisherId, seriesIds: [firstId], format: "digital", isbn13 });
+      }
+      if (sequel === "absent") return { firstId, sequelId: null };
+      const sequelId = await insertSeries(ctx, { publicId: 5358, title: SEQUEL, status: sequel });
+      for (const position of [1, 2]) await insertVolume(ctx, { seriesId: sequelId, position });
+      return { firstId, sequelId };
+    });
+  }
+
+  /** Each Release's Series and ISBN, by the Series' publicId. */
+  const releasesBySeries = (t: TestT) =>
+    t.run(async (ctx) => {
+      const rows: Array<[number | undefined, string | undefined]> = [];
+      for (const release of await ctx.db.query("releases").collect()) {
+        rows.push([(await ctx.db.get(release.seriesIds[0]!))?.publicId, release.isbn13]);
+      }
+      return rows.sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    });
+
+  const holdFor = (t: TestT, annId: number) =>
+    t.run(async (ctx) => {
+      const obs = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) => q.eq("sourceKey", "ann").eq("sourceRecordId", `release:${annId}`))
+        .unique();
+      const hold = await ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", obs!._id))
+        .unique();
+      return {
+        linked: obs!.recordRef !== undefined,
+        kind: hold?.kind ?? null,
+        reason: obs!.conflicts?.find((c) => c.field === "placement")?.reason ?? null,
+      };
+    });
+
+  it.each(["absent", "hidden"] as const)(
+    "holds the sequel's lines when its Series is %s, never filing them under the first work",
+    async (state) => {
+      const t = makeT();
+      await seed(t, state);
+      stubAnn([ENTRY], PAGES);
+      await sync(t);
+      await syncPages(t);
+
+      // Nothing new under Series 1229: its Volumes keep their own books only.
+      expect(await releasesBySeries(t)).toEqual([
+        [1229, "9781975308544"],
+        [1229, "9781975331306"],
+      ]);
+      for (const annId of [54971, 54972]) {
+        expect(await holdFor(t, annId)).toEqual({
+          linked: false,
+          kind: "series",
+          reason: `The line names "${SEQUEL}", another work than the entry's "${FIRST}", and no active Series has that title.`,
+        });
+      }
+      // The entry's own lines link by ISBN, as any line does.
+      expect((await holdFor(t, 30341)).linked).toBe(true);
+      expect((await holdFor(t, 30342)).linked).toBe(true);
+    },
+  );
+
+  it("places the sequel's lines under the sequel's Series by their labels", async () => {
+    const t = makeT();
+    const { sequelId } = await seed(t, "active");
+    stubAnn([ENTRY], PAGES);
+    await sync(t);
+    await syncPages(t);
+
+    expect(await releasesBySeries(t)).toEqual([
+      [1229, "9781975308544"],
+      [1229, "9781975331306"],
+      [5358, SEQUEL_ISBNS[54971]],
+      [5358, SEQUEL_ISBNS[54972]],
+    ]);
+    await t.run(async (ctx) => {
+      for (const [label, isbn13] of [["1", SEQUEL_ISBNS[54971]], ["2", SEQUEL_ISBNS[54972]]] as const) {
+        const release = (await ctx.db.query("releases").collect()).find((r) => r.isbn13 === isbn13)!;
+        const [coverage] = await ctx.db
+          .query("volumeCoverages")
+          .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
+          .collect();
+        const volume = (await ctx.db.get(coverage!.volumeId))!;
+        expect([volume.seriesId, volume.label]).toEqual([sequelId, label]);
+      }
+      // The mirror built no Volume of the first work from the sequel's labels.
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes).toHaveLength(4);
+    });
+  });
+
+  it("reports a sequel line an earlier import linked to a Release of the first work", async () => {
+    const t = makeT();
+    const { firstId } = await seed(t, "active");
+    stubAnn([ENTRY], PAGES);
+    await sync(t, { releasePages: false });
+    // What the old placement left: the sequel's book as a physical Release
+    // of the first work's Volume 1, its line linked there.
+    const misplaced = await t.run(async (ctx) => {
+      const publisherId = (await ctx.db.query("publishers").first())!._id;
+      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.seriesId === firstId && v.label === "1")!;
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: volume._id });
+      const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [firstId], isbn13: SEQUEL_ISBNS[54971] });
+      const obs = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) => q.eq("sourceKey", "ann").eq("sourceRecordId", "release:54971"))
+        .unique();
+      await ctx.db.patch(obs!._id, { recordRef: { type: "release", id: releaseId } });
+      return { releaseId, volume };
+    });
+
+    const listed = await t.action(internal.ann.listMisplacedSequelLines, {});
+    expect(listed).toEqual([
+      {
+        annId: "54971",
+        title: `${SEQUEL}: Cycle of the Elixir`,
+        label: "1",
+        isbn13: SEQUEL_ISBNS[54971],
+        release: { id: misplaced.releaseId, isbn13: SEQUEL_ISBNS[54971] },
+        volumes: [{ publicId: misplaced.volume.publicId, label: "1" }],
+        series: { publicId: 1229, title: FIRST },
+        work: SEQUEL,
+        workSeries: { publicId: 5358, title: SEQUEL },
+      },
+    ]);
+    // A page of one line at a time reaches the same line.
+    let cursor: string | null = null;
+    const paged: string[] = [];
+    for (;;) {
+      const page: { lines: Array<{ annId: string }>; continueCursor: string; isDone: boolean } = await t.query(
+        internal.ann.misplacedSequelLines,
+        { paginationOpts: { numItems: 1, cursor } },
+      );
+      paged.push(...page.lines.map((line) => line.annId));
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    expect(paged).toEqual(["54971"]);
+  });
+});
+
+describe("ann — a title match set aside for disjoint ISBNs is flagged", () => {
+  const ISBN = (n: number) => `97819753000${String(n).padStart(2, "0")}`;
+  // ANN's entry lists only Volumes 1 to 9.
+  const ENTRY: FixtureManga = {
+    id: 41000,
+    title: "Echo Garden",
+    releases: Array.from({ length: 9 }, (_, i) => ({
+      annId: 41001 + i,
+      date: "2020-01-07",
+      designator: `GN ${i + 1}`,
+      ean: ISBN(i + 1),
+    })),
+  };
+
+  /** A publisher feed's Series of the same title, built from its newest books, Volumes 10 to 12. */
+  async function seedNewest(t: TestT, bootstrap: boolean) {
+    await seedRegistry(t, bootstrap);
+    return await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
+      const seriesId = await insertSeries(ctx, { title: "Echo Garden" });
+      for (const position of [10, 11, 12]) {
+        const volumeId = await insertVolume(ctx, { seriesId, position });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], isbn13: ISBN(position) });
+      }
+      return await ctx.db.get(seriesId);
+    });
+  }
+
+  it("creates the entry's Series and one duplicate candidate naming both, and a rerun adds none", async () => {
+    const t = makeT();
+    const existing = (await seedNewest(t, true))!;
+    stubAnn([ENTRY]);
+    await sync(t, { releasePages: false });
+
+    const state = () =>
+      t.run(async (ctx) => ({
+        series: await ctx.db.query("series").collect(),
+        candidates: await ctx.db.query("duplicateCandidates").collect(),
+      }));
+    const first = await state();
+    expect(first.series).toHaveLength(2);
+    const created = first.series.find((s) => s._id !== existing._id)!;
+    expect(first.candidates).toEqual([
+      expect.objectContaining({
+        aId: existing._id,
+        bId: created._id,
+        aTitle: "Echo Garden",
+        bTitle: "Echo Garden",
+        status: "open",
+      }),
+    ]);
+
+    await sync(t, { releasePages: false });
+    const second = await state();
+    expect(second.series).toHaveLength(2);
+    expect(second.candidates).toHaveLength(1);
+  });
+
+  it("names the set-aside Series on the creation Proposal it queues in steady state", async () => {
+    const t = makeT();
+    const existing = (await seedNewest(t, false))!;
+    stubAnn([ENTRY]);
+    await sync(t, { releasePages: false });
+    await t.run(async (ctx) => {
+      const [version] = await ctx.db.query("proposalVersions").collect();
+      expect(version?.changeComment).toContain(
+        `Series ${existing.publicId} ("Echo Garden") has this title, but its books share no ISBN with this entry's`,
+      );
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      expect(await ctx.db.query("duplicateCandidates").collect()).toEqual([]);
+    });
+  });
+});

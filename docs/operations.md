@@ -67,7 +67,9 @@ off:
    {"kind":"random"}`), each checked by hand and marked Verified or Failed.
 2. The about 50 Series with the most Releases (`{"kind":"prominent"}`).
 3. A duplicate sweep (`launch.runDuplicateSweep`) of Series pairs whose
-   normalized titles collide. Each pair is marked Distinct or merged.
+   normalized titles collide. Each pair is marked Distinct or merged. ANN
+   adds a pair to the same list when disjoint ISBNs kept it from linking a
+   Series of its entry's title ([imports](imports.md#matching-ladder)).
 4. No systemic error pattern. Fix a failed sample's error class
    pipeline-wide, then redraw. There is no numeric threshold.
 

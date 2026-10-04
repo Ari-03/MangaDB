@@ -46,6 +46,28 @@ threads. Google's Perspective API is not an option; it is being shut down.
   cheap, and import runs, source health and moderation have no browser call
   site.
 
+## Disjoint ISBNs mean another work
+
+When ANN's entry and a Series of the same title both hold ISBNs in a
+shared format and share none, `workMatch` calls them different works
+(decided 2026-10-04). It is what keeps a parent off its spinoff (Citrus
+off Citrus+, which carries "Citrus Plus" as an alternative title): a
+spinoff shares its author, so only the books tell them apart. A wrong "same" lets ANN build Volumes and credits on the wrong
+Series, which is hard to undo; a wrong "different" costs a duplicate
+Series, which a merge undoes. The case it gets wrong is a work reissued
+under new ISBNs, or a Series a publisher feed built from later Volumes than
+ANN lists.
+
+So every use is visible. When the rule drops the only Series of the
+entry's title and ANN creates a new one, the pair goes on the duplicate
+list on `/mod/launch`; in steady state the creation Proposal names the
+dropped Series.
+
+Ruled out: holding such an entry for review instead, which in Bootstrap
+Mode would leave its books out of the catalog until a person looked; and
+treating disjoint ISBNs as no evidence, which would link namesakes by
+title alone.
+
 ## Cover art sources
 
 Covers come from Penguin Random House's distribution CDN first and the

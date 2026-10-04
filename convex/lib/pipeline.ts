@@ -436,12 +436,6 @@ export async function removedSeriesFor(
     publisherId: Id<"publishers"> | null;
   },
 ): Promise<RemovedSeries | null> {
-  const hidden = (series: Doc<"series">): RemovedSeries => ({
-    kind: "hidden",
-    series,
-    reason: `"${args.seriesTitle}" is Series ${series.publicId} ("${series.title}"), which an Editor hid — not recreated by an import.`,
-  });
-
   const linkObs =
     args.observation.recordRef?.type === "series"
       ? args.observation
@@ -450,20 +444,42 @@ export async function removedSeriesFor(
         : null;
   if (linkObs?.recordRef?.type === "series") {
     const linked = await survivorOf<"series">(ctx, await ctx.db.get(linkObs.recordRef.id));
-    if (linked?.status === "hidden") return hidden(linked);
+    if (linked?.status === "hidden") return hiddenWork(args.seriesTitle, linked);
     if (linked?.status === "active" && linked._id !== linkObs.recordRef.id) {
       return { kind: "merged", survivor: linked };
     }
   }
+  return await hiddenWorkTitled(ctx, args.seriesTitle, args.publisherId);
+}
 
-  const incoming =
-    args.publisherId !== null ? new Set(await publisherHouse(ctx, args.publisherId)) : null;
-  for (const series of await hiddenSeriesTitled(ctx, args.seriesTitle)) {
+type HiddenWork = Extract<RemovedSeries, { kind: "hidden" }>;
+
+function hiddenWork(seriesTitle: string, series: Doc<"series">): HiddenWork {
+  return {
+    kind: "hidden",
+    series,
+    reason: `"${seriesTitle}" is Series ${series.publicId} ("${series.title}"), which an Editor hid — not recreated by an import.`,
+  };
+}
+
+/**
+ * The hidden Series a title names (step 2 of removedSeriesFor), or null:
+ * one with the same normalized title, unless both sides name publishers
+ * and they differ. Open Library, which never creates a Series, asks it to
+ * hold such a book.
+ */
+export async function hiddenWorkTitled(
+  ctx: MutationCtx,
+  seriesTitle: string,
+  publisherId: Id<"publishers"> | null,
+): Promise<HiddenWork | null> {
+  const incoming = publisherId !== null ? new Set(await publisherHouse(ctx, publisherId)) : null;
+  for (const series of await hiddenSeriesTitled(ctx, seriesTitle)) {
     if (incoming !== null) {
       const houses = await seriesPublishers(ctx, series._id);
       if (houses.size > 0 && ![...houses].some((id) => incoming.has(id))) continue;
     }
-    return hidden(series);
+    return hiddenWork(seriesTitle, series);
   }
   return null;
 }

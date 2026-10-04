@@ -413,13 +413,14 @@ describe("candidateSeries", () => {
       (await t.run((ctx) => hiddenSeriesTitled(ctx, "Emma and Capucine"))).map((s) => s._id),
     ).toEqual([hidden]);
 
-    // A hidden namesake never shadows an active Series' alt title, and a
-    // hidden Series' alt title never counts.
+    // A hidden Series with the primary title outranks an active Series'
+    // alt title, and a hidden Series' alt title never counts.
     const paradise = await series(t, "Paradise");
     await t.run((ctx) => ctx.db.patch(paradise, { status: "hidden" }));
-    const kept = await series(t, "Paradise Residence", ["Paradise"]);
-    expect((await t.run((ctx) => candidateSeries(ctx, "Paradise"))).map((s) => s._id)).toEqual([
-      kept,
+    await series(t, "Paradise Residence", ["Paradise"]);
+    expect(await t.run((ctx) => candidateSeries(ctx, "Paradise"))).toEqual([]);
+    expect((await t.run((ctx) => hiddenSeriesTitled(ctx, "Paradise"))).map((s) => s._id)).toEqual([
+      paradise,
     ]);
     await series(t, "Mo Dao Zu Shi (Novel)", ["Grandmaster"]).then((id) =>
       t.run((ctx) => ctx.db.patch(id, { status: "hidden" })),

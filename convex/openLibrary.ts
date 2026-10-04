@@ -19,10 +19,10 @@
 //   match or creation review — OpenLibrary is crowd-sourced and
 //   weak-titled, so an ambiguous or structure-shaped record stays on its
 //   observation and waits for stronger sources. One a person could place
-//   (a known publisher, an active Series of its title) is a Held Book; the
-//   rest are recorded nowhere (placeEdition). Its blurb
-//   never queues against weak text another record wrote (ANN's, another
-//   edition's) either: the first text stays (lib/authority.ts)
+//   (a known publisher, and an active Series of its title or one an Editor
+//   hid) is a Held Book; the rest are recorded nowhere (placeEdition). Its
+//   blurb never queues against weak text another record wrote (ANN's,
+//   another edition's) either: the first text stays (lib/authority.ts)
 // - no withdrawal pass: the streamed file is an operator-filtered slice of
 //   the dump, so absence from it is never evidence
 //
@@ -71,6 +71,7 @@ import {
   createCanonicalRecords,
   descriptionRepairWork,
   findPublisherByName,
+  hiddenWorkTitled,
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
   needsEditionLine,
@@ -345,7 +346,8 @@ function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unkno
  *   the observation; or it names one Series whose Volume does not exist
  *   (`volumeMissing`), its packaging cannot be mapped (`packaging`), the
  *   Series is locked or the title names several (`series`), or the Volume
- *   already has this publisher's Release in its format (`isbn`).
+ *   already has this publisher's Release in its format (`isbn`); or its
+ *   title names no active Series but one an Editor hid (`series`).
  * - `skip`: nothing to act on, recorded nowhere: a library rebind, an
  *   unknown publisher, no Series match, an unlabeled edition with no
  *   unlabeled Volume, or a book another source holds out of scope.
@@ -411,11 +413,15 @@ export async function placeEdition(
   // outranks OpenLibrary's scope guess: Yen Press records its light novels
   // and audio (by ISBN) as out of scope, and OpenLibrary titles rarely say
   // "light novel".
-  if (
-    publisher === null ||
-    candidates.length === 0 ||
-    (snapshot.isbn13 !== undefined && (await outOfScopeElsewhere(ctx, snapshot.isbn13)))
-  ) {
+  const outOfScope =
+    snapshot.isbn13 !== undefined && (await outOfScopeElsewhere(ctx, snapshot.isbn13)) !== null;
+  // A title naming no active Series but one an Editor hid is that work's
+  // book: held, as the catalog feeds hold it (removedSeriesFor).
+  if (publisher !== null && candidates.length === 0 && flag === null && !outOfScope) {
+    const hidden = await hiddenWorkTitled(ctx, seriesTitle, publisher._id);
+    if (hidden !== null) return { kind: "hold", hold: { kind: "series", reason: hidden.reason } };
+  }
+  if (publisher === null || candidates.length === 0 || outOfScope) {
     return flag !== null ? { kind: "review", reason: flag.note } : { kind: "skip" };
   }
   if (flag !== null) {

@@ -775,6 +775,27 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 
+  it("holds a roman-numeral title whose whole name is a hidden Series, off the base's Volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const base = await backbone(t, "Kingdom Hearts", ["2"]);
+    const sequel = await backbone(t, "Kingdom Hearts II", []);
+    await t.run((ctx) => ctx.db.patch(sequel, { status: "hidden" }));
+    stubApi([{ isbn: "9781975300000", title: "Kingdom Hearts II", imprint: "Yen Press" }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toEqual([]);
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.map((v) => [v.seriesId, v.label])).toEqual([[base, "2"]]);
+      const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === "9781975300000")!;
+      const hold = await ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", obs._id))
+        .unique();
+      expect(hold?.kind).toBe("series");
+    });
+  });
+
   it("asks for a roman-numeral name without the groups the raw title carries", async () => {
     const t = makeT();
     await seedRegistry(t, true);

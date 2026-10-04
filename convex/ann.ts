@@ -59,6 +59,7 @@
 import { v, type Infer } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { paginationOptsValidator } from "convex/server";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
@@ -70,6 +71,7 @@ import {
   parseReleasePage,
   parseReport,
   releaseUrl,
+  sequelWork,
   toSnapshot,
   type AnnMangaSnapshot,
 } from "./lib/ann";
@@ -89,7 +91,7 @@ import {
 } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
-import { coveringOf, releasesOf } from "./lib/editionRows";
+import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import {
   candidateSeries,
   isbnHolders,
@@ -126,6 +128,7 @@ import {
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
 import { withExceptionCapture } from "./lib/posthog";
+import { pairKeyOf } from "./lib/qa";
 
 export const SOURCE_KEY = "ann";
 /** The source's name in a citation when the registry row has none. */
@@ -452,11 +455,12 @@ type ApplyResult = {
 };
 
 /** Volume labels this entry evidences: plain GN/eBook numbers, no ranges or
- * omnibus/box-set packaging (those describe Editions, not source Volumes).
- * Canonical and deduplicated numerically ("1" and "01" are one Volume). */
+ * omnibus/box-set packaging (those describe Editions, not source Volumes),
+ * and none from a line of another work (sequelWork). Canonical and
+ * deduplicated numerically ("1" and "01" are one Volume). */
 function backboneLabels(snapshot: AnnMangaSnapshot): Array<string | undefined> {
   const labels: Array<string | undefined> = [];
-  for (const release of snapshot.releases) {
+  for (const release of ownLines(snapshot)) {
     if (release.multi || release.editionLineHint) continue;
     const label = release.label !== undefined ? canonicalLabel(release.label) : undefined;
     if (!labels.some((l) => labelsEqual(l, label ?? null))) labels.push(label);
@@ -464,25 +468,82 @@ function backboneLabels(snapshot: AnnMangaSnapshot): Array<string | undefined> {
   return labels;
 }
 
-/** Every release line is packaging: the entry evidences no single Volume. */
+/** Every line of the entry's own work is packaging: it evidences no single Volume. */
 function packagingOnly(snapshot: AnnMangaSnapshot): boolean {
-  return (
-    snapshot.releases.length > 0 &&
-    snapshot.releases.every((release) => release.multi || release.editionLineHint)
-  );
+  const own = ownLines(snapshot);
+  return own.length > 0 && own.every((release) => release.multi || release.editionLineHint);
 }
 
 type AnnLine = AnnMangaSnapshot["releases"][number];
 
-/** How many of the entry's lines share this line's label and format. */
+/** The entry's lines of its own work: every line but a sequel's (sequelWork). */
+function ownLines(snapshot: AnnMangaSnapshot): AnnLine[] {
+  return snapshot.releases.filter((release) => sequelWork(release, snapshot) === null);
+}
+
+/** How many of the entry's lines of this line's work share its label and format. */
 function printingsOf(snapshot: AnnMangaSnapshot, line: AnnLine): number {
+  const work = sequelWork(line, snapshot);
   return snapshot.releases.filter(
     (other) =>
       !other.multi &&
       !other.editionLineHint &&
       other.format === line.format &&
-      labelsEqual(other.label, line.label ?? null),
+      labelsEqual(other.label, line.label ?? null) &&
+      sequelWork(other, snapshot) === work,
   ).length;
+}
+
+/**
+ * The Series a line of another work (sequelWork) goes under: the one active
+ * Series titled with the work it names, else with the line's full title.
+ * Otherwise none, with the reason for its hold.
+ */
+async function sequelSeries(
+  ctx: QueryCtx | MutationCtx,
+  work: string,
+  line: AnnLine,
+  entryTitle: string,
+): Promise<{ series: Doc<"series"> } | { series: null; reason: string }> {
+  let found = await candidateSeries(ctx, work);
+  if (found.length === 0 && line.title !== work) found = await candidateSeries(ctx, line.title);
+  if (found.length === 1) return { series: found[0]! };
+  const which = found.length === 0 ? "no active Series has that title" : `${found.length} active Series have that title`;
+  return {
+    series: null,
+    reason: `The line names "${work}", another work than the entry's "${entryTitle}", and ${which}.`,
+  };
+}
+
+/**
+ * Flag the Series ANN created for an entry beside the one Series of the
+ * entry's title, which workMatch set aside only because their books share
+ * no ISBN: a duplicate candidate for the Data Team (/mod/launch), once per
+ * pair.
+ */
+async function flagDisjointTwin(
+  ctx: MutationCtx,
+  createdId: Id<"series">,
+  setAside: Doc<"series">,
+  snapshot: AnnMangaSnapshot,
+) {
+  if (createdId === setAside._id) return;
+  const pairKey = pairKeyOf(setAside._id, createdId);
+  const existing = await ctx.db
+    .query("duplicateCandidates")
+    .withIndex("by_pairKey", (q) => q.eq("pairKey", pairKey))
+    .unique();
+  const created = await ctx.db.get(createdId);
+  if (existing || !created) return;
+  await ctx.db.insert("duplicateCandidates", {
+    pairKey,
+    aId: setAside._id,
+    bId: createdId,
+    aTitle: setAside.title,
+    bTitle: created.title,
+    reason: `ANN entry ${snapshot.id} has this title, but its books share no ISBN with Series ${setAside.publicId}'s, so the import created Series ${created.publicId}. Merge them if they are one work under other ISBNs.`,
+    status: "open",
+  });
 }
 
 // An ANN line and a canonical Release more than this many years apart are
@@ -613,6 +674,10 @@ export const applyManga = internalMutation({
 
     // ----- the Series: rung ① stored link, else resolve/create -----
     let seriesId: Id<"series"> | null = null;
+    // The one Series of the entry's title, set aside only because its books
+    // and the entry's share no ISBN: flagged beside whatever Series the
+    // entry gets created or queued.
+    let setAside: Doc<"series"> | null = null;
     if (observation.recordRef?.type === "series") {
       // Repairs stand: a merged Series is followed to its survivor (and the
       // link repointed); a hidden one keeps its lines on record only.
@@ -657,12 +722,18 @@ export const applyManga = internalMutation({
       };
       const sameWork = async (found: Doc<"series">[]) => {
         const kept: Doc<"series">[] = [];
+        const disjoint: Doc<"series">[] = [];
         for (const series of found) {
-          if ((await workMatch(ctx, series._id, evidence)) !== "different") kept.push(series);
+          const verdict = await workMatch(ctx, series._id, evidence);
+          if (verdict === "disjointBooks") disjoint.push(series);
+          else if (verdict !== "different") kept.push(series);
         }
-        return kept;
+        return { kept, disjoint };
       };
-      let candidates = await sameWork(await candidateSeries(ctx, snapshot.title));
+      const titled = await candidateSeries(ctx, snapshot.title);
+      const byTitle = await sameWork(titled);
+      let candidates = byTitle.kept;
+      if (titled.length === 1 && byTitle.disjoint.length === 1) setAside = byTitle.disjoint[0]!;
       if (candidates.length === 0) {
         // ANN often names a work by a short title and carries the
         // publisher's full title only as an alternative ("7th Time Loop:
@@ -675,7 +746,7 @@ export const applyManga = internalMutation({
         for (const alt of snapshot.altTitles) {
           for (const series of await candidateSeries(ctx, alt)) byAlt.set(series._id, series);
         }
-        candidates = await sameWork([...byAlt.values()]);
+        candidates = (await sameWork([...byAlt.values()])).kept;
       }
       if (candidates.length === 1) {
         seriesId = candidates[0]!._id;
@@ -718,7 +789,11 @@ export const applyManga = internalMutation({
           labels: labels.filter((l): l is string => l !== undefined),
           seriesOnly: packagingOnly(snapshot),
           now,
-          comment: `"${snapshot.title}" observed at ${sourceName} needs a brand-new Series — steady-state creation gate. Series + Volume backbone only; ANN carries no publisher, so Releases arrive from other sources.`,
+          comment: `"${snapshot.title}" observed at ${sourceName} needs a brand-new Series — steady-state creation gate. Series + Volume backbone only; ANN carries no publisher, so Releases arrive from other sources.${
+            setAside !== null
+              ? ` Series ${setAside.publicId} ("${setAside.title}") has this title, but its books share no ISBN with this entry's, so the import did not link it: it may be the same work under other ISBNs.`
+              : ""
+          }`,
         });
         return { status: "queued", changed: true, releasesLinked: 0 };
       }
@@ -742,6 +817,7 @@ export const applyManga = internalMutation({
       }
       seriesId = creation.seriesId;
       await linkObservation(ctx, observation._id, { type: "series", id: seriesId });
+      if (setAside !== null) await flagDisjointTwin(ctx, seriesId, setAside, snapshot);
       changed = true;
     } else if (labels.length > 0) {
       // The Volume backbone under a linked Series — within the spec §6
@@ -779,18 +855,27 @@ export const applyManga = internalMutation({
           canonical = linked;
         }
       } else {
+        // A line of another work (a sequel ANN files under the first work's
+        // entry) links only under that work's own Series, else waits for the
+        // release-page pass to hold it.
+        const work = sequelWork(release, snapshot);
+        const lineSeriesId =
+          work === null ? seriesId : ((await sequelSeries(ctx, work, release, snapshot.title)).series?._id ?? null);
         // An ISBN names exactly one book: it links whatever the packaging,
         // but only onto a Release of this Series (elsewhere it is a
         // duplicate-Series question for a human, not a link).
         const byIsbn =
           release.isbn13 !== undefined ? (await releaseByIsbn(ctx, release.isbn13)).active : null;
-        const match = byIsbn
-          ? byIsbn.seriesIds.includes(seriesId) && !byIsbn.locked
-            ? ({ kind: "one", release: byIsbn } as const)
-            : ({ kind: "none" } as const)
-          : !release.multi && !release.editionLineHint
-            ? await matchReleaseInSeries(ctx, seriesId, snapshot, release)
-            : ({ kind: "none" } as const);
+        const match =
+          lineSeriesId === null
+            ? ({ kind: "none" } as const)
+            : byIsbn
+              ? byIsbn.seriesIds.includes(lineSeriesId) && !byIsbn.locked
+                ? ({ kind: "one", release: byIsbn } as const)
+                : ({ kind: "none" } as const)
+              : !release.multi && !release.editionLineHint
+                ? await matchReleaseInSeries(ctx, lineSeriesId, snapshot, release)
+                : ({ kind: "none" } as const);
         if (match.kind === "one") {
           canonical = match.release;
           await linkObservation(ctx, releaseObs._id, { type: "release", id: canonical._id });
@@ -1240,10 +1325,12 @@ async function pageCitation(ctx: QueryCtx, annId: string) {
  * Place one release line from its page (freshly fetched, or the stored
  * one): link the Release carrying its ISBN, else create a leaf Release
  * under the linked Series' existing Volume when the Distributor resolves
- * to an existing publisher row. Everything the importer will not decide
- * stays on the observation as a placement note. A freshly fetched page of
- * an already LINKED line (the description refetch) is stored, and its
- * Description offered to the linked Release. One atomic mutation.
+ * to an existing publisher row. A line of another work (sequelWork) goes
+ * under that work's one active Series instead, or is held. Everything the
+ * importer will not decide stays on the observation as a placement note.
+ * A freshly fetched page of an already LINKED line (the description
+ * refetch) is stored, and its Description offered to the linked Release.
+ * One atomic mutation.
  */
 export const applyReleasePage = internalMutation({
   args: {
@@ -1300,13 +1387,20 @@ export const applyReleasePage = internalMutation({
     const isbn13 = page.isbn13 ?? line.isbn13;
     if (isbn13 === undefined) return await hold(null, "ANN lists no ISBN for this release.");
 
-    // The Series: the manga entry's rung-① link, through any repair merge.
+    // The Series: the manga entry's rung-① link, through any repair merge;
+    // for a line of another work (sequelWork), that work's own Series.
     const mangaObs = await getObservation(ctx, SOURCE_KEY, `manga:${line.mangaId}`);
     const seriesRef = mangaObs?.recordRef;
+    const entry = mangaObs?.snapshot as AnnMangaSnapshot | undefined;
+    const known = entry?.kind === "annManga" ? entry : null;
+    const work = known !== null ? sequelWork(line, known) : null;
+    const sequel = known !== null && work !== null ? await sequelSeries(ctx, work, line, known.title) : null;
     const series =
-      seriesRef?.type === "series"
-        ? await survivorOf<"series">(ctx, await ctx.db.get(seriesRef.id))
-        : null;
+      sequel !== null
+        ? sequel.series
+        : seriesRef?.type === "series"
+          ? await survivorOf<"series">(ctx, await ctx.db.get(seriesRef.id))
+          : null;
 
     // An existing Release with the ISBN: link it (same Series only).
     const { active: byIsbn, hidden: isbnHidden } = await releaseByIsbn(ctx, isbn13);
@@ -1337,6 +1431,7 @@ export const applyReleasePage = internalMutation({
     if ((line.multi || line.editionLineHint) && packaging === null) {
       return await hold("packaging", "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
     }
+    if (sequel?.series === null) return await hold("series", sequel.reason);
     if (!series || series.status !== "active") {
       return await hold("series", "The manga entry has no linked active Series.");
     }
@@ -1564,6 +1659,108 @@ async function fillLinked(
     releaseId,
   };
 }
+
+// ---------- sequel lines already misplaced ----------
+
+type SeriesRef = { publicId: number; title: string };
+
+/** A line `misplacedSequelLines` reports. */
+type MisplacedSequelLine = {
+  annId: string;
+  title: string;
+  label: string | null;
+  isbn13: string | null;
+  release: { id: Id<"releases">; isbn13: string | null };
+  /** The Volumes the Release's Edition covers. */
+  volumes: Array<{ publicId: number; label: string | null }>;
+  /** The manga entry's Series, where the Release sits. */
+  series: SeriesRef;
+  /** The work the line names, and its one active Series, if any. */
+  work: string;
+  workSeries: SeriesRef | null;
+};
+
+/**
+ * One page of ANN release lines in source-record-id order, reporting each
+ * line of another work (sequelWork) that is linked to a Release of its
+ * manga entry's Series: the line, its ISBN, the Release and the Volumes it
+ * covers, that Series, and the one active Series the line's work names, if
+ * any. Read-only, for an operator to review (`listMisplacedSequelLines`);
+ * moving such a Release is a Data Team action. Reads per line are bounded:
+ * the entry's observation (once per page), and for a reported line its
+ * Release, Edition coverage and two title searches.
+ */
+export const misplacedSequelLines = internalQuery({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { paginationOpts }) => {
+    const result = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q.eq("sourceKey", SOURCE_KEY).gt("sourceRecordId", "release:").lt("sourceRecordId", "release;"),
+      )
+      .paginate(paginationOpts);
+    const entries = new Map<string, Doc<"sourceObservations"> | null>();
+    const lines: MisplacedSequelLine[] = [];
+    for (const doc of result.page) {
+      if (doc.recordRef?.type !== "release") continue;
+      const line = doc.snapshot as AnnReleaseSnapshot;
+      if (!entries.has(line.mangaId)) {
+        entries.set(line.mangaId, await getObservation(ctx, SOURCE_KEY, `manga:${line.mangaId}`));
+      }
+      const mangaObs = entries.get(line.mangaId);
+      if (!mangaObs || mangaObs.recordRef?.type !== "series") continue;
+      const entry = mangaObs.snapshot as AnnMangaSnapshot;
+      const work = entry.kind === "annManga" ? sequelWork(line, entry) : null;
+      if (work === null) continue;
+      const series = await survivorOf<"series">(ctx, await ctx.db.get(mangaObs.recordRef.id));
+      const release = await ctx.db.get(doc.recordRef.id);
+      if (!series || !release?.seriesIds.includes(series._id)) continue;
+      const volumes = [];
+      for (const coverage of await coverageOf(ctx, release.editionId)) {
+        const volume = await ctx.db.get(coverage.volumeId);
+        if (volume) volumes.push({ publicId: volume.publicId, label: volume.label ?? null });
+      }
+      const target = await sequelSeries(ctx, work, line, entry.title);
+      lines.push({
+        annId: line.annId,
+        title: line.title,
+        label: line.label ?? null,
+        isbn13: line.isbn13 ?? line.page?.isbn13 ?? null,
+        release: { id: release._id, isbn13: release.isbn13 ?? null },
+        volumes,
+        series: { publicId: series.publicId, title: series.title },
+        work,
+        workSeries: target.series ? { publicId: target.series.publicId, title: target.series.title } : null,
+      });
+    }
+    return { lines, continueCursor: result.continueCursor, isDone: result.isDone };
+  },
+});
+
+/**
+ * Every line `misplacedSequelLines` reports, walked REPAIR_SCAN lines a
+ * page. Read-only:
+ *
+ *   npx convex run ann:listMisplacedSequelLines '{}'
+ */
+export const listMisplacedSequelLines = internalAction({
+  args: {},
+  handler: async (ctx): Promise<MisplacedSequelLine[]> => {
+    const found: MisplacedSequelLine[] = [];
+    let cursor: string | null = null;
+    for (;;) {
+      const page: { lines: MisplacedSequelLine[]; continueCursor: string; isDone: boolean } =
+        await ctx.runQuery(internal.ann.misplacedSequelLines, {
+          paginationOpts: { numItems: REPAIR_SCAN, cursor },
+        });
+      found.push(...page.lines);
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    console.log(`[ann.listMisplacedSequelLines] ${found.length} line(s)`);
+    return found;
+  },
+});
 
 // ---------- the description backfill ----------
 

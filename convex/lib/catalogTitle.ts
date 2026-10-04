@@ -17,7 +17,7 @@ import { packagingValidator, rangeLabels, type ParsedBookTitle } from "./bookTit
 import { fullDateValidator } from "./dates";
 import type { CoverRequest } from "./covers";
 import { inferCoverage } from "./coverage";
-import { candidateSeries, matchRelease, type ReleaseFact } from "./matching";
+import { candidateSeries, hiddenSeriesTitled, matchRelease, type ReleaseFact } from "./matching";
 import { linkObservation, recordUnplaced, upsertObservation } from "./observations";
 import {
   alreadyHandled,
@@ -166,11 +166,13 @@ const lettersOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/g
  * trailing roman numeral is more often a sequel's name ("Kingdom Hearts
  * II") than a volume, so the whole title is asked first, and the split
  * stands only when an existing base Series claims it ("BARBARITIES II" →
- * Barbarities Vol. 2); a new work keeps its whole name. A trailing number
- * the parser left in place for want of a volume number ("Tower Dungeon 7"
- * from a PRH row without seriesNumber) follows the same rule: whole title
- * first, else an existing base Series takes it as a Volume, else the new
- * work keeps its whole name.
+ * Barbarities Vol. 2) and no hidden Series has the whole name; a new work,
+ * or one an Editor hid, keeps its whole name with no candidates, so the
+ * creation path holds a hidden work's book. A trailing number the parser
+ * left in place for want of a volume number ("Tower Dungeon 7" from a PRH
+ * row without seriesNumber) follows the same rule: whole title first, else
+ * an existing base Series takes it as a Volume, else the new work keeps its
+ * whole name.
  */
 export async function resolveBaseSeries(
   ctx: QueryCtx | MutationCtx,
@@ -197,6 +199,11 @@ export async function resolveBaseSeries(
     if (whole.length > 0 || named.length === 0) {
       return { seriesTitle: whole[0]?.title ?? wholeName, volumeLabel: null, candidates: whole };
     }
+    // An Editor hid the work the whole name names: it is never the base's Volume.
+    const hidden =
+      (await hiddenSeriesTitled(ctx, parsed.title)).length > 0 ||
+      (wholeName !== parsed.title && (await hiddenSeriesTitled(ctx, wholeName)).length > 0);
+    if (hidden) return { seriesTitle: wholeName, volumeLabel: null, candidates: [] };
     return plain;
   }
   if (named.length > 0) return plain;

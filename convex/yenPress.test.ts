@@ -837,3 +837,62 @@ describe("yenPress.applyTitle — a gapped coverage statement is never widened (
     });
   });
 });
+
+describe("yenPress.applyTitle — a sequel's book stays off its first work", () => {
+  const FIRST = "The Alchemist Who Survived Now Dreams of a Quiet City Life";
+  const SEQUEL = `${FIRST} II`;
+  const ISBN = "9781975393489";
+  const [snapshot] = toSnapshots(
+    {
+      title: `${SEQUEL}, Vol. 1 (manga): Cycle of the Elixir`,
+      category: "manga",
+      formats: [{ tab: "Paperback", isbn13: ISBN, imprint: "Yen Press", seriesName: `${SEQUEL} (manga)` }],
+    },
+    `https://yenpress.com/titles/${ISBN}-the-alchemist-who-survived-now-dreams-of-a-quiet-city-life-ii-vol-1-manga`,
+  );
+
+  /** The first work carrying the sequel's name as an alt title, and the sequel's Series. */
+  async function seedAlchemist(t: TestT, sequel: "active" | "hidden") {
+    await seed(t);
+    return await t.run(async (ctx) => {
+      const firstId = await insertSeries(ctx, { publicId: 1229, title: FIRST, altTitles: [SEQUEL] });
+      const sequelId = await insertSeries(ctx, { publicId: 5358, title: SEQUEL, status: sequel });
+      for (const seriesId of [firstId, sequelId]) {
+        await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: seriesId === firstId ? 12291 : 53581,
+          seriesId,
+          label: "1",
+          position: 1,
+        });
+      }
+      return { firstId, sequelId };
+    });
+  }
+
+  it("files it under the sequel's Series by Yen's own series title", async () => {
+    const t = makeT();
+    const { sequelId } = await seedAlchemist(t, "active");
+    expect(snapshot!.seriesTitle).toBe(SEQUEL);
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: snapshot! });
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => [r.isbn13, r.seriesIds])).toEqual([[ISBN, [sequelId]]]);
+    });
+  });
+
+  it("holds it when the sequel is hidden, though the first work carries the sequel's name as an alt title", async () => {
+    const t = makeT();
+    await seedAlchemist(t, "hidden");
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: snapshot! });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toEqual([]);
+      const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === ISBN)!;
+      const hold = await ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", obs._id))
+        .unique();
+      expect(hold?.kind).toBe("series");
+    });
+  });
+});

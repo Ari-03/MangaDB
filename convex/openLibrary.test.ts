@@ -614,6 +614,38 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
   );
 
   it.each(splits)(
+    "$title + $subtitle: with the sequel hidden, the parent gains no ISBN and the book is held",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { parentReleaseId, sequelReleaseId } = await buildKingdomHearts(t, {
+        parent: true,
+        sequel: true,
+      });
+      await t.run(async (ctx) => {
+        const sequel = (await ctx.db.query("series").collect()).find((s) => s.title === "Kingdom Hearts II")!;
+        await ctx.db.patch(sequel._id, { status: "hidden" });
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(parentReleaseId!))!.isbn13).toBeUndefined();
+        expect((await ctx.db.get(sequelReleaseId!))!.isbn13).toBeUndefined();
+        expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+        const [obs] = await ctx.db.query("sourceObservations").collect();
+        expect(obs!.recordRef).toBeUndefined();
+        const hold = await ctx.db
+          .query("placementHolds")
+          .withIndex("by_observation", (q) => q.eq("observationId", obs!._id))
+          .unique();
+        expect(hold?.kind).toBe("series");
+        expect(obs!.conflicts?.find((c) => c.field === "placement")?.reason).toContain("which an Editor hid");
+      });
+    },
+  );
+
+  it.each(splits)(
     "$title + $subtitle: with only the sequel, the sequel claims the book",
     async (split) => {
       const t = makeT();

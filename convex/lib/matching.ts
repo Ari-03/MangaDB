@@ -183,8 +183,10 @@ export async function isbnHolders(
  * answered by their survivor, split by what they mean to an importer:
  * `active` (attach here) and `hidden` (an Editor removed this work — never
  * recreate it). Active alt-title matches count only when no primary title
- * matches (ANN lists sequels and spinoffs — "Citrus Plus", "Dragon Ball Z"
- * — as alt titles). Searched under both the raw and the folded spelling, so "Candy &
+ * matches, active or hidden (ANN lists sequels and spinoffs — "Citrus
+ * Plus", "Dragon Ball Z" — as alt titles, so a hidden "Kingdom Hearts II"
+ * is that work, not the parent carrying its name as an alt title).
+ * Searched under both the raw and the folded spelling, so "Candy &
  * Cigarettes" finds "CANDY AND CIGARETTES".
  */
 async function seriesByTitle(
@@ -217,13 +219,18 @@ async function seriesByTitle(
   const alt = await resolve(
     all.filter((series) => series.altTitles.some((title) => normalizeTitle(title) === wanted)),
   );
-  // A hidden namesake never shadows an active Series that carries the
-  // title as an alt title; and hidden Series count by primary title only —
-  // an alt title (a pinyin or romanized name) is too loose to refuse a
-  // creation on.
+  // A hidden Series with the primary title outranks an active Series that
+  // carries it as an alt title, so the importer holds the book instead of
+  // filing it under that other work; and hidden Series count by primary
+  // title only — an alt title (a pinyin or romanized name) is too loose to
+  // refuse a creation on.
   return {
     active:
-      primary.active.length > 0 ? exactTitleAmong(seriesTitle, primary.active) : alt.active,
+      primary.active.length > 0
+        ? exactTitleAmong(seriesTitle, primary.active)
+        : primary.hidden.length > 0
+          ? []
+          : alt.active,
     hidden: primary.hidden,
   };
 }
@@ -265,17 +272,21 @@ const EVIDENCE_VOLUMES = 150;
  * Whether a title-matched Series is the work the evidence describes. A
  * title alone links Doubt to Doubt!!, E'S to ES, and Citrus to Citrus+ (an
  * alt title); once linked, the source builds its Volumes and credits there.
- *   "same"      — one of the work's ISBNs is already a Release of the Series
- *   "different" — both sides know their creators (ANN person ids) and share
- *                 none, or both hold ISBNs in a common format and share none
- *                 (a spinoff shares its author, so only the books tell it)
- *   "unknown"   — not enough on one side to tell; the title decides
+ *   "same"          — one of the work's ISBNs is already a Release of the Series
+ *   "different"     — both sides know their creators (ANN person ids) and
+ *                     share none
+ *   "disjointBooks" — both hold ISBNs in a common format and share none (a
+ *                     spinoff shares its author, so only the books tell it):
+ *                     another work by policy (docs/decisions.md), though a
+ *                     work reissued under new ISBNs looks the same, so ANN
+ *                     flags the pair as a possible duplicate
+ *   "unknown"       — not enough on one side to tell; the title decides
  */
 export async function workMatch(
   ctx: QueryCtx | MutationCtx,
   seriesId: Id<"series">,
   evidence: WorkEvidence,
-): Promise<"same" | "different" | "unknown"> {
+): Promise<"same" | "different" | "disjointBooks" | "unknown"> {
   const isbns = new Set(evidence.books.map((book) => book.isbn13));
   for (const isbn13 of isbns) {
     const releases = await ctx.db
@@ -324,7 +335,7 @@ export async function workMatch(
       seen.add(row.editionId);
       const releases = await releasesOf(ctx, row.editionId);
       if (releases.some((r) => r.status === "active" && r.isbn13 && formats.has(r.format))) {
-        return "different";
+        return "disjointBooks";
       }
     }
   }

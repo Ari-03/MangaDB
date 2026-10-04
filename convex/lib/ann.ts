@@ -211,6 +211,49 @@ export function splitReleaseTitle(
   };
 }
 
+// What may follow the entry's name in a sequel's line title: one space, a
+// roman numeral or a number, then nothing or a colon and a subtitle.
+const SEQUEL_TAIL = /^ ([IVX]+|\d+)(?: ?: ?\S.*)?$/;
+const ROMAN_II_TO_XXXIX = /^X{0,3}(?:IX|IV|V?I{0,3})$/;
+
+/**
+ * The work a release line names when that work is not its manga entry's.
+ * ANN files a sequel's books under the first work's entry: under "The
+ * Alchemist Who Survived Now Dreams of a Quiet City Life", the line "The
+ * Alchemist Who Survived Now Dreams of a Quiet City Life II: Cycle of the
+ * Elixir (GN 1)" names "The Alchemist Who Survived Now Dreams of a Quiet
+ * City Life II". The rule: with bracketed tags ("[3-in-1 Edition]") set
+ * aside, the line title is the entry's title or one of its alternative
+ * titles (case and spacing aside), then a sequel marker, then optionally a
+ * colon and a subtitle. A marker is a roman numeral from II to XXXIX, or a
+ * number other than the line's own Volume label ("Tower Dungeon 7" at GN 7
+ * repeats its volume). The work is the title up to the marker. Null for
+ * every other line, such as the entry's own title, an edition line
+ * ("Naruto [3-in-1 Edition]", "Berserk Deluxe Edition"), a subtitle ("One
+ * Piece - Romance Dawn", "orange: The Complete Collection 2"), and a work
+ * that is the entry's own title ("Kingdom Hearts II" under "Kingdom Hearts
+ * II" with the alternative title "Kingdom Hearts").
+ */
+export function sequelWork(
+  line: { title: string; label?: string },
+  entry: { title: string; altTitles: string[] },
+): string | null {
+  const spaced = (text: string) => text.replace(/\s+/g, " ").trim();
+  const core = spaced(line.title.replace(/\[[^\]]*\]/g, " ")).replace(/[\s:–—-]+$/, "");
+  const own = spaced(entry.title).toLowerCase();
+  for (const name of [entry.title, ...entry.altTitles].map(spaced)) {
+    if (name === "" || !core.toLowerCase().startsWith(name.toLowerCase())) continue;
+    const marker = SEQUEL_TAIL.exec(core.slice(name.length))?.[1];
+    if (marker === undefined) continue;
+    const roman = ROMAN_II_TO_XXXIX.test(marker) && marker !== "I";
+    const number = /^\d+$/.test(marker) && (line.label === undefined || Number(marker) !== Number(line.label));
+    if (!roman && !number) continue;
+    const work = core.slice(0, name.length + 1 + marker.length);
+    if (work.toLowerCase() !== own) return work;
+  }
+  return null;
+}
+
 // ---------- manga records ----------
 
 /**
