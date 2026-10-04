@@ -55,10 +55,11 @@ export const MAX_CARRIED_ERRORS = 50;
  * its run stamped in the mutation that schedules it). A fetch or body read
  * has no timeout of its own, so a stalled request holds its link until
  * Convex ends the action: inside a link, the gap between two stamps is
- * bounded by the 30-minute action limit, not by the boundaries above. PRH
- * and ANN's page pass hand off after 4 and 5 minutes, Open Library and ANN's
- * mirror after a line or batch budget, Yen Press and the backlist after a
- * fetch budget; Seven Seas and the Kodansha calendar run in one action.
+ * bounded by the 30-minute action limit, not by the boundaries above. PRH,
+ * ANN's page pass and Open Library hand off after 4, 5 and 10 minutes (Open
+ * Library sooner after a line budget), ANN's mirror after a batch budget,
+ * Yen Press and the backlist after a fetch budget; Seven Seas and the
+ * Kodansha calendar run in one action.
  * Between links, the gap is the scheduler's delay in starting the next one,
  * normally seconds. Sixty minutes is the action limit with another 30 to
  * spare. A chain whose hand-off waits longer than this is closed although it

@@ -29,8 +29,9 @@
 // The raw editions dump is ~10 GB; scripts/filter-openlibrary-dump.mjs
 // narrows it offline to manga-relevant publishers, and the operator hosts
 // the filtered file at OPENLIBRARY_DUMP_URL (docs/imports.md). The sync action
-// streams it line by line and self-continues across Convex's action time
-// budget, carrying the Import Run.
+// streams it line by line and hands off to a continuation after
+// LINK_BUDGET_MS or maxLines lines, whichever comes first, carrying the
+// Import Run.
 //
 // `replayDescriptions` re-applies stored editions, with no network: an
 // edition observed before its Release existed (ANN created most VIZ books
@@ -98,6 +99,14 @@ const IMPORT_COMMENT = "Imported from OpenLibrary (CC0).";
 
 /** Lines per invocation before scheduling a continuation. */
 const DEFAULT_MAX_LINES = 20000;
+/**
+ * Wall-clock time per link, from its start, before scheduling a
+ * continuation; it covers the download of the lines earlier links
+ * processed. Checked before each line, so a link overruns it by at most
+ * one line's apply (applyRetrying: four tries, about 2.5 s of backoff) and
+ * one gate check, leaving 20 of Convex's 30 action minutes spare.
+ */
+const LINK_BUDGET_MS = 10 * 60 * 1000;
 /** Lines between two checks of the import gate inside a link. */
 const GATE_LINES = 1000;
 
@@ -121,7 +130,9 @@ type SyncResult =
  * One link of a dump pass. Called with no args by the monthly cadence tick
  * (requires OPENLIBRARY_DUMP_URL); continuation links carry the run state.
  * The import gate (lib/importRuns.ts) is checked at each link and every
- * GATE_LINES lines.
+ * GATE_LINES lines. A link applies at least one line, then stops before
+ * the next once it has run for LINK_BUDGET_MS or processed maxLines lines;
+ * a gate stop on that line comes first.
  *
  *   npx convex run openLibrary:sync '{"dumpUrl":"https://…/filtered.txt"}'
  */
@@ -133,6 +144,8 @@ export const sync = internalAction({
     maxLines: v.optional(v.number()),
     /** Never schedule a continuation (tests and bounded manual runs). */
     noContinue: v.optional(v.boolean()),
+    /** Wall-clock budget per link, at most LINK_BUDGET_MS; tests pass 0 to force a hand-off. */
+    linkBudgetMs: v.optional(v.number()),
     /** First dump line (0-based) to process: where a continuation resumes, or an operator's reprocess. */
     startLine: v.optional(v.number()),
     // ----- continuation state (never passed by callers) -----
@@ -143,6 +156,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("openLibrary.sync", ctx, async () => {
+      const linkStartedAt = Date.now();
       const source = await registryRow(ctx, SOURCE_KEY);
       if (!source.enabled && args.runId === undefined) {
         return { skipped: "disabled" as const };
@@ -158,6 +172,10 @@ export const sync = internalAction({
       const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
       if (!Number.isSafeInteger(maxLines) || maxLines < 1 || maxLines > DEFAULT_MAX_LINES) {
         throw new Error(`maxLines must be an integer between 1 and ${DEFAULT_MAX_LINES}`);
+      }
+      const linkBudgetMs = args.linkBudgetMs ?? LINK_BUDGET_MS;
+      if (!(linkBudgetMs >= 0 && linkBudgetMs <= LINK_BUDGET_MS)) {
+        throw new Error(`linkBudgetMs must be between 0 and ${LINK_BUDGET_MS}`);
       }
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
@@ -190,6 +208,7 @@ export const sync = internalAction({
         let lineNo = 0;
         let processed = 0;
         let done = false;
+        let outOfTime = false;
         let stopped: Awaited<ReturnType<typeof stopAtGate>> = null;
 
         const handleLine = async (line: string) => {
@@ -213,27 +232,33 @@ export const sync = internalAction({
 
         // Every line goes through here, newline-terminated or the dump's
         // unterminated last one, so the gate before each GATE_LINES-th line
-        // applies to both. Returns the gate's stop, with the line unapplied.
+        // and the time check before each line apply to both. Returns the
+        // gate's stop, with the line unapplied; out of time, the line is
+        // left unapplied too, for the continuation.
         const processLine = async (line: string) => {
           if (line.trim() === "") return null;
           if (processed > 0 && processed % GATE_LINES === 0) {
             const stop = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
             if (stop) return stop;
           }
+          if (processed > 0 && Date.now() - linkStartedAt >= linkBudgetMs) {
+            outOfTime = true;
+            return null;
+          }
           await handleLine(line);
           return null;
         };
 
-        while (!done && processed < maxLines && !stopped) {
+        while (!done && !outOfTime && processed < maxLines && !stopped) {
           const chunk = await reader.read();
           if (chunk.done) {
-            done = true;
             stopped = await processLine(buffer);
+            done = !outOfTime;
             break;
           }
           buffer += decoder.decode(chunk.value, { stream: true });
           let newline = buffer.indexOf("\n");
-          while (newline >= 0 && processed < maxLines && !stopped) {
+          while (newline >= 0 && !outOfTime && processed < maxLines && !stopped) {
             const line = buffer.slice(0, newline);
             buffer = buffer.slice(newline + 1);
             stopped = await processLine(line);
@@ -248,6 +273,7 @@ export const sync = internalAction({
           await ctx.scheduler.runAfter(0, internal.openLibrary.sync, {
             dumpUrl,
             maxLines: args.maxLines,
+            linkBudgetMs: args.linkBudgetMs,
             startLine: startLine + processed,
             runId,
             seen,
