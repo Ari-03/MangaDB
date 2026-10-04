@@ -161,7 +161,10 @@ export const setScoreFormat = mutation({
  * Opt the viewer out of analytics, or back in (lib/posthog.ts `capture`,
  * lib/analytics.tsx). Unlike the other settings it stays open to a
  * suspended User, so nobody is kept in analytics by a suspension. It
- * affects events from now on, not those already sent.
+ * affects events from now on, not those already sent. Asking for the
+ * stored choice again writes nothing: the Do Not Track opt-out repeats on
+ * every mount of the consent gate (lib/analytics.tsx), and a write to the
+ * User row would rerun every personal query that reads it.
  */
 export const setAnalyticsOptOut = mutation({
   args: { optOut: v.boolean() },
@@ -171,7 +174,8 @@ export const setAnalyticsOptOut = mutation({
     if (user?.deletingSince !== undefined)
       fail("unauthenticated", "This account is being deleted.");
     if (!user) fail("usernameRequired", "Claim a username to finish setting up your account.");
-    await ctx.db.patch(user._id, { analyticsOptOut: optOut });
+    // Never chosen (undefined) differs from either choice, so a first choice is stored.
+    if (user.analyticsOptOut !== optOut) await ctx.db.patch(user._id, { analyticsOptOut: optOut });
     return { optOut };
   },
 });

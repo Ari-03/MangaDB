@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { COMMENT_POLICY } from "./comments";
+import { COMMENT_POLICY } from "./lib/commentPolicy";
 import type { PageTargetRef } from "./lib/ratings";
 import { insertEdition, insertPublisher, insertVolume } from "./test.factories";
 import {

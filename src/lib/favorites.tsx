@@ -6,7 +6,7 @@
 // nothing renders, so the panel stays empty and hides itself.
 
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useState, type ReactNode } from "react";
 
@@ -16,6 +16,7 @@ import { Cover } from "~/lib/cover";
 import { ConcealArt } from "~/lib/mature";
 import type { RatingTarget } from "~/lib/ratings";
 import { slugParams } from "~/lib/slug";
+import { useViewerQuery } from "~/lib/viewer";
 
 function HeartGlyph({ filled }: { filled: boolean }) {
   return (
@@ -34,7 +35,7 @@ function HeartGlyph({ filled }: { filled: boolean }) {
 
 /** The "Favorite" / "Favorited" toggle for a Series, Volume or omnibus Edition; nothing signed out. */
 export function FavoriteButton({ target }: { target: RatingTarget }) {
-  const data = useQuery(api.favorites.isFavorite, { target });
+  const data = useViewerQuery(api.favorites.isFavorite, { target });
   const toggle = useMutation(api.favorites.toggle);
   // A toggle is not idempotent: one write at a time.
   const [busy, setBusy] = useState(false);
@@ -69,7 +70,7 @@ type FavoriteItem = NonNullable<FunctionReturnType<typeof api.favorites.mine>>["
  * title's cover is concealed unless the viewer opted in.
  */
 export function LibraryFavorites() {
-  const mine = useQuery(api.favorites.mine, {});
+  const mine = useViewerQuery(api.favorites.mine);
   if (mine === undefined) return <p className="placeholder">Loading…</p>;
   if (mine === null) return null;
   if (mine.items.length === 0) {

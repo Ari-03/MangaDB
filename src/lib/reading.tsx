@@ -10,7 +10,7 @@
 // pass completes solely via the confirmed completePass mutation.
 
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
@@ -21,6 +21,7 @@ import { Cover } from "~/lib/cover";
 import { mutationErrorMessage } from "~/lib/errors";
 import { useRunLock } from "~/lib/quickActions";
 import { slugParams } from "~/lib/slug";
+import { useViewerQuery } from "~/lib/viewer";
 
 const STATUS_LABELS = {
   planToRead: "Plan to Read",
@@ -93,7 +94,7 @@ export function CompletedPrompt({
  * prompt); nothing here changes it as a side effect of anything.
  */
 export function SeriesReadingControls({ seriesPublicId }: { seriesPublicId: number }) {
-  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+  const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   if (!tracking) return null;
   return (
@@ -153,7 +154,7 @@ function SeriesReadingProgressInner({
   seriesPublicId: number;
   volumeCount: number;
 }) {
-  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+  const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   if (!tracking) return null;
   const read = tracking.volumes.filter((volume) => volume.readCount > 0).length;
   const percent = Math.round((read / volumeCount) * 100);
@@ -194,7 +195,7 @@ export function VolumeReadCount({
   seriesPublicId: number;
   volumePublicId: number;
 }) {
-  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+  const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   const adjustCount = useMutation(api.reading.adjustVolumeReadCount);
   const lock = useRunLock((claims) => claims.reads.has(volumePublicId));
   if (!tracking) return null;
@@ -249,7 +250,7 @@ export function VolumeReadCount({
  * undone Volume.
  */
 export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }) {
-  const data = useQuery(api.reading.passForRelease, { releaseId });
+  const data = useViewerQuery(api.reading.passForRelease, { releaseId });
   const startPass = useMutation(api.reading.startPass);
   const setPercent = useMutation(api.reading.setPassPercent);
   const completePass = useMutation(api.reading.completePass);
@@ -453,7 +454,7 @@ type ReadingFilter = "all" | ReadingStatus;
  * through its books. Filter chips narrow to one status.
  */
 export function LibraryReading() {
-  const overview = useQuery(api.reading.myReading, {});
+  const overview = useViewerQuery(api.reading.myReading);
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   const [filter, setFilter] = useState<ReadingFilter>("all");
   if (overview === undefined) return <p className="placeholder">Loading…</p>;

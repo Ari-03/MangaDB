@@ -5,10 +5,15 @@
 //
 // Flow: edge cache → R2 bucket → upstream fetch; R2 and cache writes finish
 // in the background, and a storage failure only costs the copy, never the
-// art. The first upstream is the distribution CDN Penguin Random House runs
-// for the publishers it carries, which is most English manga; it answers any
-// ISBN-13 it knows with the jacket art and unknown ones with a stand-in.
-// Where it has nothing (older Tokyopop and VIZ backlist, much of Yen Press,
+// art. A visitor waits at most FOREGROUND_BUDGET_MS for a jacket R2 does not
+// hold: past it they get a short-lived error the page treats as no art yet
+// (its next ISBN, then cloth), while the fetch, the R2 write and the edge
+// cache write go on in the background, so the next request finds the
+// answer. Every jacket carries an ETag (R2's, or the one R2 will give it)
+// and a revalidation that names it gets a 304. The first upstream is the
+// distribution CDN Penguin Random House runs for the publishers it
+// carries, which is most English manga; it answers any ISBN-13 it knows
+// with the jacket art and unknown ones with a stand-in. Where it has nothing (older Tokyopop and VIZ backlist, much of Yen Press,
 // many ebook ISBNs) the OpenLibrary Covers API is asked next. No art from
 // either is "no cover", remembered for a day; the app draws its cloth
 // placeholder for those (see ~/lib/cover.tsx). An upstream that is down,
@@ -31,6 +36,8 @@
 //
 // Measured on a stratified sample of the catalog's ISBNs (docs/decisions.md,
 // "Cover art sources"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
+import { createHash } from "node:crypto";
+
 import { env, waitUntil } from "cloudflare:workers";
 
 import type { CoverShelf } from "~/lib/homeShelves";
@@ -63,6 +70,14 @@ const STALE_TTL = 60 * 60;
 const REFRESH_LIMIT = 4;
 /** An upstream that has not delivered its jacket by then couldn't answer. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
+/**
+ * How long a visitor waits for a jacket R2 does not hold. PRH answers in
+ * 0.1–0.9 s and OpenLibrary, asked after a PRH miss, in 0.2–0.6 s with its
+ * redirect (measured 2026-10-04), so 3 s is about twice the slowest usual
+ * miss-then-hit. A cover with three ISBNs settles within ~9 s, not the ~60 s
+ * of three sequential lookups that each wait out two 10 s timeouts.
+ */
+const FOREGROUND_BUDGET_MS = 3_000;
 const USER_AGENT = "MangaDB/1.0 (+https://mangadb.org/about-the-data)";
 
 /**
@@ -85,12 +100,71 @@ export async function coverResponse(request: Request): Promise<Response | null> 
   if (cached) {
     const hit = new Response(cached.body, cached);
     hit.headers.set("X-Cover-Cache", "hit");
-    return hit;
+    return notModified(request, hit) ?? hit;
   }
 
-  const response = await lookup(isbn13);
-  inBackground("edge cache write", cache.put(cacheKey, response.clone()));
-  return response;
+  // The lookup runs to its end, and its answer reaches the edge cache, even
+  // when the visitor stopped waiting for it.
+  const looked = lookup(isbn13).then((response) => {
+    inBackground("edge cache write", cache.put(cacheKey, response.clone()));
+    return response;
+  });
+  inBackground("lookup", looked);
+  const response = await withinBudget(looked, FOREGROUND_BUDGET_MS);
+  if (!response) return coverPending();
+  return notModified(request, response) ?? response;
+}
+
+/** What `work` resolves to, or null once `ms` have passed first. */
+async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The headers RFC 9110 §15.4.5 has a 304 repeat from its 200, plus the
+// edge copy's `Age`: without it a cache downstream would count a stale
+// cover's hour from now, not from when the edge stored it.
+const NOT_MODIFIED_HEADERS = [
+  "Cache-Control",
+  "Content-Location",
+  "Date",
+  "ETag",
+  "Expires",
+  "Vary",
+  "Age",
+  "X-Cover-Origin",
+  "X-Cover-Cache",
+];
+
+/**
+ * A 304 for a revalidation of the jacket `response` holds (its ETag among
+ * the request's `If-None-Match`, `*` for any), carrying the headers a cache
+ * refreshes from; null for anything else. `If-Modified-Since` is not
+ * answered: every jacket has an ETag, which wins over it (RFC 9110 §13.2.2).
+ */
+function notModified(request: Request, response: Response): Response | null {
+  const etag = response.headers.get("ETag");
+  const asked = request.headers.get("If-None-Match");
+  if (response.status !== 200 || !etag || !asked) return null;
+  // Weak comparison: a tag matches with or without its W/ prefix.
+  const opaque = (tag: string) => tag.trim().replace(/^W\//, "");
+  if (asked.trim() !== "*" && !asked.split(",").some((tag) => opaque(tag) === opaque(etag))) {
+    return null;
+  }
+  void response.body?.cancel();
+  const headers = new Headers();
+  for (const name of NOT_MODIFIED_HEADERS) {
+    const value = response.headers.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  return new Response(null, { status: 304, headers });
 }
 
 /**
@@ -104,6 +178,8 @@ function inBackground(label: string, work: Promise<unknown>): void {
 type StoredCover = {
   bytes: ArrayBuffer;
   etag: string;
+  /** `etag` quoted, as an ETag header carries it. */
+  httpEtag: string;
   httpMetadata?: { contentType?: string };
   customMetadata?: Record<string, string>;
 };
@@ -117,8 +193,8 @@ async function storedCover(
   try {
     const stored = await bucket.get(key);
     if (!stored) return null;
-    const { etag, httpMetadata, customMetadata } = stored;
-    return { bytes: await stored.arrayBuffer(), etag, httpMetadata, customMetadata };
+    const { etag, httpEtag, httpMetadata, customMetadata } = stored;
+    return { bytes: await stored.arrayBuffer(), etag, httpEtag, httpMetadata, customMetadata };
   } catch (error) {
     console.error("covers: R2 read failed", error);
     return null;
@@ -135,10 +211,11 @@ async function lookup(isbn13: string): Promise<Response> {
     const fresh = lastChecked(stored.customMetadata) + REFRESH_AGE_MS - Date.now();
     if (fresh > 0) {
       // Never cached past the moment its check falls due.
-      return coverOk(stored.bytes, contentType, "r2", Math.min(HIT_TTL, Math.ceil(fresh / 1000)));
+      const maxAge = Math.min(HIT_TTL, Math.ceil(fresh / 1000));
+      return coverOk(stored.bytes, contentType, "r2", maxAge, stored.httpEtag);
     }
     refreshInBackground(bucket, isbn13, stored);
-    return coverOk(stored.bytes, contentType, "r2", STALE_TTL);
+    return coverOk(stored.bytes, contentType, "r2", STALE_TTL, stored.httpEtag);
   }
 
   const found = await firstJacket(isbn13, UPSTREAMS);
@@ -152,7 +229,17 @@ async function lookup(isbn13: string): Promise<Response> {
   }
   if (!found) return coverMissing();
   if (bucket) inBackground("R2 write", storeJacket(bucket, key, found));
-  return coverOk(found.bytes, found.contentType, "upstream", HIT_TTL);
+  return coverOk(found.bytes, found.contentType, "upstream", HIT_TTL, jacketEtag(found.bytes));
+}
+
+/**
+ * The ETag R2 gives `bytes` stored in one part (the MD5 of the bytes,
+ * quoted), so a jacket keeps its tag when its next request is served from
+ * R2. Were R2 ever to tag differently, a browser would download the jacket
+ * once more, nothing worse.
+ */
+function jacketEtag(bytes: ArrayBuffer): string {
+  return `"${createHash("md5").update(new Uint8Array(bytes)).digest("hex")}"`;
 }
 
 /**
@@ -297,12 +384,31 @@ function coverOk(
   contentType: string,
   origin: string,
   maxAge: number,
+  etag: string,
 ): Response {
   return new Response(bytes, {
     headers: {
       "Content-Type": contentType,
       "Cache-Control": `public, max-age=${maxAge}`,
+      ETag: etag,
       "X-Cover-Origin": origin,
+    },
+  });
+}
+
+/**
+ * The answer when a jacket R2 does not hold took longer than the budget: an
+ * error, which the page treats as no art (its next ISBN, then cloth), kept
+ * by no cache, so the next request finds what the background lookup
+ * stored, or the miss it remembered.
+ */
+function coverPending(): Response {
+  return new Response("Cover still being fetched", {
+    status: 503,
+    headers: {
+      "Content-Type": "text/plain",
+      "Cache-Control": "no-store",
+      "X-Cover-Origin": "pending",
     },
   });
 }

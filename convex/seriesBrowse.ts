@@ -369,7 +369,9 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   let storedCover: string | null = null;
   const coverCandidates: SeriesCoverCandidate[] = [];
   const collectors = new Set<string>();
-  const today = todaySortKey();
+  // A mutation may read the clock (no cached result to expire); the row
+  // records the day's split into released and forthcoming, and its cover pick.
+  const today = todaySortKey(new Date());
 
   for (const [editionId, edition] of editions) {
     const publisher = await ctx.db.get(edition.publisherId);
@@ -423,7 +425,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   const rating = await ratingSummary(ctx, { kind: "series", id: series._id });
 
   const titleSort = sortKeyFor(series.title);
-  const coverIsbns = seriesCoverIsbns(coverCandidates);
+  const coverIsbns = seriesCoverIsbns(coverCandidates, today);
   const row = {
     seriesId: series._id,
     publicId: series.publicId,

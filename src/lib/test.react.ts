@@ -5,10 +5,16 @@
 // to run once the render is done (again only when a dependency changed),
 // and useSyncExternalStore reads the store's snapshot directly, recording
 // the subscribe function it was handed. `backendHooks` is a convex/react
-// whose useQuery answers from `harness.snapshot` and whose useMutation runs
-// against the convex-test `harness.backend`. A suite opts into it with
+// whose useQuery answers from `harness.snapshot` (nothing for "skip", and
+// records what it subscribed in `harness.subscribed`), whose useMutation
+// runs against the convex-test `harness.backend`, and whose useConvexAuth
+// reports `harness.convexAuth` (in step with Clerk unless a test says
+// otherwise); `clerkHooks` is a Clerk whose useAuth reports the session in
+// `harness.auth` (signed in unless a test says otherwise). A suite opts
+// into them with
 //
 //   vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
+//   vi.mock("@clerk/tanstack-react-start", async () => (await import("./test.react")).clerkHooks);
 //
 // and imports the components under test with `await import(...)` after
 // this file. Test-only: the name stays outside vitest's include
@@ -20,10 +26,16 @@ import { vi } from "vitest";
 
 import type { Accessor } from "../../convex/test.helpers";
 
+type Session = { isLoaded: boolean; isSignedIn: boolean | undefined };
+type ConvexAuth = { isLoading: boolean; isAuthenticated: boolean };
+
 /**
- * State shared with the mocks: the signed-in backend, the query snapshot
- * useQuery answers from, an optional wrapper around every mutation call
- * (see hold), the in-flight mutation promises, the hook slots of the
+ * State shared with the mocks: the signed-in backend, the Clerk session
+ * useAuth reports, Convex's ruling on its token as useConvexAuth reports
+ * it (null: in step with Clerk, as once the token is accepted), the query
+ * snapshot useQuery answers from, the queries useQuery was asked for
+ * without "skip", an optional wrapper around every mutation call (see
+ * hold), the in-flight mutation promises, the hook slots of the
  * component being rendered with its cursor, the effects the render queued,
  * and the last subscribe an external store was read with. Hoisted, so the
  * react mock can use it (and exported under another name, as vitest cannot
@@ -31,6 +43,9 @@ import type { Accessor } from "../../convex/test.helpers";
  */
 const state = vi.hoisted(() => ({
   backend: null as Accessor | null,
+  auth: { isLoaded: true, isSignedIn: true } as Session | null,
+  convexAuth: null as ConvexAuth | null,
+  subscribed: new Set<string>(),
   intercept: null as ((name: string, run: () => Promise<unknown>) => Promise<unknown>) | null,
   snapshot: new Map<string, unknown>(),
   inflight: [] as Array<Promise<unknown>>,
@@ -104,18 +119,47 @@ vi.mock("react", async (importOriginal) => {
 
 /** convex/react wired to the harness: queries from the snapshot, mutations to the backend. */
 export const backendHooks = {
-  useQuery: (ref: FunctionReference<"query">) => harness.snapshot.get(getFunctionName(ref)),
+  useQuery: (ref: FunctionReference<"query">, args?: unknown) => {
+    if (args === "skip") return undefined;
+    harness.subscribed.add(getFunctionName(ref));
+    return harness.snapshot.get(getFunctionName(ref));
+  },
   useMutation: (ref: FunctionReference<"mutation">) => (args: Record<string, unknown>) => {
     const run = () => harness.backend!.mutation(ref, args);
     const call = harness.intercept ? harness.intercept(getFunctionName(ref), run) : run();
     harness.inflight.push(call);
     return call;
   },
+  useConvexAuth: (): ConvexAuth =>
+    harness.convexAuth ?? {
+      isLoading: harness.auth?.isLoaded !== true,
+      isAuthenticated: harness.auth?.isSignedIn === true,
+    },
 };
+
+/** Clerk wired to the harness: the session is `harness.auth`. */
+export const clerkHooks = {
+  // Null stands for Clerk off: no ClerkProvider above, where useAuth throws.
+  useAuth: () => {
+    if (!harness.auth)
+      throw new Error("useAuth can only be used within the <ClerkProvider /> component.");
+    return harness.auth;
+  },
+};
+
+/** The Clerk sessions a test can put `harness.auth` in, or null for Clerk off. */
+export const AUTH = {
+  signedIn: { isLoaded: true, isSignedIn: true },
+  signedOut: { isLoaded: true, isSignedIn: false },
+  loading: { isLoaded: false, isSignedIn: undefined },
+} satisfies Record<string, Session>;
 
 /** Clear the harness between tests. */
 export function resetHarness() {
   harness.backend = null;
+  harness.auth = AUTH.signedIn;
+  harness.convexAuth = null;
+  harness.subscribed.clear();
   harness.intercept = null;
   harness.snapshot.clear();
   harness.inflight = [];

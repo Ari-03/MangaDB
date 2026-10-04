@@ -45,6 +45,7 @@ import { fail } from "./lib/errors";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
+import type { ProposalWarning } from "./lib/proposalWarnings";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   applyMerge,
@@ -256,14 +257,6 @@ async function checkEvidence(ctx: MutationCtx, rows: Evidence[]): Promise<void> 
 }
 
 // ---------- warnings (surfaced at submit, acknowledged explicitly) ----------
-
-export const PROPOSAL_WARNINGS = {
-  newSeries: "Creates a brand-new Series",
-  bulk: "Bulk change: more than 10 operations",
-  partialCoverage: "Declares partial Volume Coverage",
-} as const;
-
-export type ProposalWarning = keyof typeof PROPOSAL_WARNINGS;
 
 function computeWarnings(ops: StoredOp[]): ProposalWarning[] {
   const warnings = new Set<ProposalWarning>();

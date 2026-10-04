@@ -1,20 +1,18 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
-import { useMemo, type CSSProperties, type ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { fetchHomeCatalog, releaseTitle, type BrowseRelease } from "~/lib/catalogData";
 import { plural } from "~/lib/format";
 import { clothColor, Cover } from "~/lib/cover";
 import {
-  coverShelf,
-  heroBooks,
-  heroPool,
-  jacketed,
-  oneCoverPer,
-  shelfDays,
+  HERO_COLS,
+  homePools,
+  homeQuestions,
+  homeShelves,
   type CoverShelf,
-  type CoversOnFile,
+  type DayShelf,
 } from "~/lib/homeShelves";
 import {
   currentMonth,
@@ -30,10 +28,15 @@ import { slugify, slugParams } from "~/lib/slug";
 import { SeriesShelfItem } from "~/lib/shelfItem";
 import { coversOnFile } from "~/server/covers";
 
-/** Two ledges of the newest Series in the catalog. */
-const SERIES_SHELF_LIMIT = 14;
-/** Series asked for to fill them: only jacketed ones are shelved (the query's cap). */
+/** Series asked for to fill the Series shelf: only jacketed ones are shelved (the query's cap). */
 const SERIES_SHELF_POOL = 28;
+/**
+ * Covers that load at once rather than lazily. React's server render puts a
+ * preload in <head> for every eager <img>, where it competes with the
+ * scripts, so only the covers every width shows on first paint ask for one:
+ * the first three on the top ledge, all a phone's ledge holds (home.css).
+ */
+const EAGER_COVERS = 3;
 
 // The home shelves seat only books whose real jacket we hold
 // (lib/homeShelves.ts), and the cover store is the one that knows. Runs in
@@ -46,30 +49,40 @@ export const Route = createFileRoute("/")({
   // The shelves are server-rendered from the same public month window the
   // Releases browser uses (lib/catalogData.ts) — a loader read, never a
   // reactive subscription for public catalog data — and never hold a Mature
-  // Series, whatever the viewer chose.
+  // Series, whatever the viewer chose. The loader seats the shelves itself
+  // and returns only the books they show: the two months it reads would
+  // otherwise travel in the page's HTML (about 250 KB of it).
   loader: async () => {
     const month = currentMonth();
     const [stats, series, releases, nextReleases] = await fetchHomeCatalog(
       month,
       SERIES_SHELF_POOL,
     );
-    // The "today" boundary travels with the loader data so SSR and hydration
-    // group the shelves identically.
+    // The "today" boundary travels with the loader data so the headings
+    // read the same day the shelves were seated by, in SSR and hydration.
     const todaySort = todaySortKey();
     const pools = homePools(releases.releases, nextReleases.releases, todaySort);
-    const { primary, secondary, undated } = pools.days;
     // Which candidates have a jacket on file. A failed check is "unknown"
     // (null): the shelves then seat any book with art to try, as before.
-    const jackets = await fetchCoversOnFile({
-      data: [
-        coverShelf(pools.hero, HERO_ROWS * HERO_COLS),
-        coverShelf(primary ? primary.releases : undated, SHELF_LIMIT),
-        coverShelf(secondary?.releases ?? [], NEXT_SHELF_LIMIT),
-        coverShelf(series, SERIES_SHELF_LIMIT),
-      ],
-    }).catch(() => null);
-    return { stats, series, month, todaySort, releases, nextReleases, jackets };
+    const jackets = await fetchCoversOnFile({ data: homeQuestions(pools, series) }).catch(
+      () => null,
+    );
+    return {
+      counts: {
+        series: stats.series.count,
+        volumes: stats.volumes.count,
+        publishers: stats.publishers.count,
+      },
+      month,
+      todaySort,
+      ...homeShelves(pools, series, jackets ? new Set(jackets) : null),
+    };
   },
+  // Coming back home within five minutes reuses the shelves instead of
+  // re-reading both months and the cover store in the background. The
+  // shelves turn on the UTC day (todaySort), so a reused page is at most
+  // five minutes behind midnight; a full page load always runs the loader.
+  staleTime: 5 * 60_000,
   // Canonical + social card for the home page; the title and
   // description templates live in the root route's defaults.
   head: () =>
@@ -90,50 +103,13 @@ const LABELS = [
   ["publishers", "Publishers"],
 ] as const;
 
-/** Covers standing on the hero's ledges: three short rows at most. */
-const HERO_ROWS = 3;
-const HERO_COLS = 5;
-/** Below this a shelf of Series reads as a gap, so the link list serves. */
-const SERIES_SHELF_MIN = 4;
-/** Home shelves are a taste of the month; the agenda holds the whole of it. */
-const SHELF_LIMIT = 14;
-const NEXT_SHELF_LIMIT = 7;
-
-/**
- * Every home shelf's candidates in shelf order, before the jacket check: the
- * loader asks the cover store about them, and the component seats the ones
- * it holds.
- */
-function homePools(
-  releases: Array<BrowseRelease>,
-  nextReleases: Array<BrowseRelease>,
-  todaySort: number,
-) {
-  // A book's physical and digital Releases are one cover on a shelf.
-  const monthBooks = oneCoverPer(releases, (r) => r.edition.publicId);
-  const hero = heroPool(
-    [...monthBooks, ...oneCoverPer(nextReleases, (r) => r.edition.publicId)],
-    todaySort,
-    // The day the shelf below leads with (see ReleaseShelves).
-    monthBooks.find((book) => book.day !== null && book.sort >= todaySort)?.sort ?? null,
-  );
-  return { days: shelfDays(monthBooks, todaySort), hero };
-}
-
 function Home() {
-  const { stats, series, month, todaySort, releases, nextReleases, jackets } =
+  const { counts, month, todaySort, hero, primary, secondary, undated, series, seriesLinks } =
     Route.useLoaderData();
-  const onFile = useMemo(() => (jackets ? new Set(jackets) : null), [jackets]);
-  const pools = homePools(releases.releases, nextReleases.releases, todaySort);
-  const heroCovers = heroBooks(pools.hero, onFile, HERO_ROWS * HERO_COLS);
-  // The shelf seats jacketed Series; too few of them and the newest Series
-  // are listed by name instead.
-  const newest = series.slice(0, SERIES_SHELF_LIMIT);
-  const shelfSeries = jacketed(series, onFile, SERIES_SHELF_LIMIT);
 
   return (
     <main className="home">
-      <section className={heroCovers.length > 0 ? "hero" : "hero hero--solo"}>
+      <section className={hero.length > 0 ? "hero" : "hero hero--solo"}>
         <div className="hero-copy">
           <h1 className="hero-title">Know what lands on the shelf this week.</h1>
           <p className="hero-sub">
@@ -151,18 +127,25 @@ function Home() {
           <div className="stat-row">
             {LABELS.map(([key, label]) => (
               <div className="stat" key={key}>
-                <div className="stat-num">{roundedCount(stats[key].count)}</div>
+                <div className="stat-num">{roundedCount(counts[key])}</div>
                 <div className="stat-label">{label}</div>
               </div>
             ))}
           </div>
         </div>
-        {heroCovers.length > 0 ? <HeroShelf releases={heroCovers} /> : null}
+        {hero.length > 0 ? <HeroShelf releases={hero} /> : null}
       </section>
 
-      <ReleaseShelves month={month} todaySort={todaySort} days={pools.days} onFile={onFile} />
+      <ReleaseShelves
+        month={month}
+        todaySort={todaySort}
+        eager={hero.length === 0 ? EAGER_COVERS : 0}
+        primary={primary}
+        secondary={secondary}
+        undated={undated}
+      />
 
-      {newest.length > 0 ? (
+      {series.length > 0 || seriesLinks.length > 0 ? (
         <section className="section">
           <div className="section-head">
             <h2 className="section-title">Recently added series</h2>
@@ -171,9 +154,9 @@ function Home() {
               Search all series
             </Link>
           </div>
-          {shelfSeries.length >= SERIES_SHELF_MIN ? (
+          {series.length > 0 ? (
             <div className="shelf">
-              {shelfSeries.map((entry) => (
+              {series.map((entry) => (
                 // The Series' first jacket (lib/covers.ts); a Series with no
                 // art on file is not shelved here.
                 <SeriesShelfItem
@@ -184,7 +167,7 @@ function Home() {
             </div>
           ) : (
             <ul className="series-links">
-              {newest.map((entry) => (
+              {seriesLinks.map((entry) => (
                 <li key={entry.publicId}>
                   <Link
                     to="/series/$publicId/$slug"
@@ -227,14 +210,14 @@ function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
           // biome-ignore lint/suspicious/noArrayIndexKey: a row is its position in the grid; the covers inside it are keyed by Release
           key={index}
         >
-          {row.map((release) => (
+          {row.map((release, column) => (
             <EditionLink className="cover-link" release={release} key={release.id}>
               <Cover
                 src={release.coverUrl}
                 isbn13={release.coverIsbns}
                 title={releaseTitle(release)}
                 foot={[release.volumeLabel, release.publisher?.name]}
-                lazy={index > 0}
+                lazy={index > 0 || column >= EAGER_COVERS}
               />
             </EditionLink>
           ))}
@@ -247,82 +230,83 @@ function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
 /**
  * The home shelves: the nearest publication day the month still has ahead of
  * it (falling back to its last one once the month has shipped), then the day
- * after it (lib/homeShelves.ts `shelfDays`). Each seats its jacketed books;
- * the counts beside the headings are of every book that day. An empty month
- * is an invitation, never a blank section.
+ * after it (lib/homeShelves.ts `shelfDays`). Each shows the jacketed books
+ * the loader seated; the counts beside the headings are of every book that
+ * day. An empty month is an invitation, never a blank section. `eager` is
+ * how many of the first shelf's covers load at once: none while the hero
+ * wall stands above it.
  */
 function ReleaseShelves({
   month,
   todaySort,
-  days: { primary, secondary, undated },
-  onFile,
+  eager,
+  primary,
+  secondary,
+  undated,
 }: {
   month: YearMonth;
   todaySort: number;
-  days: ReturnType<typeof homePools>["days"];
-  onFile: CoversOnFile;
+  eager: number;
+  primary: DayShelf<BrowseRelease> | null;
+  secondary: DayShelf<BrowseRelease> | null;
+  undated: { count: number; books: Array<BrowseRelease> };
 }) {
   if (!primary) {
-    const books = jacketed(undated, onFile, SHELF_LIMIT);
     // No dated day left in the window: either the month holds only
     // day-to-be-announced Releases, or it holds nothing at all.
     return (
       <section className="section">
         <div className="section-head">
           <h2 className="section-title">
-            {undated.length > 0
+            {undated.count > 0
               ? `Coming in ${MONTH_NAMES[month.month - 1]}`
               : "On the shelf this month"}
           </h2>
           <p className="section-note">
-            {undated.length > 0
-              ? `${plural(undated.length, "book")}, publication day still to be announced`
+            {undated.count > 0
+              ? `${plural(undated.count, "book")}, publication day still to be announced`
               : `Nothing is dated for ${monthTitle(month)} yet`}
           </p>
           {/* An empty month carries its own call to action below, so the
               section head does not repeat it. */}
-          {undated.length > 0 ? (
+          {undated.count > 0 ? (
             <Link className="section-link" to="/releases">
               Full agenda for {MONTH_NAMES[month.month - 1]}
             </Link>
           ) : null}
         </div>
-        {undated.length === 0 ? (
+        {undated.count === 0 ? (
           <EmptyMonth month={month} />
-        ) : books.length > 0 ? (
-          <Shelf releases={books} eager />
+        ) : undated.books.length > 0 ? (
+          <Shelf releases={undated.books} eager={eager} />
         ) : null}
       </section>
     );
   }
 
-  const primaryBooks = jacketed(primary.releases, onFile, SHELF_LIMIT);
-  const secondaryBooks = secondary ? jacketed(secondary.releases, onFile, NEXT_SHELF_LIMIT) : [];
   return (
     <>
       <section className="section">
         <div className="section-head">
           <h2 className="section-title">{primaryHeading(primary.day, todaySort)}</h2>
           <p className="section-note">
-            {fullDate(month, primary.day)} — {plural(primary.releases.length, "book")}
+            {fullDate(month, primary.day)} — {plural(primary.count, "book")}
           </p>
           <Link className="section-link" to="/releases">
             Full agenda for {MONTH_NAMES[month.month - 1]}
           </Link>
         </div>
-        {primaryBooks.length > 0 ? <Shelf releases={primaryBooks} eager /> : null}
+        {primary.books.length > 0 ? <Shelf releases={primary.books} eager={eager} /> : null}
       </section>
 
-      {secondary && secondaryBooks.length > 0 ? (
+      {secondary ? (
         <section className="section">
           <div className="section-head">
             <h2 className="section-title">
               Next {weekdayFullName(month, secondary.day)}, {secondary.day}{" "}
               {MONTH_NAMES[month.month - 1]}
             </h2>
-            <p className="section-note">
-              {plural(secondary.releases.length, "book")} already dated
-            </p>
+            <p className="section-note">{plural(secondary.count, "book")} already dated</p>
             <Link
               className="section-link"
               to="/releases/$month"
@@ -332,18 +316,21 @@ function ReleaseShelves({
               See the month grid
             </Link>
           </div>
-          <Shelf releases={secondaryBooks} />
+          <Shelf releases={secondary.books} />
         </section>
       ) : null}
     </>
   );
 }
 
-/** A row of Releases as shelved books: cover, then the ledge and its label. */
-function Shelf({ releases, eager = false }: { releases: Array<BrowseRelease>; eager?: boolean }) {
+/**
+ * A row of Releases as shelved books: cover, then the ledge and its label.
+ * The first `eager` covers load at once, the rest lazily.
+ */
+function Shelf({ releases, eager = 0 }: { releases: Array<BrowseRelease>; eager?: number }) {
   return (
     <div className="shelf">
-      {releases.map((release) => {
+      {releases.map((release, index) => {
         const lead = release.series[0];
         return (
           <div className="shelf-item" key={release.id}>
@@ -354,7 +341,7 @@ function Shelf({ releases, eager = false }: { releases: Array<BrowseRelease>; ea
                   isbn13={release.coverIsbns}
                   title={releaseTitle(release)}
                   foot={[release.volumeLabel, release.publisher?.name]}
-                  lazy={!eager}
+                  lazy={index >= eager}
                 />
               </EditionLink>
             </div>

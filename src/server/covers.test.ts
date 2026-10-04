@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { stubBrokenEdgeCache, stubEdgeCache } from "./test.cache";
@@ -140,6 +142,7 @@ describe("coverResponse with a stored jacket", () => {
       get: vi.fn(async () => ({
         arrayBuffer: async () => OLD.slice().buffer,
         etag: "etag-1",
+        httpEtag: '"etag-1"',
         httpMetadata: { contentType: "image/jpeg" },
         customMetadata: metadata,
       })),
@@ -301,6 +304,7 @@ describe("coverResponse with a stored jacket", () => {
       get: async () => ({
         arrayBuffer: async () => object.bytes.slice().buffer,
         etag: object.etag,
+        httpEtag: `"${object.etag}"`,
         httpMetadata: { contentType: "image/jpeg" },
         customMetadata: { source: object.source, fetchedAt: object.fetchedAt },
       }),
@@ -399,6 +403,296 @@ describe("coverResponse with a stored jacket", () => {
     for (const resolve of pending) resolve();
     await settle();
     expect(covers.put).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("coverResponse refreshing stale jackets", () => {
+  test("checks at most four stale jackets at once per isolate, serving each", async () => {
+    const releases: Array<(response: Response) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>((resolve) => releases.push(resolve))),
+    );
+    worker.env.COVERS = {
+      get: async () => ({
+        arrayBuffer: async () => new Uint8Array(20_000).buffer,
+        etag: "r2-tag",
+        httpEtag: '"r2-tag"',
+        customMetadata: { fetchedAt: new Date(0).toISOString() },
+      }),
+      put: async () => {},
+    };
+    const responses = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        coverResponse(new Request(`https://mangadb.org/covers/978197470052${i}.jpg`)),
+      ),
+    );
+    const checks = releases.length;
+    // Let every check end, a second upstream included, before afterEach waits on them.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    for (const release of releases) release(new Response(null, { status: 404 }));
+    expect(checks).toBe(4);
+    expect(responses.every((res) => res?.status === 200)).toBe(true);
+  });
+});
+
+describe("coverResponse validators", () => {
+  const URL = "https://mangadb.org/covers/9781974700523.jpg";
+  const KEY = URL;
+  const STORED = new Uint8Array(30_000).fill(5);
+  /** A request for the test cover revalidating with `ifNoneMatch`. */
+  const revalidate = (ifNoneMatch: string) =>
+    coverResponse(new Request(URL, { headers: { "If-None-Match": ifNoneMatch } }));
+  /** An R2 bucket holding a fresh jacket tagged `"r2-tag"`. */
+  const holding = () => {
+    const covers = {
+      get: vi.fn(async () => ({
+        arrayBuffer: async () => STORED.slice().buffer,
+        etag: "r2-tag",
+        httpEtag: '"r2-tag"',
+        httpMetadata: { contentType: "image/jpeg" },
+        customMetadata: { fetchedAt: new Date().toISOString() },
+      })),
+      put: vi.fn(async () => {}),
+    };
+    worker.env.COVERS = covers;
+    return covers;
+  };
+
+  test("a jacket from R2 carries R2's ETag", async () => {
+    holding();
+    const res = await get();
+    expect(res?.status).toBe(200);
+    expect(res?.headers.get("ETag")).toBe('"r2-tag"');
+  });
+
+  test("an R2 hit that matches If-None-Match is a 304 with the 200's caching headers", async () => {
+    holding();
+    const full = await get();
+    edge.clear();
+    const res = await revalidate('"r2-tag"');
+    expect(res?.status).toBe(304);
+    expect(res?.body).toBeNull();
+    expect(res?.headers.get("ETag")).toBe('"r2-tag"');
+    expect(res?.headers.get("Cache-Control")).toBe(full?.headers.get("Cache-Control"));
+    expect(res?.headers.get("X-Cover-Origin")).toBe("r2");
+    expect(res?.headers.get("Content-Type")).toBeNull();
+  });
+
+  test("an edge-cache hit that matches If-None-Match is a 304", async () => {
+    const covers = holding();
+    await get();
+    await Promise.all(worker.background);
+    expect(edge.has(KEY)).toBe(true);
+    const res = await revalidate('"r2-tag"');
+    expect(res?.status).toBe(304);
+    expect(res?.headers.get("X-Cover-Cache")).toBe("hit");
+    expect(res?.headers.get("ETag")).toBe('"r2-tag"');
+    // Answered from the edge: R2 was read once, for the first request.
+    expect(covers.get).toHaveBeenCalledTimes(1);
+  });
+
+  test("an edge-cache 304 keeps the cached copy's age and date", async () => {
+    const date = new Date(Date.now() - 3_500_000).toUTCString();
+    edge.set(
+      KEY,
+      new Response("jacket", {
+        headers: {
+          ETag: '"r2-tag"',
+          "Cache-Control": "public, max-age=3600",
+          Age: "3500",
+          Date: date,
+          Vary: "Accept",
+          "X-Cover-Origin": "r2",
+        },
+      }),
+    );
+    const res = await revalidate('"r2-tag"');
+    expect(res?.status).toBe(304);
+    // A cache downstream would otherwise give the stale hour a fresh start.
+    expect(res?.headers.get("Age")).toBe("3500");
+    expect(res?.headers.get("Date")).toBe(date);
+    expect(res?.headers.get("Vary")).toBe("Accept");
+    expect(res?.headers.get("X-Cover-Origin")).toBe("r2");
+    expect(res?.headers.get("X-Cover-Cache")).toBe("hit");
+  });
+
+  test.each([
+    ["a weak form of the tag", 'W/"r2-tag"'],
+    ["the tag among others", '"other", "r2-tag"'],
+    ["any tag", "*"],
+  ])("matches %s", async (_name, ifNoneMatch) => {
+    holding();
+    expect((await revalidate(ifNoneMatch))?.status).toBe(304);
+  });
+
+  test.each([
+    ["from R2", false],
+    ["from the edge", true],
+  ])("a jacket %s whose tag the request doesn't name is the full 200", async (_name, fromEdge) => {
+    holding();
+    await get();
+    await Promise.all(worker.background);
+    if (!fromEdge) edge.clear();
+    const res = await revalidate('"stale-tag"');
+    expect(res?.status).toBe(200);
+    expect(new Uint8Array(await res!.arrayBuffer())).toEqual(STORED);
+    expect(res?.headers.get("ETag")).toBe('"r2-tag"');
+  });
+
+  test("a stale copy's 304 keeps its one-hour lifetime", async () => {
+    worker.env.COVERS = {
+      get: async () => ({
+        arrayBuffer: async () => STORED.slice().buffer,
+        etag: "r2-tag",
+        httpEtag: '"r2-tag"',
+        httpMetadata: { contentType: "image/jpeg" },
+        customMetadata: { fetchedAt: new Date(0).toISOString() },
+      }),
+      put: async () => {},
+    };
+    upstreams = [status(404), status(404)];
+    const res = await revalidate('"r2-tag"');
+    expect(res?.status).toBe(304);
+    expect(res?.headers.get("Cache-Control")).toBe("public, max-age=3600");
+  });
+
+  test("an upstream jacket is tagged as R2 will tag it, and revalidates from the edge", async () => {
+    upstreams = [image];
+    const res = await get();
+    const md5 = createHash("md5").update(JACKET).digest("hex");
+    expect(res?.headers.get("X-Cover-Origin")).toBe("upstream");
+    expect(res?.headers.get("ETag")).toBe(`"${md5}"`);
+    await Promise.all(worker.background);
+    const again = await revalidate(`"${md5}"`);
+    expect(again?.status).toBe(304);
+    expect(again?.headers.get("X-Cover-Cache")).toBe("hit");
+  });
+
+  test("a miss is never a 304", async () => {
+    upstreams = [status(404), status(404)];
+    expect((await revalidate("*"))?.status).toBe(404);
+  });
+
+  test("a cached outage is never a 304", async () => {
+    edge.set(
+      KEY,
+      new Response("Cover source unavailable", {
+        status: 503,
+        headers: { "Cache-Control": "public, max-age=300" },
+      }),
+    );
+    expect((await revalidate("*"))?.status).toBe(503);
+  });
+});
+
+describe("coverResponse waiting on upstreams", () => {
+  const KEY = "https://mangadb.org/covers/9781974700523.jpg";
+  /** An upstream answer the test releases, standing in for a slow CDN. */
+  const held = () => {
+    let release!: (response: Response) => void;
+    const answer = new Promise<Response>((resolve) => (release = resolve));
+    return { answer: () => answer, release };
+  };
+  const emptyBucket = () => {
+    const covers = { get: vi.fn(async () => null), put: vi.fn(async () => ({})) };
+    worker.env.COVERS = covers;
+    return covers;
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("an answer inside three seconds is served", async () => {
+    vi.useFakeTimers();
+    upstreams = [
+      () => new Promise<Response>((resolve) => setTimeout(() => resolve(image()), 2_900)),
+    ];
+    const pending = get();
+    await vi.advanceTimersByTimeAsync(2_900);
+    const res = await pending;
+    expect(res?.status).toBe(200);
+    expect(res?.headers.get("X-Cover-Origin")).toBe("upstream");
+  });
+
+  test("past three seconds the visitor gets an uncached error at once, and the jacket is stored for the next", async () => {
+    const covers = emptyBucket();
+    const slow = held();
+    upstreams = [slow.answer];
+    vi.useFakeTimers();
+    const pending = get();
+    let settled = false;
+    void pending.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const res = await pending;
+    vi.useRealTimers();
+    expect(res?.status).toBe(503);
+    expect(res?.headers.get("Cache-Control")).toBe("no-store");
+    expect(res?.headers.get("X-Cover-Origin")).toBe("pending");
+    // Nothing remembered yet: the edge holds no answer, R2 no jacket.
+    expect(edge.has(KEY)).toBe(false);
+    expect(covers.put).not.toHaveBeenCalled();
+
+    // The CDN answers after the visitor moved on; the lookup still runs to
+    // its end, kept alive by waitUntil.
+    slow.release(image());
+    await Promise.all(worker.background);
+    await Promise.all(worker.background);
+    expect(covers.put).toHaveBeenCalledWith(
+      "9781974700523.jpg",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(edge.get(KEY)?.status).toBe(200);
+    const next = await get();
+    expect(next?.status).toBe(200);
+    expect(next?.headers.get("X-Cover-Cache")).toBe("hit");
+    expect(new Uint8Array(await next!.arrayBuffer())).toEqual(JACKET);
+  });
+
+  test.each([
+    ["a miss everywhere, remembered for a day", [status(404), status(404)], 404, 60 * 60 * 24],
+    ["an outage, remembered for five minutes", [status(503), status(404)], 503, 300],
+  ])("a late %s", async (_name, answers, code, maxAge) => {
+    const slow = held();
+    upstreams = [slow.answer, ...answers.slice(1)];
+    vi.useFakeTimers();
+    const pending = get();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect((await pending)?.status).toBe(503);
+    vi.useRealTimers();
+    slow.release(answers[0]!());
+    await Promise.all(worker.background);
+    await Promise.all(worker.background);
+    const remembered = edge.get(KEY);
+    expect(remembered?.status).toBe(code);
+    expect(remembered?.headers.get("Cache-Control")).toBe(`public, max-age=${maxAge}`);
+  });
+
+  test("a stored jacket is never held up by the budget", async () => {
+    const OLD = new Uint8Array(30_000).fill(3);
+    worker.env.COVERS = {
+      get: async () => ({
+        arrayBuffer: async () => OLD.slice().buffer,
+        etag: "e",
+        httpEtag: '"e"',
+        httpMetadata: { contentType: "image/jpeg" },
+        customMetadata: { fetchedAt: new Date(0).toISOString() },
+      }),
+      put: async () => {},
+    };
+    // Its check hangs in the background; the copy is served regardless.
+    const slow = held();
+    upstreams = [slow.answer];
+    const res = await get();
+    expect(res?.status).toBe(200);
+    expect(res?.headers.get("X-Cover-Origin")).toBe("r2");
+    slow.release(status(404)());
   });
 });
 

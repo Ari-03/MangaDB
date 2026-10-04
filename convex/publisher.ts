@@ -25,6 +25,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { COUNT_CAP, PUBLISHER_SCAN_CAP } from "./catalog";
+import { boundedReads } from "./lib/boundedReads";
 import { getActive } from "./lib/merges";
 import {
   browseCache,
@@ -111,7 +112,9 @@ export const publisherPage = query({
     horizonSort: v.number(),
     ...showMatureArg,
   },
-  handler: async (ctx, { slug, todaySort, horizonSort, showMature }) => {
+  handler: async (unbounded, { slug, todaySort, horizonSort, showMature }) => {
+    // Both windows join at once and share one read queue (lib/boundedReads.ts).
+    const ctx = boundedReads(unbounded);
     const publisher = await resolvePublisher(ctx, slug);
     if (!publisher) return null;
     if (publisher.slug !== slug) {
@@ -233,19 +236,23 @@ async function visibleMonth(
   showMature: boolean,
 ) {
   // yyyymm00 (month-precision) … yyyymm99 covers every day of the month.
+  // Active rows only, off the status-led index like monthBrowse: hidden and
+  // merged Releases neither cost reads nor push active ones past the cap.
   const windowDocs =
     fromSort === null
       ? []
       : await ctx.db
           .query("releases")
-          .withIndex("by_date", (q) =>
-            q.gte("pubDate.sort", fromSort).lte("pubDate.sort", fromSort + 99),
+          .withIndex("by_status_date", (q) =>
+            q
+              .eq("status", "active")
+              .gte("pubDate.sort", fromSort)
+              .lte("pubDate.sort", fromSort + 99),
           )
           .take(WINDOW_CAP);
 
   const rows = await Promise.all(
     windowDocs.map(async (release): Promise<BoardRow | null> => {
-      if (release.status !== "active") return null;
       const edition = await cache.edition(release.editionId);
       if (!edition || edition.status !== "active") return null;
       const series = (await Promise.all(release.seriesIds.map(cache.series))).flatMap((doc) =>
@@ -282,15 +289,20 @@ async function visibleMonth(
  *
  * Without `showMature`, books of Mature Series and adult-only Publishers
  * are left out of every count, strip, and directory entry (lib/mature.ts).
- * Pass one `cache` to build both views of a month from the same reads.
+ * Pass one `cache` to build both views of a month from the same reads, made
+ * from the same bounded ctx (lib/boundedReads.ts) so its reads and the
+ * board's own share one queue.
  */
 async function buildMonthBoard(
-  ctx: QueryCtx,
+  unbounded: QueryCtx,
   year: number,
   month: number,
   showMature: boolean,
-  cache: BrowseCache = browseCache(ctx),
+  cache?: BrowseCache,
 ) {
+  // A busy month's rows join at once; every read waits its turn in one queue.
+  const ctx = boundedReads(unbounded);
+  cache ??= browseCache(ctx);
   const fromSort = monthOk(year, month) ? year * 10000 + month * 100 : null;
   const previousSort =
     fromSort === null ? null : month === 1 ? fromSort - 10000 + 1100 : fromSort - 100;
@@ -599,7 +611,11 @@ export const rebuildBoards = internalAction({
  */
 export const computeBoard = internalQuery({
   args: { year: v.number(), month: v.number() },
-  handler: async (ctx, { year, month }): Promise<{ general: MonthBoard; mature: MonthBoard }> => {
+  handler: async (
+    unbounded,
+    { year, month },
+  ): Promise<{ general: MonthBoard; mature: MonthBoard }> => {
+    const ctx = boundedReads(unbounded);
     const cache = browseCache(ctx);
     return {
       general: await buildMonthBoard(ctx, year, month, false, cache),

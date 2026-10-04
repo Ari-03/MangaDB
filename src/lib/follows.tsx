@@ -5,7 +5,7 @@
 // there is no visibility control to render.
 
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
@@ -13,7 +13,7 @@ import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate, plural } from "~/lib/format";
 import { sortKeyMonth } from "~/lib/month";
-import { useReadyViewer } from "~/lib/viewer";
+import { useReadyViewer, useViewerQuery } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
 /** A Series a collection write suggests following (collection.setReleaseEntry and kin). */
@@ -32,7 +32,7 @@ export type FollowSuggestion = FunctionReturnType<
  * signed-out viewers).
  */
 export function SeriesFollowControls({ seriesPublicId }: { seriesPublicId: number }) {
-  const data = useQuery(api.follows.seriesFollow, { seriesPublicId });
+  const data = useViewerQuery(api.follows.seriesFollow, { seriesPublicId });
   const setFollow = useMutation(api.follows.setSeriesFollow);
   if (!data) return null; // loading, signed out, or username pending
   return (
@@ -166,8 +166,8 @@ function sortDate(sort: number, day: number | null): string | null {
  * `todaySort` comes from the page, so its tab count shares this query.
  */
 export function LibraryUpcoming({ todaySort }: { todaySort: number }) {
-  const upcoming = useQuery(api.follows.myUpcoming, { todaySort });
-  const following = useQuery(api.follows.myFollowing, {});
+  const upcoming = useViewerQuery(api.follows.myUpcoming, { todaySort });
+  const following = useViewerQuery(api.follows.myFollowing);
   const viewer = useReadyViewer();
   const setPreference = useMutation(api.users.setFormatPreference);
   const setFollow = useMutation(api.follows.setSeriesFollow);

@@ -6,6 +6,8 @@ declare module "cloudflare:workers" {
   interface R2ObjectBody {
     arrayBuffer(): Promise<ArrayBuffer>;
     etag: string;
+    /** `etag` quoted, for an ETag header. */
+    httpEtag: string;
     httpMetadata?: { contentType?: string };
     customMetadata?: Record<string, string>;
   }

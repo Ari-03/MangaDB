@@ -5,7 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import type { AnnCredit } from "./lib/ann";
 import { workMatch } from "./lib/matching";
-import { matchPerson, mergeRoles, nameKey, nearKeys, roleFor } from "./people";
+import { matchPerson, mergeRoles, nameKey, nearKeys, REBUILD_VERSION, roleFor } from "./people";
 import {
   insertEdition,
   insertObservation,
@@ -438,6 +438,22 @@ async function catalogState(t: TestT) {
   });
 }
 
+/** A credit as the rebuild writes it: the row pages show, and its run row. */
+async function insertCredit(
+  ctx: MutationCtx,
+  credit: Overrides<"seriesCredits", "seriesId" | "personId" | "role">,
+  run: Omit<Overrides<"seriesCreditRuns", "rebuiltAt">, "creditId" | "seriesId" | "source">,
+) {
+  const creditId = await ctx.db.insert("seriesCredits", credit);
+  await ctx.db.insert("seriesCreditRuns", {
+    creditId,
+    seriesId: credit.seriesId,
+    source: credit.source,
+    ...run,
+  });
+  return creditId;
+}
+
 const personNamed = (t: TestT, name: string) =>
   t.run(async (ctx) => (await ctx.db.query("people").collect()).filter((p) => p.name === name));
 
@@ -844,13 +860,13 @@ describe("people.rebuild PRH lines", () => {
       after: null,
       rebuiltAt: Date.now() + 1000,
     });
-    const rows = await t.run((ctx) =>
+    const runs = await t.run((ctx) =>
       ctx.db
-        .query("seriesCredits")
+        .query("seriesCreditRuns")
         .withIndex("by_series", (q) => q.eq("seriesId", fresh))
         .collect(),
     );
-    expect(rows.map((row) => (row.runNames ?? []).map((n) => n.name)).sort()).toEqual([
+    expect(runs.map((run) => (run.runNames ?? []).map((n) => n.name)).sort()).toEqual([
       ["Yuka Sato"],
       ["Yuki Sato"],
     ]);
@@ -900,25 +916,23 @@ describe("people.rebuild PRH lines", () => {
         await ctx.db.delete(row._id);
       }
       const prh = (personId: Id<"people">, runNames: { name: string; count: number }[]) =>
-        ctx.db.insert("seriesCredits", {
-          seriesId: ids.hellbound,
-          personId,
-          role: "art",
-          runRole: "art",
-          source: "prh",
-          rebuiltAt,
-          runNames: runNames.map((n) => ({ ...n, role: "art" as const, seenAt: 1 })),
-          runApart: [],
-        });
+        insertCredit(
+          ctx,
+          { seriesId: ids.hellbound, personId, role: "art", source: "prh" },
+          {
+            runRole: "art",
+            rebuiltAt,
+            runNames: runNames.map((n) => ({ ...n, role: "art" as const, seenAt: 1 })),
+            runApart: [],
+          },
+        );
       await prh(other, [{ name: "Choi Gyu-Seok", count: 2 }]);
       for (let i = 0; i < 100; i++) {
-        await ctx.db.insert("seriesCredits", {
-          seriesId: ids.berserk,
-          personId: other,
-          role: "author",
-          source: "creators",
-          rebuiltAt,
-        });
+        await insertCredit(
+          ctx,
+          { seriesId: ids.berserk, personId: other, role: "author", source: "creators" },
+          { rebuiltAt },
+        );
       }
       await prh(choi, [{ name: "Choe Gyu-Seok", count: 1 }]);
       return { choi };
@@ -1150,6 +1164,344 @@ describe("people.rebuild name keys", () => {
       (await ctx.db.query("people").collect()).filter((p) => p.name.startsWith("Gone ")),
     );
     expect(left).toHaveLength(5);
+  });
+});
+
+/** convex-test's syscall entry, which every `ctx.db` write goes through. */
+type ConvexGlobal = {
+  syscall: unknown;
+  jsSyscall: unknown;
+  asyncSyscall: (op: string, args: string) => Promise<string>;
+};
+const WRITE_OPS = new Set(["1.0/insert", "1.0/shallowMerge", "1.0/replace", "1.0/remove"]);
+
+/**
+ * Run `body`, counting the document writes (inserts, patches, deletes) it
+ * makes per table. convex-test ids end in their table's name.
+ */
+async function countWrites(body: () => Promise<unknown>): Promise<Record<string, number>> {
+  const holder = globalThis as unknown as { Convex: ConvexGlobal };
+  const real = holder.Convex;
+  const writes: Record<string, number> = {};
+  holder.Convex = {
+    get syscall() {
+      return real.syscall;
+    },
+    get jsSyscall() {
+      return real.jsSyscall;
+    },
+    get asyncSyscall() {
+      const call = real.asyncSyscall;
+      return async (op: string, args: string) => {
+        if (WRITE_OPS.has(op)) {
+          const { table, id } = JSON.parse(args) as { table?: string; id?: string };
+          const name = table ?? id!.replace(/^\d+/, "");
+          writes[name] = (writes[name] ?? 0) + 1;
+        }
+        return await call(op, args);
+      };
+    },
+  };
+  try {
+    await body();
+  } finally {
+    holder.Convex = real;
+  }
+  return writes;
+}
+
+/** Every credit's shown fields and every person, by id, to tell a rewrite from a no-op. */
+const shownRows = (t: TestT) =>
+  t.run(async (ctx) => ({
+    credits: await ctx.db.query("seriesCredits").collect(),
+    people: await ctx.db.query("people").collect(),
+  }));
+
+// Every Series page reads its Series' credit rows and their people
+// (creditsFor), so any write to one invalidates the page's cached query.
+describe("people.rebuild writes", () => {
+  it("rewrites no credit or person when nothing changed, only the run rows", async () => {
+    for (const { t } of [await publisherCatalog(), await variantCatalog()]) {
+      // The first rerun prunes the losing spellings' people, which no
+      // Series credits; nothing is left to change after it.
+      await t.action(internal.people.rebuild, {});
+      const before = await shownRows(t);
+      const writes = await countWrites(() => t.action(internal.people.rebuild, {}));
+      expect(writes.seriesCredits ?? 0).toBe(0);
+      expect(writes.people ?? 0).toBe(0);
+      // The stamps went to the run rows instead.
+      expect(writes.seriesCreditRuns).toBeGreaterThanOrEqual(before.credits.length);
+      expect(await shownRows(t)).toEqual(before);
+    }
+  });
+
+  it("rewrites nothing on the first rerun of a publisher and ANN catalog either", async () => {
+    const { t } = await publisherCatalog();
+    const writes = await countWrites(() => t.action(internal.people.rebuild, {}));
+    expect(writes.seriesCredits ?? 0).toBe(0);
+  });
+
+  it("still sweeps a credit no observation gives, and writes only that one", async () => {
+    const { t, ids } = await publisherCatalog();
+    await withdraw(t, await observationOf(t, "kodansha", "1122/v2#physical"));
+    const writes = await countWrites(() => t.action(internal.people.rebuild, {}));
+    expect(await creditLines(t, ids.marriage)).toEqual(["Peko Watanabe: author (creators)"]);
+    expect(writes.seriesCredits).toBe(1);
+    // Its run row went with it.
+    const orphans = await t.run(async (ctx) => {
+      const runs = await ctx.db.query("seriesCreditRuns").collect();
+      const live = await Promise.all(runs.map((run) => ctx.db.get(run.creditId)));
+      return runs.filter((_, i) => live[i] === null);
+    });
+    expect(orphans).toEqual([]);
+  });
+
+  it("writes a credit whose role changed, and the one its line dropped", async () => {
+    const { t, ids } = await publisherCatalog();
+    const ruin = await observationOf(t, "prh", "9781646516650");
+    await t.run((ctx) =>
+      ctx.db.patch(ruin._id, {
+        snapshot: { kind: "prhTitle", author: "Story and Art by Muneyuki Kaneshiro" },
+      }),
+    );
+    const writes = await countWrites(() => t.action(internal.people.rebuild, {}));
+    expect(await creditLines(t, ids.ruin)).toEqual(["Muneyuki Kaneshiro: story_art (prh)"]);
+    // Kaneshiro's role, and Nomura's row swept.
+    expect(writes.seriesCredits).toBe(2);
+  });
+
+  it("converges after a run that stopped part-way, as if it never ran", async () => {
+    const { t, ids } = await variantCatalog();
+    await t.action(internal.people.rebuild, {});
+    const settled = await catalogState(t);
+    // A run that stamped and tallied every row, then died before its sweep
+    // and settle, after a PRH line changed.
+    const stopped = Date.now() - 1000;
+    const hellbound = (await t.run((ctx) => ctx.db.query("sourceObservations").collect())).find(
+      (o) => o.snapshot?.author === "Written by Yeon Sang-Ho. Illustrated by Choi Gyu-Seok.",
+    )!;
+    await t.run((ctx) =>
+      ctx.db.patch(hellbound._id, {
+        snapshot: { kind: "prhTitle", author: "Written by Yeon Sang-Ho." },
+      }),
+    );
+    await t.mutation(internal.people.creditBatch, { after: null, rebuiltAt: stopped });
+    let after: string | null = null;
+    do {
+      ({ next: after } = await t.mutation(internal.people.publisherBatch, {
+        sourceKey: "prh",
+        after,
+        rebuiltAt: stopped,
+      }));
+    } while (after !== null);
+    // Put the line back: the rerun must give what the first run gave.
+    await t.run((ctx) => ctx.db.patch(hellbound._id, { snapshot: hellbound.snapshot }));
+    await t.action(internal.people.rebuild, {});
+    expect(await catalogState(t)).toEqual(settled);
+    expect(await creditLines(t, ids.hellbound)).toEqual([
+      "Choe Gyu-Seok: art (prh)",
+      "Yeon Sang-Ho: story (prh)",
+    ]);
+    const writes = await countWrites(() => t.action(internal.people.rebuild, {}));
+    expect(writes.seriesCredits ?? 0).toBe(0);
+  });
+
+  it("moves a legacy row's run fields off it once, and sweeps legacy rows no run gives", async () => {
+    const { t, ids } = await publisherCatalog();
+    const settled = await catalogState(t);
+    // As the rebuild before seriesCreditRuns left the catalog: run fields
+    // on each credit, and one credit nothing gives any more.
+    await toLegacy(t);
+    const legacyCount = await t.run(async (ctx) => {
+      const stray = (await ctx.db.query("people").collect()).find(
+        (p) => p.name === "Peko Watanabe",
+      )!;
+      await ctx.db.insert("seriesCredits", {
+        seriesId: ids.ghost,
+        personId: stray._id,
+        role: "art",
+        rebuiltAt: 0,
+      });
+      return (await ctx.db.query("seriesCredits").collect()).length;
+    });
+    const first = await countWrites(() => t.action(internal.people.rebuild, {}));
+    expect(await catalogState(t)).toEqual(settled);
+    const rows = await t.run((ctx) => ctx.db.query("seriesCredits").collect());
+    for (const row of rows) {
+      expect([row.rebuiltAt, row.runRole, row.runNames, row.runApart]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    }
+    // Each kept row cleared once, the stray deleted.
+    expect(first.seriesCredits).toBe(legacyCount);
+    const second = await countWrites(() => t.action(internal.people.rebuild, {}));
+    expect(second.seriesCredits ?? 0).toBe(0);
+  });
+});
+
+/** Move every run row's fields onto its credit and delete it, as the rebuild before `seriesCreditRuns` kept them. */
+const toLegacy = (t: TestT) =>
+  t.run(async (ctx) => {
+    for (const run of await ctx.db.query("seriesCreditRuns").collect()) {
+      const { rebuiltAt, runRole, runNames, runApart } = run;
+      await ctx.db.patch(run.creditId, { rebuiltAt, runRole, runNames, runApart });
+      await ctx.db.delete(run._id);
+    }
+  });
+
+type DeployPhase = "publisher" | "sweep" | "settle";
+
+/**
+ * Run a rebuild's batches by hand up to `phase` (in "publisher", PRH's
+ * pass alone is done), and return its continuation: no `version`, and in
+ * "settle" a cursor this deployment's settle query can't read.
+ */
+async function rebuildUpTo(t: TestT, phase: DeployPhase) {
+  const startedAt = Date.now() + 1000;
+  let after: string | null = null;
+  do {
+    ({ next: after } = await t.mutation(internal.people.creditBatch, {
+      after,
+      rebuiltAt: startedAt,
+    }));
+  } while (after !== null);
+  for (const sourceKey of phase === "publisher" ? ["prh"] : ["prh", "sevenseas", "kodansha"]) {
+    do {
+      ({ next: after } = await t.mutation(internal.people.publisherBatch, {
+        sourceKey,
+        after,
+        rebuiltAt: startedAt,
+      }));
+    } while (after !== null);
+  }
+  if (phase === "settle") {
+    while ((await t.mutation(internal.people.sweepCredits, { before: startedAt })) > 0);
+  }
+  return {
+    startedAt,
+    phase,
+    source: phase === "publisher" ? 1 : 0,
+    cursor: phase === "settle" ? "a cursor over seriesCredits.by_rebuiltAt" : null,
+    afterPublicId: null,
+    publisherError: null,
+    credits: 0,
+    publisherCredits: 1000,
+    swept: 0,
+    pruned: 0,
+    people: 0,
+  };
+}
+
+/**
+ * A run cut off by the deploy that brought `seriesCreditRuns`: it stamped
+ * and tallied rows on the credits themselves, and settle reads only run
+ * rows. Each catalog holds a role a settle must lower and two rows for
+ * near spellings a settle must fold, as the code before it would.
+ */
+describe("people.rebuild resumed across the deploy that brought seriesCreditRuns", () => {
+  /** A catalog whose next run lowers Kaneshiro's and Peko Watanabe's roles. */
+  async function loweringCatalog() {
+    const { t, ids } = await publisherCatalog();
+    const ruin = await observationOf(t, "prh", "9781646516650");
+    await t.run((ctx) =>
+      ctx.db.patch(ruin._id, {
+        snapshot: { kind: "prhTitle", author: "Story and Art by Muneyuki Kaneshiro" },
+      }),
+    );
+    await t.action(internal.people.rebuild, {});
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ruin._id, { snapshot: ruin.snapshot });
+      // A fuller role than Kodansha's lists give, from an earlier run.
+      const peko = (await ctx.db.query("people").collect()).find(
+        (p) => p.name === "Peko Watanabe",
+      )!;
+      const row = (await ctx.db.query("seriesCredits").collect()).find(
+        (c) => c.personId === peko._id,
+      )!;
+      await ctx.db.patch(row._id, { role: "story_art" });
+    });
+    return { t, ids };
+  }
+
+  /** The variant catalog with a second Hellbound row, for Choi's spelling. */
+  async function foldingCatalog() {
+    const { t, ids } = await variantCatalog();
+    await t.run(async (ctx) => {
+      const personId = await insertPersonRow(ctx, {
+        publicId: 4318,
+        name: "Choi Gyu-Seok",
+        seriesCount: 1,
+      });
+      await insertCredit(
+        ctx,
+        { seriesId: ids.hellbound, personId, role: "art", source: "prh" },
+        { rebuiltAt: 0 },
+      );
+    });
+    return { t, ids };
+  }
+
+  /** The credits once resumed, after checking a further run changes none of them. */
+  async function settledCredits(t: TestT) {
+    const { credits } = await catalogState(t);
+    const legacy = (await t.run((ctx) => ctx.db.query("seriesCredits").collect())).filter(
+      (row) =>
+        row.rebuiltAt !== undefined || row.runRole !== undefined || row.runNames !== undefined,
+    );
+    expect(legacy).toEqual([]);
+    await t.action(internal.people.rebuild, {});
+    expect((await catalogState(t)).credits).toEqual(credits);
+    return credits;
+  }
+
+  it.each<DeployPhase>(["publisher", "sweep", "settle"])(
+    "starts over from %s, settling as the run it replaces would have",
+    async (phase) => {
+      const lowering = await loweringCatalog();
+      const state = await rebuildUpTo(lowering.t, phase);
+      await toLegacy(lowering.t);
+      const result = await lowering.t.action(internal.people.rebuild, { state });
+      // Counted afresh, not carried on from the old run.
+      expect(result.continued).toBe(false);
+      expect(result.publisherCredits).not.toBe(1000);
+      expect(await creditLines(lowering.t, lowering.ids.ruin)).toEqual([
+        "Muneyuki Kaneshiro: story (prh)",
+        "Yusuke Nomura: art (prh)",
+      ]);
+      expect(await creditLines(lowering.t, lowering.ids.marriage)).toEqual([
+        "Co Author: author (creators)",
+        "Peko Watanabe: author (creators)",
+      ]);
+      await settledCredits(lowering.t);
+
+      const folding = await foldingCatalog();
+      const cutOff = await rebuildUpTo(folding.t, phase);
+      await toLegacy(folding.t);
+      await folding.t.action(internal.people.rebuild, { state: cutOff });
+      expect(await creditLines(folding.t, folding.ids.hellbound)).toEqual([
+        "Choe Gyu-Seok: art (prh)",
+        "Yeon Sang-Ho: story (prh)",
+      ]);
+      await settledCredits(folding.t);
+    },
+  );
+
+  it("resumes a continuation of this layout where it stopped", async () => {
+    const { t, ids } = await loweringCatalog();
+    const state = { ...(await rebuildUpTo(t, "settle")), version: REBUILD_VERSION, cursor: null };
+    const result = await t.action(internal.people.rebuild, { state });
+    expect(result).toMatchObject({ continued: false, publisherCredits: 1000 });
+    expect(await creditLines(t, ids.ruin)).toEqual([
+      "Muneyuki Kaneshiro: story (prh)",
+      "Yusuke Nomura: art (prh)",
+    ]);
+    expect(await creditLines(t, ids.marriage)).toEqual([
+      "Co Author: author (creators)",
+      "Peko Watanabe: author (creators)",
+    ]);
   });
 });
 

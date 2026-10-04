@@ -21,6 +21,7 @@ import { editionCoverage } from "./catalogPages";
 import { getActive, mergeSurvivor, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { boundedReads } from "./lib/boundedReads";
 import { releaseCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf } from "./lib/editionRows";
 import { releaseAnchor } from "./lib/titles";
@@ -198,34 +199,42 @@ export const seriesTracking = query({
     const user = await viewerOrNull(ctx);
     if (!user) return null;
     const series = await resolveActiveSeries(ctx, seriesPublicId);
-    if (!series) return null;
+    return series ? await seriesTrackingOf(ctx, user._id, series._id) : null;
+  },
+});
 
-    const state = await seriesStateRow(ctx, user._id, series._id);
-    const volumes = [];
-    for (const volume of await activeVolumes(ctx, series._id)) {
-      const progress = await volumeProgressRow(ctx, user._id, volume._id);
-      volumes.push({
+/** seriesTracking for a known viewer and Series; exported for its cost tests. */
+export async function seriesTrackingOf(ctx: QueryCtx, userId: Id<"users">, seriesId: Id<"series">) {
+  // Volume Progress rows carry no usable Series (schema.ts), so each
+  // Volume is looked up by (user, volume); the lookups go out together
+  // through one bounded queue (boundedReads), however long the Series runs.
+  const bounded = boundedReads(ctx);
+  const [state, active, passRows] = await Promise.all([
+    seriesStateRow(bounded, userId, seriesId),
+    activeVolumes(bounded, seriesId),
+    bounded.db
+      .query("releaseProgress")
+      .withIndex("by_user_series", (q) => q.eq("userId", userId).eq("seriesId", seriesId))
+      .collect(),
+  ]);
+  const volumes = await Promise.all(
+    active.map(async (volume) => {
+      const progress = await volumeProgressRow(bounded, userId, volume._id);
+      return {
         volumeId: volume._id,
         volumePublicId: volume.publicId,
         readCount: progress?.readCount ?? 0,
         lastCompletedAt: progress?.lastCompletedAt ?? null,
-      });
-    }
-    const passes = (
-      await ctx.db
-        .query("releaseProgress")
-        .withIndex("by_user_series", (q) => q.eq("userId", user._id).eq("seriesId", series._id))
-        .collect()
-    ).map((pass) => ({ releaseId: pass.releaseId, percent: pass.percent ?? null }));
-
-    return {
-      seriesId: series._id,
-      readingStatus: state?.readingStatus ?? null,
-      volumes,
-      passes,
-    };
-  },
-});
+      };
+    }),
+  );
+  return {
+    seriesId,
+    readingStatus: state?.readingStatus ?? null,
+    volumes,
+    passes: passRows.map((pass) => ({ releaseId: pass.releaseId, percent: pass.percent ?? null })),
+  };
+}
 
 /**
  * The viewer's pass state for one Release row. Null without a viewer or for

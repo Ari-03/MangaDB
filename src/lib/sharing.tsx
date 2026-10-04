@@ -12,11 +12,11 @@
 // get null from the queries, so the public pages render without the controls.
 
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { useReadyViewer } from "~/lib/viewer";
+import { useReadyViewer, useViewerQuery } from "~/lib/viewer";
 
 type Kind = "ownership" | "reading";
 type Visibility = "public" | "private";
@@ -136,7 +136,7 @@ const VISIBILITY_WORDS: Record<Visibility, string> = {
  * click or Escape. Renders nothing signed out.
  */
 export function SeriesVisibilityControls({ seriesPublicId }: { seriesPublicId: number }) {
-  const state = useQuery(api.sharing.seriesVisibility, { seriesPublicId });
+  const state = useViewerQuery(api.sharing.seriesVisibility, { seriesPublicId });
   const setOverride = useMutation(api.sharing.setSeriesVisibility);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);

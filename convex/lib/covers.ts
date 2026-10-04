@@ -1,7 +1,6 @@
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, QueryCtx } from "../_generated/server";
-import { todaySortKey } from "./dates";
 import { coveringOf, releasesOf } from "./editionRows";
 import { politeFetch } from "./http";
 
@@ -303,12 +302,16 @@ export type SeriesCoverCandidate = Pick<Doc<"releases">, "isbn13" | "format" | "
  * one is on file, else the earliest book that is. Stored per Series
  * (`seriesStats.coverIsbns`) and tried in turn by its cards, so the order
  * favours the Releases the cover upstreams know best.
+ *
+ * `today` is today's yyyymmdd (lib/dates.ts `todaySortKey`), the line
+ * between published and forthcoming. It has no default: a query that read
+ * the clock here would have its cached result expire within seconds, so
+ * queries take the day as an argument and only the rebuild reads a clock.
  */
 export function seriesCoverIsbns(
   candidates: ReadonlyArray<SeriesCoverCandidate>,
-  now: Date = new Date(),
+  today: number,
 ): string[] {
-  const today = todaySortKey(now);
   const published = (c: SeriesCoverCandidate) => {
     const sort = c.pubDate?.sort ?? 0;
     return sort > 0 && sort <= today;
@@ -343,10 +346,14 @@ export function statsCoverIsbns(
 
 /**
  * A jacket for a whole Series from its first few Volumes: the first stored
- * cover, else the `seriesCoverIsbns` candidates. Cheap enough for a
- * home-page shelf.
+ * cover, else the `seriesCoverIsbns` candidates ranked as of `today`
+ * (yyyymmdd). Cheap enough for a home-page shelf.
  */
-export async function seriesCover(ctx: QueryCtx, seriesId: Id<"series">): Promise<Jacket> {
+export async function seriesCover(
+  ctx: QueryCtx,
+  seriesId: Id<"series">,
+  today: number,
+): Promise<Jacket> {
   const volumes = await ctx.db
     .query("volumes")
     .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
@@ -373,5 +380,5 @@ export async function seriesCover(ctx: QueryCtx, seriesId: Id<"series">): Promis
       }
     }
   }
-  return { coverUrl: null, coverIsbns: seriesCoverIsbns(candidates) };
+  return { coverUrl: null, coverIsbns: seriesCoverIsbns(candidates, today) };
 }

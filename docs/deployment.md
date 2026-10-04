@@ -239,6 +239,11 @@ Visit the deployed URL. The home page is server-rendered on the Worker and
 shows live catalog counts fetched from Convex during SSR, so it proves the
 SSR to Convex round trip.
 
+Scripts and styles under `/assets/` should answer `Cache-Control: public,
+max-age=31536000, immutable` (`public/_headers`; their names carry a content
+hash, so a deploy gives changed files new URLs). The favicons and every page
+keep the default revalidation.
+
 ## Why it is built this way
 
 **One shared staging, not a deployment per branch.** Convex preview
