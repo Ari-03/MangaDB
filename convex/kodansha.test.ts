@@ -21,7 +21,7 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import { drain, expectStampedAtHandOff, makeT, seedRegistry, tickingClock, type TestT } from "./test.helpers";
 
 const BASE = "https://kodansha.us";
 
@@ -1411,8 +1411,11 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     stubBacklist([BLUE_LOCK, NEEDLES, NOVEL], BACKLIST_PAGES);
 
     // A one-fetch budget: each link finishes the series it started, then chains.
+    const clock = tickingClock();
     const first = await backlist(t, { maxFetches: 1 });
     expect(first).toMatchObject({ continued: true, seriesCrawled: 1 });
+    await expectStampedAtHandOff(t);
+    clock.mockRestore();
     await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();

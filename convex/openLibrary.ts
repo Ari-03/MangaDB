@@ -19,8 +19,8 @@
 //   match or creation review — OpenLibrary is crowd-sourced and
 //   weak-titled, so an ambiguous or structure-shaped record stays on its
 //   observation and waits for stronger sources. One a person could place
-//   (one active Series, a known publisher) is a Held Book; the rest are
-//   recorded nowhere (placeEdition). Its blurb
+//   (a known publisher, an active Series of its title) is a Held Book; the
+//   rest are recorded nowhere (placeEdition). Its blurb
 //   never queues against weak text another record wrote (ANN's, another
 //   edition's) either: the first text stays (lib/authority.ts)
 // - no withdrawal pass: the streamed file is an operator-filtered slice of
@@ -333,11 +333,16 @@ function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unkno
  * stored edition can be classified too (imports.backfillHolds):
  *
  * - `match`: the ladder found its Release (rungs ②–④); applyEdition links it.
- * - `review`: the ladder flagged it; the reason stays on the observation.
+ * - `review`: the ladder flagged a book no one could place (an unknown
+ *   publisher, no Series match, out of scope elsewhere); the reason stays on
+ *   the observation.
  * - `create`: a leaf Release under a Series, Volume and Publisher that all
  *   exist (rung ⑤).
- * - `hold`: a book a person could place, held for the Data Team: one active
- *   Series and a known Publisher, but the Volume it names does not exist
+ * - `hold`: a book a person could place, held for the Data Team: a known
+ *   Publisher and at least one active Series, but the ladder flagged its
+ *   ISBN or the Volume's Release in its format (`isbn`, rungs ②–③) or a
+ *   same-titled Series (`series`, rung ④), with the flag in `review` for
+ *   the observation; or it names one Series whose Volume does not exist
  *   (`volumeMissing`), its packaging cannot be mapped (`packaging`), the
  *   Series is locked or the title names several (`series`), or the Volume
  *   already has this publisher's Release in its format (`isbn`).
@@ -358,7 +363,7 @@ export async function placeEdition(
       volumeLabel: string | null;
       publisher: Doc<"publishers">;
     }
-  | { kind: "hold"; hold: Hold }
+  | { kind: "hold"; hold: Hold; review?: string }
   | { kind: "skip" }
 > {
   // Rungs ②–④ via the shared ladder; the publisher key resolves against
@@ -392,21 +397,37 @@ export async function placeEdition(
   };
   const match = await matchRelease(ctx, fact);
   if (match.kind === "match") return { kind: "match", release: match.release };
-  if (match.kind === "review") {
-    return { kind: "review", reason: `unmatched (rung ${match.rung}): ${match.reason}` };
-  }
+  // The ladder's flag, and the note it leaves on the observation.
+  const flag =
+    match.kind === "review"
+      ? { rung: match.rung, reason: match.reason, note: `unmatched (rung ${match.rung}): ${match.reason}` }
+      : null;
 
   // Rung ⑤ — the leaf-creation boundary: a single-volume Release whose
   // Series (unique title match), Volume (exact label), and Publisher all
   // already exist, with no Edition-Line shape. Anything else would define
   // structure, which OpenLibrary never does; what a person could place is
-  // held, the rest is skipped.
-  if (publisher === null || candidates.length === 0) return { kind: "skip" };
-  // A publisher feed that knows this ISBN outranks OpenLibrary's scope
-  // guess: Yen Press records its light novels and audio (by ISBN) as out of
-  // scope, and OpenLibrary titles rarely say "light novel".
-  if (snapshot.isbn13 !== undefined && (await outOfScopeElsewhere(ctx, snapshot.isbn13))) {
-    return { kind: "skip" };
+  // held, the rest is skipped. A publisher feed that knows this ISBN
+  // outranks OpenLibrary's scope guess: Yen Press records its light novels
+  // and audio (by ISBN) as out of scope, and OpenLibrary titles rarely say
+  // "light novel".
+  if (
+    publisher === null ||
+    candidates.length === 0 ||
+    (snapshot.isbn13 !== undefined && (await outOfScopeElsewhere(ctx, snapshot.isbn13)))
+  ) {
+    return flag !== null ? { kind: "review", reason: flag.note } : { kind: "skip" };
+  }
+  if (flag !== null) {
+    return {
+      kind: "hold",
+      review: flag.note,
+      hold: {
+        kind: flag.rung === 4 ? "series" : "isbn",
+        reason: `${flag.reason.charAt(0).toUpperCase()}${flag.reason.slice(1)}.`,
+        ...(candidates.length === 1 ? { seriesId: candidates[0]!._id } : {}),
+      },
+    };
   }
   if (candidates.length > 1) {
     return {
@@ -542,17 +563,21 @@ export const applyEdition = internalMutation({
       return { status: "linked", changed: true, releaseId: release._id };
     }
 
-    if (placement.kind === "review") {
-      // A flat crowd-sourced record is never worth a human's review slot on
-      // its own; the ambiguity stays on the observation for the record.
-      await clearHold(ctx, observation._id);
-      await ctx.db.patch(observation._id, {
-        conflicts: [{ field: "match", offered: snapshot.title, at: now, reason: placement.reason }],
+    // A flat crowd-sourced record is never worth a human's review slot on
+    // its own; the ladder's flag stays on the observation for the record.
+    const noteFlag = (reason: string) =>
+      ctx.db.patch(observation._id, {
+        conflicts: [{ field: "match", offered: snapshot.title, at: now, reason }],
       });
+
+    if (placement.kind === "review") {
+      await clearHold(ctx, observation._id);
+      await noteFlag(placement.reason);
       return { status: "recordOnly", changed: false };
     }
 
     if (placement.kind === "hold") {
+      if (placement.review !== undefined) await noteFlag(placement.review);
       await recordUnplaced(ctx, observation, placement.hold, now);
       return { status: "recordOnly", changed: false };
     }

@@ -18,7 +18,7 @@ import {
   toSnapshots,
 } from "./lib/yenPress";
 import { insertBundle, insertObservation, insertPublisher, insertSeries } from "./test.factories";
-import { bundleMembers, drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import { bundleMembers, drain, expectStampedAtHandOff, makeT, seedRegistry, tickingClock, type TestT } from "./test.helpers";
 
 // Trimmed first-party HTML fetched 2026-09-26; only fields used by the parser.
 const liveFixture = (name: string) =>
@@ -546,8 +546,11 @@ describe("yenPress.sync", () => {
       [IZE_URL]: IZE_BOX_PAGE,
     });
 
+    const clock = tickingClock();
     const first = await sync(t, { maxFetches: 1 });
     expect(first).toMatchObject({ continued: true, fetched: 1 });
+    await expectStampedAtHandOff(t);
+    clock.mockRestore();
     await drain(t);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();

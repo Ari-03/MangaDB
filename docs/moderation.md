@@ -127,7 +127,9 @@ lives on `/mod/launch`. See [imports](imports.md) for how both arise.
 The "Held books" section of `/mod/imports` (`imports.heldBooks`) lists the
 books an import observed but could not place, newest first, filtered by
 kind and source. Each row shows the source's own title, link and ISBN, the
-Series and label it proposes, the matched Series, the reason, and any
-Proposal already queued for it. A book leaves the list when an importer
-links its observation or its source stops listing it. The rows have no
-actions yet; see [imports](imports.md#held-books) for the kinds.
+Series and label it proposes, the matched Series, and the reason. A book
+leaves the list when an importer links its observation, queues a creation
+Proposal for it (it is then in the review queue), or its source stops
+listing it. Books no one can place or that are out of scope are not
+listed. The rows have no actions yet; see [imports](imports.md#held-books)
+for the kinds.

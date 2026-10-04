@@ -231,7 +231,8 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
       <p className="section-hint">
         Books a source lists that its import could not place: the Volume they name is missing,
         their packaging cannot be mapped, no single Series fits, or their ISBN or slot is taken.
-        A book leaves this list once it is linked or its source stops listing it.
+        A book leaves this list once it is linked, a creation Proposal is queued for it, or its
+        source stops listing it.
       </p>
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>
         <label>
@@ -292,11 +293,6 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
                   <a href={row.url} target="_blank" rel="noreferrer">
                     Source record
                   </a>
-                ) : null}
-                {row.proposal !== null ? (
-                  <Link to="/mod/proposal/$id" params={{ id: row.proposal.id }}>
-                    Proposal ({row.proposal.state})
-                  </Link>
                 ) : null}
               </div>
               {row.reason !== null ? <p className="import-hold-reason">{row.reason}</p> : null}

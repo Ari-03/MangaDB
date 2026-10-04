@@ -18,7 +18,7 @@ import {
   insertSourceRevision,
   insertVolume,
 } from "./test.factories";
-import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import { drain, expectStampedAtHandOff, makeT, seedRegistry, tickingClock, type TestT } from "./test.helpers";
 
 const DUMP_URL = "https://dumps.example.org/filtered.txt";
 
@@ -434,8 +434,11 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
       },
       CHAINSAW_22,
     ]);
+    const clock = tickingClock();
     const first = await sync(t, { maxLines: 2 });
     expect(first).toMatchObject({ continued: true, nextLine: 2 });
+    await expectStampedAtHandOff(t);
+    clock.mockRestore();
     await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();

@@ -1,13 +1,16 @@
 // Held Books: what an import could not place, listed for the Data Team
 // (imports.heldBooks). Covers the hold lifecycle (held, re-sighted, linked,
-// withdrawn), Open Library's held editions against the ones it still skips,
-// the list's gate, pages and filters, and the backfill of stored rows.
+// withdrawn, queued for review), Open Library's held editions against the
+// ones it still skips, ANN lines no one can place, the list's gate, pages
+// and filters, and the backfill of stored rows.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
-import { type Hold, linkObservation, recordUnplaced } from "./lib/observations";
+import { storedHoldKind } from "./imports";
+import { type Hold, type HoldKind, linkObservation, recordUnplaced } from "./lib/observations";
+import type { BookSnapshot } from "./lib/sevenSeas";
 import {
   insertCoverage,
   insertEdition,
@@ -65,7 +68,7 @@ async function aliceSkeleton(t: TestT) {
 const openLibrarySync = (t: TestT) => t.action(internal.openLibrary.sync, {});
 
 const asEditor = (t: TestT) => signedIn(t, carol);
-const list = (t: TestT, args: { kind?: Hold["kind"]; sourceKey?: string; numItems?: number; cursor?: string | null } = {}) =>
+const list = (t: TestT, args: { kind?: HoldKind; sourceKey?: string; numItems?: number; cursor?: string | null } = {}) =>
   asEditor(t).query(api.imports.heldBooks, {
     paginationOpts: { numItems: args.numItems ?? 25, cursor: args.cursor ?? null },
     ...(args.kind !== undefined ? { kind: args.kind } : {}),
@@ -103,7 +106,6 @@ describe("Open Library holds", () => {
         seriesTitle: "Alice in Borderland",
         volumeLabel: "1",
         series: { publicId: 7, title: "Alice in Borderland" },
-        proposal: null,
       }),
     ]);
     const observation = await observationOf(t, "/books/OL1M");
@@ -239,6 +241,51 @@ describe("Open Library holds", () => {
       ["/books/OL2M", "volumeMissing", 2_000_000],
     ]);
   });
+
+  it("keeps an edition held when another Series' Release takes its ISBN, and the backfill agrees", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, carol]);
+    const { publisherId } = await aliceSkeleton(t);
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    expect((await list(t)).page.map((row) => row.kind)).toEqual(["volumeMissing"]);
+    await t.run(async (ctx) => {
+      const other = await insertSeries(ctx, { publicId: 8, title: "Unrelated Story" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertRelease(ctx, { editionId, publisherId, seriesIds: [other], isbn13: "9781974728374" });
+    });
+    stubDump([alice1]);
+    await openLibrarySync(t);
+
+    const held = [
+      expect.objectContaining({
+        sourceRecordId: "/books/OL1M",
+        kind: "isbn",
+        reason: "ISBN 9781974728374 matches an existing release with a dissimilar title.",
+        series: { publicId: 7, title: "Alice in Borderland" },
+      }),
+    ];
+    expect((await list(t)).page).toEqual(held);
+    const observation = await observationOf(t, "/books/OL1M");
+    expect(observation?.recordRef).toBeUndefined();
+    expect(observation?.conflicts?.map((c) => [c.field, c.reason])).toEqual([
+      ["match", "unmatched (rung 2): ISBN 9781974728374 matches an existing release with a dissimilar title"],
+      ["placement", "ISBN 9781974728374 matches an existing release with a dissimilar title."],
+    ]);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      expect(await ctx.db.query("proposals").collect()).toEqual([]);
+    });
+
+    // Classified afresh, the stored edition is held the same way.
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("placementHolds").collect()) await ctx.db.delete(row._id);
+    });
+    await t.mutation(internal.imports.backfillHolds, {});
+    await drain(t);
+    expect((await list(t)).page).toEqual(held);
+  });
 });
 
 describe("the hold lifecycle", () => {
@@ -287,7 +334,7 @@ describe("the hold lifecycle", () => {
     await t.run(async (ctx) => {
       await held(ctx, "ann", "release:1", { kind: "volumeMissing", reason: "No Volume 3 under the Series." }, 10);
       await held(ctx, "openlibrary", "/books/OL9M", { kind: "volumeMissing", reason: "Missing." }, 20);
-      await held(ctx, "ann", "release:2", { kind: "other", reason: "ANN lists no ISBN for this release." }, 30);
+      await held(ctx, "ann", "release:2", { kind: "other", reason: 'Distributor "Unheard Of Press" resolves to no publisher row.' }, 30);
     });
     await expect(
       signedIn(t, dave).query(api.imports.heldBooks, { paginationOpts: { numItems: 5, cursor: null } }),
@@ -304,6 +351,129 @@ describe("the hold lifecycle", () => {
     expect(await ids({ sourceKey: "ann" })).toEqual(["release:2", "release:1"]);
     expect(await ids({ sourceKey: "ann", kind: "volumeMissing" })).toEqual(["release:1"]);
     expect(await ids({ sourceKey: "prh" })).toEqual([]);
+  });
+});
+
+/** A Seven Seas Deluxe Edition whose listing states no coverage. */
+const deluxe: BookSnapshot = {
+  kind: "book",
+  url: "https://sevenseasentertainment.com/books/alpha-deluxe-1/",
+  title: "Alpha Deluxe Edition 1",
+  modifiedGmt: "2026-01-01",
+  seriesTitle: "Alpha",
+  seriesSlug: "alpha",
+  creators: [],
+  isbn13: "9781999000417",
+  packaging: { lineName: "Deluxe Edition", linePosition: "1", coverRange: null },
+};
+
+const applySevenSeas = (t: TestT, snapshot: BookSnapshot) =>
+  t.mutation(internal.sevenSeas.applyBook, { sourceRecordId: "101", snapshot });
+
+/**
+ * Hold the Deluxe Edition for packaging, then let a later sync find its
+ * coverage, which queues a creation Proposal outside Bootstrap Mode.
+ * Returns the observation as queued.
+ */
+async function heldThenQueued(t: TestT) {
+  await seedRegistry(t, false);
+  await seedTeam(t, [alice, carol]);
+  await t.run((ctx) => insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" }));
+  await applySevenSeas(t, deluxe);
+  expect((await list(t)).page.map((row) => [row.kind, row.reason])).toEqual([
+    ["packaging", expect.stringContaining("an Editor maps it.")],
+  ]);
+  await applySevenSeas(t, { ...deluxe, description: "Collects volumes 1-3 in hardcover." });
+  const observation = await t.run((ctx) => ctx.db.query("sourceObservations").first());
+  expect(observation?.queuedProposalId).toBeDefined();
+  expect(observation?.conflicts?.find((c) => c.field === "placement")).toBeUndefined();
+  expect((await list(t)).page).toEqual([]);
+  return observation!;
+}
+
+describe("a queued Proposal takes the book off the list", () => {
+  it("held, queued, then approved: the Release exists and the book stays off the list", async () => {
+    const t = makeT();
+    const observation = await heldThenQueued(t);
+    const result = await signedIn(t, alice).mutation(api.proposals.approveProposal, {
+      proposalId: observation.queuedProposalId!,
+    });
+    expect(result.status).toBe("approved");
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(1);
+    expect((await list(t)).page).toEqual([]);
+    // Approval does not link the observation.
+    expect((await t.run((ctx) => ctx.db.get(observation._id)))?.recordRef).toBeUndefined();
+  });
+
+  it("held, queued, then rejected: off the list, and a later hold is a note only", async () => {
+    const t = makeT();
+    const observation = await heldThenQueued(t);
+    await signedIn(t, alice).mutation(api.proposals.rejectProposal, {
+      proposalId: observation.queuedProposalId!,
+      note: "Not a Deluxe Edition.",
+    });
+    expect((await list(t)).page).toEqual([]);
+    // The listing drops its coverage again: the reason is noted, not listed.
+    await applySevenSeas(t, deluxe);
+    expect((await list(t)).page).toEqual([]);
+    const conflicts = (await t.run((ctx) => ctx.db.get(observation._id)))?.conflicts;
+    expect(conflicts?.find((c) => c.field === "placement")?.reason).toContain("an Editor maps it.");
+  });
+});
+
+describe("ANN lines", () => {
+  /** An unlinked ANN line of manga 10 ("Alpha" vol. 1). */
+  const insertLine = (ctx: MutationCtx, annId: string) =>
+    insertObservation(ctx, {
+      sourceKey: "ann",
+      sourceRecordId: `release:${annId}`,
+      snapshot: {
+        kind: "annRelease",
+        annId,
+        mangaId: "10",
+        url: `https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${annId}`,
+        title: "Alpha",
+        label: "1",
+        multi: false,
+        format: "physical",
+        editionLineHint: false,
+      },
+    });
+
+  const placePage = (t: TestT, annId: string, page: { isbn13?: string; distributor?: string }) =>
+    t.mutation(internal.ann.applyReleasePage, { annId, page: { status: "ok", fetchedAt: Date.now(), ...page } });
+
+  it("notes a line no one can place without listing it, and lists one someone can act on", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, carol]);
+    await t.run(async (ctx) => {
+      const seriesId = await insertSeries(ctx, { publicId: 3, title: "Alpha" });
+      await insertObservation(ctx, { sourceKey: "ann", sourceRecordId: "manga:10", recordRef: { type: "series", id: seriesId } });
+      // Line 1 was listed before lines like it were left off.
+      const id = await insertLine(ctx, "1");
+      await recordUnplaced(ctx, (await ctx.db.get(id))!, { kind: "other", reason: "ANN lists no ISBN for this release." }, 1);
+      await insertLine(ctx, "2");
+      await insertLine(ctx, "3");
+    });
+    expect((await list(t)).page).toHaveLength(1);
+    await placePage(t, "1", {});
+    await placePage(t, "2", { isbn13: "9781999000424", distributor: "Yen On" });
+    await placePage(t, "3", { isbn13: "9781999000431", distributor: "Unheard Of Press" });
+
+    expect((await list(t)).page.map((row) => [row.sourceRecordId, row.kind, row.series?.publicId])).toEqual([
+      ["release:3", "other", 3],
+    ]);
+    const notes = await t.run(async (ctx) =>
+      (await ctx.db.query("sourceObservations").collect())
+        .filter((o) => o.sourceRecordId.startsWith("release:"))
+        .map((o) => [o.sourceRecordId, o.conflicts?.find((c) => c.field === "placement")?.reason]),
+    );
+    expect(notes).toEqual([
+      ["release:1", "ANN lists no ISBN for this release."],
+      ["release:2", '"Yen On" is a prose imprint: out of manga scope.'],
+      ["release:3", 'Distributor "Unheard Of Press" resolves to no publisher row.'],
+    ]);
   });
 });
 
@@ -418,5 +588,117 @@ describe("imports.backfillHolds", () => {
     await t.mutation(internal.imports.backfillHolds, {});
     await drain(t);
     expect((await list(t)).page).toEqual(rows);
+  });
+
+  it("keeps every hold an importer wrote, so a rerun after a live sighting changes nothing", async () => {
+    const t = makeT();
+    await seedTeam(t, [alice, carol]);
+    const kodanshaReason = '"Alpha Omnibus 1" is Omnibus of "Alpha" with no stated coverage — an Editor maps it.';
+    const { seriesId, kodansha } = await t.run(async (ctx) => {
+      const seriesId = await insertSeries(ctx, { publicId: 3, title: "Alpha" });
+      // ANN's page pass held this line under its Series.
+      const annLine = await insertObservation(ctx, { sourceKey: "ann", sourceRecordId: "release:1" });
+      const missing = { kind: "volumeMissing", reason: "No Volume 1 under the Series.", seriesId } as const;
+      await recordUnplaced(ctx, (await ctx.db.get(annLine))!, missing, 100);
+      // A kind its reason alone does not name.
+      const prh = await insertObservation(ctx, { sourceKey: "prh", sourceRecordId: "9780000000003" });
+      await recordUnplaced(ctx, (await ctx.db.get(prh))!, { kind: "series", reason: "A reason only its importer reads." }, 200);
+      // Noted before holds existed.
+      const kodansha = await insertObservation(ctx, {
+        sourceKey: "kodansha",
+        sourceRecordId: "alpha-omnibus-1",
+        conflicts: [{ field: "placement", offered: null, at: 300, reason: kodanshaReason }],
+      });
+      return { seriesId, kodansha };
+    });
+    const holds = () => t.run((ctx) => ctx.db.query("placementHolds").collect());
+    const backfill = async () => {
+      await t.mutation(internal.imports.backfillHolds, {});
+      await drain(t);
+    };
+    const before = await holds();
+    await backfill();
+    const after = await holds();
+    expect(after.slice(0, 2)).toEqual(before);
+    expect(after[2]).toMatchObject({ observationId: kodansha, kind: "packaging", heldAt: 300 });
+
+    // Kodansha sees the book again, now with its Series.
+    await t.run(async (ctx) =>
+      recordUnplaced(ctx, (await ctx.db.get(kodansha))!, { kind: "packaging", reason: kodanshaReason, seriesId }, 400),
+    );
+    const sighted = await holds();
+    expect(sighted[2]).toMatchObject({ kind: "packaging", heldAt: 300, seriesId });
+    await backfill();
+    expect(await holds()).toEqual(sighted);
+  });
+
+  it("removes a hold no longer held: queued for review, unplaceable, or out of scope elsewhere", async () => {
+    const t = makeT();
+    const queued = await heldThenQueued(t);
+    await aliceSkeleton(t);
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    const annLine = await t.run(async (ctx) => {
+      // Rows written before such books were left off the list.
+      await ctx.db.insert("placementHolds", { observationId: queued._id, sourceKey: queued.sourceKey, kind: "packaging", heldAt: 1 });
+      const annLine = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:1",
+        conflicts: [{ field: "placement", offered: null, at: 2, reason: "ANN lists no ISBN for this release." }],
+      });
+      await ctx.db.insert("placementHolds", { observationId: annLine, sourceKey: "ann", kind: "other", heldAt: 2 });
+      // Yen Press has since filed the Open Library edition's ISBN out of scope.
+      await insertObservation(ctx, {
+        sourceKey: "yenpress",
+        sourceRecordId: "9781974728374",
+        snapshot: { outOfScope: "category light-novels" },
+      });
+      return annLine;
+    });
+    expect((await list(t)).page).toHaveLength(3);
+
+    await t.mutation(internal.imports.backfillHolds, {});
+    await drain(t);
+    expect((await list(t)).page).toEqual([]);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(annLine))?.conflicts).toHaveLength(1);
+    });
+    expect((await observationOf(t, "/books/OL1M"))?.conflicts ?? []).toEqual([]);
+  });
+});
+
+describe("storedHoldKind", () => {
+  it("reads each importer's reason as the kind that importer assigns, or as unlisted", () => {
+    const reasons: Array<[string, HoldKind | null]> = [
+      // ann.ts applyReleasePage
+      ["ANN lists no ISBN for this release.", null],
+      ["ISBN 9781974728374 is on a Release an Editor hid — not recreated.", "isbn"],
+      ["ISBN 9781974728374 is already on a Release of another Series — a duplicate-Series question for an Editor.", "isbn"],
+      ["Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.", "packaging"],
+      ["A store-exclusive or variant cover: never a Release of its own.", null],
+      ["The manga entry has no linked active Series.", "series"],
+      ["The Series is locked.", "series"],
+      ["The release page names no distributor.", "other"],
+      ['"Yen On" is a prose imprint: out of manga scope.', null],
+      ['"Kana" publishes in another language: out of English scope.', null],
+      ['Distributor "Unheard Of Press" resolves to no publisher row.', "other"],
+      ["Omnibus 3 would cover Volumes 7–9, but the Series lacks 9.", "volumeMissing"],
+      ["Omnibus of unknown size: steady state leaves unmapped packaging to review.", "packaging"],
+      ["Omnibus 3: steady state leaves Edition Line creation to review.", "packaging"],
+      ["No Volume 4 under the Series.", "volumeMissing"],
+      ["Volume 4 already has a physical VIZ Media Release (ISBN 9781974700011): a reprint or variant, not created.", "isbn"],
+      // lib/catalogTitle.ts (PRH, Yen Press)
+      ['Box set "Alpha Box Set" has no unique base Series.', "series"],
+      ['Box set "Alpha Box Set" is a Release Bundle — steady state leaves bundles to review.', "packaging"],
+      ['"Alpha Omnibus 1" is packaging (Omnibus) whose covered Volumes the title does not state — an Editor maps it.', "packaging"],
+      // sevenSeas.ts
+      ['Box set "Alpha Box Set" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.', "packaging"],
+      ['"Alpha Deluxe Edition 1" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.', "packaging"],
+      // kodansha.ts
+      ['"Alpha Omnibus 1" is Omnibus of "Alpha" with no stated coverage — an Editor maps it.', "packaging"],
+      // lib/pipeline.ts removedSeriesFor, for every importer
+      ['"Alpha" is Series 3 ("Alpha"), which an Editor hid — not recreated by an import.', "series"],
+    ];
+    expect(reasons.map(([reason]) => [reason, storedHoldKind(reason)])).toEqual(reasons);
   });
 });

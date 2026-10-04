@@ -133,6 +133,8 @@ export const holdKind = v.union(
   // Its ISBN is already held elsewhere, or its Volume already has the
   // publisher's Release in that format.
   v.literal("isbn"),
+  // Anything else a person could act on: ANN names no distributor, or one
+  // with no publisher row.
   v.literal("other"),
 );
 
@@ -688,8 +690,9 @@ export default defineSchema({
     .index("by_source_seen", ["sourceKey", "lastSeenAt"]),
 
   // Held Books (CONTEXT.md): one row per unlinked, non-withdrawn
-  // observation an import holds (lib/observations.ts recordUnplaced),
-  // removed when it is linked or withdrawn. A table of its own, so the list
+  // observation with no queued Proposal that an import holds
+  // (lib/observations.ts recordUnplaced), removed when it is linked,
+  // withdrawn, or queued for review. A table of its own, so the list
   // has small indexes and adding them never backfills sourceObservations.
   placementHolds: defineTable({
     observationId: v.id("sourceObservations"),

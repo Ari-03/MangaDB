@@ -40,7 +40,7 @@ import { coverageOf, coveringOf, releasesOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
-import { getObservation, linkObservation, recordUnplaced, upsertObservation } from "./observations";
+import { clearHold, getObservation, linkObservation, recordUnplaced, upsertObservation } from "./observations";
 import { applyRetrying } from "./occ";
 import { allocatePublicId } from "./publicIds";
 import {
@@ -1754,7 +1754,9 @@ async function queueEditionLine(
  * These land in the shared review queue (proposals.ts); a Moderator's
  * approval applies the ops via the creation registry. The observation
  * remembers the proposal (queuedProposalId) so an unchanged snapshot never
- * re-queues — not while one is open, and not after a rejection.
+ * re-queues — not while one is open, and not after a rejection. From here
+ * the book is the review queue's, never a Held Book (clearHold), whatever
+ * the Proposal's outcome.
  */
 export async function queueCreationProposal(
   ctx: MutationCtx,
@@ -1868,5 +1870,6 @@ export async function queueCreationProposal(
     now: args.now,
   });
   await ctx.db.patch(args.observation._id, { queuedProposalId: proposalId });
+  await clearHold(ctx, args.observation._id);
   return proposalId;
 }

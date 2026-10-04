@@ -24,7 +24,7 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
+import { drain, expectStampedAtHandOff, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 type FixtureRelease = {
   annId: number;
@@ -1902,6 +1902,7 @@ describe("ann — release-page descriptions", () => {
     const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
     slowClock();
     expect(await syncPages(t)).toMatchObject({ continued: true, fetched: 1 });
+    await expectStampedAtHandOff(t);
     await runScheduled(t);
     // Each of this test's pages exactly once (a late timer from an earlier
     // test can add another fixture's id to the shared log).

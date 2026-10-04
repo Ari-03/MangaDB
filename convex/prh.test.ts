@@ -20,7 +20,7 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { alice, bundleMembers, drain, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { alice, bundleMembers, drain, expectStampedAtHandOff, makeT, seedRegistry, seedTeam, signedIn, tickingClock, type TestT } from "./test.helpers";
 
 type FixtureTitle = {
   isbn: string;
@@ -1008,9 +1008,12 @@ describe("prh.sync — continuation links", () => {
     stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
     // Two one-page imprints and a zero budget: the first link must hand off
     // after imprint one even though no page boundary triggered a check.
+    const clock = tickingClock();
     const first = await sync(t, { imprints: ["AA", "BB"], linkBudgetMs: 0 });
     expect(first).toMatchObject({ continued: true });
     expect(requestedUrls).toHaveLength(1);
+    await expectStampedAtHandOff(t);
+    clock.mockRestore();
     await drain(t);
     expect(requestedUrls).toHaveLength(2);
     expect(requestedUrls[1]).toContain("/imprints/BB/");

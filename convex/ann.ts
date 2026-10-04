@@ -1266,8 +1266,10 @@ export const applyReleasePage = internalMutation({
       return { status: fetched ? "stored" : "skipped", changed };
     }
     const citation = await pageCitation(ctx, annId);
-    // `seriesId`: the line's active Series, once it is known.
-    const hold = async (kind: HoldKind, reason: string, seriesId?: Id<"series">): Promise<PlaceResult> => {
+    // `seriesId`: the line's active Series, once it is known. A null kind
+    // keeps the reason for a line no one can place or that is out of scope,
+    // off the Held Books list.
+    const hold = async (kind: HoldKind | null, reason: string, seriesId?: Id<"series">): Promise<PlaceResult> => {
       const held = await recordUnplaced(
         ctx,
         observation!,
@@ -1278,7 +1280,7 @@ export const applyReleasePage = internalMutation({
     };
 
     const isbn13 = page.isbn13 ?? line.isbn13;
-    if (isbn13 === undefined) return await hold("other", "ANN lists no ISBN for this release.");
+    if (isbn13 === undefined) return await hold(null, "ANN lists no ISBN for this release.");
 
     // The Series: the manga entry's rung-① link, through any repair merge.
     const mangaObs = await getObservation(ctx, SOURCE_KEY, `manga:${line.mangaId}`);
@@ -1315,7 +1317,7 @@ export const applyReleasePage = internalMutation({
       return await hold("packaging", "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
     }
     if (VARIANT_LINE.test(line.title)) {
-      return await hold("other", "A store-exclusive or variant cover: never a Release of its own.");
+      return await hold(null, "A store-exclusive or variant cover: never a Release of its own.");
     }
     if (!series || series.status !== "active") {
       return await hold("series", "The manga entry has no linked active Series.");
@@ -1325,10 +1327,10 @@ export const applyReleasePage = internalMutation({
     const distributor = page.distributor;
     if (distributor === undefined) return await hold("other", "The release page names no distributor.", series._id);
     if (NOVEL_DISTRIBUTORS.test(distributor)) {
-      return await hold("other", `"${distributor}" is a prose imprint: out of manga scope.`, series._id);
+      return await hold(null, `"${distributor}" is a prose imprint: out of manga scope.`, series._id);
     }
     if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
-      return await hold("other", `"${distributor}" publishes in another language: out of English scope.`, series._id);
+      return await hold(null, `"${distributor}" publishes in another language: out of English scope.`, series._id);
     }
     const publisher = await findPublisherByName(ctx, distributor);
     if (!publisher) {

@@ -146,6 +146,26 @@ export async function drain(t: Pick<Accessor, "finishAllScheduledFunctions">) {
   }
 }
 
+/** A clock that moves a millisecond at each reading, so no two stamps share a time; mockRestore() stops it. */
+export function tickingClock() {
+  let now = Date.now();
+  return vi.spyOn(Date, "now").mockImplementation(() => (now += 1));
+}
+
+/**
+ * Expect the latest run stamped after every observation it wrote: the
+ * stamp a link writes as it hands off to its continuation
+ * (lib/importRuns.ts stampHandOff). Run the link under tickingClock.
+ */
+export async function expectStampedAtHandOff(t: Pick<Accessor, "run">) {
+  await t.run(async (ctx) => {
+    const [run] = await ctx.db.query("importRuns").order("desc").take(1);
+    const observations = await ctx.db.query("sourceObservations").collect();
+    expect(observations.length).toBeGreaterThan(0);
+    expect(run?.lastActivityAt).toBeGreaterThan(Math.max(...observations.map((o) => o.lastSeenAt)));
+  });
+}
+
 /**
  * A Release Bundle's memberships in bundle order (by `order`, then
  * creation), each with its Release. Without `bundleId`, the only bundle in

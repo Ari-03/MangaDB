@@ -7,9 +7,11 @@
 // review its withdrawal queued is retired with it.
 //
 // A record an import cannot place is held (recordUnplaced): its reason is
-// the observation's `placement` note, and an unlinked, non-withdrawn one is
-// listed as a Held Book (`placementHolds`). Linking it (linkObservation) or
-// withdrawing it clears both (clearHold).
+// the observation's `placement` note, and one a person could act on is
+// listed as a Held Book (`placementHolds`) while it is unlinked, not
+// withdrawn, and has no queued Proposal. Linking it (linkObservation),
+// withdrawing it, or queuing a creation Proposal for it clears both
+// (clearHold).
 
 import type { Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -19,8 +21,13 @@ import { sameValue } from "./values";
 
 export type HoldKind = Infer<typeof holdKind>;
 
-/** Why an import holds a record, and the active Series it resolved, if any. */
-export type Hold = { kind: HoldKind; reason: string; seriesId?: Id<"series"> };
+/**
+ * Why an import holds a record, and the active Series it resolved, if any.
+ * A null `kind` is a record no one can place or that is out of scope (no
+ * ISBN, a variant cover, a prose or foreign-language imprint): its note is
+ * kept for the record, but it is never listed.
+ */
+export type Hold = { kind: HoldKind | null; reason: string; seriesId?: Id<"series"> };
 
 export async function getObservation(
   ctx: QueryCtx | MutationCtx,
@@ -166,11 +173,13 @@ export async function holdOf(
 /**
  * Leave a record the importer cannot place on its observation (spec §6:
  * record, never guess): the reason becomes its `placement` note, and an
- * unlinked, non-withdrawn observation is listed as a Held Book of
- * `hold.kind`. A re-sighting of the same hold keeps its place in the list
- * (`heldAt`); a new kind moves it to the top. A linked observation (a box
- * set placed as a Release Bundle that now names another Series) carries the
- * note only. Returns whether anything was written.
+ * unlinked, non-withdrawn observation with no queued Proposal is listed as
+ * a Held Book of `hold.kind`. A re-sighting of the same hold keeps its
+ * place in the list (`heldAt`); a new kind moves it to the top. An
+ * unlisted hold (null kind), a linked observation (a box set placed as a
+ * Release Bundle that now names another Series), and one whose creation
+ * Proposal was queued (the review queue has it) carry the note only, and
+ * any row they had is removed. Returns whether anything was written.
  */
 export async function recordUnplaced(
   ctx: MutationCtx,
@@ -188,20 +197,26 @@ export async function recordUnplaced(
     });
     changed = true;
   }
-  if (current.recordRef !== undefined || current.withdrawn) return changed;
   const row = await holdOf(ctx, current._id);
+  const listed = current.recordRef === undefined && !current.withdrawn && current.queuedProposalId === undefined;
+  const kind = listed ? hold.kind : null;
+  if (kind === null) {
+    if (row === null) return changed;
+    await ctx.db.delete(row._id);
+    return true;
+  }
   if (row === null) {
     await ctx.db.insert("placementHolds", {
       observationId: current._id,
       sourceKey: current.sourceKey,
-      kind: hold.kind,
+      kind,
       heldAt: now,
       ...(hold.seriesId !== undefined ? { seriesId: hold.seriesId } : {}),
     });
     return true;
   }
-  if (row.kind !== hold.kind) {
-    await ctx.db.patch(row._id, { kind: hold.kind, heldAt: now, seriesId: hold.seriesId });
+  if (row.kind !== kind) {
+    await ctx.db.patch(row._id, { kind, heldAt: now, seriesId: hold.seriesId });
     return true;
   }
   if (row.seriesId !== hold.seriesId) {
@@ -213,8 +228,8 @@ export async function recordUnplaced(
 
 /**
  * Take the observation off the Held Books list and drop its `placement`
- * note: it was placed, withdrawn, or no longer held. Returns whether
- * anything was written.
+ * note: it was placed, withdrawn, queued for review, or no longer held.
+ * Returns whether anything was written.
  */
 export async function clearHold(
   ctx: MutationCtx,

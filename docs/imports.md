@@ -133,9 +133,10 @@ lists the current set.
 
 ### Held books
 
-A book an import observed but could not place is a Held Book. The importer
-records why as a `placement` note on its observation and lists an unlinked,
-non-withdrawn one in `placementHolds` with a kind:
+A book an import observed but could not place, and that a person could,
+is a Held Book. The importer records why as a `placement` note on its
+observation and lists an unlinked, non-withdrawn one with no queued
+Proposal in `placementHolds` with a kind:
 
 | Kind | Meaning | Recorded by |
 |---|---|---|
@@ -143,7 +144,17 @@ non-withdrawn one in `placementHolds` with a kind:
 | `packaging` | Packaging with no stated coverage, or a line member or box set steady state leaves to an Editor | Seven Seas, Kodansha, PRH and Yen Press, ANN's page pass, Open Library |
 | `series` | No single active Series: hidden, ambiguous, locked or not linked | every importer |
 | `isbn` | Its ISBN is on a hidden Release or another Series' Release, or its Volume already has the publisher's Release in that format | ANN's page pass, Open Library |
-| `other` | No ISBN, no or unknown distributor, a variant cover, a prose or foreign imprint | ANN's page pass |
+| `other` | ANN names no distributor, or one that resolves to no publisher row | ANN's page pass |
+
+A book no one can place, or that is out of scope, keeps its note for the
+record but is not listed: an ANN line with no ISBN, a variant cover, a
+prose imprint or a foreign-language distributor, and the Open Library
+editions described under "Open Library" below.
+
+Once an importer queues a creation Proposal for a book, the book is the
+review queue's: the hold and its note go, and a later hold of that
+observation is a note only, whether the Proposal is open, approved or
+rejected.
 
 A hold keeps the time it was first held while the importer sees the same
 kind again, and moves to the top when its kind changes. Linking the
@@ -156,20 +167,29 @@ Release Bundle names another Series keeps its note but is not held.
 `/mod/imports` lists Held Books newest first (`imports.heldBooks`, Data
 Team), filtered by kind and source, with the source's title, link and
 ISBN, the Series and label the source proposes, the matched Series, the
-reason, when it was first held and last listed, and any Proposal already
-queued for it.
+reason, and when it was first held and last listed.
 
 Holds recorded before the list existed, and Open Library editions skipped
 without a note, reach it through a backfill. It pages over every
-observation, continues itself, fetches nothing and writes no canonical
-record: it holds unlinked notes under the kind their reason names,
-classifies unlinked Open Library editions as the next run would, and drops
-`placement` notes left on linked observations (not on a Release Bundle).
-Run it once after deploying the list:
+observation, ten at a time, continues itself, fetches nothing and writes
+no canonical record. An observation that already has a hold keeps it as
+its importer wrote it (kind, first-held time, matched Series). Otherwise
+the backfill holds unlinked notes under the kind their reason names and
+leaves the unlisted ones as notes, classifies unlinked Open Library
+editions as the next run would, and drops `placement` notes left on
+linked observations (not on a Release Bundle). It removes only holds that
+are no longer held: a book with a queued Proposal, an ANN line no one can
+place, or an Open Library edition the next run would skip. Withdrawn
+observations are left alone. Run it once after deploying the list; it is
+safe to rerun:
 
 ```sh
 npx convex run imports:backfillHolds '{}'
 ```
+
+A page that fails (a transaction limit, say) ends the chain, and the
+error is in the function's logs. Rerun the command: it starts again from
+the first observation, and redoing the pages already done is harmless.
 
 ## Descriptions
 
@@ -273,7 +293,9 @@ fetched once and stored. The line then links by ISBN, or becomes a leaf
 Release under an existing Volume when the distributor matches a publisher
 row. It never creates a Series, Volume, publisher, packaging, variant
 cover, prose imprint, or a second same-format Release of a Volume from one
-publisher. Lines it cannot place are Held Books. The page's description fills
+publisher. Lines it cannot place are Held Books, except lines no one can
+place or that are out of scope (no ISBN, a variant cover, a prose imprint,
+a foreign-language distributor), which keep only their note. The page's description fills
 a blank Release Description at weak authority, and the pass refetches up
 to 2,000 linked pages a run to read descriptions. Citations link the
 Encyclopedia, as ANN's license requires.
@@ -370,12 +392,16 @@ ISBNs (standard), dates (weak), binding (standard) and a blank description
 An unmatched record may create only a leaf Release under a Series, Volume
 and publisher that all exist already, which is how most VIZ print Releases
 appear under the ANN backbone. It never queues reviews and never
-withdraws. An edition a person could place, under exactly one active
-Series and a known publisher, is a Held Book (`placeEdition`): its Volume
-is missing, its packaging cannot be mapped, the Series is locked, or the
-Volume already has that publisher's Release in its format. An edition with
-no Series match, an unknown publisher, or an ISBN Yen Press holds out of
-scope is skipped and recorded nowhere. Library rebinds (Turtleback, Perfection Learning) never count
+withdraws. An edition a person could place, with a known publisher and at
+least one active Series of its title, is a Held Book (`placeEdition`): its
+title names several Series, or names one whose Volume is missing, whose
+Series is locked, or whose Volume already has that publisher's Release in
+its format; its packaging cannot be mapped; or the matching ladder flagged
+it (`isbn` for its ISBN or a taken slot, `series` for a same-titled
+Series), in which case the flag also stays on the observation as a `match`
+note. An edition with no Series match, an unknown publisher, or an ISBN
+Yen Press holds out of scope is skipped and listed nowhere; a ladder flag
+on such an edition stays only as its `match` note. Library rebinds (Turtleback, Perfection Learning) never count
 as publishers. A Volume gets at most one Open Library leaf per (publisher,
 format). Only English editions enter: a non-English language, a
 non-English ISBN group (978-4 and the like), or no language and no
