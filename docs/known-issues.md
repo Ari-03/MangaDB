@@ -23,9 +23,23 @@ is fixed.
   offers deletion before a username is claimed, and deleting the Clerk
   sign-in alone could not be ordered against a claim landing during the
   request (the claim and its first rows would survive without a sign-in).
-  Someone who signed in but never claimed a username must have their
-  sign-in deleted in the Clerk dashboard; the Convex database holds
-  nothing for them.
+  Someone who signed in but never claimed a username can claim one and
+  then delete the account on `/me`, or have their sign-in deleted in the
+  Clerk dashboard; the Convex database holds nothing for them.
+- **A sign-in deleted in Clerk directly leaves its account behind.** The
+  site is not told when a sign-in is deleted from the Clerk dashboard, or
+  from the "Delete account" button in `<UserButton />`'s "Manage account"
+  window, which Clerk shows while the instance setting "Allow users to
+  delete their accounts" is on ([configuration](configuration.md#clerk)).
+  The `users` row, its username and every row the purge would delete
+  (public Ratings, Reviews and Comments among them) stay, with no sign-in
+  that can remove them, until an operator purges them: in
+  the Convex dashboard set `deletingSince` to the current time in
+  milliseconds on the `users` row whose `clerkSubject` is the deleted
+  Clerk user id, then run
+  `npx convex run users:purgeUser '{"userId":"…"}'`. The deletion then
+  finishes as one asked for on `/me` ([operations](operations.md#account-deletion));
+  Clerk answers the identity's deletion with a 404, which counts as done.
 
 ## Catalog and imports
 

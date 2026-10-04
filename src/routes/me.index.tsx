@@ -333,10 +333,12 @@ function DeleteAccountInner() {
  * before any sign-out. (useAuth's isLoaded is no signal here: the server's
  * auth state makes it true before clerk-js has loaded.) The deletion goes
  * ahead whether or not this works, so a failed sign-out says both, with
- * another try and a way off the page.
+ * another try and a way off the page. If clerk-js fails to load, that is
+ * a failed sign-out with only the way off; the wait offers the way off
+ * too, in case clerk-js never loads.
  */
 function SignOutDeleted() {
-  // useClerk re-renders on every Clerk status change, so `loaded` is live.
+  // useClerk re-renders on every Clerk status change, so `loaded` and `status` are live.
   const clerk = useClerk();
   const navigate = useNavigate();
   const [failed, setFailed] = useState(false);
@@ -360,10 +362,16 @@ function SignOutDeleted() {
     void signOut();
   }, [clerk.loaded, signOut]);
 
-  if (!failed) {
+  // Hotloading clerk-js failed: signOut() would only queue again.
+  const clerkFailed = clerk.status === "error";
+
+  if (!failed && !clerkFailed) {
     return (
       <div className="danger-zone">
         <p>Your account is being deleted. Signing you out…</p>
+        <div className="danger-actions">
+          <Link to="/">Leave this page</Link>
+        </div>
       </div>
     );
   }
@@ -375,9 +383,11 @@ function SignOutDeleted() {
         again, or leave this page.
       </p>
       <div className="danger-actions">
-        <button type="button" onClick={() => void signOut()}>
-          Try signing out again
-        </button>
+        {clerkFailed ? null : (
+          <button type="button" onClick={() => void signOut()}>
+            Try signing out again
+          </button>
+        )}
         <Link to="/">Leave this page</Link>
       </div>
     </div>

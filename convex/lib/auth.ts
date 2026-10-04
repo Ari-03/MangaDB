@@ -7,8 +7,9 @@
 // themselves, absent to everyone else. Their row stays until the purge has
 // emptied every personal table and a day has passed since Clerk deleted the
 // sign-in, and still holds their username and Clerk subject so neither can
-// be claimed again in the meantime, even by a token issued before. Moderation reads the row itself: a Shadowed User's
-// Comments stay hidden while they wait for the purge (comments.ts).
+// be claimed again in the meantime, even by a token issued before.
+// Moderation reads the row itself: a Shadowed User's Comments stay hidden
+// while they wait for the purge (comments.ts).
 
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";

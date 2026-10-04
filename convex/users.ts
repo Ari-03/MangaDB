@@ -10,6 +10,7 @@ import type { Id, TableNames } from "./_generated/dataModel";
 import {
   internalAction,
   internalMutation,
+  internalQuery,
   mutation,
   query,
   type MutationCtx,
@@ -168,10 +169,11 @@ export const setScoreFormat = mutation({
  * confirms the sign-in is gone (removePurgedUser): until then the marked
  * row keeps the identity, and any token issued to it, out of the account
  * and from claiming a new one. Refused for the last active Administrator,
- * and for an identity with no User (no username claimed): its sign-in can
- * only be deleted in Clerk. Asking again while a deletion is under way, or
- * waiting on Clerk, changes nothing. Needs CLERK_SECRET_KEY on the Convex
- * deployment; without it nothing is marked or scheduled.
+ * and for an identity with no User (no username claimed), which can claim
+ * one and delete that, or be deleted in Clerk. Asking again while a
+ * deletion is under way, or waiting on Clerk, changes nothing. Needs
+ * CLERK_SECRET_KEY on the Convex deployment; without it nothing is marked
+ * or scheduled.
  */
 export const deleteAccount = mutation({
   args: {},
@@ -215,8 +217,11 @@ export const PURGED_ROW_GRACE = 24 * 60 * MINUTE;
 /**
  * Delete the Clerk identity of a purged User through the Backend API, then
  * schedule removePurgedUser PURGED_ROW_GRACE later. purgeUser's last run
- * schedules it. A 404 means the identity is already gone, which counts as
- * done. A failed call (an error status, a network error, a missing
+ * schedules it. Each attempt first checks (clerkDeletionRefusal) that the
+ * subject's User row is marked deleting and purged; otherwise it logs why
+ * and stops without contacting Clerk, so a wrong subject deletes nothing.
+ * A 404 means the identity is already gone, which counts as done. A
+ * failed call (an error status, a network error, a missing
  * CLERK_SECRET_KEY) reschedules this action after the next
  * CLERK_RETRY_DELAYS wait; past the last it logs an error with the command
  * that retries it and stops, leaving the marked row in place. Run with
@@ -225,6 +230,11 @@ export const PURGED_ROW_GRACE = 24 * 60 * MINUTE;
 export const deleteClerkIdentity = internalAction({
   args: { clerkSubject: v.string(), attempt: v.number() },
   handler: async (ctx, { clerkSubject, attempt }) => {
+    const refusal: string | null = await ctx.runQuery(internal.users.clerkDeletionRefusal, { clerkSubject });
+    if (refusal !== null) {
+      console.error(`Not deleting Clerk identity ${clerkSubject}: ${refusal}.`);
+      return null;
+    }
     const failure = await deleteFromClerk(clerkSubject);
     if (failure === null) {
       await ctx.scheduler.runAfter(PURGED_ROW_GRACE, internal.users.removePurgedUser, { clerkSubject });
@@ -244,6 +254,22 @@ export const deleteClerkIdentity = internalAction({
       clerkSubject,
       attempt: attempt + 1,
     });
+    return null;
+  },
+});
+
+/**
+ * Why deleteClerkIdentity must leave a subject's Clerk identity alone, or
+ * null when it may delete it: only a User row marked deleting whose purge
+ * has finished (`purgedAt`) allows it.
+ */
+export const clerkDeletionRefusal = internalQuery({
+  args: { clerkSubject: v.string() },
+  handler: async (ctx, { clerkSubject }) => {
+    const user = await getUserBySubject(ctx, clerkSubject);
+    if (!user) return "no User row has that subject";
+    if (user.deletingSince === undefined) return "its User is not being deleted";
+    if (user.purgedAt === undefined) return "its User's purge has not finished";
     return null;
   },
 });
@@ -283,9 +309,11 @@ export const removePurgedUser = internalMutation({
  * The most units of work one purgeUser run takes: a row deleted or
  * detached, or a Rating deleted with its aggregates. A unit reads at most
  * nine documents (counting the read inside each patch and delete), writes
- * at most four and queries at most four index ranges, so a run stays near
- * 1,800 documents read, 800 written and 800 ranges, far inside the 32,000,
- * 16,000 and 4,096 limits. Bytes are bounded by PURGE_RESERVE instead.
+ * at most four and queries about eight index ranges (on the real backend
+ * each patch and delete records one, as each query does), so a run stays
+ * near 1,800 documents read, 800 written and 1,600 ranges, inside the
+ * 32,000, 16,000 and 4,096 limits. Bytes are bounded by PURGE_RESERVE
+ * instead.
  */
 export const PURGE_BATCH = 200;
 
@@ -294,18 +322,18 @@ export const PURGE_BATCH = 200;
  * work; with less left, the run stops and reschedules itself. Every patch
  * and delete reads the document it changes, and that read counts too. The
  * most expensive unit is a Series Rating whose rank moves: it reads the
- * library pack it shares with about 1,000 Series twice (the lookup in
+ * Series' library row (seriesStats) and the library pack it shares with
+ * about 1,000 Series twice each (the lookup in
  * seriesBrowse.syncRatingProjection, then the patch that rewrites it) and
- * writes it once, and a pack may reach the 1 MiB document limit: 2 MiB
- * read, 1 MiB written. Its other documents (the Rating, its ratingStats
- * and seriesStats rows) are a few KB, and every other unit reads well
- * under 100 KB (a Review of 5,000 characters is at most 15,000 bytes of
- * text, read by the query and again by the delete). The 1 MiB over that
- * covers those rows, the next row a query fetches before the check that
- * stops the run, and the run's last writes, so a run ends under the
- * 16 MiB limits.
+ * writes each once. Each may reach the 1 MiB document limit: 4 MiB read,
+ * 2 MiB written. Its other documents (the Rating and its ratingStats row)
+ * are a few hundred bytes, and every other unit reads well under 100 KB (a
+ * Review of 5,000 characters is at most 15,000 bytes of text, read by the
+ * query and again by the delete). The 1 MiB over that covers those rows,
+ * the next row a query fetches before the check that stops the run, and
+ * the run's last writes, so a run ends under the 16 MiB limits.
  */
-export const PURGE_RESERVE = 3 * 1024 * 1024;
+export const PURGE_RESERVE = 5 * 1024 * 1024;
 
 /**
  * Empty a deleting User's personal tables, one unit of work at a time

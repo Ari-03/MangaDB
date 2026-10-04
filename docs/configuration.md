@@ -35,7 +35,12 @@ One-time setup:
    Keep its token lifetime under a day: account deletion keeps the deleted
    user's row a day after Clerk confirms, so a token issued before cannot
    claim a username.
-3. Set the variables below, and allow `mangadb.org` and the staging
+3. Turn off the instance setting "Allow users to delete their accounts".
+   Account deletion goes through `/me`; with the setting on, the "Manage
+   account" window of `<UserButton />` offers a "Delete account" button
+   that deletes only the Clerk sign-in and leaves the user's MangaDB rows
+   ([known issues](known-issues.md)).
+4. Set the variables below, and allow `mangadb.org` and the staging
    workers.dev origin in the Clerk dashboard.
 
 ## App and Worker

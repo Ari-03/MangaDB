@@ -1,3 +1,4 @@
+import { getDocumentSize } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
@@ -486,6 +487,105 @@ describe("users.purgeUser", () => {
     }
   });
 
+  it("purges Ratings whose library row and pack both near the 1 MiB document limit", async () => {
+    const t = makeT({ transactionLimits: true });
+    const SERIES = 5;
+    const REVIEWS = 190;
+    const leaving = await t.run(async (ctx) => {
+      const leaving = await ctx.db.insert("users", {
+        clerkSubject: SUBJECT_A,
+        username: "leaving",
+        usernameNormalized: "leaving",
+        formatPreference: "both",
+        ownershipVisibility: "private",
+        readingVisibility: "private",
+      });
+      // One Series per pack: a library row of about 900 KB (three
+      // 300,000-character fields) beside a pack of about 980 KB.
+      for (let block = 0; block < SERIES; block++) {
+        const publicId = block * 1000;
+        const seriesId = await insertSeries(ctx, { publicId });
+        const title = "x".repeat(300_000);
+        const entry = {
+          publicId,
+          titleSort: title,
+          searchKey: title,
+          sourceStatus: "ongoing" as const,
+          publishers: [],
+          hasPhysical: true,
+          hasDigital: false,
+          volumeCount: 10,
+          latestReleaseSort: 0,
+          nextReleaseSort: 0,
+          lastReleasedSort: 0,
+          followers: 0,
+          collectors: 0,
+          ratingRank: 70,
+        };
+        await ctx.db.insert("seriesStats", {
+          ...entry,
+          seriesId,
+          title,
+          letter: "x",
+          releaseCount: 10,
+          firstReleaseSort: 0,
+          coverUrl: null,
+          coverIsbn: null,
+          rebuiltAt: 0,
+          ratingCount: 4,
+          ratingAverage: 70,
+        });
+        const filler = { ...entry, publicId: publicId + 1, titleSort: "filler", searchKey: "y".repeat(380_000) };
+        await ctx.db.insert("seriesStatsPacks", { block, entries: [entry, filler] });
+        // This user's 100 among four Ratings averaging 70: removing it moves the rank.
+        await ctx.db.insert("ratings", { userId: leaving, seriesId, score: 100, updatedAt: 0 });
+        await ctx.db.insert("ratingStats", { seriesId, sum: 280, count: 4 });
+      }
+      for (let n = 0; n < REVIEWS; n++) {
+        const seriesId = await insertSeries(ctx, { publicId: 10_000 + n });
+        await ctx.db.insert("reviews", {
+          userId: leaving,
+          seriesId,
+          body: "界".repeat(5000),
+          status: "visible",
+          spoiler: false,
+          createdAt: 0,
+        });
+      }
+      await ctx.db.patch(leaving, { deletingSince: Date.now() });
+      return leaving;
+    });
+    const sizes = await t.run(async (ctx) =>
+      [...(await ctx.db.query("seriesStats").collect()), ...(await ctx.db.query("seriesStatsPacks").collect())].map(
+        getDocumentSize,
+      ),
+    );
+    expect(Math.min(...sizes)).toBeGreaterThan(900_000);
+    expect(Math.max(...sizes)).toBeLessThan(1_048_576);
+
+    // Each such Rating reads about 3.8 MB: the first run stops for budget among them.
+    await t.mutation(internal.users.purgeUser, { userId: leaving });
+    const left = await t.run(async (ctx) => ({
+      reviews: await ctx.db.query("reviews").collect(),
+      ratings: (await ctx.db.query("ratings").collect()).length,
+    }));
+    expect(left.reviews).toEqual([]);
+    expect(left.ratings).toBeGreaterThan(0);
+    expect(left.ratings).toBeLessThan(SERIES);
+    while ((await t.run((ctx) => ctx.db.get(leaving)))?.purgedAt === undefined) {
+      await t.mutation(internal.users.purgeUser, { userId: leaving });
+    }
+
+    const end = await t.run(async (ctx) => ({
+      ratings: await ctx.db.query("ratings").collect(),
+      library: await ctx.db.query("seriesStats").collect(),
+      packs: await ctx.db.query("seriesStatsPacks").collect(),
+    }));
+    expect(end.ratings).toEqual([]);
+    expect(end.library.map((row) => row.ratingRank)).toEqual(Array(SERIES).fill(60));
+    expect(end.packs.map((pack) => pack.entries[0]?.ratingRank)).toEqual(Array(SERIES).fill(60));
+  });
+
   it("drains Comments a bounded amount at a time, keeping other authors' rows and counts", async () => {
     const t = makeT();
     const { leaving, staying } = await seedTwoUsers(t);
@@ -765,6 +865,36 @@ describe("users.deleteAccount", () => {
     expect((await personalRows(t)).users.map((row) => row._id)).toContain(leaving);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await personalRows(t)).toEqual(without(before, leaving));
+  });
+
+  it("contacts Clerk on a manual retry only for a subject whose row is marked deleting and purged", async () => {
+    const t = makeT();
+    const { leaving } = await seedTwoUsers(t);
+    const requests = stubClerk(200);
+    const errors = quiet();
+    const retry = (clerkSubject: string) => t.action(internal.users.deleteClerkIdentity, { clerkSubject, attempt: 0 });
+
+    // SUBJECT_A's purge is scheduled but has not run.
+    await t.withIdentity({ subject: SUBJECT_A }).mutation(api.users.deleteAccount, {});
+    const queued = await scheduled(t);
+    await retry(SUBJECT_B);
+    await retry("user_none");
+    await retry(SUBJECT_A);
+    expect(requests).toEqual([]);
+    expect(await scheduled(t)).toEqual(queued);
+    expect(errors.mock.calls.map(([message]) => message)).toEqual([
+      `Not deleting Clerk identity ${SUBJECT_B}: its User is not being deleted.`,
+      "Not deleting Clerk identity user_none: no User row has that subject.",
+      `Not deleting Clerk identity ${SUBJECT_A}: its User's purge has not finished.`,
+    ]);
+
+    // Once the purge has finished, the same retry deletes the identity.
+    await t.mutation(internal.users.purgeUser, { userId: leaving });
+    await retry(SUBJECT_A);
+    expect(requests).toEqual([expect.objectContaining({ url: `https://api.clerk.com/v1/users/${SUBJECT_A}` })]);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(leaving))).toBeNull();
+    expect(await personalRows(t)).toMatchObject({ users: [{ clerkSubject: SUBJECT_B }] });
   });
 
   it("refuses an identity with no account, and schedules nothing", async () => {

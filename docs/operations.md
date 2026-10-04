@@ -109,13 +109,14 @@ A user's request (`users.deleteAccount`) sets `deletingSince` on their
 `users` row and schedules the rest, in this order, with no operator:
 
 1. `users:purgeUser` deletes their personal rows one at a time, and each
-   run stops after 200 or once less than 3 MiB of its 16 MiB read or write
+   run stops after 200 or once less than 5 MiB of its 16 MiB read or write
    budget is left, as `ctx.meta.getTransactionMetrics()` reports it. A
-   Series Rating whose rank moves is the largest step: it reads its library
-   pack twice and rewrites it, and a pack may reach 1 MiB. With today's
-   packs (about 380 KB) a run fits about 18 such Ratings; at 1 MiB, 7. The
-   run that reads every table to its end sets `purgedAt` and schedules the
-   next two.
+   Series Rating whose rank moves is the largest step: it reads the
+   Series' library row and its library pack twice each and rewrites both,
+   and each may reach 1 MiB. Library rows are a few KB; with today's packs
+   (about 380 KB) a run fits about 15 such Ratings, 6 at a 1 MiB pack, and
+   3 if the library row is at 1 MiB too. The run that reads every table to
+   its end sets `purgedAt` and schedules the next two.
 2. `users:redactMergeManifests` drops their rows from merge manifests.
 3. `users:deleteClerkIdentity` deletes the Clerk sign-in, retrying five
    times over about seven hours. Once Clerk confirms (a 404 counts), it
@@ -147,11 +148,15 @@ Two states need an operator:
   `npx convex run users:deleteClerkIdentity '{"clerkSubject":"…","attempt":0}'`.
   It deletes the identity, treats a 404 as done, schedules the row's
   removal a day later, and retries on its own again if Clerk still fails.
-  It does not check the subject: copy it from the marked row.
+  Before each attempt it checks the subject: unless a `users` row with that
+  subject has both `deletingSince` and `purgedAt` set, it logs "Not
+  deleting Clerk identity" with the reason and contacts no one. Running it
+  for a wrong subject is safe.
 
 A user asking again while their row is marked changes nothing. An identity
-with no `users` row (no username claimed) is refused: its sign-in can only
-be deleted in the Clerk dashboard ([known issues](known-issues.md)).
+with no `users` row (no username claimed) is refused: it can claim a
+username and then delete the account, or its sign-in can be deleted in the
+Clerk dashboard ([known issues](known-issues.md)).
 
 ## Catalog repair tool
 
