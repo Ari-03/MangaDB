@@ -154,16 +154,25 @@ function choose(tree: Host[], label: "On" | "Off") {
   input.props.onChange();
 }
 
-beforeEach(() => {
-  resetHarness();
+/** A fresh page and a fresh posthog-js, with nothing called or sent yet. */
+function freshPage() {
   clientSlots.length = 0;
-  fakes.auth.isLoaded = false;
-  fakes.auth.isSignedIn = undefined;
-  fakes.auth.userId = null;
   Object.assign(fakes.state, { distinctId: "anon-1", anonymousIds: 1, identified: false, optedOut: false, inited: false });
   fakes.calls.length = 0;
   fakes.sent.length = 0;
   fakes.options = null;
+}
+
+beforeEach(() => {
+  resetHarness();
+  // The client's module state outlives a test, as it outlives a render but
+  // not a reload: a sending consent clears an `off` an earlier test left.
+  freshPage();
+  client({ status: "anonymous" });
+  freshPage();
+  fakes.auth.isLoaded = false;
+  fakes.auth.isSignedIn = undefined;
+  fakes.auth.userId = null;
   vi.stubGlobal("navigator", { doNotTrack: null });
   vi.stubGlobal("window", {});
   return () => vi.unstubAllGlobals();
@@ -284,7 +293,7 @@ describe("PostHogAnalytics", () => {
     ]);
   });
 
-  it("drops events once the viewer turns analytics off, and identifies again without $opt_in when they turn it on", () => {
+  it("drops events once the viewer turns analytics off, and resets before identifying again without $opt_in when they turn it on", () => {
     client(identified(reader.subject));
     client(identified(reader.subject));
     fakes.calls.length = 0;
@@ -295,10 +304,29 @@ describe("PostHogAnalytics", () => {
     expect(fakes.sent).toEqual([]);
     expect(fakes.calls).toEqual([]);
 
+    // Nothing posthog-js gathered while off survives: the reset comes first.
     client(identified(reader.subject));
     search();
+    expect(fakes.calls).toEqual(["reset", `identify ${reader.subject}`]);
+    expect(fakes.sent).toEqual([
+      { event: "$identify", id: reader.subject },
+      { event: "search_performed", id: reader.subject },
+    ]);
+  });
+
+  it("resets when an anonymous client that was off sends again, and not on a sign-in from anonymous", () => {
+    client({ status: "anonymous" });
+    client({ status: "off" });
+    client({ status: "pending" });
+    client({ status: "anonymous" });
+    expect(fakes.calls).toEqual(["reset"]);
+
+    fakes.calls.length = 0;
+    fakes.sent.length = 0;
+    client({ status: "pending" });
+    client(identified(reader.subject));
     expect(fakes.calls).toEqual([`identify ${reader.subject}`]);
-    expect(fakes.sent).toEqual([{ event: "search_performed", id: reader.subject }]);
+    expect(fakes.sent).toEqual([{ event: "$identify", id: reader.subject }]);
   });
 
   it("forgets an identified user on sign-out before anything else is sent", () => {
@@ -356,7 +384,7 @@ describe("Signing in and out on one page", () => {
     search();
     // Convex has not seen the new session yet: no viewer.
     setQuery(api.users.viewer, null);
-    expect(gate()).toEqual({ status: "off" });
+    expect(gate()).toEqual({ status: "pending" });
     run();
     search();
 
@@ -382,14 +410,16 @@ describe("Signing in and out on one page", () => {
     run();
     signIn(null);
     run();
+    // What posthog-js gathered while off is forgotten before anything goes out.
+    expect(fakes.calls).toEqual(["reset"]);
     fakes.sent.length = 0;
 
     search();
     reload();
     run();
     expect(fakes.sent).toEqual([
-      { event: "search_performed", id: "anon-1" },
-      { event: "$pageview", id: "anon-1" },
+      { event: "search_performed", id: "anon-2" },
+      { event: "$pageview", id: "anon-2" },
     ]);
   });
 });
@@ -425,8 +455,21 @@ describe("AnalyticsSettings", () => {
     await refreshViewer(as);
     run();
     search();
-    expect(fakes.calls).toEqual([`identify ${reader.subject}`]);
-    expect(fakes.sent).toEqual([{ event: "search_performed", id: reader.subject }]);
+    expect(fakes.calls).toEqual(["reset", `identify ${reader.subject}`]);
+    expect(fakes.sent).toEqual([
+      { event: "$identify", id: reader.subject },
+      { event: "search_performed", id: reader.subject },
+    ]);
+  });
+
+  it("says that PostHog receives the IP address and that earlier events may still be delivered", async () => {
+    const t = makeT();
+    const as = await withUser(t, reader);
+    await refreshViewer(as);
+    const panel = mount(() => AnalyticsSettings()).map((host) => text(host.props.children)).join(" ");
+    expect(panel).toContain("PostHog also receives your IP address and browser details.");
+    expect(panel).toContain("may still be delivered later, including after a lost connection is restored");
+    expect(panel).not.toContain("few seconds");
   });
 
   it("says when this browser sends Do Not Track", async () => {

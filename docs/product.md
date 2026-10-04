@@ -253,11 +253,14 @@ or Global Privacy Control sends nothing either way, and switches an account
 that has never chosen to Off, once; the panel says so. A browser without
 it never switches an account back on. Signed-out visitors have no toggle;
 Do Not Track covers them and they create no person profile. Two accounts
-used on one browser are never linked. Events never carry the user's email
-or the text of their reviews and comments, but they include page addresses
-and titles, so a search's text is sent with the search page; the panel
-says so. Off stops new events; a browser may still deliver those from the
-few seconds before, and none already sent are deleted. What is collected
+used on one browser are never merged into one person, and no event carries
+the other account's id, though their events share a device id. Events never
+carry the user's email or the text of their reviews and comments, but they
+include page addresses and titles, so a search's text is sent with the
+search page, and PostHog also receives the visitor's IP address and browser
+details; the panel says both. Off stops new events; events captured before
+the switch may still be delivered later, including after a lost connection
+is restored, and events already collected are not deleted. What is collected
 is listed in [configuration](configuration.md#analytics-posthog).
 
 ## Account deletion

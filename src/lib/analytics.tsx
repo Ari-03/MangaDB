@@ -65,11 +65,15 @@ export function track<E extends AnalyticsEvent>(event: E, properties: AnalyticsE
 
 /**
  * What the PostHog client may do for this session:
- * - `pending`: Clerk or the signed-in viewer's preference has not answered.
- * - `off`: a signed-in viewer who opted out, or whose account is being deleted.
+ * - `pending`: Clerk or the signed-in viewer's preference has not answered,
+ *   or Convex has no viewer for the session (not yet authenticated, or the
+ *   account is being deleted).
+ * - `off`: a signed-in viewer who opted out, or one still claiming a
+ *   username whose browser sends Do Not Track.
  * - `anonymous`: signed out; captured without a person (Do Not Track applies).
  * - `identified`: a signed-in viewer who has not opted out, captured as them.
- * Nothing is sent while `pending` or `off`.
+ * Nothing is sent while `pending` or `off`, and sending after `off` starts
+ * from posthog-js's reset().
  */
 export type AnalyticsConsent =
   | { status: "pending" | "off" | "anonymous" }
@@ -154,7 +158,7 @@ export function ViewerAnalytics() {
   if (!isLoaded) consent = { status: "pending" };
   else if (!isSignedIn || !userId) consent = ANONYMOUS;
   else if (viewer === undefined) consent = { status: "pending" };
-  else if (viewer === null) consent = { status: "off" };
+  else if (viewer === null) consent = { status: "pending" };
   else if (viewer.needsUsername) consent = dnt ? { status: "off" } : { status: "identified", userId };
   else if (viewer.analyticsOptOut ?? dnt) consent = { status: "off" };
   else consent = { status: "identified", userId, username: viewer.username, role: viewer.role };
@@ -189,7 +193,8 @@ function AnalyticsSettingsInner() {
         reviews, comments, favorites and searches to PostHog, to see how the site is used. While
         you are signed in they carry your account id, username and any data-team role. They never
         carry your email or the text of your reviews and comments. Page addresses and titles are
-        included, so a search is sent as part of the search page's address and title.
+        included, so a search is sent as part of the search page's address and title. PostHog
+        also receives your IP address and browser details.
       </p>
       <div className="vis-field">
         <span className="vis-legend" id="analytics-label">
@@ -210,8 +215,8 @@ function AnalyticsSettingsInner() {
         </span>
         <p className="vis-hint">
           Off stops new events about your account, from our server and from any browser you are
-          signed in on. Events from before the switch, including any this browser still sends in
-          the next few seconds, are not deleted.
+          signed in on. Events captured before the switch may still be delivered later, including
+          after a lost connection is restored, and events already collected are not deleted.
         </p>
         <p className="vis-hint">
           {doNotTrack()

@@ -98,9 +98,11 @@ users. Pageviews and pageleaves are automatic. posthog-js adds the full
 page address (`$current_url`) to every event and the document title to
 pageviews, so a search's text reaches PostHog through `/search?q=…` and
 the search page's title. Signed-in users are identified by their Clerk
-user id with `username` and `role`, never email. Sign-out resets the
-session, and so does a different user signing in, so one browser never
-links two accounts. The Deploy workflow reads
+user id with `username` and `role`, never email. Before events go out
+under a signed-out visit or another account, the client calls `reset()`,
+so two accounts are never merged into one person and no event carries the
+other account's id. `reset()` keeps posthog-js's `$device_id`, so events
+from two accounts on one browser share it. The Deploy workflow reads
 `VITE_PUBLIC_POSTHOG_KEY` from the GitHub environment it deploys to, so
 staging and production can use separate projects. A local deploy reads it
 from `.env.local` or the shell.
@@ -112,16 +114,25 @@ who opted out, the browser never loads posthog-js, and `capture` in
 The client's `before_send` is its only gate: it drops every event while a
 signed-in user's choice is still loading or is Off, so a client already
 running when the user switches Off captures nothing more, and one that is
-waiting identifies no one. A browser sending Do Not Track or Global
+waiting identifies no one. It gates only what goes through `capture()`:
+posthog-js's logs and metrics check `is_capturing()` and send without it,
+and remote config is off only because `advanced_disable_flags` is set.
+Convex having no viewer yet for a new session counts as still loading. A browser sending Do Not Track or Global
 Privacy Control sets the opt-out once on an account that has never chosen,
 so server events stop too; a browser without it never clears one.
-Signed-out visitors have no toggle: `respect_dnt` covers them. On sign-out
-the client calls `reset()`; for a user who had opted out nothing was
-captured before it, so nothing goes out under their id. posthog-js sends
-captured events in batches about three seconds apart, and nothing public
-clears a batch, so events captured before a switch to Off or a sign-out can
-still arrive in the seconds after. Opting out stops new events; it deletes
-nothing PostHog already holds.
+Signed-out visitors have no toggle: `respect_dnt` covers them. posthog-js
+updates its session and pageview state (`$session_entry_url`,
+`$prev_pageview_pathname`) before `before_send` drops an event, so when
+sending resumes after Off, by switching On or by signing out, the client
+calls `reset()` before anything is identified or sent. Otherwise it calls
+`reset()` only when posthog-js holds an identified id other than the one
+now signed in: on sign-out, or when a different user signs in. A sign-in
+from a signed-out visit does not reset, so that browsing stays with the
+account. posthog-js sends captured events in batches, keeps a batch that
+fails to send and retries it with backoff, and nothing public clears one,
+so events captured before a switch to Off or a sign-out may still be
+delivered later, including after a lost connection is restored. Opting out
+stops new events; it deletes nothing PostHog already holds.
 
 **Proxy.** `src/server/posthogProxy.ts` forwards `/_s/*` from the site's
 own origin so ad blockers do not drop events. `/_s/static/*` and
