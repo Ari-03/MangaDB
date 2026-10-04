@@ -207,7 +207,8 @@ the coverage is stated the Draft cannot be submitted. Then submit it like
 any Proposal: an Editor's waits for a Moderator, and a Moderator may
 approve their own, as with any Proposal. Readers cannot prepare. A
 placement Draft is edited only on that page; the ordinary draft save
-refuses it, and refuses a hand-written placement.
+refuses it, and refuses a hand-written placement or an op marked to join
+an existing record.
 
 It does nothing for a book whose hold needs another decision first, and
 says why: no single active, unlocked Series (link, unlock or merge it), an
@@ -219,7 +220,10 @@ rebinder's copy). It never creates a Series or a Publisher.
 While the Proposal is open the row stays, marked "Placement Draft" or
 "Placement awaiting review" with a link. Your own Draft, or any Proposal
 in review, opens on a second click; preparing a book another member has
-an unsubmitted Draft for withdraws their Draft, with a note saying why.
+an unsubmitted placement Draft for (one sent back by "request changes" is
+a Draft again) withdraws their Draft, with a note saying why. A Draft the
+book points at that does not place it is left as it is, and the book gets
+a new Draft.
 Approval creates the records and links the source's record to the new
 Release, which takes the book off the list. The new Release's fields count
 as human-authored, so a later differing value from the source (a date
@@ -227,9 +231,13 @@ slip, a binding change) queues a review Proposal instead of updating it.
 If an import placed the same book meanwhile, approval reuses its Volume
 and its matching Edition, and refuses rather than duplicate a Release with
 the same ISBN. It refuses, writing nothing, when the book was withdrawn,
-held as another kind or under another Series, given another ISBN, linked,
-or the Edition it joins already has a Release in its format. It marks the
-Proposal stale when the Series, or a matching Volume, Edition or line it
-would join, was hidden, merged or locked. After a rejection the book is
-held again and can be prepared anew; its import does not queue a creation
-Proposal of its own for it until its source's record changes.
+held as another kind or under another Series, given another ISBN or
+format, linked, or the Edition it joins already has a Release in its
+format, and it refuses a Release placed under a stored Edition instead of
+one the Proposal creates or joins. It marks the Proposal stale when it
+would join a hidden or merged Volume or Edition Line, or a hidden, merged
+or locked Edition, or when its Series was hidden, merged or locked; a
+locked active Volume or line is joined, as imports join them. After a
+rejection the book is held again and can be prepared anew; its import
+does not queue a creation Proposal of its own for it until its source's
+record changes.

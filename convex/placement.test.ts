@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { recordUnplaced } from "./lib/observations";
 import { parseDumpLine } from "./lib/openLibrary";
 import { reconcileFields } from "./lib/reconcile";
@@ -582,6 +582,54 @@ describe("one live Draft per book", () => {
     expect((await approve(t, second)).status).toBe("approved");
   });
 
+  it.each([
+    ["no book", "its author", carol],
+    ["no book", "another member", bob],
+    ["another book", "its author", carol],
+    ["another book", "another member", bob],
+  ] as const)(
+    "leaves a Draft the book points at whose ops place %s as it is, and prepares a new one for %s that the book points at",
+    async (other, _who, user) => {
+      const t = makeT();
+      const { alice1, vagabond4, aliceId } = await held(t);
+      const first = await prepare(t, alice1);
+      // However its ops came to place nothing, or another book.
+      await t.run(async (ctx) => {
+        const draft = (await ctx.db.get(first))!.draft!;
+        const ops =
+          other === "no book"
+            ? [{ kind: "create" as const, table: "volumes", tempId: "v", fields: { seriesId: aliceId, label: "7" } }]
+            : draft.ops.map((op) =>
+                op.kind === "create" && op.table === "releases"
+                  ? { ...op, fields: { ...op.fields, placement: { observationId: vagabond4, seriesId: aliceId } } }
+                  : op,
+              );
+        await ctx.db.patch(first, { draft: { ...draft, ops } });
+      });
+      const before = await t.run((ctx) => ctx.db.get(first));
+
+      const result = await signedIn(t, user).mutation(api.placement.preparePlacement, { observationId: alice1 });
+      expect(result).toMatchObject({ status: "prepared" });
+      const second = result.status === "prepared" ? result.proposalId : null;
+      expect(second).not.toBe(first);
+      expect(await t.run((ctx) => ctx.db.get(first))).toEqual(before);
+      expect((await detail(t, first))!.notes).toEqual([]);
+      expect(await t.run(async (ctx) => (await ctx.db.get(alice1))?.queuedProposalId)).toBe(second);
+    },
+  );
+
+  it("prepares a new Draft over the author's own withdrawn one, never reopening or withdrawing it again", async () => {
+    const t = makeT();
+    const { alice1 } = await held(t);
+    const first = await prepare(t, alice1);
+    await signedIn(t, carol).mutation(api.proposals.withdrawProposal, { proposalId: first });
+    const before = await t.run((ctx) => ctx.db.get(first));
+    const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
+    expect(result).toMatchObject({ status: "prepared" });
+    expect(await t.run((ctx) => ctx.db.get(first))).toEqual(before);
+    expect((await detail(t, first))!.notes).toEqual([]);
+  });
+
   it("keeps two copies in review safe: only the one the book points at is approved, and the other then refuses", async () => {
     const t = makeT();
     const { alice1, aliceId } = await held(t);
@@ -674,6 +722,94 @@ describe("only placement.ts writes a placement", () => {
     });
     expect((await detail(t, proposalId))!.placement!.series).toEqual({ publicId: 7, title: "Alice in Borderland" });
     await expect(submit(t, proposalId)).rejects.toMatchObject({ data: { code: "invalidCreate" } });
+  });
+
+  it("refuses a hand-written op marked to join an existing record in saveDraft", async () => {
+    const t = makeT();
+    const { alice1, aliceId } = await held(t);
+    await t.run((ctx) => insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1", status: "hidden" }));
+    await expect(
+      signedIn(t, carol).mutation(api.proposals.saveDraft, {
+        ops: [{ kind: "create", table: "volumes", tempId: "v", fields: { seriesId: aliceId, label: "1", joinExisting: true } }],
+        evidence: [{ kind: "observation", observationId: alice1 }],
+        comment: "Volume 1.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "invalidCreate", message: expect.stringContaining("reference the record by ID") } });
+    expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toEqual([]);
+  });
+
+  it.each(["draft", "inReview", "rebased"] as const)(
+    "refuses a placed Release naming a stored Edition (%s) at submission and approval, writing nothing",
+    async (stage) => {
+      const t = makeT();
+      const { alice1, aliceId, vagabondId, publisherId } = await held(t);
+      const proposalId = await prepare(t, alice1);
+      await state(t, proposalId, "1");
+      // Only the Release op, under a stored Edition of Vagabond's.
+      const editionId = await t.run(async (ctx) => {
+        const volumeId = await insertVolume(ctx, { seriesId: vagabondId, position: 12, label: "12" });
+        const id = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId: id, volumeId });
+        return id;
+      });
+      const forge = (ops: Doc<"proposalVersions">["ops"]) =>
+        ops.flatMap((op) =>
+          op.kind === "create" && op.table === "releases" ? [{ ...op, fields: { ...op.fields, editionId } }] : [],
+        );
+      if (stage === "draft") {
+        await t.run(async (ctx) => {
+          const draft = (await ctx.db.get(proposalId))!.draft!;
+          await ctx.db.patch(proposalId, { draft: { ...draft, ops: forge(draft.ops) } });
+        });
+      } else {
+        await submit(t, proposalId);
+        await t.run(async (ctx) => {
+          const version = (await ctx.db
+            .query("proposalVersions")
+            .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+            .unique())!;
+          await ctx.db.patch(version._id, { ops: forge(version.ops) });
+        });
+        if (stage === "rebased") await signedIn(t, carol).mutation(api.proposals.rebaseProposal, { proposalId });
+      }
+      const refused = { data: { code: "invalidCreate", message: expect.stringContaining("names a stored Edition") } };
+      if (stage === "inReview") await expect(approve(t, proposalId)).rejects.toMatchObject(refused);
+      else await expect(submit(t, proposalId)).rejects.toMatchObject(refused);
+      expect(await t.run((ctx) => ctx.db.query("releases").collect())).toEqual([]);
+      expect(await volumeLabels(t, aliceId)).toEqual(["4"]);
+      expect(await linkOf(t, alice1)).toBeNull();
+    },
+  );
+
+  it.each([
+    ["a Volume under another Series", 'Every record a placement creates is under "Alice in Borderland"'],
+    ["a second placed Release", "A Proposal places one held book, through one Release."],
+  ])("refuses at approval, writing nothing, a version whose ops carry %s", async (change, reason) => {
+    const { t, alice1, aliceId, vagabondId, proposalId } = await submittedAlice();
+    await t.run(async (ctx) => {
+      const version = (await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique())!;
+      const ops = version.ops.flatMap((op): Doc<"proposalVersions">["ops"] => {
+        if (op.kind !== "create") return [op];
+        if (change === "a Volume under another Series" && op.table === "volumes") {
+          return [{ ...op, fields: { ...op.fields, seriesId: vagabondId } }];
+        }
+        if (change === "a second placed Release" && op.table === "releases") {
+          return [op, { ...op, tempId: "release-2", fields: { ...op.fields, isbn13: "9781974799991" } }];
+        }
+        return [op];
+      });
+      await ctx.db.patch(version._id, { ops });
+    });
+    await expect(approve(t, proposalId)).rejects.toMatchObject({
+      data: { code: "invalidCreate", message: expect.stringContaining(reason) },
+    });
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toEqual([]);
+    expect(await volumeLabels(t, aliceId)).toEqual(["4"]);
+    expect(await volumeLabels(t, vagabondId)).toEqual(["10", "11"]);
+    expect(await linkOf(t, alice1)).toBeNull();
   });
 
   it("refuses a range that would carry more ops than a Proposal may", async () => {
@@ -791,6 +927,8 @@ describe("approval after the book or its hold changed", () => {
     ["held as a Series question now", "No single active, unlocked Series fits this book"],
     ["held under another Series now", 'held under "Vagabond" now'],
     ["given another ISBN by its source", "The Release's ISBN or format is not the book's"],
+    ["given an ISBN-10 by its source", "The Release's ISBN or format is not the book's"],
+    ["given another format by its source", "The Release's ISBN or format is not the book's"],
     ["linked meanwhile", "already linked"],
     ["its Edition's physical slot taken meanwhile", "slot for this publisher and format, is already taken"],
   ])("refuses, writing nothing, when the book was %s", async (change, reason) => {
@@ -804,6 +942,12 @@ describe("approval after the book or its hold changed", () => {
       if (change === "held under another Series now") await rehold("volumeMissing", vagabondId);
       if (change === "given another ISBN by its source" && observation.snapshot?.kind === "olEdition") {
         await ctx.db.patch(alice1, { snapshot: { ...observation.snapshot, isbn13: "9781974758746" } });
+      }
+      if (change === "given an ISBN-10 by its source" && observation.snapshot?.kind === "olEdition") {
+        await ctx.db.patch(alice1, { snapshot: { ...observation.snapshot, isbn10: "1974728374" } });
+      }
+      if (change === "given another format by its source" && observation.snapshot?.kind === "olEdition") {
+        await ctx.db.patch(alice1, { snapshot: { ...observation.snapshot, format: "digital", binding: undefined } });
       }
       if (change === "linked meanwhile") {
         const editionId = await insertEdition(ctx, { publisherId });

@@ -26,8 +26,8 @@
 // Edition may be Unmapped Packaging (`coverageUnmapped`, under a line, no
 // coverage rows), and its Release names the observation it places
 // (`placement`), which approval links to the new Release (proposals.ts).
-// Only placement.ts writes `placement` (proposals.ts refuses it in a
-// member's own ops).
+// Only placement.ts writes `placement`, and only it and the importers write
+// `joinExisting` (proposals.ts refuses both in a member's own ops).
 //
 // Hard invariants checked with every plan: no ISBN the proposal assigns — to
 // a new Release or, through an update op, an existing one — ends up on two
@@ -157,6 +157,10 @@ type Join<Table extends TableNames> = { existingId?: Id<Table>; unavailable?: Un
 /** Whether a create op carries a held book's `placement` (only placement.ts writes one). */
 export const carriesPlacement = (op: CreateOpInput): boolean =>
   typeof op.fields === "object" && op.fields !== null && "placement" in op.fields;
+
+/** Whether a create op is marked `joinExisting` (only placement.ts and the importers mark one). */
+export const marksJoin = (op: CreateOpInput): boolean =>
+  typeof op.fields === "object" && op.fields !== null && "joinExisting" in op.fields;
 
 /** The records a plan's placement joins matched but may not join: the Proposal is stale. */
 export const unjoinable = (plans: CreatePlan[]): Unjoinable[] =>

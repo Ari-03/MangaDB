@@ -24,9 +24,9 @@
 // The observation points at the Draft (`queuedProposalId`, the importers'
 // dedup pointer), so a second "Prepare placement" by its author, or by
 // anyone while it is in review, opens it; another member's click withdraws
-// an unsubmitted Draft and writes their own. The hold stays listed, marked
-// by that Proposal's state, until approval links the book; a rejected or
-// withdrawn Proposal leaves it held.
+// a member's unsubmitted placement of the book and writes their own. The
+// hold stays listed, marked by that Proposal's state, until approval links
+// the book; a rejected or withdrawn Proposal leaves it held.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -260,7 +260,8 @@ type Placing = { proposalId: Id<"proposals">; plans: CreatePlan[]; release: Rele
  * active Release holds, and a publisher that resolves to a Publisher row.
  * Given a Proposal's plans (`placing`), the ops too: the observation points
  * at that Proposal, its placed Release carries the book's ISBN-13, ISBN-10
- * and format under the hold's Series, every Volume and line it creates or
+ * and format under the hold's Series in an Edition the ops create or join
+ * (never one named by a stored ID), every Volume and line it creates or
  * covers is in that Series, nothing it joins is hidden, locked or merged
  * away, and the Edition it joins has no Release of that format yet (the
  * slot an `isbn` hold guards).
@@ -329,6 +330,10 @@ async function placedOtherwise(
   }
   if (release.placement?.seriesId !== series._id) {
     return `The book is held under "${series.title}" now, not the Series this Proposal places it under.`;
+  }
+  // Coverage and the slot are checked on the Edition plan, so the Release goes under one.
+  if (release.edition.kind === "id") {
+    return "Its Release names a stored Edition instead of one this Proposal creates or joins: save the placement again.";
   }
   const blocked = unjoinable(plans)[0];
   if (blocked !== undefined) {
@@ -422,9 +427,11 @@ export async function checkPlacement(
  * in review, or the caller's own Draft of it; else say why the book cannot
  * be prepared; else write a Draft authored by the member, citing the
  * observation, with its coverage unstated and the source's line prefilled.
- * Another member's unsubmitted Draft of the book is withdrawn, with a note
- * saying why, and the observation points at the new one. A repeat or a
- * replay opens the same Draft.
+ * Another member's unsubmitted Draft placing this book is withdrawn, with a
+ * note saying why, and the observation points at the new one. Any other
+ * Draft the observation points at (one whose ops place no book or another
+ * book, or an import's) is left as it is, and the book gets a new Draft and
+ * points at it. A repeat or a replay opens the same Draft.
  */
 export const preparePlacement = mutation({
   args: { observationId: v.id("sourceObservations") },
@@ -433,13 +440,18 @@ export const preparePlacement = mutation({
     const observation = await ctx.db.get(observationId);
     if (observation === null) return fail("notFound", "No such observation.");
     const queued = observation.queuedProposalId !== undefined ? await ctx.db.get(observation.queuedProposalId) : null;
+    // A member's Draft that places this book: theirs to open, or another member's to withdraw.
+    const placesBook =
+      queued?.state === "draft" &&
+      queued.author.kind === "user" &&
+      placedBy(queued.draft?.ops ?? [])?.observationId === observationId;
     const mine = queued?.author.kind === "user" && queued.author.userId === user._id;
-    if (queued !== null && (queued.state === "inReview" || (queued.state === "draft" && mine))) {
+    if (queued !== null && (queued.state === "inReview" || (placesBook && mine))) {
       return { status: "existing" as const, proposalId: queued._id };
     }
     const check = await placeable(ctx, observation);
     if (!check.ok) return { status: "unavailable" as const, reason: check.reason };
-    if (queued?.state === "draft") {
+    if (queued !== null && placesBook) {
       await ctx.db.patch(queued._id, { state: "withdrawn", decidedAt: Date.now() });
       await ctx.db.insert("proposalNotes", {
         proposalId: queued._id,

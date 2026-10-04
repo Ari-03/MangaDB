@@ -67,13 +67,30 @@ function coverageText(coverage: Placement["coverage"]): string {
 }
 
 /**
+ * The placement form's inputs as the Draft states them: its coverage and
+ * line, or, while its coverage is unstated, the line the Draft or its
+ * source names.
+ */
+function placementForm({ coverage, line, book }: Placement) {
+  const covered = coverage.kind === "volumes" ? coverage.volumes : [];
+  const shown = coverage.kind === "pending" ? (line ?? book?.line ?? null) : line;
+  return {
+    from: covered[0]?.label ?? "",
+    to: covered[covered.length - 1]?.label ?? "",
+    unmapped: coverage.kind === "unmapped",
+    lineName: shown?.name ?? "",
+    linePosition: shown?.position ?? "",
+  };
+}
+
+/**
  * A held book's placement: what its source says beside what approval
  * creates under the Series, a caution to check the book, and, for its
  * author while it is a Draft, the form that states its coverage (a range of
  * canonical Volumes, or Unmapped Packaging under its line), its line, and
  * the change comment, with the one Volume the page may suggest, saved only
- * when the author accepts it. Saving rebuilds the Draft's ops
- * (placement.setPlacement).
+ * when the author accepts it, which also fills the form with it. Saving
+ * rebuilds the Draft's ops (placement.setPlacement).
  */
 function PlacementPanel({
   placement,
@@ -88,12 +105,9 @@ function PlacementPanel({
 }) {
   const setPlacement = useMutation(api.placement.setPlacement);
   const { book, coverage, suggestion } = placement;
-  const covered = coverage.kind === "volumes" ? coverage.volumes : [];
-  const [from, setFrom] = useState(covered[0]?.label ?? "");
-  const [to, setTo] = useState(covered[covered.length - 1]?.label ?? "");
-  const [unmapped, setUnmapped] = useState(coverage.kind === "unmapped");
-  const [lineName, setLineName] = useState(placement.line?.name ?? book?.line?.name ?? "");
-  const [linePosition, setLinePosition] = useState(placement.line?.position ?? book?.line?.position ?? "");
+  const [form, setForm] = useState(() => placementForm(placement));
+  const { from, to, unmapped, lineName, linePosition } = form;
+  const edit = (change: Partial<typeof form>) => setForm((current) => ({ ...current, ...change }));
   const [changeComment, setChangeComment] = useState(comment);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +124,8 @@ function PlacementPanel({
         line: stated === null && lineName.trim() !== "" ? { name: lineName, position: linePosition.trim() || null } : null,
         comment: changeComment,
       });
+      // An accepted Volume is the coverage now, outside any line.
+      if (stated !== null) setForm({ ...stated, unmapped: false, lineName: "", linePosition: "" });
       setSaved(true);
     } catch (err) {
       setError(mutationErrorMessage(err, "Saving the placement failed."));
@@ -219,15 +235,15 @@ function PlacementPanel({
             <legend>Covered Volumes</legend>
             <label>
               First
-              <input value={from} disabled={unmapped} onChange={(event) => setFrom(event.target.value)} />
+              <input value={from} disabled={unmapped} onChange={(event) => edit({ from: event.target.value })} />
             </label>
             <label>
               Last
-              <input value={to} disabled={unmapped} onChange={(event) => setTo(event.target.value)} />
+              <input value={to} disabled={unmapped} onChange={(event) => edit({ to: event.target.value })} />
             </label>
           </fieldset>
           <label>
-            <input type="checkbox" checked={unmapped} onChange={(event) => setUnmapped(event.target.checked)} />{" "}
+            <input type="checkbox" checked={unmapped} onChange={(event) => edit({ unmapped: event.target.checked })} />{" "}
             Unmapped Packaging (no source states which Volumes it collects)
           </label>
           <span className="field-help">
@@ -236,12 +252,12 @@ function PlacementPanel({
           </span>
           <label>
             Edition Line
-            <input value={lineName} onChange={(event) => setLineName(event.target.value)} />
+            <input value={lineName} onChange={(event) => edit({ lineName: event.target.value })} />
             <span className="field-help">Leave empty for an ordinary book outside any line.</span>
           </label>
           <label>
             Line position
-            <input value={linePosition} onChange={(event) => setLinePosition(event.target.value)} />
+            <input value={linePosition} onChange={(event) => edit({ linePosition: event.target.value })} />
           </label>
           <label>
             Change comment (required)

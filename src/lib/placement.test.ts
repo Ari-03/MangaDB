@@ -232,7 +232,7 @@ describe("the placement panel on the Proposal page", () => {
     expect(await t.run(async (ctx) => (await ctx.db.get(proposalId))?.state)).toBe("inReview");
   });
 
-  it("suggests Volume 1 for Alice's book 1, saving it only when the author accepts it", async () => {
+  it("suggests Volume 1 for Alice's book 1, saving it only when the author accepts it, and fills the form with it", async () => {
     const t = makeT();
     const { alice1 } = await seed(t);
     const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
@@ -255,6 +255,25 @@ describe("the placement panel on the Proposal page", () => {
     expect(pageText(after)).toContain("Edition at viz-media covering: Volume 1 (new)");
     expect(after.some((host) => host.type === "button" && text(host.props.children) === "Accept Volume 1")).toBe(false);
     expect(press(after, "Submit for review").disabled).toBe(false);
+    expect(after.filter((host) => host.type === "input").map((host) => host.props.value ?? host.props.checked)).toEqual([
+      "1",
+      "1",
+      false,
+      "",
+      "",
+    ]);
+
+    // A later Save, say of the comment alone, keeps Volume 1.
+    const comment = after.find((host) => host.type === "textarea");
+    typeInto(comment, "Volume 1, checked against the cover.");
+    const form = mount(proposal).find((host) => host.type === "form")!;
+    (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+    await settle();
+    await show(t, carol);
+    const saved = mount(proposal);
+    expect(saved.some((host) => host.props.className === "form-error")).toBe(false);
+    expect(pageText(saved)).toContain("Edition at viz-media covering: Volume 1 (new)");
+    expect((await t.run((ctx) => ctx.db.get(result.proposalId)))?.draft?.comment).toBe("Volume 1, checked against the cover.");
   });
 
   it("shows another member the placement without the form", async () => {

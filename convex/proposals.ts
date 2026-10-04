@@ -39,6 +39,7 @@ import {
   applyCreatePlan,
   carriesPlacement,
   checkOpCount,
+  marksJoin,
   planCreateOps,
   unavailableCreateRefs,
   CREATABLE_TABLES,
@@ -128,11 +129,12 @@ type OpInput =
  * record's current base Revision (the staleness anchor); a clearOverride
  * must name an editable field the record has overridden and gets the base
  * Revision too; create ops keep their validated raw fields so temp-ID
- * references survive verbatim, except a held book's `placement`, which only
- * placement.ts writes. A record takes one update and any number of
- * clears, but never a change to a field and the clear of its override
- * together: the change is itself a human correction, and which of the two
- * applied last would decide the outcome.
+ * references survive verbatim, except a held book's `placement` and the
+ * `joinExisting` mark, which only placement.ts and the importers write. A
+ * record takes one update and any number of clears, but never a change to
+ * a field and the clear of its override together: the change is itself a
+ * human correction, and which of the two applied last would decide the
+ * outcome.
  */
 async function buildDraftOps(
   ctx: MutationCtx,
@@ -149,6 +151,9 @@ async function buildDraftOps(
     if (op.kind === "create") {
       if (carriesPlacement(op)) {
         fail("invalidCreate", "A held book's placement is prepared from its observation: use Prepare placement.");
+      }
+      if (marksJoin(op)) {
+        fail("invalidCreate", "A create op joins an existing record only in a placement or an import: reference the record by ID.");
       }
       ops.push({
         kind: "create",
