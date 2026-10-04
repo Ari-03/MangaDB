@@ -225,7 +225,11 @@ function OwnershipSection({ ownership }: { ownership: PublicProfileData["ownersh
       {ownership.releases.length > 0 ? (
         <div className="shelf">
           {ownership.releases.map((row, i) => (
-            <ReleaseItem key={i} row={row} />
+            <ReleaseItem
+              // biome-ignore lint/suspicious/noArrayIndexKey: known defect, left for its own fix: a row removed above a focused link moves that focus to the next row's link (docs/known-issues.md, Interface)
+              key={i}
+              row={row}
+            />
           ))}
         </div>
       ) : null}
@@ -248,7 +252,11 @@ function OwnershipSection({ ownership }: { ownership: PublicProfileData["ownersh
           {bundle.members.length > 0 ? (
             <div className="shelf">
               {bundle.members.map((member, i) => (
-                <ReleaseItem key={i} row={member} />
+                <ReleaseItem
+                  // biome-ignore lint/suspicious/noArrayIndexKey: known defect, left for its own fix: a row removed above a focused link moves that focus to the next row's link (docs/known-issues.md, Interface)
+                  key={i}
+                  row={member}
+                />
               ))}
             </div>
           ) : null}
@@ -324,7 +332,10 @@ function ReadingSection({ reading }: { reading: PublicProfileData["reading"] }) 
                 {series.passes.length > 0 ? (
                   <ul className="profile-passes">
                     {series.passes.map((pass, i) => (
-                      <li key={i}>
+                      <li
+                        // biome-ignore lint/suspicious/noArrayIndexKey: known defect, left for its own fix: a row removed above a focused link moves that focus to the next row's link (docs/known-issues.md, Interface)
+                        key={i}
+                      >
                         Reading{" "}
                         <Link
                           to="/edition/$publicId/$slug"

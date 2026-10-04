@@ -126,7 +126,7 @@ for await (const line of lines) {
     continue;
   }
   if (!keep(edition)) continue;
-  process.stdout.write(line + "\n");
+  process.stdout.write(`${line}\n`);
   kept++;
 }
 

@@ -309,7 +309,11 @@ function OpsList({ ops }: { ops: RenderedOps }) {
   return (
     <ol className="proposal-ops">
       {ops.map((op, i) => (
-        <li key={i} className="proposal-op">
+        <li
+          // biome-ignore lint/suspicious/noArrayIndexKey: each op renders text with no state, so a key by position only re-renders in place
+          key={i}
+          className="proposal-op"
+        >
           {op.kind === "create" ? (
             <>
               <p>
@@ -389,7 +393,10 @@ function EvidenceList({ evidence }: { evidence: RenderedEvidence }) {
   return (
     <ul className="proposal-evidence">
       {evidence.map((row, i) => (
-        <li key={i}>
+        <li
+          // biome-ignore lint/suspicious/noArrayIndexKey: known defect, left for its own fix: a row removed above a focused link moves that focus to the next row's link (docs/known-issues.md, Interface)
+          key={i}
+        >
           {row.kind === "url" ? (
             <>
               <a href={row.url} rel="nofollow noreferrer">
@@ -507,7 +514,14 @@ function ProposalDetail({ id }: { id: string }) {
 
   return (
     <main className="mod-page mod-proposal-page">
-      <Breadcrumbs trail={[<Link to="/mod/queue">Review queue</Link>, "Proposal"]} />
+      <Breadcrumbs
+        trail={[
+          <Link key="queue" to="/mod/queue">
+            Review queue
+          </Link>,
+          "Proposal",
+        ]}
+      />
       <div className="mod-title-row">
         <h1>Proposal</h1>
         <ProposalStateChip state={detail.state} />
@@ -538,6 +552,7 @@ function ProposalDetail({ id }: { id: string }) {
           <div className="mod-actions">
             {detail.state === "draft" ? (
               <button
+                type="button"
                 className="btn btn-sm btn-primary"
                 disabled={busy || coveragePending}
                 onClick={() => void onSubmitDraft()}
@@ -546,6 +561,7 @@ function ProposalDetail({ id }: { id: string }) {
               </button>
             ) : null}
             <button
+              type="button"
               className="btn btn-sm"
               disabled={busy}
               onClick={() =>
@@ -562,6 +578,7 @@ function ProposalDetail({ id }: { id: string }) {
               Rebase onto current records
             </button>
             <button
+              type="button"
               className="btn btn-sm"
               disabled={busy}
               onClick={() => void run(() => withdrawProposal({ proposalId }), "Withdrawn.")}
@@ -578,6 +595,7 @@ function ProposalDetail({ id }: { id: string }) {
                 ))}
               </ul>
               <button
+                type="button"
                 className="btn btn-sm btn-primary"
                 disabled={busy}
                 onClick={() => void onSubmitDraft(pendingWarnings)}
@@ -595,6 +613,7 @@ function ProposalDetail({ id }: { id: string }) {
           <h2>Review</h2>
           <div className="mod-actions">
             <button
+              type="button"
               className="btn btn-sm"
               disabled={busy}
               onClick={() => void run(() => claimProposal({ proposalId }), "Claimed.")}
@@ -602,6 +621,7 @@ function ProposalDetail({ id }: { id: string }) {
               Claim
             </button>
             <button
+              type="button"
               className="btn btn-sm"
               disabled={busy}
               onClick={() => void run(() => unclaimProposal({ proposalId }), "Unclaimed.")}
@@ -609,6 +629,7 @@ function ProposalDetail({ id }: { id: string }) {
               Unclaim
             </button>
             <button
+              type="button"
               className="btn btn-sm btn-primary"
               disabled={busy || detail.stale}
               onClick={() => void onApprove()}
@@ -630,6 +651,7 @@ function ProposalDetail({ id }: { id: string }) {
             {/* An import cannot revise a Draft (proposals.requestChanges). */}
             {detail.author.kind === "user" ? (
               <button
+                type="button"
                 className="btn btn-sm"
                 disabled={busy || decisionNote.trim() === ""}
                 onClick={() =>
@@ -643,6 +665,7 @@ function ProposalDetail({ id }: { id: string }) {
               </button>
             ) : null}
             <button
+              type="button"
               className="btn btn-sm"
               disabled={busy || decisionNote.trim() === ""}
               onClick={() =>
@@ -717,7 +740,10 @@ function ProposalDetail({ id }: { id: string }) {
         ) : (
           <ol>
             {detail.notes.map((note, i) => (
-              <li key={i}>
+              <li
+                // biome-ignore lint/suspicious/noArrayIndexKey: each note is plain text with no state, so a key by position only re-renders in place
+                key={i}
+              >
                 <strong>
                   {note.kind === "requestChanges"
                     ? "Changes requested"
@@ -739,6 +765,7 @@ function ProposalDetail({ id }: { id: string }) {
           />
         </label>
         <button
+          type="button"
           className="btn btn-sm btn-primary"
           disabled={busy || discussionNote.trim() === ""}
           onClick={() =>

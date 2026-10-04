@@ -99,6 +99,7 @@ function RootDocument({ children }: { children: ReactNode }) {
     // "light" before React hydrates, which is intended.
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: THEME_BOOT is a constant in this file, with no outside input */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <HeadContent />
       </head>

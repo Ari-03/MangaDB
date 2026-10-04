@@ -279,9 +279,8 @@ const VOLUME_MARKER = new RegExp(
 const BRACKET_MARKER = new RegExp(`(?:^|\\s)${MARKER}\\s*(${LABEL})$`, "i");
 
 /** "Otherside Picnic 05", "Buddha 3: Devadatta", "Astro Boy 1 & 2". */
-const BARE_NUMBER = new RegExp(
-  `^(.*?[^\\s#,])(?:\\s*,)?\\s+(\\d{1,3}(?:\\.\\d+)?(?:\\s*(?:-|–|&)\\s*\\d{1,3})?)(?:\\s*:\\s*(.+)|\\s+\\(([^()]+)\\))?$`,
-);
+const BARE_NUMBER =
+  /^(.*?[^\s#,])(?:\s*,)?\s+(\d{1,3}(?:\.\d+)?(?:\s*(?:-|–|&)\s*\d{1,3})?)(?:\s*:\s*(.+)|\s+\(([^()]+)\))?$/;
 
 /**
  * "BARBARITIES II": an unmarked trailing roman numeral, upper-case only and
@@ -571,7 +570,7 @@ export function parseBookTitle(raw: string, options: ParseOptions = {}): ParsedB
   let volumeSubtitle: string | null = null;
   // The Volumes a designation lists outside the brackets ("Vol. 1-3",
   // "Omnibus 5-6"): packaging even when a gap leaves it null.
-  let listed: Stated = undefined;
+  let listed: Stated;
   let bareNumber = false;
   let bareRoman = false;
   let bareSplit: ParsedBookTitle["bareSplit"] = null;

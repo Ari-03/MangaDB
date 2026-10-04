@@ -96,6 +96,7 @@ function ClaimForm() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="off"
+                  // biome-ignore lint/a11y/noAutofocus: the page exists to fill in this one field
                   autoFocus
                   required
                 />

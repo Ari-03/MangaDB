@@ -135,6 +135,7 @@ describe("JSON-LD builders", () => {
     const html = renderToString(
       createElement(RouterContextProvider, {
         router,
+        // biome-ignore lint/correctness/noChildrenProp: RouterContextProvider's props type requires children, so createElement takes it here rather than as a third argument
         children: createElement(Asset, { tag: "script", attrs: { type }, children }),
       }),
     );

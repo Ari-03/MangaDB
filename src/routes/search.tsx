@@ -77,6 +77,7 @@ function SearchPage() {
   // this page's box once typing settles, "Did you mean" links, direct URLs.
   // Keyed on the query alone, so a reload of the same query (a mature-titles
   // change) is not a second search. Never the query text itself.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `q` alone, as said above; the loader returns `results` with `q`, so the counts read are this query's
   useEffect(() => {
     if (q === "") return;
     track("search_performed", {
@@ -139,6 +140,7 @@ function SearchPage() {
             }}
             placeholder="Series title, author, publisher, or ISBN"
             aria-label="Search series, authors, publishers, or an ISBN"
+            // biome-ignore lint/a11y/noAutofocus: the search page opens to type a query
             autoFocus
           />
           <button className="btn btn-primary" type="submit">

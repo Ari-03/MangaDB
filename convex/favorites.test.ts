@@ -4,8 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import { api } from "./_generated/api";
 import type { TargetId } from "./lib/ratings";
 import { insertCoverage, insertEdition, insertPublisher, insertRelease } from "./test.factories";
 import { alice, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
@@ -248,7 +247,7 @@ describe("Favorites of an omnibus Edition", () => {
   });
 
   it("refuses a single-volume Edition and Unmapped Packaging", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     await expect(toggle(t, READER, { kind: "edition", id: books.single })).rejects.toMatchObject({
       data: { code: "rateVolume" },
     });
@@ -260,7 +259,7 @@ describe("Favorites of an omnibus Edition", () => {
   });
 
   it("lists an Edition Favorite in the library with its title, cover and link kind", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     await toggle(t, READER, { kind: "edition", id: books.omnibus });
     const mine = await t.withIdentity({ subject: READER }).query(api.favorites.mine, {});
     expect(mine!.items).toEqual([
@@ -349,7 +348,7 @@ describe("Favorites of an omnibus Edition", () => {
   });
 
   it("purging a user deletes their Edition Favorites", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     await toggle(t, READER, { kind: "edition", id: books.omnibus });
     await toggle(t, OTHER, { kind: "edition", id: books.omnibus });
     await purgeAccount(t, READER);
@@ -357,7 +356,7 @@ describe("Favorites of an omnibus Edition", () => {
   });
 
   it("an Edition merge repoints Favorites, keeps the survivor's on a clash, and a split undoes it", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     await toggle(t, READER, { kind: "edition", id: books.omnibus }); // both: survivor's wins
     await toggle(t, READER, { kind: "edition", id: books.twin });
     await toggle(t, OTHER, { kind: "edition", id: books.twin }); // only the loser: moves over

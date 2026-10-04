@@ -162,7 +162,13 @@ function SeriesPage() {
 
   return (
     <main className="series-page">
-      <Breadcrumbs trail={[<Link to="/series">Series</Link>]} />
+      <Breadcrumbs
+        trail={[
+          <Link key="series" to="/series">
+            Series
+          </Link>,
+        ]}
+      />
 
       <section className="series-hero">
         <div className="series-hero-aside">
@@ -506,7 +512,10 @@ function FamilySection({
       {family.relationships.length > 0 ? (
         <ul className="family-relationships">
           {family.relationships.map((rel, i) => (
-            <li key={i}>
+            <li
+              // biome-ignore lint/suspicious/noArrayIndexKey: each relationship is plain text with no state, so a key by position only re-renders in place
+              key={i}
+            >
               {rel.from.title} is {RELATIONSHIP_LABELS[rel.type]} {rel.to.title}
               {rel.note ? ` — ${rel.note}` : ""}
             </li>

@@ -89,12 +89,10 @@ describe("packaging — Unmapped Packaging queue and mapping", () => {
         .query("revisions")
         .withIndex("by_record", (q) => q.eq("ref.type", "edition").eq("ref.id", editionId))
         .collect();
-      expect(
-        revisions
-          .map((r) => r.changes.map((c) => c.field))
-          .flat()
-          .sort(),
-      ).toEqual(["coverageUnmapped", "volumeCoverage"]);
+      expect(revisions.flatMap((r) => r.changes.map((c) => c.field)).sort()).toEqual([
+        "coverageUnmapped",
+        "volumeCoverage",
+      ]);
       expect(revisions.every((r) => r.author.kind === "user")).toBe(true);
     });
     // Gone from the queue.

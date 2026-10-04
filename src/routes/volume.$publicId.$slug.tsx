@@ -124,7 +124,11 @@ function VolumePage() {
     <main className="volume-page">
       <Breadcrumbs
         trail={[
-          <Link to="/series/$publicId/$slug" params={slugParams(series.publicId, series.title)}>
+          <Link
+            key="series"
+            to="/series/$publicId/$slug"
+            params={slugParams(series.publicId, series.title)}
+          >
             {series.title}
           </Link>,
           volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume",

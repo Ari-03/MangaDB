@@ -1533,7 +1533,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     },
     second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
   })),
-  "Series hidden, steady state": each((s) => ({
+  "Series hidden, steady state": each(() => ({
     result: `recordOnly, unchanged, reason "hidden series"`,
     hold: `series: "Gamma Quest" is Series 1 ("Gamma Quest"), which an Editor hid — not recreated by an import.`,
     created: ["placementHold"],
@@ -1544,7 +1544,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       writes: ["~ sourceObservations lastSeenAt"],
     },
   })),
-  "Series hidden, Bootstrap Mode": each((s) => ({
+  "Series hidden, Bootstrap Mode": each(() => ({
     result: `recordOnly, unchanged, reason "hidden series"`,
     hold: `series: "Gamma Quest" is Series 1 ("Gamma Quest"), which an Editor hid — not recreated by an import.`,
     created: ["placementHold"],
@@ -2031,7 +2031,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     },
   ),
   "packaging with a gapped Volume list on a sized line, steady state": each(
-    (s) => ({
+    () => ({
       result: `recordOnly, unchanged, reason "packaging without coverage"`,
       hold: `packaging under series "Gamma Quest": "Gamma Quest 3-in-1 Edition 2 (Vol. 4 & 6)" is packaging (3-in-1 Edition) whose covered Volumes the title does not state — an Editor maps it.`,
       created: ["placementHold"],
@@ -2083,7 +2083,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     },
   ),
   "packaging with unknown coverage, steady state": each(
-    (s) => ({
+    () => ({
       result: `recordOnly, unchanged, reason "packaging without coverage"`,
       hold: `packaging under series "Gamma Quest": "Gamma Quest Deluxe Edition 2" is packaging (Deluxe Edition) whose covered Volumes the title does not state — an Editor maps it.`,
       created: ["placementHold"],
@@ -2106,7 +2106,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     },
   ),
   "packaging with unknown coverage and no line name, Bootstrap Mode": each(
-    (s) => ({
+    () => ({
       result: `recordOnly, unchanged, reason "packaging without coverage"`,
       hold: `packaging under series "Gamma Quest": "Gamma Quest Collection" is packaging (multi-volume) whose covered Volumes the title does not state — an Editor maps it.`,
       created: ["placementHold"],
@@ -2129,7 +2129,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     },
   ),
   "packaging with unknown coverage, ambiguous Series, Bootstrap Mode": each(
-    (s) => ({
+    () => ({
       result: `recordOnly, unchanged, reason "packaging without coverage"`,
       hold: `packaging: "Gamma Quest Deluxe Edition 2" is packaging (Deluxe Edition) whose covered Volumes the title does not state — an Editor maps it.`,
       created: ["placementHold"],
@@ -2177,7 +2177,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     },
   ),
   "box set, steady state": each(
-    (s) => ({
+    () => ({
       result: `recordOnly, unchanged, reason "box set"`,
       hold: `packaging under series "Gamma Quest": Box set "Gamma Quest Box Set 1 (Vol. 1-2)" is a Release Bundle — steady state leaves bundles to review.`,
       created: ["placementHold"],
@@ -2207,7 +2207,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
   "box set with no stated coverage, Bootstrap Mode": unstatedBox,
   "box set with no stated coverage, steady state": unstatedBox,
   "packaging with unknown coverage on an ISBN a hidden Release holds": each(
-    (s) => ({
+    () => ({
       result: `recordOnly, unchanged, reason "packaging without coverage"`,
       hold: `packaging: "Gamma Quest Deluxe Edition 2" is packaging (Deluxe Edition) whose covered Volumes the title does not state — an Editor maps it.`,
       created: ["placementHold"],

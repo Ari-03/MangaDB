@@ -219,7 +219,10 @@ function QueueRow({ row, canAct }: { row: Row; canAct: boolean }) {
           {row.notes.length > 0 ? (
             <ul>
               {row.notes.map((note, i) => (
-                <li key={i}>
+                <li
+                  // biome-ignore lint/suspicious/noArrayIndexKey: each note is plain text with no state, so a key by position only re-renders in place
+                  key={i}
+                >
                   {REASON_LABELS[note.reason]}: {note.note}
                 </li>
               ))}

@@ -145,6 +145,7 @@ function ConsentSync({ consent }: { consent: AnalyticsConsent }) {
   const username = consent.status === "identified" ? consent.username : undefined;
   const role = consent.status === "identified" ? consent.role : undefined;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `consent` can be a new object each render; its fields, which are all applyConsent reads, are the dependencies
   useLayoutEffect(() => {
     if (clientLoaded) applyConsent(consent);
     // Unmounted (the router's error screen replaced the app), nothing reads
@@ -152,7 +153,6 @@ function ConsentSync({ consent }: { consent: AnalyticsConsent }) {
     return () => {
       sending = false;
     };
-    // `consent` is a new object each render; its fields are the dependencies.
   }, [status, userId, username, role]);
 
   return null;

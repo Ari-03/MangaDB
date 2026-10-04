@@ -192,6 +192,7 @@ function EditionPage() {
           ...(primarySeries
             ? [
                 <Link
+                  key="series"
                   to="/series/$publicId/$slug"
                   params={slugParams(primarySeries.publicId, primarySeries.title)}
                 >

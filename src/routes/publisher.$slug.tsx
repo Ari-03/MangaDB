@@ -198,7 +198,13 @@ function PublisherPage() {
 
   return (
     <main className="publisher-page">
-      <Breadcrumbs trail={[<Link to="/publishers">Publishers</Link>]} />
+      <Breadcrumbs
+        trail={[
+          <Link key="publishers" to="/publishers">
+            Publishers
+          </Link>,
+        ]}
+      />
 
       <header className="pub-hero">
         <span className="pub-logo" aria-hidden="true">

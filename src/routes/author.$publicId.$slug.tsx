@@ -80,7 +80,13 @@ function AuthorPage() {
   const volumes = series.reduce((sum, entry) => sum + entry.volumeCount, 0);
   return (
     <main className="author-page">
-      <Breadcrumbs trail={[<Link to="/authors">Authors</Link>]} />
+      <Breadcrumbs
+        trail={[
+          <Link key="authors" to="/authors">
+            Authors
+          </Link>,
+        ]}
+      />
 
       <header className="author-hero">
         <p className="page-kicker">Author</p>

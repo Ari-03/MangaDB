@@ -124,6 +124,7 @@ async function overlayFor(as: Accessor) {
     api.reading.seriesTracking,
     await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }),
   );
+  // biome-ignore lint/correctness/useHookAtTopLevel: called outside a render on purpose; its only hooks are the mocked useQuery, which reads the snapshot set above
   const overlay = useSeriesOverlay(1);
   if (!overlay) throw new Error("overlay missing");
   return overlay;

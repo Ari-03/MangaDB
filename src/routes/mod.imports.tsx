@@ -159,7 +159,10 @@ function Imports() {
                   </summary>
                   <ul>
                     {run.errors.map((error, i) => (
-                      <li key={i}>
+                      <li
+                        // biome-ignore lint/suspicious/noArrayIndexKey: each error is a plain string, so a key by position only re-renders in place
+                        key={i}
+                      >
                         <code>{error}</code>
                       </li>
                     ))}

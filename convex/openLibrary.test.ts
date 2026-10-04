@@ -34,7 +34,7 @@ function dumpLine(edition: Record<string, unknown>): string {
 }
 
 function stubDump(editions: Array<Record<string, unknown>>) {
-  const body = editions.map(dumpLine).join("\n") + "\n";
+  const body = `${editions.map(dumpLine).join("\n")}\n`;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url === DUMP_URL) {

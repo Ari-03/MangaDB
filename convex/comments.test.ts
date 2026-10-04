@@ -7,7 +7,7 @@
 import type { FunctionArgs } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api, internal } from "./_generated/api";
+import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { COMMENT_POLICY } from "./comments";
 import type { PageTargetRef } from "./lib/ratings";

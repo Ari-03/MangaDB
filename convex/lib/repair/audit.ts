@@ -207,7 +207,9 @@ export async function settlePositions(
     .filter((vol) => labelNumber(vol.label) === null)
     .sort((a, b) => a.position - b.position);
   const target = new Map(volumes.map((vol) => [vol._id, labelNumber(vol.label)]));
-  unnumbered.forEach((vol, i) => target.set(vol._id, maxNumber + 1 + i));
+  unnumbered.forEach((vol, i) => {
+    target.set(vol._id, maxNumber + 1 + i);
+  });
   for (const vol of volumes) {
     const position = target.get(vol._id);
     if (position === undefined || position === null || position === vol.position) continue;

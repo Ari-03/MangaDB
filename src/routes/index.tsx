@@ -222,7 +222,11 @@ function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
       aria-label="Covers publishing soon"
     >
       {rows.map((row, index) => (
-        <div className="hero-row" key={index}>
+        <div
+          className="hero-row"
+          // biome-ignore lint/suspicious/noArrayIndexKey: a row is its position in the grid; the covers inside it are keyed by Release
+          key={index}
+        >
           {row.map((release) => (
             <EditionLink className="cover-link" release={release} key={release.id}>
               <Cover

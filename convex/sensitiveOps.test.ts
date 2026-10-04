@@ -183,7 +183,7 @@ describe("sensitiveOps — authorization, reason, and confirmation", () => {
     expect(form!.splitAvailable).toBe(false);
     const counts = Object.fromEntries(form!.impact.map((r) => [r.label, r.count]));
     expect(counts["Source observations"]).toBe(1);
-    expect(counts["Volumes"]).toBe(1);
+    expect(counts.Volumes).toBe(1);
     expect(counts["Relationship edges"]).toBe(2);
     expect(counts["User series states (follows, reading, visibility)"]).toBe(2);
     expect(counts["Volume read counts"]).toBe(1);

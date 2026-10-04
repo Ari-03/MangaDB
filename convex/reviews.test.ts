@@ -5,7 +5,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { api, internal } from "./_generated/api";
+import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { TargetId, TargetRef } from "./lib/ratings";
 import { REVIEW_MAX_LENGTH, REVIEW_MIN_LENGTH, REVIEW_REASON_MAX } from "./reviews";
@@ -501,7 +501,7 @@ describe("Reviews of an omnibus Edition", () => {
       .mutation(api.reviews.save, { target, body: TEXT, spoiler: false });
 
   it("reviews a multi-volume Edition as one book, with the author's Rating of it", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     const target = { kind: "edition" as const, id: books.omnibus };
     const author = t.withIdentity({ subject: AUTHOR });
     await author.mutation(api.ratings.set, { target, score: 70 });
@@ -520,7 +520,7 @@ describe("Reviews of an omnibus Edition", () => {
   });
 
   it("refuses a single-volume Edition with rateVolume", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     await expect(save(t, { kind: "edition", id: books.single })).rejects.toMatchObject({
       data: { code: "rateVolume" },
     });
@@ -528,7 +528,7 @@ describe("Reviews of an omnibus Edition", () => {
   });
 
   it("an Edition merge repoints Reviews, the survivor's winning a clash", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     const on = (subject: string, editionId: Id<"editions">, body: string) =>
       t.withIdentity({ subject }).mutation(api.reviews.save, {
         target: { kind: "edition", id: editionId },
@@ -551,7 +551,7 @@ describe("Reviews of an omnibus Edition", () => {
   });
 
   it("purging a user deletes their Edition Reviews", async () => {
-    const { t, ids, books } = await seedBooks();
+    const { t, books } = await seedBooks();
     await save(t, { kind: "edition", id: books.omnibus });
     await purgeAccount(t, AUTHOR);
     expect(await t.run((ctx) => ctx.db.query("reviews").collect())).toEqual([]);

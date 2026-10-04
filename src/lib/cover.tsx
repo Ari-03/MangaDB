@@ -198,6 +198,7 @@ export function Cover({
   // A server-rendered <img> can fail before React hydrates, and that error
   // event is gone by the time onError is attached; a finished image with no
   // pixels is the tell.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `fail` is new each render but only calls the stable setFailed, so `art` alone decides when to look
   useEffect(() => {
     const el = img.current;
     if (art && el && el.complete && el.naturalWidth === 0) fail(art);

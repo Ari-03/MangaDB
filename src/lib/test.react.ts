@@ -69,6 +69,7 @@ vi.mock("react", async (importOriginal) => {
       deps.some((dep, i) => !Object.is(dep, prev[i]))
     );
   };
+  // biome-ignore lint/suspicious/noConfusingVoidType: mirrors React's EffectCallback, which returns void or a destructor
   function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]) {
     const slots = state.slots;
     const index = state.cursor++;

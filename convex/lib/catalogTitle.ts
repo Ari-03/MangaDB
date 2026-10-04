@@ -11,7 +11,7 @@
 // mutation per record, spec §6).
 
 import { v, type Infer } from "convex/values";
-import type { Doc, Id } from "../_generated/dataModel";
+import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
 import { packagingValidator, rangeLabels, type ParsedBookTitle } from "./bookTitle";

@@ -30,7 +30,8 @@ let convexClient: ConvexReactClient | undefined;
 export const clerkEnabled = Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 
 export function AppProviders({ children }: { children: ReactNode }) {
-  const client = (convexClient ??= new ConvexReactClient(convexUrl()));
+  convexClient ??= new ConvexReactClient(convexUrl());
+  const client = convexClient;
   // The viewer's mature-titles choice (lib/mature.tsx) wraps everything.
   const inner = <MatureProvider>{children}</MatureProvider>;
   if (!clerkEnabled) {

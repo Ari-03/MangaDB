@@ -123,7 +123,11 @@ describe("posthogProxyResponse", () => {
   it("streams an upload upstream instead of buffering it first", async () => {
     // A body whose sender is still uploading: one chunk arrived, no end yet.
     let sender!: ReadableStreamDefaultController<Uint8Array>;
-    const upload = new ReadableStream<Uint8Array>({ start: (c) => void (sender = c) });
+    const upload = new ReadableStream<Uint8Array>({
+      start: (c) => {
+        sender = c;
+      },
+    });
     sender.enqueue(new TextEncoder().encode("first,"));
     const request = new Request("https://mangadb.org/_s/s/", {
       method: "POST",

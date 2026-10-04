@@ -190,7 +190,10 @@ function ModRolesContent() {
         ) : (
           <ul className="audit-list">
             {auditLog.map((entry, i) => (
-              <li key={i}>
+              <li
+                // biome-ignore lint/suspicious/noArrayIndexKey: each entry is plain text with no state, so a key by position only re-renders in place
+                key={i}
+              >
                 <time dateTime={new Date(entry.at).toISOString()}>
                   {new Date(entry.at).toLocaleDateString(undefined, {
                     year: "numeric",
