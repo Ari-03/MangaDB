@@ -36,6 +36,7 @@ import {
 import { plural } from "~/lib/format";
 import { bookLabel, PathShelf } from "~/lib/seriesShelf";
 import { slugParams } from "~/lib/slug";
+import { useViewerQuery } from "~/lib/viewer";
 
 /**
  * The three-state segmented control. Exactly one state can be active;
@@ -91,7 +92,7 @@ function StateButtons({
  * overwrite a choice made here meanwhile.
  */
 export function ReleaseCollectionControls({ releaseId }: { releaseId: Id<"releases"> }) {
-  const data = useQuery(api.collection.entryForRelease, { releaseId });
+  const data = useViewerQuery(api.collection.entryForRelease, { releaseId });
   const setEntry = useMutation(api.collection.setReleaseEntry);
   // The post-first-entry follow suggestion the last mutation returned;
   // ephemeral — following and permanent dismissal go through FollowPrompt.
@@ -176,7 +177,7 @@ export function ReleaseCollectionControls({ releaseId }: { releaseId: Id<"releas
 
 /** Collection controls on the Bundle page; renders nothing signed out. */
 export function BundleCollectionControls({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
-  const data = useQuery(api.collection.entryForBundle, { bundleId });
+  const data = useViewerQuery(api.collection.entryForBundle, { bundleId });
   const setEntry = useMutation(api.collection.setBundleEntry);
   // Follow suggestions for the member Releases' Series.
   const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
@@ -216,7 +217,7 @@ export function BundleCollectionControls({ bundleId }: { bundleId: Id<"releaseBu
  * Renders nothing signed out or when nothing covering it is owned.
  */
 export function VolumeOwnership({ volumePublicId }: { volumePublicId: number }) {
-  const data = useQuery(api.collection.volumeOwnership, { volumePublicId });
+  const data = useViewerQuery(api.collection.volumeOwnership, { volumePublicId });
   if (!data || data.owned.length === 0) return null;
   return (
     <div className="volume-ownership" role="status">
@@ -287,7 +288,7 @@ export function countLibrary(library: Library): Record<EntryState, number> {
  * their covers or all at once.
  */
 export function LibraryCollection({ shelf }: { shelf: EntryState }) {
-  const library = useQuery(api.collection.myLibrary, {});
+  const library = useViewerQuery(api.collection.myLibrary);
   if (library === undefined) return <p className="placeholder">Loading…</p>;
   if (library === null) return null;
 

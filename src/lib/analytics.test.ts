@@ -234,6 +234,7 @@ describe("AnalyticsSettings", () => {
 
   it("says that PostHog receives the IP address and that earlier events may still be delivered", async () => {
     const t = makeT();
+    signIn(reader.subject);
     const as = await withUser(t, reader);
     await refreshViewer(as);
     const panel = mount(() => AnalyticsSettings()).map((host) => text(host.props.children)).join(" ");
@@ -244,6 +245,7 @@ describe("AnalyticsSettings", () => {
 
   it("says when this browser sends Do Not Track", async () => {
     const t = makeT();
+    signIn(reader.subject);
     const as = await withUser(t, reader);
     await refreshViewer(as);
     const panel = () => mount(() => AnalyticsSettings()).map((host) => text(host.props.children)).join(" ");

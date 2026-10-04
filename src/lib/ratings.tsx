@@ -28,7 +28,7 @@ import {
   type Smiley,
 } from "../../convex/lib/scoreFormat";
 import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
-import { useReadyViewer } from "~/lib/viewer";
+import { useReadyViewer, useViewerQuery } from "~/lib/viewer";
 
 /** A rating target as pages know it: `{ kind: "series" | "volume" | "edition", publicId }`. */
 export type RatingTarget = FunctionArgs<typeof api.ratings.summary>["target"];
@@ -206,7 +206,7 @@ function SmileyGlyph({ smiley }: { smiley: Smiley }) {
  * Nothing at all signed out, so the container can hide itself.
  */
 export function RatingControl({ target }: { target: RatingTarget }) {
-  const mine = useQuery(api.ratings.mine, { target });
+  const mine = useViewerQuery(api.ratings.mine, { target });
   const format = useViewerFormat();
   const setScore = useMutation(api.ratings.set);
   // The score just picked, shown until the query catches up.

@@ -7,7 +7,8 @@
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import type { ReactNode } from "react";
+import type { FunctionReturnType } from "convex/server";
+import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
@@ -106,9 +107,10 @@ export function ProposalStateChip({ state }: { state: string }) {
 
 /**
  * The public revision history of a record page, as a closed disclosure so it
- * sits quietly under the catalog content. Renders nothing until the client
- * has data (history is reactive, not SSR'd) and nothing at all when the
- * record has no history yet.
+ * sits quietly under the catalog content. Few readers open it and the query
+ * reads every revision with its authors, so it subscribes the first time the
+ * disclosure opens (and stays live from then on): "Loading…" until the
+ * history arrives, the revision count in the summary after.
  */
 export function RecordHistory({
   type,
@@ -117,17 +119,41 @@ export function RecordHistory({
   type: HistoryTargetType;
   publicId: number;
 }) {
-  const history = useQuery(api.moderation.recordHistory, { type, publicId });
-  if (!history || history.revisions.length === 0) return null;
-  const count = history.revisions.length;
+  const [opened, setOpened] = useState(false);
+  const history = useQuery(api.moderation.recordHistory, opened ? { type, publicId } : "skip");
+  const count = history?.revisions.length;
   return (
-    <details className="record-history">
+    <details
+      className="record-history"
+      onToggle={(event) => {
+        if (event.currentTarget.open) setOpened(true);
+      }}
+    >
       <summary>
         History
-        <span className="record-history-count">
-          {count} revision{count === 1 ? "" : "s"}
-        </span>
+        {count !== undefined ? (
+          <span className="record-history-count">
+            {count} revision{count === 1 ? "" : "s"}
+          </span>
+        ) : null}
       </summary>
+      {opened ? <HistoryBody history={history} /> : null}
+    </details>
+  );
+}
+
+/** The opened history: loading, empty, or the revisions newest first. */
+function HistoryBody({
+  history,
+}: {
+  history: FunctionReturnType<typeof api.moderation.recordHistory> | undefined;
+}) {
+  if (history === undefined) return <p className="section-hint">Loading…</p>;
+  if (history === null || history.revisions.length === 0) {
+    return <p className="section-hint">No changes recorded yet.</p>;
+  }
+  return (
+    <>
       <p className="section-hint">
         Every approved change to this record, newest first.
         {history.overriddenFields.length > 0 ? (
@@ -192,7 +218,7 @@ export function RecordHistory({
           </li>
         ))}
       </ol>
-    </details>
+    </>
   );
 }
 

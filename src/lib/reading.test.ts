@@ -20,6 +20,7 @@ import { makeT, reader, withUser, type Accessor, type TestT } from "../../convex
 import { click, harness, hold, mount, press, render, resetHarness, setQuery, settle, text, type Host } from "./test.react";
 
 vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
+vi.mock("@clerk/tanstack-react-start", async () => (await import("./test.react")).clerkHooks);
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
 vi.mock("~/lib/mature", () => ({ useArtConcealed: () => false }));
 

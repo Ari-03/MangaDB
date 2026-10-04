@@ -20,7 +20,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { FEATURES } from "../../convex/lib/features";
-import { useIsModerator } from "~/lib/viewer";
+import { useIsModerator, useViewerQuery } from "~/lib/viewer";
 import { RatingControl, ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
 
 // Mirrors REVIEW_MIN_LENGTH / REVIEW_MAX_LENGTH / REVIEW_PAGE in convex/reviews.ts.
@@ -74,7 +74,7 @@ function LiveReviews({
   noun: string;
 }) {
   const [limit, setLimit] = useState(PAGE);
-  const mine = useQuery(api.reviews.mine, { target });
+  const mine = useViewerQuery(api.reviews.mine, { target });
   const ownId = mine?.review?.reviewId ?? null;
   // The viewer's own Review shows above the list, not in it: ask for one
   // extra row so dropping it still leaves a full page.
@@ -202,7 +202,7 @@ export function TakePanel({
 
 /** Signed out or without a username, the Reviews section says how to join in. */
 function ReviewPrompt({ noun }: { noun: string }) {
-  const viewer = useQuery(api.users.viewer, {});
+  const viewer = useViewerQuery(api.users.viewer);
   if (viewer === undefined) return null;
   if (viewer === null) {
     return (
@@ -229,7 +229,7 @@ function ReviewPrompt({ noun }: { noun: string }) {
  * the panel can hide itself.
  */
 function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
-  const mine = useQuery(api.reviews.mine, { target });
+  const mine = useViewerQuery(api.reviews.mine, { target });
   const [editing, setEditing] = useState(false);
   if (!mine) return null; // loading, signed out, or username pending
   const review = mine.review;
@@ -452,7 +452,7 @@ function ModerateReview({ reviewId, hidden }: { reviewId: Id<"reviews">; hidden:
 
 /** The target's hidden Reviews, for Moderators; nothing for anyone else. */
 function HiddenReviews({ target }: { target: RatingTarget }) {
-  const hidden = useQuery(api.reviews.hiddenList, { target });
+  const hidden = useViewerQuery(api.reviews.hiddenList, { target });
   if (!hidden || hidden.length === 0) return null;
   return (
     <div className="reviews-hidden">

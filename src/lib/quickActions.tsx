@@ -9,7 +9,7 @@
 // and reading never changes a Series status — a first entry or a fully read
 // Series only *prompts*, in the shelf's prompt area.
 
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 
@@ -20,6 +20,7 @@ import { mutationErrorMessage } from "~/lib/errors";
 import { plural } from "~/lib/format";
 import { FollowPrompt, type FollowSuggestion } from "~/lib/follows";
 import { CompletedPrompt, type SeriesSuggestion } from "~/lib/reading";
+import { useViewerQuery } from "~/lib/viewer";
 
 export type EntryState = "wanted" | "ordered" | "owned";
 
@@ -58,15 +59,16 @@ export type QuickBook = {
  * the per-Volume read counts. Null while loading, signed out, or when the
  * Series is unknown — the shelf then renders without badges or actions.
  * Both queries dedupe across the shelf's items in the Convex client, so
- * every book subscribing costs one subscription each.
+ * every book subscribing costs one subscription each, and an anonymous
+ * visitor subscribes to neither (useViewerQuery).
  */
 export type SeriesOverlay = NonNullable<
   FunctionReturnType<typeof api.collection.seriesEntries>
 > & { volumesRead: ReadonlyMap<number, number> };
 
 export function useSeriesOverlay(seriesPublicId: number): SeriesOverlay | null {
-  const entries = useQuery(api.collection.seriesEntries, { seriesPublicId });
-  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+  const entries = useViewerQuery(api.collection.seriesEntries, { seriesPublicId });
+  const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   if (!entries || !tracking) return null;
   return {
     ...entries,

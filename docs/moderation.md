@@ -40,8 +40,9 @@ Reload and edit again. Hidden, merged and locked records refuse edits.
 
 Each record page shows its public history: the diff, the author and their
 role at the time (or the import source), the approver, the time, the
-comment and the source citation. Pending and rejected proposals stay
-private to the Data Team.
+comment and the source citation. It sits in a closed History disclosure
+that loads the first time it is opened. Pending and rejected proposals
+stay private to the Data Team.
 
 **Human Overrides.** An approved human change to a field whose latest
 Revision came from an import adds that field to the record's

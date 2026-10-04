@@ -8,12 +8,14 @@ import { AnalyticsProvider } from "~/lib/analytics";
 import { convexUrl } from "~/lib/convexUrl";
 import { MatureProvider } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
-import { useIsDataTeam, useReadyViewer } from "~/lib/viewer";
+import { useConvexClerkAuth, useIsDataTeam, useReadyViewer } from "~/lib/viewer";
 
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
 // ConvexProviderWithClerk feeds its "convex"-template JWT to the reactive
 // Convex client so every mutation/query authorizes via
-// ctx.auth.getUserIdentity(). Clerk is optional at runtime: without the
+// ctx.auth.getUserIdentity(); it reads the session through
+// useConvexClerkAuth (lib/viewer.ts), so viewer-only queries can tell when
+// Convex has ruled on the current session's token. Clerk is optional at runtime: without the
 // publishable key the public catalog renders signed out. Convex is not:
 // without its URL the first render throws (lib/convexUrl.ts).
 // PostHog (lib/analytics.tsx) sits innermost, so its consent gate can read
@@ -44,7 +46,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   }
   return (
     <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
-      <ConvexProviderWithClerk client={client} useAuth={useAuth}>
+      <ConvexProviderWithClerk client={client} useAuth={useConvexClerkAuth}>
         <AnalyticsProvider identify>{inner}</AnalyticsProvider>
       </ConvexProviderWithClerk>
     </ClerkProvider>

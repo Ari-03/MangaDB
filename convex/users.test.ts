@@ -68,6 +68,33 @@ describe("users.setAnalyticsOptOut", () => {
     });
   });
 
+  it("writes the User row only when the choice changes", async () => {
+    const t = makeT();
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+    await asA.mutation(api.users.claimUsername, { username: "alice" });
+    // Documents the call wrote, so a repeat of the stored choice (Do Not
+    // Track on every mount, lib/analytics.tsx) is seen to leave the row alone.
+    const written = (optOut: boolean) =>
+      asA.run(async (ctx) => {
+        await ctx.runMutation(api.users.setAnalyticsOptOut, { optOut });
+        return (await ctx.meta.getTransactionMetrics()).documentsWritten.used;
+      });
+    expect(await written(true)).toBe(1); // a first choice is stored
+    expect(await written(true)).toBe(0);
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ analyticsOptOut: true });
+    expect(await written(false)).toBe(1);
+    expect(await written(false)).toBe(0);
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ analyticsOptOut: false });
+  });
+
+  it("stores an explicit On over a never-made choice", async () => {
+    const t = makeT();
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+    await asA.mutation(api.users.claimUsername, { username: "alice" });
+    await asA.mutation(api.users.setAnalyticsOptOut, { optOut: false });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ analyticsOptOut: false });
+  });
+
   it("stays open to a suspended User", async () => {
     const t = makeT();
     await seedTeam(t, [alice, bob]);

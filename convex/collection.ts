@@ -12,6 +12,7 @@ import { editionCoverage, publisherLink } from "./catalogPages";
 import { followMerges, getActive, requireActive } from "./lib/merges";
 import { seriesStateRow } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { boundedReads } from "./lib/boundedReads";
 import { releaseCover, statsCoverIsbns } from "./lib/covers";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import { editionPathKey } from "./lib/editionGroups";
@@ -326,6 +327,10 @@ export const volumeOwnership = query({
  * through an Owned Bundle (Derived Ownership, computed here as always), plus
  * the format preference the quick actions use to pick a Release when a book
  * has several. Null without a viewer or for an unknown Series.
+ *
+ * A Release counts when its active survivor names the Series (directly or
+ * through a merged Series). Entries come in the order they were made, so
+ * quickBookFor picks the first one made.
  */
 export const seriesEntries = query({
   args: { seriesPublicId: v.number() },
@@ -333,48 +338,86 @@ export const seriesEntries = query({
     const user = await viewerOrNull(ctx);
     if (!user) return null;
     const series = await resolveActiveSeries(ctx, seriesPublicId);
-    if (!series) return null;
-
-    const inSeries = async (release: Doc<"releases">) => {
-      for (const rawId of release.seriesIds) {
-        if (rawId === series._id) return true;
-        const resolved = await getActive(ctx, "series", rawId);
-        if (resolved && resolved._id === series._id) return true;
-      }
-      return false;
-    };
-
-    const rows = await ctx.db
-      .query("collectionEntries")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .collect();
-    const entries = [];
-    const derivedOwned = new Set<Id<"releases">>();
-    for (const row of rows) {
-      if (row.releaseId) {
-        const release = await getActive(ctx, "releases", row.releaseId);
-        if (!release || !(await inSeries(release))) continue;
-        entries.push({
-          releaseId: release._id,
-          state: row.state,
-          variantId: row.variantId ?? null,
-        });
-      } else if (row.bundleId && row.state === "owned") {
-        const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
-        if (!bundle) continue;
-        for (const release of await bundleReleases(ctx, bundle._id)) {
-          if (await inSeries(release)) derivedOwned.add(release._id);
-        }
-      }
-    }
-    return {
-      seriesId: series._id,
-      formatPreference: user.formatPreference,
-      entries,
-      derivedOwned: [...derivedOwned],
-    };
+    return series ? await seriesOverlay(ctx, user, series) : null;
   },
 });
+
+/**
+ * seriesEntries for a known viewer and Series; exported for its cost tests.
+ *
+ * It reads the viewer's whole collection and resolves every entry, so a
+ * library of N entries costs about 2N reads however few concern this
+ * Series. The lookups go out together through one bounded queue, and each
+ * Release, Series, box set and box set's members is looked up once by the id
+ * an entry names, however many entries name it (two merged ids that lead to
+ * the same survivor still read it once each, as the one-by-one scan did), so
+ * it reads no document or range the one-by-one scan did not. Cutting the reads for very large libraries needs a
+ * per-(user, Series) index on collectionEntries, with a backfill.
+ */
+export async function seriesOverlay(ctx: QueryCtx, user: Doc<"users">, series: Doc<"series">) {
+  const bounded = boundedReads(ctx);
+  const releaseOf = once((id: Id<"releases">) => getActive(bounded, "releases", id));
+  const survivorOf = once(async (id: Id<"series">) => (await getActive(bounded, "series", id))?._id);
+  const bundleOf = once((id: Id<"releaseBundles">) => getActive(bounded, "releaseBundles", id));
+  const membersOf = once(async (bundleId: Id<"releaseBundles">) => {
+    const memberships = await bounded.db
+      .query("bundleMemberships")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+      .collect();
+    const releases = await Promise.all(memberships.map((membership) => releaseOf(membership.releaseId)));
+    return releases.filter((release) => release !== null);
+  });
+  // The other Series a Release names are resolved in turn, stopping at the
+  // first that leads here, as the scan did.
+  const inSeries = async (release: Doc<"releases">) => {
+    if (release.seriesIds.includes(series._id)) return true;
+    for (const rawId of release.seriesIds) {
+      if ((await survivorOf(rawId)) === series._id) return true;
+    }
+    return false;
+  };
+
+  const rows = await bounded.db
+    .query("collectionEntries")
+    .withIndex("by_user", (q) => q.eq("userId", user._id))
+    .collect();
+  // Each row: its direct entry if on a Release here, or the Releases here
+  // an Owned box set gives it.
+  const resolved = await Promise.all(
+    rows.map(async (row) => {
+      if (row.releaseId) {
+        const release = await releaseOf(row.releaseId);
+        if (!release || !(await inSeries(release))) return { derived: [] };
+        return { entry: { releaseId: release._id, state: row.state, variantId: row.variantId ?? null }, derived: [] };
+      }
+      if (!row.bundleId || row.state !== "owned") return { derived: [] };
+      const bundle = await bundleOf(row.bundleId);
+      if (!bundle) return { derived: [] };
+      const members = await membersOf(bundle._id);
+      const covered = await Promise.all(members.map(inSeries));
+      return { derived: members.filter((_, i) => covered[i]).map((release) => release._id) };
+    }),
+  );
+  return {
+    seriesId: series._id,
+    formatPreference: user.formatPreference,
+    entries: resolved.flatMap((row) => (row.entry ? [row.entry] : [])),
+    derivedOwned: [...new Set(resolved.flatMap((row) => row.derived))],
+  };
+}
+
+/** `read` memoized by key: each key is read once, its promise shared by every caller. */
+function once<K, V>(read: (key: K) => Promise<V>) {
+  const reads = new Map<K, Promise<V>>();
+  return (key: K) => {
+    let pending = reads.get(key);
+    if (!pending) {
+      pending = read(key);
+      reads.set(key, pending);
+    }
+    return pending;
+  };
+}
 
 /** Whether every completely covered Volume of an Edition has a completed read. */
 async function editionRead(
