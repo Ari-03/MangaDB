@@ -379,6 +379,16 @@ is fixed.
   before its links got a ten-minute budget
   ([imports](imports.md#open-library)). A time budget beside the count is
   the fix.
+- **A stranded run that is not its source's latest is never closed.** The
+  hourly tick asks only about each source's latest run (`enabledSources`
+  and `runScheduled` in `convex/imports.ts`). A sync started by hand while
+  an earlier run of the same source is still `running` opens a second run,
+  and if the earlier one's chain is gone it stays `running` in the list
+  for good. Seen on staging on 2026-10-04 with Open Library. An operator
+  closes it with
+  `npx convex run imports:closeStrandedRun '{"runId":"…"}'`, which
+  refuses a run that is still active. The fix is for the tick to close
+  every stranded `running` run of a source, not only the latest.
 - **An Open Library link can still reach the action limit on a stalled
   read or a slow download.** A link checks its ten minutes only between
   dump lines (`LINK_BUDGET_MS` in `convex/openLibrary.ts`). The fetch of
