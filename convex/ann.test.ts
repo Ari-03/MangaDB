@@ -225,6 +225,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs.map((run) => run.status)).toEqual(["succeeded", "running"]);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("links release observations to canonical Releases and reconciles dates at standard authority", async () => {
@@ -284,6 +285,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       expect(obs9002!.conflicts).toHaveLength(1);
       expect(obs9002!.conflicts![0]!.reason).toContain("lower authority");
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("mirrors in chained links and withdraws entries a complete mirror stopped seeing", async () => {
@@ -340,6 +342,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       const kept = observations.find((o) => o.sourceRecordId === "manga:1001")!;
       expect(kept.withdrawn).toBe(false);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it.each(["html report", "missing detail", "failed detail", "malformed report item"])(
@@ -579,6 +582,7 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
     await t.run(async (ctx) => {
       expect((await ctx.db.get(release))!.pubDate!.year).toBe(2005);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never links a line years away from the Release's own date", async () => {
@@ -594,6 +598,7 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
     await releaseFor(t, "5", { year: 2005, month: 3, day: 1, sort: 20050301 });
     await sync(t);
     expect(await linkOf(t, 9201)).toBeNull();
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("builds no placeholder Volume for an omnibus-only entry and dedupes labels", async () => {
@@ -629,6 +634,7 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
       expect(await volumesOf("Homunculus")).toHaveLength(0);
       expect((await volumesOf("Sand Land")).map((v) => [v.label, v.position])).toEqual([["1", 1]]);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 });
 
@@ -648,6 +654,7 @@ describe("ann.sync — steady state", () => {
       const tables = versions[0]!.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
       expect(tables).toEqual(["series", "volumes"]);
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 });
 
@@ -1069,6 +1076,7 @@ describe("ann — repairs stand across mirrors", () => {
     expect(all.map((s) => s.status)).toEqual(["hidden"]);
     expect(await volumesOf(t, alpha!._id)).toHaveLength(3);
     expect((await obsFor(t, 9004))?.recordRef).toBeUndefined();
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never creates a Series whose title names a hidden one", async () => {
@@ -1091,6 +1099,7 @@ describe("ann — repairs stand across mirrors", () => {
         "Series 77",
       );
     });
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("follows a merged Series to its survivor and builds the backbone there", async () => {
@@ -1129,6 +1138,7 @@ describe("ann — repairs stand across mirrors", () => {
       expect(mangaObs?.recordRef?.id).toBe(survivorId);
     });
     expect((await volumesOf(t, survivorId)).map((v) => v.label).sort()).toEqual(["1", "2", "3"]);
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   const GHOST: FixtureManga = {
@@ -1160,6 +1170,7 @@ describe("ann — repairs stand across mirrors", () => {
     });
     await sync(t);
     expect((await volumesOf(t, ghost!._id)).map((v) => v.label)).toEqual(["1", "2"]);
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never recreates a numbered Volume a repair merged or hid", async () => {
@@ -1186,6 +1197,7 @@ describe("ann — repairs stand across mirrors", () => {
       ["2", "merged"],
       ["3", "hidden"],
     ]);
+    await drain(t); // the page passes its syncs chained, under this test's stub
   });
 
   it("never places a release line whose ISBN is on a Release an Editor hid", async () => {

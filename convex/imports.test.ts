@@ -50,6 +50,7 @@ describe("imports.runScheduled", () => {
     // Running again is a no-op.
     await t.action(internal.imports.runScheduled, {});
     expect(await t.run((ctx) => ctx.db.query("publishers").collect())).toHaveLength(slugs.length);
+    await drain(t); // the syncs it dispatched, under this test's stub
   });
 });
 
@@ -453,6 +454,7 @@ describe("import runs & source health", () => {
     expect(await health()).toEqual({ state: "unhealthy", failures: 3 });
     await finishRun(t, "succeeded");
     expect(await health()).toEqual({ state: "healthy", failures: 0 });
+    await drain(t); // the health alerts the transitions scheduled
   });
 });
 
@@ -778,6 +780,7 @@ describe("imports.dashboard", () => {
     const ann = rows.find((r) => r.key === "ann")!;
     expect(ann.healthState).toBe("healthy");
     expect(ann.lastRun).toBeNull();
+    await drain(t); // the health alert the transition scheduled
   });
 });
 

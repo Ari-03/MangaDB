@@ -12,6 +12,9 @@ export default defineConfig({
   },
   test: {
     environment: "edge-runtime",
+    // Refuses fetch, WebSocket and happy-dom's network for any test that
+    // has not stubbed them.
+    setupFiles: ["./vitest.setup.ts"],
     // The slowest convex-test cases near 4s on a 4-vCPU CI runner; 5s is too thin.
     testTimeout: 15_000,
     // The rate-limiter package is inlined so its component test helper's

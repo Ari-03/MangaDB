@@ -518,7 +518,8 @@ describe("users.purgeUser", () => {
       });
       expect(end.pack.find((entry) => entry.publicId === series.publicId)?.ratingRank).toBe(60);
     }
-  });
+    // 2 to 5 s alone, and it has run past the 15 s default beside other heavy jobs.
+  }, 60_000);
 
   it("purges Ratings whose library row and pack both near the 1 MiB document limit", async () => {
     const t = makeT({ transactionLimits: true });
