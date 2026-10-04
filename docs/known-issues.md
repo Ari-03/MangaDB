@@ -97,12 +97,6 @@ is fixed.
   restarts each continuation from byte zero and skips lines it already
   processed. Byte-offset continuation with HTTP Range, or a dump split into
   separate files, would avoid it.
-- **Three copies of the apply ladder.** `applyBook` in
-  `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
-  `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same
-  sequence and have drifted once already (Seven Seas lacked the
-  removed-Series check). They should become one ladder with per-source
-  options.
 - **A large merge cannot be Split.** `applySplit`
   (`convex/lib/sensitiveOps.ts`) runs as one transaction. It reads several
   index ranges for every row the merge moved and for every owner of every

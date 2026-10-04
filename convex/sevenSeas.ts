@@ -2,12 +2,14 @@
 // REST catalog (`wp/v2/books`) using `modified_gmt` as the change signal,
 // fetches the book page for new/changed records, normalizes it
 // (lib/sevenSeas.ts), and hands each snapshot to `applyBook`, which runs
-// the shared matching ladder and creation path (lib/matching.ts,
-// lib/pipeline.ts). Seven Seas specifics: series links are keyed by the
-// site's series slug, a box set becomes a Release Bundle that picks up
-// members whose books arrived after it on every listing that notes it, and
-// packaging an older planner left unplaced is replayed once from its
-// stored snapshot, without its page, paced by the detail budget.
+// the shared matching ladder (lib/matching.ts) and gives a book it matches
+// to no Release to the shared placement tail (lib/unmatched.ts: holds,
+// queue, creation). Seven Seas keeps its own: series links keyed by the
+// site's series slug, the linked Release's reconcile, a box set as a
+// Release Bundle that picks up members whose books arrived after it on
+// every listing that notes it, and packaging an older planner left
+// unplaced, replayed once from its stored snapshot, without its page,
+// paced by the detail budget.
 //
 // Covers land in Convex file storage as {storageId, sourceUrl, attribution}
 // through the shared attach path (lib/covers.ts `storeCover`), and are
@@ -33,28 +35,22 @@ import { closeRun, registryRow, runToContinue, stopAtGate, storeRunCover } from 
 import { applyRetrying } from "./lib/occ";
 import { parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { inferCoverage } from "./lib/coverage";
-import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
+import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
 import {
   getObservation,
-  type Hold,
   linkObservation,
   markSeen,
   recordUnplaced,
   upsertObservation,
 } from "./lib/observations";
 import {
-  alreadyHandled,
   blurbOutranked,
-  createCanonicalRecords,
   createReleaseBundle,
-  creationGates,
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
   linkedSeriesId,
-  queueCreationProposal,
   reconcileLinkedBundle,
   reconcileLinkedSeries,
-  removedSeriesFor,
   toPartialDate,
   linkSeriesObservation,
   type BundleReconcile,
@@ -70,6 +66,7 @@ import {
   type BookSnapshot,
 } from "./lib/sevenSeas";
 import { withExceptionCapture } from "./lib/posthog";
+import { placeUnmatched } from "./lib/unmatched";
 
 export const SOURCE_KEY = "sevenseas";
 const BASE_URL = "https://sevenseasentertainment.com";
@@ -427,7 +424,7 @@ function reconcileSeries(
  * Whether an unplaced observation carries a verdict a planner older than the
  * blurb, the line's size and Unmapped Packaging recorded. Only those
  * texts replay: a replay links, queues, or overwrites them with a verdict of
- * today's planner (unplacedVerdict, a hidden Series' note), none of which
+ * today's planner (unplacedNote, a hidden Series' note), none of which
  * replays again, so each observation replays at most once. No verdict at
  * all (an Editor's unlink) is settled too, until the page changes.
  */
@@ -446,14 +443,10 @@ function staleVerdict(observation: Doc<"sourceObservations">): boolean {
 }
 
 /** Why a packaging book or box set stays on its observation, today. */
-function unplacedVerdict(snapshot: BookSnapshot, seriesId: Id<"series"> | null): Hold {
-  return {
-    kind: "packaging",
-    reason: snapshot.isBox
-      ? `Box set "${snapshot.title}" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`
-      : `"${snapshot.title}" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`,
-    ...(seriesId !== null ? { seriesId } : {}),
-  };
+function unplacedNote(snapshot: BookSnapshot): string {
+  return snapshot.isBox
+    ? `Box set "${snapshot.title}" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`
+    : `"${snapshot.title}" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`;
 }
 
 /**
@@ -618,6 +611,57 @@ export const applyBook = internalMutation({
     // Packaging covers the base Series' real Volumes; it is never a Volume.
     const packaging = snapshot.packaging ?? null;
     const labels = coveredLabels(snapshot);
+    const releasePayload = {
+      format: "physical" as const,
+      binding: snapshot.binding,
+      isbn13: snapshot.isbn13,
+      pubDate: snapshot.releaseDate ? toPartialDate(snapshot.releaseDate) : undefined,
+      price:
+        snapshot.priceCents !== undefined
+          ? {
+              amountCents: snapshot.priceCents,
+              currency: snapshot.currency ?? "USD",
+            }
+          : undefined,
+      description: snapshot.description,
+    };
+    const bootstrap = await getBootstrapMode(ctx);
+
+    // A box set is never a Release: it skips the ladder for a Release
+    // Bundle of the base Series' existing Releases.
+    if (snapshot.isBox) {
+      if (seriesId === null || labels.length === 0 || !bootstrap) {
+        await recordUnplaced(
+          ctx,
+          observation,
+          {
+            kind: "packaging",
+            reason: unplacedNote(snapshot),
+            ...(seriesId !== null ? { seriesId } : {}),
+          },
+          now,
+        );
+        return { status: "recordOnly", changed: false, reason: "box set" };
+      }
+      const bundle = await createReleaseBundle(ctx, {
+        sourceKey: SOURCE_KEY,
+        observation,
+        citation,
+        importComment: IMPORT_COMMENT,
+        seriesId,
+        name: snapshot.title,
+        labels,
+        publisher: PUBLISHER,
+        release: releasePayload,
+        tagBootstrapUnreviewed: true,
+        now,
+      });
+      if (bundle.conflict !== undefined) {
+        return { status: "needsReview", changed: true, reason: bundle.conflict };
+      }
+      return { status: bundle.created ? "created" : "linked", changed: true };
+    }
+
     const fact: ReleaseFact = {
       seriesTitle: snapshot.seriesTitle,
       volumeLabel: packaging ? null : (snapshot.volumeLabel ?? null),
@@ -628,10 +672,7 @@ export const applyBook = internalMutation({
       isbn13: snapshot.isbn13,
       publisherId: publisher && publisher.status === "active" ? publisher._id : null,
     };
-    // A box set is never a Release: it skips the ladder for the bundle path.
-    const match: MatchOutcome = snapshot.isBox
-      ? { kind: "create", rung: 5 }
-      : await matchRelease(ctx, fact);
+    const match = await matchRelease(ctx, fact);
 
     if (match.kind === "match") {
       // Rung ② or ③ found the one canonical Release this book is: link the
@@ -666,171 +707,41 @@ export const applyBook = internalMutation({
       };
     }
 
-    const releasePayload = {
-      format: "physical" as const,
-      binding: snapshot.binding,
-      isbn13: snapshot.isbn13,
-      pubDate: snapshot.releaseDate ? toPartialDate(snapshot.releaseDate) : undefined,
-      price:
-        snapshot.priceCents !== undefined
-          ? {
-              amountCents: snapshot.priceCents,
-              currency: snapshot.currency ?? "USD",
-            }
-          : undefined,
-      description: snapshot.description,
-    };
-
-    const bootstrap = await getBootstrapMode(ctx);
-
-    // A box set is a Release Bundle of the base Series' existing Releases.
-    if (snapshot.isBox) {
-      if (seriesId === null || labels.length === 0 || !bootstrap) {
-        await recordUnplaced(ctx, observation, unplacedVerdict(snapshot, seriesId), now);
-        return { status: "recordOnly", changed: false, reason: "box set" };
-      }
-      const bundle = await createReleaseBundle(ctx, {
+    // No Release matched: the shared tail holds, queues, or creates it
+    // (lib/unmatched.ts), under the source's series link and fixed publisher.
+    const result = await placeUnmatched(
+      ctx,
+      {
         sourceKey: SOURCE_KEY,
         observation,
         citation,
         importComment: IMPORT_COMMENT,
+        title: snapshot.title,
+        match,
         seriesId,
-        name: snapshot.title,
+        seriesTitle: snapshot.seriesTitle,
+        ambiguousSeries,
+        seriesKey: snapshot.seriesSlug,
+        seriesUrl: snapshot.seriesUrl,
+        packaging,
         labels,
+        packagingHold: unplacedNote(snapshot),
         publisher: PUBLISHER,
+        publisherId: publisher?._id ?? null,
         release: releasePayload,
-        tagBootstrapUnreviewed: true,
+        bootstrap,
         now,
-      });
-      if (bundle.conflict !== undefined) {
-        return { status: "needsReview", changed: true, reason: bundle.conflict };
-      }
-      return { status: bundle.created ? "created" : "linked", changed: true };
-    }
-
-    const editionLine =
-      packaging?.lineName != null
-        ? { name: packaging.lineName, position: packaging.linePosition }
-        : undefined;
-    // Packaging with no coverage from any signal. In Bootstrap Mode a named
-    // line's member is still created, as Unmapped Packaging under its line
-    // (CONTEXT.md), for a Moderator to map; a bare range with no line name,
-    // an ambiguous Series, or steady state keeps it on its observation
-    // (lib/catalogTitle.ts applies the same rule).
-    const unmapped =
-      packaging !== null &&
-      labels.length === 0 &&
-      editionLine !== undefined &&
-      bootstrap &&
-      ambiguousSeries === 0;
-    if (packaging && labels.length === 0 && !unmapped) {
-      await recordUnplaced(ctx, observation, unplacedVerdict(snapshot, seriesId), now);
-      return {
-        status: "recordOnly",
-        changed: false,
-        reason: "packaging without coverage",
-      };
-    }
-
-    if (match.kind === "review" || ambiguousSeries > 0) {
-      // Ambiguity always queues flagged (spec §6) — the importer never
-      // merges, in Bootstrap Mode or out of it. The queue item is the
-      // pre-filled creation guess with the flag in its change comment.
-      const reason =
-        match.kind === "review" ? match.reason : `${ambiguousSeries} same-titled Series`;
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false, reason };
-      }
-      await queueCreationProposal(ctx, {
-        sourceKey: SOURCE_KEY,
-        observation,
-        seriesId,
-        seriesTitle: snapshot.seriesTitle,
-        labels,
-        editionLine,
-        linePosition: packaging?.linePosition ?? undefined,
-        release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
-        now,
-        comment:
-          match.kind === "review"
-            ? `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`
-            : `"${snapshot.seriesTitle}" matches ${ambiguousSeries} same-titled Series — the importer never guesses.`,
-      });
-      return { status: "needsReview", changed: true, reason };
-    }
-
-    // Rung ⑤ — creation, behind the steady-state boundaries (spec §6): a
-    // single-Volume Release under an already-linked Series auto-creates; a
-    // brand-new Series, multi-Volume Coverage, or an Edition-Line-shaped
-    // release always queues, pre-filled so a correct guess is one click.
-    // Bootstrap Mode lifts the gates (spec §7).
-    const gates = creationGates({
-      seriesId,
-      multiVolume: labels.length > 1,
-      editionLineHint: editionLine !== undefined,
-    });
-    if (gates.length > 0 && !bootstrap) {
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false };
-      }
-      if (seriesId === null) {
-        // A brand-new Series for a work an Editor hid would undo the repair:
-        // the book stays on its observation instead of the queue, as in
-        // Kodansha and applyCatalogTitle (the creation path checks itself).
-        const removed = await removedSeriesFor(ctx, {
-          sourceKey: SOURCE_KEY,
-          observation,
-          seriesKey: snapshot.seriesSlug,
-          seriesTitle: snapshot.seriesTitle,
-          publisherId: publisher?._id ?? null,
-        });
-        if (removed?.kind === "hidden") {
-          await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
-          return { status: "recordOnly", changed: false, reason: "hidden series" };
-        }
-      }
-      await queueCreationProposal(ctx, {
-        sourceKey: SOURCE_KEY,
-        observation,
-        seriesId,
-        seriesTitle: snapshot.seriesTitle,
-        labels,
-        editionLine,
-        linePosition: packaging?.linePosition ?? undefined,
-        release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
-        now,
-        comment: `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.${editionLine ? ` Edition Line: ${editionLine.name}.` : ""}`,
-      });
-      return { status: "queued", changed: true };
-    }
-
-    const creation = await createCanonicalRecords(ctx, {
-      sourceKey: SOURCE_KEY,
-      observation,
-      citation,
-      importComment: IMPORT_COMMENT,
-      seriesId,
-      seriesTitle: snapshot.seriesTitle,
-      seriesKey: snapshot.seriesSlug,
-      seriesUrl: snapshot.seriesUrl,
-      labels,
-      editionLine,
-      ...(unmapped ? { coverageUnmapped: true as const } : {}),
-      release: { ...releasePayload, publisher: PUBLISHER },
-      // Tag exactly what steady state would have queued (spec §7).
-      tagBootstrapUnreviewed: bootstrap && gates.length > 0,
-      now,
-    });
-    // A Series an Editor hid: nothing was created, the reason is noted.
-    if (creation.blocked !== undefined) {
-      return { status: "recordOnly", changed: false, reason: "hidden series" };
-    }
-    const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
-    return {
-      status: "created",
-      changed: true,
-      releaseId: creation.releaseId,
-      cover: created ? coverRequest(created, snapshot.coverUrl) : undefined,
-    };
+      },
+      {
+        unmappedPackaging: true,
+        ambiguityQuotesBook: false,
+        ensurePublisherToQueue: false,
+        hiddenWorkBeforeQueued: false,
+      },
+    );
+    // A created Release's art is the action's to store.
+    if (result.status !== "created" || result.releaseId === undefined) return result;
+    const created = await ctx.db.get(result.releaseId);
+    return { ...result, cover: created ? coverRequest(created, snapshot.coverUrl) : undefined };
   },
 });

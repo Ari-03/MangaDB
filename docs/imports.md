@@ -44,8 +44,8 @@ Observations never write the catalog directly. Reconciliation reads them and
 writes through Proposals, so every import change is a Revision that cites
 the source name and record URL. Each record applies in its own mutation,
 and write conflicts retry (`convex/lib/occ.ts`). The shared logic is in
-`convex/lib/pipeline.ts`, `matching.ts`, `authority.ts`, `reconcile.ts` and
-`catalogTitle.ts`.
+`convex/lib/pipeline.ts`, `matching.ts`, `authority.ts`, `reconcile.ts`,
+`catalogTitle.ts` and `unmatched.ts`.
 
 ## Matching ladder
 
@@ -150,6 +150,34 @@ Bundles. In Bootstrap Mode a named line's member with no usable coverage is
 created as Unmapped Packaging, which a Moderator maps at `/mod/packaging`.
 Outside Bootstrap Mode such a book stays on its observation for an Editor,
 as a Held Book (below).
+
+**One path for unmatched books.** Seven Seas (`applyBook`), Kodansha
+(`applyVolume`), and PRH and Yen Press (`applyCatalogTitle` in
+`convex/lib/catalogTitle.ts`) hand a book that matched no Release to one
+function, `placeUnmatched` in `convex/lib/unmatched.ts`. In order, it holds
+packaging with no usable coverage, queues a ladder flag for review, records
+a book with no publisher, queues a title that names several Series, queues
+what a steady-state gate stops (but holds a book whose new Series would
+recreate a hidden work), and otherwise creates the records. Each adapter
+keeps its parsing, its own series links, the reconcile of an already linked
+record, covers and blurbs, publisher resolution and box sets, and passes the
+note it holds packaging with. Four differences are options of the function:
+
+- Seven Seas, PRH and Yen Press create Unmapped Packaging in Bootstrap Mode.
+  Kodansha never states a packaged book's coverage and holds every
+  unmatched packaging book.
+- A queued ambiguity quotes the book's title with the reason "ambiguous
+  series" (PRH, Yen Press), or the Series title with the count (Seven Seas,
+  Kodansha).
+- PRH and Yen Press create the imprint's publisher row before queuing a
+  Proposal. Seven Seas and Kodansha queue under their fixed slug.
+- Outside Bootstrap Mode, PRH and Yen Press look for a hidden work before
+  checking for an open Proposal, so a book whose Proposal is still in review
+  gets the hidden work's note. Seven Seas and Kodansha answer
+  `alreadyQueued` first.
+
+`convex/unmatched.test.ts` runs the same book through all four sources for
+each case.
 
 ### Bookless Series
 

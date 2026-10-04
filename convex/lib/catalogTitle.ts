@@ -1,11 +1,12 @@
 // Catalog-title placement shared by the distributor/publisher catalog feeds
 // that speak in books (ISBN + title + imprint + onsale): the PRH API and
 // Yen Press. One record → the matching ladder → authority reconciliation
-// on a match, or the standard creation boundaries under the imprint's
-// publisher row: omnibus/deluxe books become Edition Line members covering
-// real Volumes, box sets Release Bundles (which pick up books arriving after
-// them), and packaging whose coverage the title never states stays on its
-// observation for an Editor. Each adapter
+// on a match, or the placement tail Seven Seas and Kodansha share
+// (lib/unmatched.ts) under the imprint's publisher row: omnibus/deluxe
+// books become Edition Line members covering real Volumes, and packaging
+// whose coverage nothing states stays on its observation for an Editor
+// (outside Bootstrap Mode). Box sets become Release Bundles here (which
+// pick up books arriving after them), before the ladder. Each adapter
 // wraps `applyCatalogTitle` in its own internalMutation (one atomic
 // mutation per record, spec §6).
 
@@ -20,22 +21,17 @@ import { inferCoverage } from "./coverage";
 import { candidateSeries, hiddenSeriesTitled, matchRelease, type ReleaseFact } from "./matching";
 import { linkObservation, recordUnplaced, upsertObservation } from "./observations";
 import {
-  alreadyHandled,
   type BundleReconcile,
-  createCanonicalRecords,
   createReleaseBundle,
-  creationGates,
-  ensurePublisher,
   findPublisherByName,
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
-  queueCreationProposal,
   reconcileLinkedBundle,
-  removedSeriesFor,
   toPartialDate,
 } from "./pipeline";
 import { canonicalPublisherFor, type CanonicalPublisher } from "./publishers";
 import { reconcileFields } from "./reconcile";
+import { placeUnmatched } from "./unmatched";
 
 /** The snapshot fields every catalog-title source normalizes to. */
 export const catalogTitleFields = {
@@ -283,8 +279,9 @@ export async function reconcileCatalogBox(
  * links it to the existing skeleton record, then the source's dates/ISBNs/
  * prices, titles/format, and blurb reconcile in at its registry authority.
  * Unmatched titles follow the standard creation boundaries under the
- * imprint's publisher. It applies whatever the source's enabled flag says:
- * a sync stops at its gate (lib/importRuns.ts), never mid-record.
+ * imprint's publisher (lib/unmatched.ts). It applies whatever the source's
+ * enabled flag says: a sync stops at its gate (lib/importRuns.ts), never
+ * mid-record.
  */
 export async function applyCatalogTitle(
   ctx: MutationCtx,
@@ -457,130 +454,37 @@ export async function applyCatalogTitle(
     return { status: "linked", changed: true, releaseId: release._id };
   }
 
-  const editionLine =
-    packaging?.lineName != null
-      ? { name: packaging.lineName, position: packaging.linePosition }
-      : undefined;
-  // Packaging with no coverage from any signal. In Bootstrap Mode a named
-  // line's member is still created, as Unmapped Packaging under its line
-  // (CONTEXT.md): the book shows in the publisher's own numbering and a
-  // Moderator maps its Volumes later. A bare range with no line name, an
-  // ambiguous Series, or steady state (which never queues a guess without
-  // coverage) keeps the book on its observation instead.
-  const unmapped =
-    packaging !== null &&
-    labels.length === 0 &&
-    editionLine !== undefined &&
-    bootstrap &&
-    candidates.length <= 1 &&
-    publisherRow !== undefined;
-  if (packaging && labels.length === 0 && !unmapped) {
-    await recordUnplaced(
-      ctx,
-      observation,
-      {
-        kind: "packaging",
-        reason: `"${snapshot.title}" is packaging (${packaging.lineName ?? "multi-volume"}) whose covered Volumes the title does not state — an Editor maps it.`,
-        ...(seriesId !== null ? { seriesId } : {}),
-      },
-      now,
-    );
-    return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
-  }
-
-  const linePosition = packaging?.linePosition ?? undefined;
-  // A queued packaging guess carries its Edition Line, so approval files the
-  // Edition under the base Series' line of that name (or creates it).
-  const queue = async (comment: string, reason?: string): Promise<ApplyResult> => {
-    if (await alreadyHandled(ctx, observation)) {
-      return { status: "alreadyQueued", changed: false, reason };
-    }
-    if (publisherRow === undefined) {
-      // No imprint on the record: nothing reviewable to pre-fill.
-      return { status: "needsReview", changed: false, reason };
-    }
-    // The creation registry resolves publisherSlug at approval; ensure the
-    // imprint's row exists so the queued guess stays one-click appliable.
-    const row = await ensurePublisher(ctx, publisherRow);
-    await queueCreationProposal(ctx, {
+  // No Release matched: the shared tail holds, queues, or creates it
+  // (lib/unmatched.ts). A catalog record quotes only its book title, and
+  // its imprint may have no publisher row yet.
+  return await placeUnmatched(
+    ctx,
+    {
       sourceKey: opts.sourceKey,
       observation,
+      citation,
+      importComment: opts.importComment,
+      title: snapshot.title,
+      match,
       seriesId,
       seriesTitle,
+      ambiguousSeries: candidates.length > 1 ? candidates.length : 0,
+      packaging,
       labels,
-      editionLine,
-      linePosition,
-      release: { ...releasePayload, publisherSlug: row.slug },
+      packagingHold: `"${snapshot.title}" is packaging (${packaging?.lineName ?? "multi-volume"}) whose covered Volumes the title does not state — an Editor maps it.`,
+      publisher: publisherRow,
+      publisherId: publisher?._id ?? null,
+      release: releasePayload,
+      bootstrap,
       now,
-      comment,
-    });
-    return { status: reason ? "needsReview" : "queued", changed: true, reason };
-  };
-
-  if (match.kind === "review") {
-    return await queue(
-      `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`,
-      match.reason,
-    );
-  }
-
-  if (publisherRow === undefined) {
-    // Cannot create a Release without a publisher (spec §2).
-    return { status: "recordOnly", changed: false };
-  }
-
-  if (candidates.length > 1) {
-    // Two same-titled Series: creating under either is a guess.
-    return await queue(
-      `"${snapshot.title}" matches ${candidates.length} same-titled Series — the importer never guesses.`,
-      "ambiguous series",
-    );
-  }
-
-  const gates = creationGates({
-    seriesId,
-    multiVolume: labels.length > 1,
-    editionLineHint: editionLine !== undefined,
-  });
-  if (gates.length > 0 && !bootstrap) {
-    if (seriesId === null) {
-      // A brand-new Series for a work an Editor hid would undo the repair:
-      // the book stays on its observation instead of the queue. (The
-      // creation path below makes the same check itself.)
-      const removed = await removedSeriesFor(ctx, {
-        sourceKey: opts.sourceKey,
-        observation,
-        seriesTitle,
-        publisherId: publisher?._id ?? null,
-      });
-      if (removed?.kind === "hidden") {
-        await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
-        return { status: "recordOnly", changed: false, reason: "hidden series" };
-      }
-    }
-    return await queue(
-      `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.${editionLine ? ` Edition Line: ${editionLine.name}.` : ""}`,
-    );
-  }
-
-  const creation = await createCanonicalRecords(ctx, {
-    sourceKey: opts.sourceKey,
-    observation,
-    citation,
-    importComment: opts.importComment,
-    seriesId,
-    seriesTitle,
-    labels,
-    editionLine,
-    ...(unmapped ? { coverageUnmapped: true as const } : {}),
-    release: { ...releasePayload, publisher: publisherRow },
-    tagBootstrapUnreviewed: bootstrap && gates.length > 0,
-    now,
-  });
-  if (creation.blocked !== undefined) {
-    return { status: "recordOnly", changed: false, reason: "hidden series" };
-  }
-  return { status: "created", changed: true, releaseId: creation.releaseId };
+    },
+    {
+      unmappedPackaging: true,
+      ambiguityQuotesBook: true,
+      ensurePublisherToQueue: true,
+      hiddenWorkBeforeQueued: true,
+    },
+  );
 }
 
 /**

@@ -1,8 +1,10 @@
 // The Kodansha adapter (spec §6/§7): Kodansha's own catalog
 // through the shared pipeline, from two feeds that share one observation
 // per (volume, format) and one apply path (`applyVolume`: observation →
-// matching ladder → authority reconciliation → creation/queue, as in
-// sevenSeas.ts; the shared halves live in lib/pipeline.ts):
+// matching ladder → authority reconciliation, or for a volume that matched
+// no Release the placement tail Seven Seas, PRH and Yen Press share,
+// lib/unmatched.ts, which holds every unmatched packaging volume of
+// Kodansha's; the shared halves live in lib/pipeline.ts):
 //
 // - `sync` (daily, registry row "kodansha"): the first-party JSON window —
 //   the release calendar (~8 weekly buckets of upcoming volumes) plus this
@@ -91,25 +93,14 @@ import {
   type SeriesListingEntry,
 } from "./lib/kodansha";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
+import { getObservation, linkObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
-  getObservation,
-  linkObservation,
-  markSeen,
-  recordUnplaced,
-  upsertObservation,
-} from "./lib/observations";
-import {
-  alreadyHandled,
-  createCanonicalRecords,
-  creationGates,
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
   isbnHolderBesides,
   linkSeriesObservation,
   publisherBySlug,
-  queueCreationProposal,
   reconcileLinkedSeries,
-  removedSeriesFor,
   recordIsbnConflict,
   seriesEditions,
   toPartialDate,
@@ -118,6 +109,7 @@ import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
 import { sameValue } from "./lib/values";
 import { withExceptionCapture } from "./lib/posthog";
+import { placeUnmatched } from "./lib/unmatched";
 
 export const SOURCE_KEY = "kodansha";
 /** The backlist crawl's registry row: its runs, cadence, health, and crawl state. */
@@ -668,11 +660,12 @@ async function withPageFacts(
 /**
  * Reconcile one normalized (volume, format) snapshot into the canonical
  * catalog — one atomic mutation per record (spec §6). Mirrors
- * sevenSeas.applyBook on the shared pipeline; a snapshot with an ISBN
- * (volume pages) matches by ISBN first, and is stored under the identity its
- * ISBN owns (`offerRecordId`), whatever id the page order proposed. It
- * applies whatever either registry row's enabled flag says (each feed's
- * sync gates its own run); authority is always the "kodansha" row's.
+ * sevenSeas.applyBook and shares its unmatched tail (lib/unmatched.ts); a
+ * snapshot with an ISBN (volume pages) matches by ISBN first, and is stored
+ * under the identity its ISBN owns (`offerRecordId`), whatever id the page
+ * order proposed. It applies whatever either registry row's enabled flag
+ * says (each feed's sync gates its own run); authority is always the
+ * "kodansha" row's.
  */
 export const applyVolume = internalMutation({
   args: { sourceRecordId: v.string(), snapshot: kodanshaSnapshotValidator },
@@ -852,24 +845,6 @@ export const applyVolume = internalMutation({
       };
     }
 
-    if (packaging) {
-      await recordUnplaced(
-        ctx,
-        observation,
-        {
-          kind: "packaging",
-          reason: `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
-          ...(seriesId !== null ? { seriesId } : {}),
-        },
-        now,
-      );
-      return {
-        status: "recordOnly",
-        changed: false,
-        reason: "packaging without coverage",
-      };
-    }
-
     const releasePayload = {
       format: snapshot.format,
       binding: snapshot.binding,
@@ -880,98 +855,47 @@ export const applyVolume = internalMutation({
           ? { amountCents: snapshot.priceCents, currency: "USD" }
           : undefined,
     };
-    const labels = snapshot.volumeLabel !== undefined ? [snapshot.volumeLabel] : [];
+    // Kodansha never states which Volumes a packaging line's volume
+    // collects: it covers none the tail could place, so it is held.
+    const labels = !packaging && snapshot.volumeLabel !== undefined ? [snapshot.volumeLabel] : [];
 
-    if (match.kind === "review" || ambiguousSeries > 0) {
-      const reason =
-        match.kind === "review" ? match.reason : `${ambiguousSeries} same-titled Series`;
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false, reason };
-      }
-      await queueCreationProposal(ctx, {
+    // No Release matched: the shared tail holds, queues, or creates it
+    // (lib/unmatched.ts), under the source's series link.
+    const result = await placeUnmatched(
+      ctx,
+      {
         sourceKey: SOURCE_KEY,
         observation,
+        citation,
+        importComment: IMPORT_COMMENT,
+        title: snapshot.title,
+        match,
         seriesId,
         seriesTitle: snapshot.seriesTitle,
+        ambiguousSeries,
+        seriesKey: snapshot.seriesSlug,
+        seriesUrl: snapshot.seriesUrl,
+        seriesSynopsis: snapshot.seriesSynopsis,
+        packaging,
         labels,
-        release: { ...releasePayload, publisherSlug: publisherRef.slug },
+        packagingHold: `"${snapshot.title}" is ${packaging?.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
+        publisher: publisherRef,
+        publisherId: publisher?._id ?? null,
+        release: releasePayload,
+        bootstrap: await getBootstrapMode(ctx),
         now,
-        comment:
-          match.kind === "review"
-            ? `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`
-            : `"${snapshot.seriesTitle}" matches ${ambiguousSeries} same-titled Series — the importer never guesses.`,
-      });
-      return { status: "needsReview", changed: true, reason };
-    }
-
-    const bootstrap = await getBootstrapMode(ctx);
-    const gates = creationGates({
-      seriesId,
-      multiVolume: false,
-      editionLineHint: false,
-    });
-    if (gates.length > 0 && !bootstrap) {
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false };
-      }
-      if (seriesId === null) {
-        // A brand-new Series for a work an Editor hid would undo the repair:
-        // the volume stays on its observation instead of the queue. (The
-        // creation path below makes the same check itself.)
-        const removed = await removedSeriesFor(ctx, {
-          sourceKey: SOURCE_KEY,
-          observation,
-          seriesKey: snapshot.seriesSlug,
-          seriesTitle: snapshot.seriesTitle,
-          publisherId: publisher?._id ?? null,
-        });
-        if (removed?.kind === "hidden") {
-          await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
-          return {
-            status: "recordOnly",
-            changed: false,
-            reason: "hidden series",
-          };
-        }
-      }
-      await queueCreationProposal(ctx, {
-        sourceKey: SOURCE_KEY,
-        observation,
-        seriesId,
-        seriesTitle: snapshot.seriesTitle,
-        labels,
-        release: { ...releasePayload, publisherSlug: publisherRef.slug },
-        now,
-        comment: `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.`,
-      });
-      return { status: "queued", changed: true };
-    }
-
-    const creation = await createCanonicalRecords(ctx, {
-      sourceKey: SOURCE_KEY,
-      observation,
-      citation,
-      importComment: IMPORT_COMMENT,
-      seriesId,
-      seriesTitle: snapshot.seriesTitle,
-      seriesKey: snapshot.seriesSlug,
-      seriesUrl: snapshot.seriesUrl,
-      seriesSynopsis: snapshot.seriesSynopsis,
-      labels,
-      release: { ...releasePayload, publisher: publisherRef },
-      tagBootstrapUnreviewed: bootstrap && gates.length > 0,
-      now,
-    });
-    if (creation.blocked !== undefined) {
-      return { status: "recordOnly", changed: false, reason: "hidden series" };
-    }
-    const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
-    return {
-      status: "created",
-      changed: true,
-      releaseId: creation.releaseId,
-      cover: created ? coverRequest(created, snapshot.coverUrl) : undefined,
-    };
+      },
+      {
+        unmappedPackaging: false,
+        ambiguityQuotesBook: false,
+        ensurePublisherToQueue: false,
+        hiddenWorkBeforeQueued: false,
+      },
+    );
+    // A created Release's art is the action's to store.
+    if (result.status !== "created" || result.releaseId === undefined) return result;
+    const created = await ctx.db.get(result.releaseId);
+    return { ...result, cover: created ? coverRequest(created, snapshot.coverUrl) : undefined };
   },
 });
 
