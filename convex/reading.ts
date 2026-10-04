@@ -491,18 +491,29 @@ export const completePass = mutation({
  * Undo a pass completion with what completePass returned. Decrements the
  * given Volumes (merge-resolved) whose most recent completion is still
  * `completedAt`, whatever the Edition covers today. A reread or count
- * increase since then leaves the newer count alone; a decrease keeps the
- * stamp, as writeVolumeReadCount does. A count reaching zero removes the
- * row; otherwise the prior completion time is unknown, so lastCompletedAt
- * clears, which also means a survivor two merged ids lead to is decremented
- * once. The pass comes back at its original `percent` when something was
- * undone, or when the completion had counted no Volume, unless a pass has
- * been started since. Undoing again changes nothing: the stamps no longer
- * match, and the restored pass is there.
+ * increase since then restamps the Volume, so Undo leaves the newer count
+ * alone. A count reaching zero removes the row; otherwise the prior
+ * completion time is unknown, so lastCompletedAt clears, which also means
+ * a survivor two merged ids lead to is decremented once. The pass comes
+ * back at its original `percent` when something was undone, or when the
+ * completion had counted no Volume, unless a pass has been started since.
+ * Repeating the same Undo with nothing changed in between does nothing:
+ * the stamps no longer match, and the restored pass is there. For a
+ * completion that counted no Volume, an Undo replayed after the restored
+ * pass was cancelled restores it again.
+ *
+ * Known limit: writeVolumeReadCount keeps the stamp on a decrease, since
+ * it is also the displayed last-read date, so after a decrease Undo still
+ * matches and takes off one read more than the completion added: complete
+ * (2 reads to 3), −1 by hand (2), then Undo leaves 1.
  *
  * The arguments come from the client, but every row read or written is the
- * caller's own, and a user can already set their own read counts and start
- * their own passes, so trusting them adds no power.
+ * caller's own: Volume ids only lower the caller's own counts, as the
+ * direct edits can. Called directly with an empty Volume list, Undo creates
+ * a pass at a chosen percent, which startPass and setPassPercent also
+ * allow, except on a Release whose Series is hidden, where startPass
+ * refuses and Undo does not. The effect is one private row of the
+ * caller's own.
  */
 export const undoCompletion = mutation({
   args: {

@@ -285,10 +285,12 @@ function VolumeReadCountInner({
  * anywhere a Release row renders — Series, Volume, and Edition pages.
  * `releaseId` is the row's document id from the page queries. Undo sends
  * back what completePass returned, so it reverses that completion even if
- * the Edition's coverage changed since. Completing and undoing write the
- * covered Volumes' Progress, which the client does not know here, so both
- * wait while any "Read all" run is still marking (useRunLock): its later
- * batch could otherwise re-mark an undone Volume.
+ * the Edition's coverage changed since. A refused completion or Undo shows
+ * its reason inline, and a completion in flight cannot be sent again.
+ * Completing and undoing write the covered Volumes' Progress, which the
+ * client does not know here, so both wait while any "Read all" run is
+ * still marking (useRunLock): its later batch could otherwise re-mark an
+ * undone Volume.
  */
 export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }) {
   if (!convexClient) return null;
@@ -316,6 +318,9 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
   const [completion, setCompletion] = useState<Completion | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [undoError, setUndoError] = useState<string | null>(null);
+  // A completion in flight, and why the last one was refused.
+  const [completing, setCompleting] = useState(false);
+  const [completeError, setCompleteError] = useState<string | null>(null);
 
   if (!data) return null; // loading, signed out, or username pending
   const pass = data.pass;
@@ -324,18 +329,27 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
   const start = async () => {
     setCompletion(null);
     setUndoError(null);
+    setCompleteError(null);
     setDraft(null);
     const result = await startPass({ releaseId });
     setSuggestReading(result.suggestReading);
   };
 
   const confirmComplete = async () => {
-    if (lock.held()) return;
-    setConfirming(false);
-    const result = await completePass({ releaseId });
-    setDraft(null);
-    setUndoError(null);
-    setCompletion(result);
+    if (completing || lock.held()) return;
+    setCompleting(true);
+    setCompleteError(null);
+    try {
+      const result = await completePass({ releaseId });
+      setDraft(null);
+      setUndoError(null);
+      setCompletion(result);
+    } catch (err) {
+      setCompleteError(mutationErrorMessage(err, "Completing the pass didn't go through. Try again."));
+    } finally {
+      setCompleting(false);
+      setConfirming(false);
+    }
   };
 
   const undo = async (done: Completion) => {
@@ -388,6 +402,7 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
             className="pass-cancel"
             onClick={() => {
               setConfirming(false);
+              setCompleteError(null);
               setDraft(null);
               void cancelPass({ releaseId });
             }}
@@ -400,10 +415,10 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
               completely gets +1 read.{" "}
               <button
                 type="button"
-                disabled={lock.locked}
+                disabled={lock.locked || completing}
                 onClick={() => void confirmComplete()}
               >
-                Complete pass
+                {completing ? "Completing…" : "Complete pass"}
               </button>{" "}
               <button type="button" onClick={() => setConfirming(false)}>
                 Not yet
@@ -436,6 +451,11 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
           Start reading
         </button>
       )}
+      {completeError ? (
+        <span className="form-error" role="alert">
+          {completeError}
+        </span>
+      ) : null}
       {suggestReading.length > 0 ? (
         <span className="prompt" role="status">
           {suggestReading.map((suggestion) => (

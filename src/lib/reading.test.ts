@@ -1,22 +1,30 @@
-// The per-Volume read-count controls, driven against convex-test: the
-// component runs as a plain function with convex/react's hooks wired to the
-// test backend (test.react.ts). useQuery answers from a fixed snapshot,
-// which is exactly the window between a click and the subscription refresh.
+// The per-Volume read-count controls and a Release row's pass controls,
+// driven against convex-test: the components run as plain functions with
+// convex/react's hooks wired to the test backend (test.react.ts). useQuery
+// answers from a fixed snapshot, which is exactly the window between a
+// click and the subscription refresh.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { insertSeries, insertVolume } from "../../convex/test.factories";
+import {
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+} from "../../convex/test.factories";
 import { makeT, reader, withUser, type Accessor, type TestT } from "../../convex/test.helpers";
-import { harness, press, render, resetHarness, setQuery, settle } from "./test.react";
+import { click, harness, hold, mount, press, render, resetHarness, setQuery, settle, text, type Host } from "./test.react";
 
 vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
 vi.mock("~/providers", () => ({ convexClient: {} }));
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
 vi.mock("~/lib/mature", () => ({ useArtConcealed: () => false }));
 
-const { VolumeReadCount } = await import("./reading");
+const { ReleasePassControls, VolumeReadCount } = await import("./reading");
 
 /** Vinland Saga (Series 1) with Volume 11. */
 async function seed(t: TestT) {
@@ -84,5 +92,78 @@ describe("VolumeReadCount", () => {
     again.click();
     await settle();
     expect(await readCount(t, volumeId)).toBe(0);
+  });
+});
+
+/** A Release of Vinland Saga's Edition covering Volume 11 completely. */
+async function seedRelease(t: TestT) {
+  return await t.run(async (ctx) => {
+    const seriesId = await insertSeries(ctx, { publicId: 1, title: "Vinland Saga" });
+    const volumeId = await insertVolume(ctx, { publicId: 11, seriesId });
+    const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+    const editionId = await insertEdition(ctx, { publicId: 500, publisherId });
+    await insertCoverage(ctx, { editionId, volumeId });
+    const releaseId = await insertRelease(ctx, { editionId, binding: "paperback", publisherId, seriesIds: [seriesId] });
+    return { volumeId, releaseId };
+  });
+}
+
+/** The alert a control renders, if any. */
+function alertOf(tree: Host[]) {
+  const alert = tree.find((host) => host.props.role === "alert");
+  return alert ? text(alert.props.children) : null;
+}
+
+describe("ReleasePassControls", () => {
+  it("shows a refused completion beside the controls and keeps them usable", async () => {
+    const t = makeT();
+    const { releaseId } = await seedRelease(t);
+    const as = await signIn(t);
+    await as.mutation(api.reading.startPass, { releaseId });
+    setQuery(api.reading.passForRelease, await as.query(api.reading.passForRelease, { releaseId }));
+    const controls = () => mount(() => ReleasePassControls({ releaseId }));
+    click(controls(), "Finished…");
+
+    // The pass was stopped in another tab; this one has not heard yet.
+    await as.mutation(api.reading.cancelPass, { releaseId });
+    click(controls(), "Complete pass");
+    await settle();
+
+    const after = controls();
+    expect(alertOf(after)).toBe("No active reading pass.");
+    expect(press(after, "Finished…").disabled).toBe(false);
+    expect(() => press(after, "Complete pass")).toThrow();
+
+    // Refreshed, the row offers a new pass, and starting one clears the message.
+    setQuery(api.reading.passForRelease, await as.query(api.reading.passForRelease, { releaseId }));
+    expect(alertOf(controls())).toBe("No active reading pass.");
+    click(controls(), "Start reading");
+    await settle();
+    expect(alertOf(controls())).toBeNull();
+  });
+
+  it("does not submit a completion again while one is in flight", async () => {
+    const t = makeT();
+    const { volumeId, releaseId } = await seedRelease(t);
+    const as = await signIn(t);
+    await as.mutation(api.reading.startPass, { releaseId });
+    setQuery(api.reading.passForRelease, await as.query(api.reading.passForRelease, { releaseId }));
+    const controls = () => mount(() => ReleasePassControls({ releaseId }));
+    click(controls(), "Finished…");
+
+    const first = hold("reading:completePass", 1, "before");
+    click(controls(), "Complete pass");
+    await first.reached;
+    const again = press(controls(), "Completing…");
+    const before = harness.inflight.length;
+    again.click();
+    const accepted = harness.inflight.length > before;
+    first.release();
+    await settle();
+
+    expect({ disabled: again.disabled, accepted }).toEqual({ disabled: true, accepted: false });
+    expect(await readCount(t, volumeId)).toBe(1);
+    setQuery(api.reading.passForRelease, await as.query(api.reading.passForRelease, { releaseId }));
+    expect(press(controls(), "Undo").disabled).toBe(false);
   });
 });
