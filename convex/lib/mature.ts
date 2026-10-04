@@ -44,9 +44,10 @@ import { patchPackEntry, seriesStatsRow } from "./seriesStats";
 
 /**
  * The most Series one projectMature job carries into the library: each
- * rewrites the Series' pack (syncMatureProjection), up to 1 MiB, so a job
- * reads and writes at most five packs, about 5 MB with packs near the
- * limit, whatever an import flipped.
+ * rewrites the Series' pack (syncMatureProjection), up to 1 MiB, so with
+ * packs near that size a job reads about 10 MB (each pack is read by the
+ * query and again by the patch) and writes about 5 MB of the 16 MiB
+ * limits, whatever an import flipped.
  */
 export const MATURE_PROJECTIONS_PER_JOB = 5;
 

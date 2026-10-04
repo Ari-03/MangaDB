@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { BACKLIST_KEY } from "./kodansha";
 import { MIN_COVER_BYTES } from "./lib/covers";
 import {
   insertCoverage,
@@ -723,6 +724,8 @@ type ListedSeries = {
   stamp?: string;
   /** The listing's `short_description`. */
   blurb?: string;
+  /** The listing's `age_rating`. */
+  ageRating?: number;
 };
 
 const BLUE_LOCK: ListedSeries = { slug: "blue-lock", name: "Blue Lock" };
@@ -781,6 +784,7 @@ function stubBacklist(
           type: row.type ?? "comic",
           short_description: row.blurb ?? "",
           last_updated_at: row.stamp ?? "2026-02-06T09:53:10+00:00",
+          age_rating: row.ageRating,
         }));
       return Response.json({
         success: true,
@@ -2243,6 +2247,46 @@ describe("kodansha.recordListingRatings — listing age ratings", () => {
     await t.mutation(internal.kodansha.recordListingRatings, { entries: ratings(1, () => true) });
     expect(await matureFlags(t)).toEqual({ series: [1], pack: [] });
     expect(await shelf()).toEqual([]);
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await matureFlags(t)).toEqual({ series: [1], pack: [1] });
+  });
+
+  it("a backlist run records the listing's ratings: only the 18+ series turns mature", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    await linkedSeries(t, 2);
+    // Crawled just now, so the run fetches nothing past the listing.
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      for (const publicId of [1, 2]) {
+        const slug = slugOf(publicId);
+        await insertObservation(ctx, {
+          sourceKey: BACKLIST_KEY,
+          sourceRecordId: slug,
+          lastSeenAt: now,
+          snapshot: {
+            kind: "kodanshaSeriesCrawl",
+            name: `Series ${publicId}`,
+            url: `${BASE}/series/${slug}/`,
+            lastUpdatedAt: "2026-02-06T09:53:10+00:00",
+            volumes: [],
+            recheck: [],
+            fullCrawledAt: now,
+          },
+        });
+      }
+    });
+    stubBacklist(
+      [
+        { slug: slugOf(1), name: "Series 1", ageRating: 18 },
+        { slug: slugOf(2), name: "Series 2", ageRating: 13 },
+      ],
+      {},
+    );
+
+    expect(await backlist(t)).toMatchObject({ errorCount: 0, fetched: 0, continued: false });
+    expect(await matureFlags(t)).toEqual({ series: [1], pack: [] });
 
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await matureFlags(t)).toEqual({ series: [1], pack: [1] });
