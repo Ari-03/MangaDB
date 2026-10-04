@@ -61,7 +61,7 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "Last Gasp", slug: "last-gasp" },
   { name: "Kuma", slug: "kuma" },
   { name: "Ghost Ship", slug: "ghost-ship", parentSlug: "seven-seas", adultOnly: true },
-  { name: "Steamship", slug: "steamship", parentSlug: "seven-seas" },
+  { name: "Steamship", slug: "steamship", parentSlug: "seven-seas", adultOnly: true },
   { name: "Airship", slug: "airship", parentSlug: "seven-seas" },
   {
     name: "TOKYOPOP Classics",

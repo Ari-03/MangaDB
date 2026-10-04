@@ -228,6 +228,28 @@ export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series
 }
 
 /**
+ * New 18+ evidence on a book: a Source Observation linked to the Release
+ * now rates it mature. Each of the Release's Series becomes mature at once,
+ * its library row and pack entry with it (syncMatureProjection), so the home
+ * shelves and discovery leave it out from the import's own transaction
+ * rather than from the next rebuild. A Series the Data Team rated keeps its
+ * call (lib/mature.ts). Nothing here clears the flag: a Series whose
+ * evidence went away is cleared by the next rebuild.
+ */
+export async function applyMatureEvidence(ctx: MutationCtx, releaseId: Id<"releases">) {
+  const release = await ctx.db.get(releaseId);
+  if (!release || release.status !== "active") return;
+  for (const seriesId of release.seriesIds) {
+    const series = await ctx.db.get(seriesId);
+    if (series?.status !== "active" || series.mature === true) continue;
+    if (ratedByDataTeam(series.contentRating) !== null) continue;
+    // Derived data, no Revision, as in upsertStats.
+    await ctx.db.patch(series._id, { mature: true });
+    await syncMatureProjection(ctx, series, true);
+  }
+}
+
+/**
  * Carry a Series' new rating aggregate into its library row and pack entry
  * at once (lib/ratings.ts calls this from every rating write), so "Top
  * rated" reorders without waiting for the next rebuild. The pack, a large

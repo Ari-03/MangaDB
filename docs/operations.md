@@ -91,7 +91,7 @@ a change now, or where nothing scheduled will.
 | The search nickname rule (`seriesSearchText`) | `npx convex run seriesBrowse:rebuild` |
 | The Publishers board's shape | Bump `BOARD_VERSION` in `convex/publisher.ts`, then `npx convex run publisher:rebuildBoards` |
 | Publisher rows, aliases, imprints or `adultOnly` in `convex/lib/publishers.ts` | `npx convex run launch:seedPublishers '{}'` |
-| Mature-title rules | `launch:seedPublishers`, then `seriesBrowse:rebuild` and `publisher:rebuildBoards`. Seven Seas re-reads ratings at about 200 books a run; `npx convex run sevenSeas:sync '{"maxDetailFetches":2000}'` finishes sooner. |
+| Mature-title rules, including `BOOK_PAGE_VERSION` in `convex/lib/sevenSeas.ts` | The steps in [Mature evidence after a deploy](#mature-evidence-after-a-deploy). |
 | Author credit rules (`convex/people.ts`) | `npx convex run people:rebuild` |
 | A new authority column in the registry defaults | `npx convex run importSources:backfillFieldAuthority '{}'` |
 | New registry rows | `npx convex run importSources:seedRegistry '{}'`. It adds missing rows only. |
@@ -105,6 +105,49 @@ a change now, or where nothing scheduled will.
 
 `seriesBrowse:rebuild`, `publisher:rebuildBoards` and `people:rebuild`
 return after their first action and finish in scheduled continuations.
+
+### Mature evidence after a deploy
+
+For a change to what makes a Series mature: the adult-only list
+(`adultOnly` in `convex/lib/publishers.ts`, Steamship among them) or the
+Seven Seas book-page parser (`BOOK_PAGE_VERSION` in
+`convex/lib/sevenSeas.ts`). It is an importer change, so let running
+imports finish, or disable the sources, before deploying (the "Any
+importer" row above). Then:
+
+1. Mark the adult-only rows: `npx convex run launch:seedPublishers '{}'`.
+   An existing row is listed in `markedAdultOnly` (`["steamship"]`); a
+   missing one is created already marked and listed in `created`. A rerun
+   lists neither. The hourly import tick runs the same seed, so this only
+   saves waiting for it.
+2. Re-read the Seven Seas book pages stored under an older parser. Every
+   sync does this within its detail budget, after the books ahead of them
+   in the listing (newest-modified first), and a page read once with the
+   current parser is not read again for this reason. At the daily run's
+   200 pages, N books read before take about N / 200 runs, a few weeks for
+   the whole catalog. To finish sooner, repeat
+   `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'` until it
+   prints `"completeSweep": true`; a run whose budget ran out prints
+   `false`, and so does one with an invalid listing item, which its errors
+   name. At the 350 ms pace 1,000 pages take ten minutes or more, inside
+   the 30-minute action limit. While the backlog lasts, runs whose budget
+   runs out withdraw nothing. A page that rates its book Mature or
+   names an adult-only imprint (Ghost Ship, Steamship) makes the Series
+   mature at once, with its library row, so it leaves the home page and the
+   library without a rebuild. A Data Team rating on the Series stands.
+3. Rebuild the projections that are not updated at once:
+   `npx convex run seriesBrowse:rebuild` (Series with an Edition under an
+   adult-only Publisher row, such as the Steamship books PRH files under
+   Steamship, and Series whose evidence went away), then
+   `npx convex run publisher:rebuildBoards` (the Publishers board) and
+   `npx convex run people:rebuild` (the authors directory). The sitemaps
+   follow within their six-hour edge cache.
+
+A Series that is still not mature after these steps has no linked
+evidence: its Seven Seas book may be held or in review rather than linked
+to the Release (the Held Books list and the review queue on
+`/mod/imports`). A Data Team rating (`contentRating` "mature" on the
+Series) settles it at once.
 
 ## Account deletion
 

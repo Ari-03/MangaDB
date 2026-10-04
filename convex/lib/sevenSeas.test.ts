@@ -1,11 +1,17 @@
 // Seven Seas parser tests (ticket #34): fixtures are trimmed copies of the
 // live wire formats captured 2026-08-19 — one `wp/v2/books` item and the
 // `#volume-meta` block of a book page — so the parsers are exercised against
-// exactly what the site serves, without touching the network.
+// exactly what the site serves, without touching the network. The age
+// rating and imprint fixtures (__fixtures__/sevenSeas) are book pages and
+// the age-ratings legend from the Internet Archive, 2025-08 to 2026-08: the
+// site itself answers scripted requests with a challenge page.
+
+import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
 import {
+  BOOK_PAGE_VERSION,
   decodeEntities,
   isMangaBook,
   normalizeBook,
@@ -227,5 +233,153 @@ describe("normalizeBook", () => {
       linePosition: "1",
     });
     expect(snapshot.seriesSlug).toBe(listing.slug);
+  });
+});
+
+const fixture = (name: string) =>
+  readFileSync(new URL(`./__fixtures__/sevenSeas/${name}.html`, import.meta.url), "utf8");
+
+/** A book page whose cover block is `cover` (the badge and imprint blocks), with `meta` lines. */
+const pageWith = (cover: string, meta = "") =>
+  `<div id="volume-cover"><img src="https://sevenseasentertainment.com/wp-content/uploads/c.jpg">` +
+  `${cover}</div><div id="volume-meta"><p><b>Format:</b> Manga</p>${meta}</div>`;
+
+/** The snapshot's rating fields for a book page. */
+function ratingOf(html: string) {
+  const { mature, ageRating, imprint, parserVersion } = normalizeBook(
+    parseBookListing(LISTING_FIXTURE)!,
+    parseBookPage(html),
+  );
+  return { mature, ageRating, imprint, parserVersion };
+}
+
+describe("age rating and imprint", () => {
+  it("reads the real pages: Steamship and Ghost Ship are mature whatever their badge", () => {
+    // Steamship, rated Mature.
+    expect(ratingOf(fixture("his-sensual-whisper-vol-1"))).toEqual({
+      mature: true,
+      ageRating: "mature",
+      imprint: "Steamship",
+      parserVersion: BOOK_PAGE_VERSION,
+    });
+    // Ghost Ship's block wraps its name in a link; its book is badged 17+.
+    expect(ratingOf(fixture("peter-grill-vol-15"))).toEqual({
+      mature: true,
+      ageRating: "olderteen17",
+      imprint: "Ghost Ship",
+      parserVersion: BOOK_PAGE_VERSION,
+    });
+    // No imprint: the badge decides, and Older Teen (16+) and Teen are not 18+.
+    expect(ratingOf(fixture("my-lesbian-experience-with-loneliness"))).toMatchObject({
+      mature: false,
+      ageRating: "olderteen",
+      imprint: undefined,
+    });
+    expect(ratingOf(fixture("dinosaur-sanctuary-vol-1"))).toMatchObject({
+      mature: false,
+      ageRating: "teen",
+      imprint: undefined,
+    });
+  });
+
+  it("still reads the rest of a real page", () => {
+    expect(parseBookPage(fixture("his-sensual-whisper-vol-1"))).toMatchObject({
+      seriesTitle: "His Sensual Whisper: The Voice That Sets Me On Fire",
+      seriesSlug: "his-sensual-whisper-the-voice-that-sets-me-on-fire",
+      creators: ["Pyoko Asahina"],
+      releaseDate: { year: 2025, month: 9, day: 9 },
+      priceCents: 1499,
+      category: "Manga",
+      isbn13: "9798893739404",
+      coverUrl:
+        "https://sevenseasentertainment.com/wp-content/uploads/2025/03/his_sensual_whisper_M1_site.jpg",
+    });
+  });
+
+  it("rates only the Mature badge of the site's legend 18+", () => {
+    // Each legend entry is a cover block holding one badge.
+    const badges = fixture("age-ratings")
+      .split('<div id="volume-cover"')
+      .slice(1)
+      .map((block) => `<div${block.slice(0, block.indexOf("</div></div>") + 6)}`)
+      .map((cover) => ratingOf(pageWith(cover)));
+    expect(badges.map(({ ageRating, mature }) => [ageRating, mature])).toEqual([
+      ["allages", false],
+      ["tenplus", false],
+      ["teen", false],
+      ["olderteen15", false],
+      ["olderteen17", false],
+      ["mature", true],
+    ]);
+  });
+
+  it("reads the badge by its attributes in any order, quoting or class list", () => {
+    for (const badge of [
+      '<div class="age-rating" id="mature"></div>',
+      '<div id="mature" class="age-rating"></div>',
+      "<div class='age-rating' id='mature'></div>",
+      "<div class=age-rating id=mature></div>",
+      '<div data-x="1" class="badge age-rating large" title="18+" id="mature" ></div>',
+      '<DIV CLASS="Age-Rating" ID="Mature"></DIV>',
+      '<span class="age-rating" id="mature"></span>',
+    ]) {
+      expect(ratingOf(pageWith(badge)), badge).toMatchObject({ mature: true, ageRating: "mature" });
+    }
+    // A class that only contains the word is not the badge.
+    expect(ratingOf(pageWith('<div class="no-age-rating" id="mature"></div>'))).toMatchObject({
+      mature: false,
+      ageRating: undefined,
+    });
+    // Placed after the metadata, it still counts.
+    expect(
+      ratingOf(`${pageWith("")}<div class="age-rating" id="mature"></div>`),
+    ).toMatchObject({ mature: true, ageRating: "mature" });
+  });
+
+  it("reads a text rating in the metadata when there is no badge", () => {
+    const meta = (rating: string) => ratingOf(pageWith("", `<p><b>Age Rating:</b> ${rating}</p>`));
+    expect(meta("Mature")).toMatchObject({ mature: true, ageRating: "Mature" });
+    expect(meta("M (Mature)")).toMatchObject({ mature: true });
+    expect(meta("18+")).toMatchObject({ mature: true, ageRating: "18+" });
+    expect(meta("Older Teen (17+)")).toMatchObject({
+      mature: false,
+      ageRating: "Older Teen (17+)",
+    });
+    expect(meta("Older Teen (15+)")).toMatchObject({ mature: false });
+    expect(meta("16+")).toMatchObject({ mature: false });
+    expect(meta("Teen")).toMatchObject({ mature: false });
+    // The badge, when present, is the rating.
+    const badged = pageWith(
+      '<div class="age-rating" id="teen"></div>',
+      "<p><b>Age Rating:</b> Mature</p>",
+    );
+    expect(ratingOf(badged)).toMatchObject({ mature: false, ageRating: "teen" });
+  });
+
+  it("tells a page with no rating from a rated one", () => {
+    expect(ratingOf(pageWith(""))).toEqual({
+      mature: false,
+      ageRating: undefined,
+      imprint: undefined,
+      parserVersion: BOOK_PAGE_VERSION,
+    });
+  });
+
+  it("makes an adult-only imprint mature with no badge, and no other imprint", () => {
+    const imprint = (block: string) => ratingOf(pageWith(block));
+    expect(imprint('<div id="SS-block" class="age-rating">Steamship</div>')).toMatchObject({
+      mature: true,
+      ageRating: undefined,
+      imprint: "Steamship",
+    });
+    const ghostShip = '<a href="http://www.ghostshipmanga.com/">Ghost Ship</a>';
+    expect(imprint(`<div id="GS-block" class="age-rating">${ghostShip}</div>`)).toMatchObject({
+      mature: true,
+      imprint: "Ghost Ship",
+    });
+    expect(imprint('<div id="AS-block" class="age-rating">Airship</div>')).toMatchObject({
+      mature: false,
+      imprint: "Airship",
+    });
   });
 });

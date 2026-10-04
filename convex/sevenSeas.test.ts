@@ -5,6 +5,8 @@
 // append-only history, last-seen-only bumps, Bootstrap Mode tagging, the
 // steady-state review queue, covers in file storage, and withdrawal.
 
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
@@ -18,6 +20,7 @@ import {
   seedCatalog,
 } from "./test.factories";
 import { alice, bundleMembers, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { pubDate } from "./test.catalog";
 import {
   ALPHA_1,
   bookPageHtml,
@@ -1843,5 +1846,268 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     await t.run(async (ctx) => {
       expect(await ctx.db.query("editionLines").collect()).toHaveLength(0);
     });
+  });
+});
+
+// Mature evidence (lib/mature.ts) from the book page: its age rating and its
+// imprint, read on real pages (lib/__fixtures__/sevenSeas), reaching the
+// Series and what the home page and the library show at once.
+describe("sevenSeas.sync — mature evidence from the book page", () => {
+  const savedPage = (name: string) =>
+    readFileSync(new URL(`./lib/__fixtures__/sevenSeas/${name}.html`, import.meta.url), "utf8");
+
+  /** Steamship's "His Sensual Whisper" Vol. 1: its page names the imprint and the Mature badge. */
+  const WHISPER_1: FixtureBook = {
+    id: 201,
+    slug: "his-sensual-whisper-the-voice-that-sets-me-on-fire-vol-1",
+    title: "His Sensual Whisper: The Voice That Sets Me On Fire Vol. 1",
+    modified: "2025-08-01T00:00:00",
+    page: savedPage("his-sensual-whisper-vol-1"),
+  };
+  /** Ghost Ship's "Peter Grill" Vol. 15: its page names the imprint and a 17+ badge. */
+  const PETER_GRILL_15: FixtureBook = {
+    id: 202,
+    slug: "peter-grill-and-the-philosophers-time-vol-15",
+    title: "Peter Grill and the Philosopher&#8217;s Time Vol. 15",
+    modified: "2025-10-01T00:00:00",
+    page: savedPage("peter-grill-vol-15"),
+  };
+  const ALPHA_3: FixtureBook = {
+    ...ALPHA_2,
+    id: 104,
+    slug: "alpha-manga-vol-3",
+    title: "Alpha Adventures (Manga) Vol. 3",
+    isbn: "978-1-9990001-2-7",
+  };
+
+  /** The Series of the Release a book's observation is linked to. */
+  const seriesOf = (t: TestT, b: FixtureBook) =>
+    t.run(async (ctx) => {
+      const { recordRef } = (await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", String(b.id)),
+        )
+        .unique())!;
+      if (recordRef?.type !== "release") throw new Error("not linked to a Release");
+      const release = (await ctx.db.get(recordRef.id))!;
+      return { release, series: (await ctx.db.get(release.seriesIds[0]!))! };
+    });
+
+  /**
+   * Turn a book's stored snapshot into one an older parser took: no parser
+   * version, rating or imprint, and `mature` from the badge alone.
+   */
+  const ageSnapshot = (t: TestT, b: FixtureBook, mature: boolean) =>
+    t.run(async (ctx) => {
+      const observation = (await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", String(b.id)),
+        )
+        .unique())!;
+      const stored: BookSnapshot = observation.snapshot;
+      const { parserVersion, ageRating, imprint, ...older } = stored;
+      expect(parserVersion).toBe(1);
+      expect(imprint !== undefined || ageRating !== undefined).toBe(b.page !== undefined);
+      await ctx.db.patch(observation._id, { snapshot: { ...older, mature } });
+    });
+
+  const rebuild = (t: TestT) => t.action(internal.seriesBrowse.rebuild, {});
+
+  /**
+   * Where a viewer who has not opted in sees the Series: the library (both
+   * paths), its facets, and the home page's pools.
+   */
+  async function shownTo(t: TestT, title: string, month: { year: number; month: number }) {
+    const titles = (items: Array<{ title: string }>) => items.some((item) => item.title === title);
+    const word = title.split(" ")[0]!.toLowerCase();
+    return {
+      library: titles(
+        (await t.query(api.seriesBrowse.browse, { sort: "title", showMature: false })).items,
+      ),
+      filtered: titles(
+        (await t.query(api.seriesBrowse.browse, { sort: "title", q: word, showMature: false }))
+          .items,
+      ),
+      facets: (await t.query(api.seriesBrowse.facets, { showMature: false })).total,
+      newest: titles(await t.query(api.catalog.recentSeries, { limit: 28, showMature: false })),
+      month: (
+        await t.query(api.releases.monthBrowse, { ...month, showMature: false })
+      ).releases.some((row) => row.series.some((series) => series.title === title)),
+    };
+  }
+
+  it("a Steamship book filed under Seven Seas makes its Series mature at once", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // The page without its Mature badge: the imprint alone is the evidence.
+    const page = WHISPER_1.page!.replace('<div class="age-rating" id="mature"></div>', "");
+    expect(page).not.toBe(WHISPER_1.page);
+    stubSite([{ ...WHISPER_1, page }]);
+    await sync(t);
+
+    const { release, series } = await seriesOf(t, WHISPER_1);
+    const sevenSeas = await t.run((ctx) =>
+      ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "seven-seas"))
+        .unique(),
+    );
+    expect(release.publisherId).toBe(sevenSeas!._id);
+    expect(series.mature).toBe(true);
+    expect((await observationOf(t, WHISPER_1)).snapshot).toMatchObject({
+      mature: true,
+      imprint: "Steamship",
+      parserVersion: 1,
+    });
+    expect((await observationOf(t, WHISPER_1)).snapshot.ageRating).toBeUndefined();
+    await rebuild(t);
+    expect((await seriesOf(t, WHISPER_1)).series.mature).toBe(true);
+  });
+
+  it("a mature page linking a listed Series' Release hides it from home and the library at once", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const title = "His Sensual Whisper: The Voice That Sets Me On Fire";
+    await insertCatalogRelease(t, title, { isbn13: "9798893739404", pubDate: pubDate(20250909) });
+    await rebuild(t);
+    const month = { year: 2025, month: 9 };
+    expect(await shownTo(t, title, month)).toEqual({
+      library: true,
+      filtered: true,
+      facets: 1,
+      newest: true,
+      month: true,
+    });
+
+    stubSite([WHISPER_1]);
+    await sync(t);
+    const { series } = await seriesOf(t, WHISPER_1);
+    expect(series.title).toBe(title);
+    expect(series.mature).toBe(true);
+    // No rebuild in between.
+    expect(await shownTo(t, title, month)).toEqual({
+      library: false,
+      filtered: false,
+      facets: 0,
+      newest: false,
+      month: false,
+    });
+  });
+
+  it("re-reads a page an older parser rated false, corrects it, and then leaves it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([PETER_GRILL_15]);
+    await sync(t);
+    // The older parser read only the 17+ badge: not mature. The rebuild
+    // derives the Series from that, and it is listed.
+    await ageSnapshot(t, PETER_GRILL_15, false);
+    await rebuild(t);
+    const title = "Peter Grill and the Philosopher’s Time";
+    const month = { year: 2025, month: 10 };
+    expect((await seriesOf(t, PETER_GRILL_15)).series.mature).toBeUndefined();
+    expect(await shownTo(t, title, month)).toMatchObject({
+      library: true,
+      newest: true,
+      month: true,
+    });
+
+    // The listing is unchanged; the stored snapshot's parser is not.
+    stubSite([PETER_GRILL_15]);
+    let pages = countBookPages();
+    expect(await sync(t)).toMatchObject({ completeSweep: true, errorCount: 0 });
+    expect(pages.count).toBe(1);
+    expect((await observationOf(t, PETER_GRILL_15)).snapshot).toMatchObject({
+      mature: true,
+      ageRating: "olderteen17",
+      imprint: "Ghost Ship",
+      parserVersion: 1,
+    });
+    expect((await seriesOf(t, PETER_GRILL_15)).series.mature).toBe(true);
+    expect(await shownTo(t, title, month)).toEqual({
+      library: false,
+      filtered: false,
+      facets: 0,
+      newest: false,
+      month: false,
+    });
+
+    // Read with the current parser: the next sync fetches nothing and writes nothing.
+    const history = () =>
+      t.run(async (ctx) => (await ctx.db.query("observationSnapshots").collect()).length);
+    const before = await history();
+    stubSite([PETER_GRILL_15]);
+    pages = countBookPages();
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0, completeSweep: true });
+    expect(pages.count).toBe(0);
+    expect(await history()).toBe(before);
+  });
+
+  it("re-reads old pages within the detail budget, new books first, until none is left", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, ALPHA_2]);
+    await sync(t);
+    await ageSnapshot(t, ALPHA_1, false);
+    await ageSnapshot(t, ALPHA_2, false);
+
+    // Listed newest-modified first, as the site lists them.
+    const listed = [ALPHA_3, ALPHA_1, ALPHA_2];
+    const read = async () => {
+      stubSite(listed);
+      const requests: string[] = [];
+      const site = globalThis.fetch;
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith(`${BASE}/books/`)) requests.push(String(input));
+        return site(input, init);
+      });
+      const result = await sync(t, { maxDetailFetches: 2 });
+      return { result, pages: requests.map((url) => url.split("/")[4]) };
+    };
+    expect(await read()).toMatchObject({
+      result: { completeSweep: false },
+      pages: [ALPHA_3.slug, ALPHA_1.slug],
+    });
+    expect(await read()).toMatchObject({ result: { completeSweep: true }, pages: [ALPHA_2.slug] });
+    expect(await read()).toMatchObject({ result: { completeSweep: true }, pages: [] });
+    for (const b of listed) {
+      expect((await observationOf(t, b)).snapshot.parserVersion).toBe(1);
+    }
+  });
+
+  it("never overrides the Data Team's call, in either direction", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Rated general, then a page that rates the book Mature.
+    const general = { ...ALPHA_1, modified: "2026-08-01T00:00:00" };
+    stubSite([general]);
+    await sync(t);
+    const quiet = (await seriesOf(t, general)).series;
+    await t.run((ctx) => ctx.db.patch(quiet._id, { contentRating: "general" }));
+    const rated = bookPageHtml(general).replace(
+      '<div id="volume-meta">',
+      '<div class="age-rating" id="mature"></div><div id="volume-meta">',
+    );
+    stubSite([{ ...general, modified: "2026-08-02T00:00:00", page: rated }]);
+    await sync(t);
+    expect((await observationOf(t, general)).snapshot.mature).toBe(true);
+    expect((await seriesOf(t, general)).series.mature).toBeUndefined();
+    await rebuild(t);
+    expect((await seriesOf(t, general)).series.mature).toBeUndefined();
+
+    // Rated mature, then a page that rates the book Teen.
+    await t.run((ctx) => ctx.db.patch(quiet._id, { contentRating: "mature", mature: true }));
+    const teen = rated.replace('id="mature"', 'id="teen"');
+    stubSite([{ ...general, modified: "2026-08-03T00:00:00", page: teen }]);
+    await sync(t);
+    expect((await observationOf(t, general)).snapshot).toMatchObject({
+      mature: false,
+      ageRating: "teen",
+    });
+    expect((await seriesOf(t, general)).series.mature).toBe(true);
+    await rebuild(t);
+    expect((await seriesOf(t, general)).series.mature).toBe(true);
   });
 });

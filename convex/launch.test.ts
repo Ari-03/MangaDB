@@ -440,4 +440,19 @@ describe("seedPublishers (the canonical publisher list)", () => {
     expect(first.markedAdultOnly).toEqual(["ghost-ship"]);
     expect(again.markedAdultOnly).toEqual([]);
   });
+
+  it("marks an existing Steamship row adult-only, like Ghost Ship", async () => {
+    const t = makeT();
+    // A row an earlier seed created before Steamship was on the adult-only list.
+    await t.run((ctx) => insertPublisher(ctx, { name: "Steamship", slug: "steamship" }));
+    const seeded = await t.mutation(internal.launch.seedPublishers, {});
+    expect(seeded.markedAdultOnly).toEqual(["steamship"]);
+    const steamship = await t.run((ctx) =>
+      ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "steamship"))
+        .unique(),
+    );
+    expect(steamship?.contentRating).toBe("mature");
+  });
 });

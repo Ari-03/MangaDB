@@ -360,14 +360,15 @@ page, each behind an "I'm 18 or older" check. Your own library always
 shows your own books.
 
 The library rebuild derives `series.mature`, so it lags by up to one
-rebuild. Evidence, strongest first:
+rebuild, except that a Data Team call and a Seven Seas book page rated
+mature apply at once. Evidence, strongest first:
 
 | Evidence | Source |
 |---|---|
 | Data Team call | `series.contentRating` ("mature" or "general") wins over everything |
 | Adult-only publisher | `publishers.contentRating = "mature"`, from `adultOnly` in `convex/lib/publishers.ts` |
 | Kodansha | `age_rating` 18 or over on the backlist listing |
-| Seven Seas | the book page's mature age-rating block |
+| Seven Seas | the book page's Mature age rating, or an adult-only imprint named beside it (Ghost Ship, Steamship) even on a book filed under Seven Seas |
 | Yen Press | the "Age Rating" detail ("18+ M (Mature)", "18 & Up") |
 | ANN | objectionable content MA or AO, or an erotica or hentai genre |
 

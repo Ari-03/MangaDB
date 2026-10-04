@@ -5,13 +5,17 @@
 // - a source rates one of its books or the Series itself 18+: a Source
 //   Observation linked to the Series or to one of its Releases carries
 //   `mature: true` in its snapshot (the parsers set it from Kodansha's
-//   age_rating, Seven Seas' and Yen Press's age-rating labels, and ANN's
-//   Objectionable-content rating and genres);
+//   age_rating, Seven Seas' and Yen Press's age-rating labels, a Seven Seas
+//   page naming an adult-only imprint, and ANN's Objectionable-content
+//   rating and genres);
 // - one of its Editions comes from an adult-only publisher or imprint
-//   (publishers.contentRating = "mature": FAKKU, 801 Media, Ghost Ship).
+//   (publishers.contentRating = "mature": FAKKU, 801 Media, Ghost Ship,
+//   Steamship).
 // The Series library rebuild derives `series.mature` from these
-// (seriesBrowse.upsertStats), so new evidence shows within one rebuild; an
-// edit to a Series' contentRating applies at once (moderation.applyUpdate).
+// (seriesBrowse.upsertStats), so new evidence shows within one rebuild. A
+// Seven Seas book page rating its book mature applies at once
+// (seriesBrowse.applyMatureEvidence), as does an edit to a Series'
+// contentRating (moderation.applyUpdate).
 //
 // Visibility: everyone can see a Mature Series' own pages, but discovery
 // (browse, search, the calendars, boards, author shelves, the sitemap)

@@ -273,6 +273,18 @@ Skips light novels and audiobooks. Covers are stored in Convex file
 storage. A run fetches at most 200 book pages, newest-modified first, so
 the first backfill takes several runs.
 
+The book page's age-rating badge (a text rating in its metadata when it has
+no badge) and the imprint block beside the cover decide the snapshot's
+`mature`. A Mature (18+) rating makes it true, and so does an adult-only
+imprint (Ghost Ship, Steamship) whatever its badge says; the Edition stays
+under Seven Seas. Teen and Older Teen alone do not. The snapshot keeps the
+rating and imprint as read and the version of the parser that read the
+page; a run re-reads pages an older version read, within its 200-page
+budget. A mature page makes its Series mature at once
+([product](product.md#mature-titles)). After a deploy that changes any of
+this, follow
+[Mature evidence after a deploy](operations.md#mature-evidence-after-a-deploy).
+
 ```sh
 npx convex run sevenSeas:sync '{}'                        # full sweep, ≤200 detail fetches
 npx convex run sevenSeas:sync '{"maxDetailFetches":1000}' # bigger backfill bite
