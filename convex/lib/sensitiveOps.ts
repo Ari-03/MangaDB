@@ -1621,12 +1621,15 @@ async function transferReferences(
 // ---------- Release Variant merges ----------
 
 /**
- * Pins one Release Variant merge may move, in both tables together, so the
- * merge stays reversible: Split puts every pin back in one transaction and
- * reads far more per pin than the merge. Of a transaction's 4,096 index
- * ranges it reads about 5 per Owned entry with a User of its own and 11 per
- * membership of a one-Release Bundle (4 more per further Release with its
- * own Series), so 250 of either, or of both, leave a third for the rest.
+ * Pins one Release Variant merge may move, in both tables together. Split
+ * puts every pin back in one transaction and reads far more per pin than
+ * the merge: of a transaction's 4,096 index ranges, about 5 per Owned entry
+ * with a User of its own and 11 per membership of a one-Release Bundle, so
+ * 250 of either, or of both, leave a third for the rest. The limit does not
+ * make every variant merge reversible: Split also reads 4 ranges per further
+ * Release of a moved membership's Bundle and several per owner of that
+ * Bundle, so a merge that touched a Bundle with very many owners or many
+ * Releases can still be beyond a Split.
  */
 export const VARIANT_MERGE_PIN_LIMIT = 250;
 
@@ -1654,8 +1657,8 @@ async function variantPinCounts(ctx: QueryCtx, variantId: Id<"releaseVariants">)
 /**
  * Why merging Release Variant `loserId` into `survivorId` is refused, or
  * null. Variants merge only within one Release, each resolved through any
- * Release merge, so a moved pin stays on its row's Release; and only as
- * many pins as a Split of the merge can put back. applyMerge refuses
+ * Release merge, so a moved pin stays on its row's Release; and move at
+ * most VARIANT_MERGE_PIN_LIMIT pins. applyMerge refuses
  * with this before writing anything; the merge form shows it instead of
  * the merge.
  */
@@ -1677,7 +1680,7 @@ export async function variantMergeRefusal(
   if (entries + memberships > VARIANT_MERGE_PIN_LIMIT) {
     return (
       `More than ${VARIANT_MERGE_PIN_LIMIT} collection entries and bundle memberships pin the ` +
-      "variant being merged, more than a Split could put back, and a merge must stay reversible."
+      "variant being merged. Split puts every pin back in one transaction, which cannot read that many."
     );
   }
   return null;

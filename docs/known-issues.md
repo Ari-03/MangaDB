@@ -67,6 +67,22 @@ is fixed.
   sequence and have drifted once already (Seven Seas lacked the
   removed-Series check). They should become one ladder with per-source
   options.
+- **A large merge cannot be Split.** `applySplit`
+  (`convex/lib/sensitiveOps.ts`) runs as one transaction. It reads several
+  index ranges for every row the merge moved and for every owner of every
+  Bundle the merge touched, so a merge that moved many rows, or touched a
+  Bundle owned by many users (about 1,400 with nothing else), passes the
+  4,096 ranges a transaction may read and cannot be Split. Release
+  Variant merges stop at 250 pins, which covers only Owned entries and
+  memberships of one-Release Bundles. Release, Bundle and Series merges
+  log every moved row into one manifest document with no bound at all.
+  The fix is a Split, and a merge manifest, that work in batches.
+- **Due covers are asked about again every hour during an outage.** While
+  Open Library or another upstream does not answer, every viewed cover
+  that is due for its 90-day check is asked about again roughly once an
+  hour per Cloudflare location (`src/server/covers.ts`), with no backoff.
+  When many covers fall due together this can pass Open Library's limit
+  of about 100 lookups per 5 minutes.
 
 ## Decisions waiting on the owner
 
