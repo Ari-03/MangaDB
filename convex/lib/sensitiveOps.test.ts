@@ -13,7 +13,7 @@
 // was deleted; merges carry the denormalized references that follow the
 // moved rows (Unmapped Packaging Series, a pass's Series, imprint parents);
 // Release Variant merges move every pin by index, refuse variants of
-// different Releases and more pins than one merge can move; and Split
+// different Releases and more pins than a Split can put back; and Split
 // reverses every chunk of the data repair's chunked publisher merge.
 
 import { describe, expect, it, vi } from "vitest";
@@ -1441,7 +1441,7 @@ describe("merge — Release Variants", () => {
    * the duplicate, on the third, and on the duplicate from rows of the
    * loser Release (a pin whose Release disagrees with its variant's, which
    * older merges and Splits could leave). `unrelated` Collection Entries
-   * pin nothing.
+   * and as many Bundle Memberships pin nothing.
    */
   async function variants(t: T, unrelated = 0) {
     const f = await setup(t);
@@ -1472,8 +1472,10 @@ describe("merge — Release Variants", () => {
         legacyMembership: await member(loserId, f.loser.releaseId),
         otherMembership: await member(otherId),
       };
+      const bundleId = await insertBundle(ctx, { publisherId });
       for (let n = 0; n < unrelated; n++) {
         await ctx.db.insert("collectionEntries", { userId: f.daveId, releaseId, state: "wanted" });
+        await ctx.db.insert("bundleMemberships", { bundleId, releaseId, order: n + 1 });
       }
       return ids;
     });
@@ -1509,7 +1511,7 @@ describe("merge — Release Variants", () => {
     );
 
   it("moves the merged variant's pins by index, legacy pins included, and Split puts them back", async () => {
-    // A read budget a scan of every Collection Entry would blow through.
+    // A read budget a scan of either table would blow through.
     const t = makeT({ transactionLimits: { documentsRead: 1_000 } });
     const v = await variants(t, 2_000);
     const before = await pins(t, v);
@@ -1585,7 +1587,66 @@ describe("merge — Release Variants", () => {
     expect((await pins(t, v)).entry[0]).toBe(strayId);
   });
 
-  it("refuses more pins than one merge can move, and the preview says it stopped counting", async () => {
+  /**
+   * More pins on the loser: `owners` Owned Collection Entries, each by a
+   * User of its own, and `memberships` Bundle Memberships, each in a Bundle
+   * of its own. These are the costliest pins for a Split to put back.
+   */
+  const pinLoser = (t: T, v: Variants, { owners = 0, memberships = 0 }) =>
+    t.run(async (ctx) => {
+      const releaseId = v.f.survivor.releaseId;
+      const publisherId = await firstPublisher(ctx);
+      for (let n = 0; n < owners; n++) {
+        const username = `owner${n}`;
+        const userId = await ctx.db.insert("users", {
+          clerkSubject: `user_${username}`,
+          username,
+          usernameNormalized: username,
+          formatPreference: "both",
+          ownershipVisibility: "private",
+          readingVisibility: "private",
+        });
+        await ctx.db.insert("collectionEntries", { userId, releaseId, state: "owned", variantId: v.loserId });
+      }
+      for (let n = 0; n < memberships; n++) {
+        const bundleId = await insertBundle(ctx, { publisherId });
+        await ctx.db.insert("bundleMemberships", { bundleId, releaseId, order: 1, variantId: v.loserId });
+      }
+    });
+
+  // The fixture's own four pins count toward the limit.
+  it.each([
+    ["Owned Collection Entries, a User each", { owners: VARIANT_MERGE_PIN_LIMIT - 4 }],
+    ["Bundle Memberships, a Bundle each", { memberships: VARIANT_MERGE_PIN_LIMIT - 4 }],
+    [
+      "both together",
+      { owners: (VARIANT_MERGE_PIN_LIMIT - 4) / 2, memberships: (VARIANT_MERGE_PIN_LIMIT - 4) / 2 },
+    ],
+  ])("merges as many pins as the limit allows, and Split puts them back: %s", async (_name, pins) => {
+    const t = makeT({ transactionLimits: true });
+    const v = await variants(t);
+    await pinLoser(t, v, pins);
+    /** Rows pinning the loser, in both tables. */
+    const pinning = () =>
+      t.run(async (ctx) => {
+        const entries = await ctx.db
+          .query("collectionEntries")
+          .withIndex("by_variantId", (q) => q.eq("variantId", v.loserId))
+          .collect();
+        const memberships = await ctx.db
+          .query("bundleMemberships")
+          .withIndex("by_variantId", (q) => q.eq("variantId", v.loserId))
+          .collect();
+        return entries.length + memberships.length;
+      });
+    expect(await pinning()).toBe(VARIANT_MERGE_PIN_LIMIT);
+    await mergeVariants(t, v);
+    expect(await pinning()).toBe(0);
+    await splitAs(t, ref(v.loserId));
+    expect(await pinning()).toBe(VARIANT_MERGE_PIN_LIMIT);
+  });
+
+  it("refuses more pins than a Split could put back, and the preview says it stopped counting", async () => {
     const t = makeT();
     const v = await variants(t);
     await t.run(async (ctx) => {

@@ -1621,12 +1621,14 @@ async function transferReferences(
 // ---------- Release Variant merges ----------
 
 /**
- * Pins one Release Variant merge may move. Each adds an entry of about 160
- * bytes to the merge manifest, one document of at most 1 MiB that Split
- * replays, so 4,000 leaves it under 700 KB with room for the rest; the
- * reads and writes are far inside a transaction's limits.
+ * Pins one Release Variant merge may move, in both tables together, so the
+ * merge stays reversible: Split puts every pin back in one transaction and
+ * reads far more per pin than the merge. Of a transaction's 4,096 index
+ * ranges it reads about 5 per Owned entry with a User of its own and 11 per
+ * membership of a one-Release Bundle (4 more per further Release with its
+ * own Series), so 250 of either, or of both, leave a third for the rest.
  */
-export const VARIANT_MERGE_PIN_LIMIT = 4000;
+export const VARIANT_MERGE_PIN_LIMIT = 250;
 
 /** The Collection Entries and Bundle Memberships pinning a Release Variant. */
 function variantPins(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
@@ -1653,7 +1655,7 @@ async function variantPinCounts(ctx: QueryCtx, variantId: Id<"releaseVariants">)
  * Why merging Release Variant `loserId` into `survivorId` is refused, or
  * null. Variants merge only within one Release, each resolved through any
  * Release merge, so a moved pin stays on its row's Release; and only as
- * many pins as one merge can move and record for Split. applyMerge refuses
+ * many pins as a Split of the merge can put back. applyMerge refuses
  * with this before writing anything; the merge form shows it instead of
  * the merge.
  */
@@ -1675,7 +1677,7 @@ export async function variantMergeRefusal(
   if (entries + memberships > VARIANT_MERGE_PIN_LIMIT) {
     return (
       `More than ${VARIANT_MERGE_PIN_LIMIT} collection entries and bundle memberships pin the ` +
-      "variant being merged, more than one merge can move and record for Split."
+      "variant being merged, more than a Split could put back, and a merge must stay reversible."
     );
   }
   return null;
