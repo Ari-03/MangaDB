@@ -1,0 +1,102 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.mjs",
+      "**/*.json",
+      "**/*.jsonc",
+      "**/*.css",
+      "!!**/convex/_generated",
+      "!src/routeTree.gen.ts",
+      "!worker-configuration.d.ts",
+      "!package-lock.json",
+      "!!**/dist",
+      "!!**/.convex",
+      "!!**/convex/lib/__fixtures__"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true
+    }
+  },
+  // Off so imports are never sorted: reordering them is not formatting, and
+  // the order of side-effect imports can matter.
+  "assist": {
+    "enabled": false
+  },
+  // The recommended rules, less the ones below. Each is off because it only
+  // disagrees with a deliberate style, not because its reports were ignored.
+  "linter": {
+    "enabled": true,
+    // Stated, not detected. Biome turns a domain on when package.json lists
+    // its library (react, vitest), but its scanner never reads package.json
+    // when the checkout sits under a folder named .cache, .git, .yarn or
+    // node_modules, among others, so the same commit would lint differently
+    // by path.
+    // These two are the only domains package.json turns on.
+    "domains": {
+      "react": "recommended",
+      "test": "recommended"
+    },
+    "rules": {
+      "preset": "recommended",
+      "a11y": {
+        // 11 reports: eight role="group" on labelled groups (controls, cover
+        // links, listbox options), where a <fieldset> would bring its own
+        // border, padding and form semantics, and three role="search" on
+        // search forms, which is valid ARIA.
+        "useSemanticElements": "off",
+        // ignoreNonDom: ModGate's role="dataTeam" prop is an access role, not
+        // an ARIA role. Roles on DOM elements are still checked.
+        "useValidAriaRole": {
+          "level": "error",
+          "options": { "ignoreNonDom": true }
+        }
+      },
+      "complexity": {
+        // 2 reports: ITEM and JOINED in convex/lib/coverage.ts use String.raw
+        // like the fragments beside them, though they hold no backslash.
+        "noUselessStringRaw": "off",
+        // 57 reports, 55 of them guards like `!series || series.status !==
+        // "active"`, which read as the explicit missing-or-hidden check they are.
+        "useOptionalChain": "off"
+      },
+      "style": {
+        // 88 reports in src/styles/, each checked: the later, less specific
+        // rule styles another component or is meant to lose the cascade.
+        "noDescendingSpecificity": "off",
+        // 1,475 reports, most in tests. Most of the rest index arrays, maps
+        // and regex groups the code has already checked; the others (58)
+        // assert a document, a field or a variable, and those sampled were
+        // guarded.
+        "noNonNullAssertion": "off"
+      },
+      "suspicious": {
+        // Two writes: src/lib/mature.tsx's preference cookie, which it reads
+        // back synchronously, and a test's reset. The Cookie Store API the rule
+        // suggests is asynchronous.
+        "noDocumentCookie": "off"
+      }
+    }
+  }
+}
