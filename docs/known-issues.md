@@ -287,21 +287,41 @@ is fixed.
   Bootstrap Mode made a box set whose title, blurbs and line's size give
   no range of Volumes ("… Box Set", or a title whose statements disagree)
   a Release Bundle with no members, and linked the box's observation to
-  it. No later run fills it or holds the box: a linked box adds only the
-  members its record covers (`reconcileCatalogBox` in
-  `convex/lib/catalogTitle.ts`), here none. Such a bundle is marked
-  Bootstrap-Unreviewed (the `by_bootstrap` index on `releaseBundles`), has
-  no `bundleMemberships` row, and is linked from a `prh` or `yenpress`
-  observation. No Proposal or edit form changes a bundle's members, so an
-  Editor can only report it. A Moderator can merge it into a bundle that
-  has its members, or hide it, from its Manage page
+  it. A linked box adds only the members its record covers
+  (`reconcileCatalogBox` in `convex/lib/catalogTitle.ts`), so the bundle
+  stays empty, and the box unheld, while its record states no usable
+  coverage; once its title or a blurb states a range, the next apply
+  fills the bundle. Such a bundle is marked Bootstrap-Unreviewed (the
+  `by_bootstrap` index on `releaseBundles`), has no `bundleMemberships`
+  row, is linked from a `prh` or `yenpress` observation, and that
+  observation's snapshot gives no coverage. The first three also fit a
+  healthy bundle, a box stating Volumes that have no Releases yet; the
+  fourth tells them apart. No Proposal or edit form changes a bundle's
+  members, so an Editor can only report it. A Moderator can merge it into
+  a bundle that has its members, or hide it, from its Manage page
   ([moderation](moderation.md#hide-restore-merge-split-and-locks)); a
   hidden bundle keeps the box's observation linked, so the box is not
   held either. The operator's one-time repair can fill one
   (`repair:runBatch`, a `releaseBundle` entry naming the bundle and its
-  members' ISBNs). A fix is a repair that unlinks the box's observation
-  from each such bundle and hides the bundle, so the next apply holds the
-  box.
+  members' ISBNs). A fix is a repair that, for each bundle with all four
+  properties and only those, unlinks the box's observation and hides the
+  bundle, so the next apply holds the box. Applied to a healthy bundle it
+  would do harm: the next apply links the box to the hidden bundle again,
+  and the box is then neither held nor shown.
+- **Two packaging notes give the wrong reason.** In Bootstrap Mode PRH and
+  Yen Press hold a box set with one base Series, stated coverage and no
+  imprint with the note `Box set "…" is a Release Bundle — steady state
+  leaves bundles to review.` (`applyCatalogTitle` in
+  `convex/lib/catalogTitle.ts`); what holds it is the missing publisher.
+  A title that lists its Volumes with a gap ("… (Vol. 4 & 6)") is held
+  with a note that the title does not state its covered Volumes (the
+  packaging `hold` in `applyCatalogTitle`; Seven Seas' `unplacedNote` in
+  `convex/sevenSeas.ts` says neither the title, the blurb, nor the line
+  name states them), though the title does. A fix is a note of its own for
+  a box set with no publisher, and for a gapped title one saying it states
+  no contiguous range. `storedHoldKind` (`convex/imports.ts`) classifies
+  stored notes by their text, so it must keep matching a reworded note's
+  old wording, which stays on a book until its importer applies it again.
 - **Due covers are asked about again every hour during an outage.** While
   Open Library or another upstream does not answer, every viewed cover
   that is due for its 90-day check is asked about again roughly once an
