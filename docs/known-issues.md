@@ -384,8 +384,7 @@ is fixed.
   dump lines (`LINK_BUDGET_MS` in `convex/openLibrary.ts`). The fetch of
   the dump, each read of its stream, and the skip over the lines earlier
   links processed have no deadline, so a download that stalls, or a prefix
-  that takes most of 30 minutes to arrive, ends the action before it
-  hands off. The run then stays `running` until the hourly tick closes it
+  that takes 30 minutes to arrive, ends the action before it hands off. The run then stays `running` until the hourly tick closes it
   as stranded, and the source starts again at its next cadence
   ([imports](imports.md#open-library)). Starting over is the accepted cost
   of reading the dump from its first byte

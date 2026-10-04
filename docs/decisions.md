@@ -117,8 +117,10 @@ dumps.
 
 The design's limit: if downloading and skipping the prefix alone takes
 longer than ten minutes, every link applies exactly one line and
-downloads the prefix again, so the run crawls on, never stranded while
-that prefix takes under Convex's 30-minute limit. That changes if the
+downloads the prefix again, so the run crawls. It keeps going only while
+each link also applies its line and hands off before Convex's 30-minute
+limit; a link that does not is ended there and the run is stranded. The
+decision changes if the
 dump grows until reading it up to a late link's first line takes much of
 that link's ten minutes, or if Open Library offers range requests.
 
