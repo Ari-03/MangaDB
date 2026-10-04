@@ -1089,10 +1089,12 @@ export default defineSchema({
     .index("by_release", ["releaseId"])
     .index("by_series", ["seriesId"]),
 
+  // A row's Series is its Volume's; nothing reads or writes `seriesId`, which
+  // older rows still hold until reading:unsetProgressSeries clears them.
   volumeProgress: defineTable({
     userId: v.id("users"),
     volumeId: v.id("volumes"),
-    seriesId: v.id("series"),
+    seriesId: v.optional(v.id("series")),
     readCount: v.number(),
     // Supports undoing the most recent completion.
     lastCompletedAt: v.optional(v.number()),

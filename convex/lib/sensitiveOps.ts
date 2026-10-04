@@ -679,8 +679,8 @@ async function trackersOf(ctx: MutationCtx, touched: Records): Promise<{ records
 
 /**
  * Every User with a profile surface on these records, per record, and the
- * overrides governing it. A Series: state rows, Series Ratings, and the read
- * counts and passes filed under it. A Volume: its read counts. An Edition:
+ * overrides governing it. A Series: state rows, Series Ratings, and the
+ * passes filed under it. A Volume: its read counts. An Edition:
  * its omnibus Ratings. A Release: its entries and passes. A Bundle: its
  * entries. Reviews, Volume Ratings and Favorites are no surface of Tracking
  * Visibility: the profile lists Reviews whatever it is and never shows the
@@ -692,7 +692,7 @@ async function trackersIn(ctx: MutationCtx, records: RecordSets): Promise<Tracke
     for (const row of rows) addTracker(trackers, row.userId, recordId, surfacesOf(table, row));
   };
   for (const seriesId of records.series) {
-    for (const table of ["userSeriesStates", "ratings", "volumeProgress", "releaseProgress"] as const) {
+    for (const table of ["userSeriesStates", "ratings", "releaseProgress"] as const) {
       add(
         table,
         seriesId,
@@ -1207,21 +1207,14 @@ async function transferReferences(
           });
         }
       }
-      // Progress rows key on user × release / user × volume, which the merge
-      // does not change — repoint the series denorm only.
+      // Passes key on user × release, which the merge does not change —
+      // repoint the series denorm only. Read counts follow their Volumes.
       const releaseProgress = await ctx.db
         .query("releaseProgress")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
         .collect();
       for (const row of releaseProgress) {
         await repoint(ctx, log, "releaseProgress", row, { seriesId: survivorId });
-      }
-      const volumeProgress = await ctx.db
-        .query("volumeProgress")
-        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
-        .collect();
-      for (const row of volumeProgress) {
-        await repoint(ctx, log, "volumeProgress", row, { seriesId: survivorId });
       }
       await transferRatingsAndReviews(
         ctx,
@@ -1311,10 +1304,7 @@ async function transferReferences(
           .unique();
         if (existing) await removeRow(ctx, log, "volumeProgress", row);
         else {
-          await repoint(ctx, log, "volumeProgress", row, {
-            volumeId: survivorId,
-            seriesId: survivor.seriesId,
-          });
+          await repoint(ctx, log, "volumeProgress", row, { volumeId: survivorId });
           if (crossSeries) {
             await carryVisibility(ctx, sink, row.userId, READING, [loserSeriesId], [survivor.seriesId]);
           }
@@ -1816,6 +1806,21 @@ async function ownerExists(ctx: MutationCtx, doc: unknown): Promise<boolean> {
 }
 
 /**
+ * Fields older manifests log that their table no longer keeps, by table: a
+ * read count's Series, which is its Volume's. Split neither repoints nor
+ * reinserts them, nor reads tracking from them.
+ */
+const RETIRED_FIELDS: Partial<Record<string, string>> = { volumeProgress: "seriesId" };
+
+/** A removed row's snapshot as Split reinserts it: without its table's retired field. */
+function liveSnapshot(table: string, doc: unknown): Record<string, unknown> {
+  const fields = { ...(doc as Record<string, unknown>) };
+  const retired = RETIRED_FIELDS[table];
+  if (retired) delete fields[retired];
+  return fields;
+}
+
+/**
  * Personal snapshots a deleted User left in merge manifests, removed from one
  * page of manifests at a time. The account purge (users.purgeUser), once it
  * has emptied the User's tables, schedules internal.users.redactMergeManifests,
@@ -1894,6 +1899,7 @@ async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<D
     const userId = typeof row?.userId === "string" ? ctx.db.normalizeId("users", row.userId) : null;
     if (!row || !userId || fields.length === 0) return;
     for (const [field, kind] of REF_FIELDS) {
+      if (field === RETIRED_FIELDS[table]) continue;
       for (const id of addRefs(ctx, refs, kind, row[field])) addTracker(users, userId, id, fields);
     }
   };
@@ -1923,6 +1929,7 @@ async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<D
     }
     for (const { table, docId } of manifest.inserted) personal(table, await current(table, docId));
     for (const { table, docId, field, before, after } of manifest.repointed) {
+      if (field === RETIRED_FIELDS[table]) continue;
       if (table === "volumes" && field === "seriesId") addRefs(ctx, moved, "volumes", docId);
       else if (table === "editionLines" && field === "seriesId") addRefs(ctx, moved, "lines", docId);
       else if (table === "editions" && field === "editionLineId") addRefs(ctx, moved, "editions", docId);
@@ -2080,8 +2087,9 @@ async function keepSplitVisibility(
  * Split, the only reversal of a mistaken merge: replay the merge's
  * manifests backward (delete what they inserted, reinsert what they removed
  * unless its User is gone, repoint every reference still where the merge
- * left it) and reactivate the loser. The touched Editions' Release Series
- * are then derived afresh from the restored links (recomputeReleaseDenorms).
+ * left it; RETIRED_FIELDS are neither reinserted nor repointed) and
+ * reactivate the loser. The touched Editions' Release Series are then
+ * derived afresh from the restored links (recomputeReleaseDenorms).
  * No profile shows more afterwards than just before (keepSplitVisibility):
  * an override the merge narrowed stays narrow, as the User may have tracked
  * more under it in the meantime.
@@ -2118,9 +2126,10 @@ export async function applySplit(
     }
     for (const row of manifest.removed) {
       if (!(await ownerExists(ctx, row.doc))) continue;
-      await ctx.db.insert(row.table as TableNames, row.doc as never);
+      await ctx.db.insert(row.table as TableNames, liveSnapshot(row.table, row.doc) as never);
     }
     for (const entry of [...manifest.repointed].reverse()) {
+      if (entry.field === RETIRED_FIELDS[entry.table]) continue;
       const id = ctx.db.normalizeId(entry.table as TableNames, entry.docId);
       if (!id) continue;
       const target = (await ctx.db.get(id)) as Record<string, unknown> | null;
@@ -2279,7 +2288,8 @@ export async function impactOf(
     }
     case "series": {
       const id = ref.id;
-      await count("Volumes", ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", id)));
+      const volumes = await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", id)).collect();
+      add("Volumes", volumes.length);
       await count("Edition lines", ctx.db.query("editionLines").withIndex("by_series", (q) => q.eq("seriesId", id)));
       const fromEdges = await ctx.db
         .query("seriesRelationships")
@@ -2298,10 +2308,12 @@ export async function impactOf(
         "Reading passes",
         ctx.db.query("releaseProgress").withIndex("by_series", (q) => q.eq("seriesId", id)),
       );
-      await count(
-        "Volume read counts",
-        ctx.db.query("volumeProgress").withIndex("by_series", (q) => q.eq("seriesId", id)),
-      );
+      // Read counts follow their Volumes, as trackersIn finds them.
+      let reads = 0;
+      for (const volume of volumes) {
+        reads += (await ctx.db.query("volumeProgress").withIndex("by_volume", (q) => q.eq("volumeId", volume._id)).collect()).length;
+      }
+      add("Volume read counts", reads);
       add("Ratings", (await ratingsOf(ctx, { kind: "series", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "series", id })).length);
       await count(

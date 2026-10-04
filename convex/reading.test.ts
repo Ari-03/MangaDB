@@ -1,9 +1,9 @@
 import type { FunctionReturnType } from "convex/server";
 import { describe, expect, it } from "vitest";
 
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { PASS_VOLUMES_CAP } from "./reading";
+import { PASS_VOLUMES_CAP, UNSET_SERIES_PAGE } from "./reading";
 import {
   insertCoverage,
   insertEdition,
@@ -12,7 +12,7 @@ import {
   insertSeries,
   insertVolume,
 } from "./test.factories";
-import { alice, bob, makeT, reader, seedTeam, signedIn, withUser, type TestT } from "./test.helpers";
+import { alice, bob, drain, makeT, reader, seedTeam, signedIn, withUser, type TestT } from "./test.helpers";
 import { hideRecord, mergeAs, splitAs } from "./test.moderation";
 import { describeNoViewer, seriesWithVolume } from "./test.tracking";
 
@@ -128,8 +128,7 @@ describe("reading.seriesTracking", () => {
     expect(tracking?.volumes.map((v) => v.readCount)).toEqual([0, 1, 0]);
   });
 
-  // Split restores the Volume's Series but not the progress row's denormalised
-  // seriesId, so the count is read per Volume rather than through by_user_series.
+  // A read count belongs to its Volume, which Split puts back in its Series.
   it("keeps a read recorded while merged after the Series is split back out", async () => {
     const t = makeT();
     await seedTeam(t, [alice, bob, reader]);
@@ -557,11 +556,9 @@ describe("reading.adjustVolumeReadCount", () => {
     const completedAt = async () =>
       await t.run(async (ctx) => (await ctx.db.query("volumeProgress").first())?.lastCompletedAt);
     await t.run(async (ctx) => {
-      const volume = (await ctx.db.get(v2))!;
       await ctx.db.insert("volumeProgress", {
         userId: (await ctx.db.query("users").first())!._id,
         volumeId: v2,
-        seriesId: volume.seriesId,
         readCount: 2,
         lastCompletedAt: 1,
       });
@@ -795,5 +792,38 @@ describe("reading progress belongs to one user", () => {
     expect(await as.query(api.reading.passForRelease, { releaseId: standardRelease })).toEqual({
       pass: { percent: 40 },
     });
+  });
+});
+
+describe("reading.unsetProgressSeries", () => {
+  it("clears every stored Series page by page, leaves rows written meanwhile alone, and changes nothing on a rerun", async () => {
+    const { t, as, seriesId, v1, v2 } = await setup();
+    const userId = await t.run(async (ctx) => (await ctx.db.query("users").first())!._id);
+    // Two and a half pages of rows as they were written when each stored its Series.
+    const stored = await t.run(async (ctx) => {
+      const ids: Array<Id<"volumeProgress">> = [];
+      for (let i = 0; i < UNSET_SERIES_PAGE * 2 + UNSET_SERIES_PAGE / 2; i++) {
+        ids.push(await ctx.db.insert("volumeProgress", { userId, volumeId: v1, seriesId, readCount: 1 }));
+      }
+      return ids;
+    });
+    const rows = () => t.run(async (ctx) => await ctx.db.query("volumeProgress").collect());
+
+    expect(await t.mutation(internal.reading.unsetProgressSeries, {})).toEqual({ unset: UNSET_SERIES_PAGE, done: false });
+    // A read lands between pages, and a not-yet-visited row is reread.
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
+    await t.run((ctx) => ctx.db.patch(stored.at(-1)!, { readCount: 5 }));
+    const meanwhile = (await rows()).find((row) => row.volumeId === v2)!;
+    await drain(t);
+
+    const after = await rows();
+    expect(after.filter((row) => row.seriesId !== undefined)).toEqual([]);
+    expect(after).toHaveLength(stored.length + 1);
+    expect(after.find((row) => row._id === meanwhile._id)).toEqual(meanwhile);
+    expect(after.find((row) => row._id === stored.at(-1))?.readCount).toBe(5);
+
+    expect(await t.mutation(internal.reading.unsetProgressSeries, {})).toEqual({ unset: 0, done: false });
+    await drain(t);
+    expect(await rows()).toEqual(after);
   });
 });

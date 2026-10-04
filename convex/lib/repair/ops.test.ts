@@ -26,6 +26,7 @@ import {
 } from "../../test.factories";
 import { makeT, type TestT as T } from "../../test.helpers";
 import { doubtSplit, insertBook, insertDoubt } from "../../test.moderation";
+import { getActive } from "../merges";
 import { TRAIL_CHUNK } from "./audit";
 import type { RepairEntry } from "./entries";
 import { SWEEP_BUDGET, sweepPage } from "./ops";
@@ -72,7 +73,7 @@ async function seed(t: T) {
       followPromptDismissed: false,
       readingVisibility: "private",
     });
-    await ctx.db.insert("volumeProgress", { userId: reader, volumeId: unlabeled, seriesId: source, readCount: 1 });
+    await ctx.db.insert("volumeProgress", { userId: reader, volumeId: unlabeled, readCount: 1 });
     await ctx.db.insert("releaseProgress", { userId: reader, releaseId: b1.releaseId, seriesId: source, percent: 40 });
     await ctx.db.insert("releaseProgress", { userId: reader, releaseId: b2.releaseId, seriesId: source, percent: 10 });
     await ctx.db.insert("favorites", { userId: reader, seriesId: source, volumeId: unlabeled });
@@ -152,10 +153,15 @@ const remodelEntry = (
   retireVolumeIds: options.retire ? [box.volumeId] : [],
 });
 
-/** Every personal row the split should have re-filed, with the Series it now sits under. */
+/**
+ * Every personal row the split should have re-filed, with the Series it now
+ * sits under; a read count's is its (merge-followed) Volume's.
+ */
 const personalSeries = (t: T, s: Awaited<ReturnType<typeof seed>>) =>
   t.run(async (ctx) => ({
-    volumeProgress: (await ctx.db.query("volumeProgress").collect()).map((row) => row.seriesId),
+    volumeProgress: await Promise.all(
+      (await ctx.db.query("volumeProgress").collect()).map(async (row) => (await getActive(ctx, "volumes", row.volumeId))?.seriesId),
+    ),
     b1Pass: (await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).unique())?.seriesId,
     b2Pass: (await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b2.releaseId)).unique())?.seriesId,
     favorites: (await ctx.db.query("favorites").collect()).map((row) => row.seriesId),
@@ -206,7 +212,7 @@ describe("series split (B10)", () => {
     const target = await splitOff(t);
     // Put the rows back where the old split left them.
     await t.run(async (ctx) => {
-      for (const table of ["volumeProgress", "releaseProgress", "favorites", "comments"] as const) {
+      for (const table of ["releaseProgress", "favorites", "comments"] as const) {
         for (const row of await ctx.db.query(table).collect()) await ctx.db.patch(row._id, { seriesId: s.source });
       }
     });
@@ -516,7 +522,7 @@ describe("bounded personal repair work (Standards 1)", () => {
           followPromptDismissed: false,
           readingVisibility: "private",
         });
-        await ctx.db.insert("volumeProgress", { userId, volumeId: s.unlabeled, seriesId: s.source, readCount: 1 });
+        await ctx.db.insert("volumeProgress", { userId, volumeId: s.unlabeled, readCount: 1 });
         await ctx.db.insert("releaseProgress", { userId, releaseId: s.b1.releaseId, seriesId: s.source, percent: 5 });
       }
     });
@@ -534,17 +540,18 @@ describe("bounded personal repair work (Standards 1)", () => {
   it("re-files a large split's personal rows over several legs, never widening a profile", async () => {
     const t = makeT();
     const s = await seed(t);
-    await addReaders(t, s, SWEEP_BUDGET + 10);
+    // A pass each, enough for more than two legs.
+    const readers = 2 * SWEEP_BUDGET + 10;
+    await addReaders(t, s, readers);
     const privateReading = async () => {
-      for (const username of ["dave", "bulk0", `bulk${SWEEP_BUDGET + 9}`]) {
+      for (const username of ["dave", "bulk0", `bulk${readers - 1}`]) {
         expect((await t.query(api.sharing.publicProfile, { username }))?.reading).toEqual([]);
       }
     };
     await privateReading();
     const onSource = () =>
       t.run(async (ctx) =>
-        (await ctx.db.query("volumeProgress").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).length +
-          (await ctx.db.query("releaseProgress").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).length,
+        (await ctx.db.query("releaseProgress").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).length,
       );
     const before = await onSource();
     const remaining: number[] = [];
@@ -571,7 +578,7 @@ describe("bounded personal repair work (Standards 1)", () => {
     for (const change of trail.changes) expect(typeof change.after).toBe("number");
     const rows = trail.records.flatMap((record) => record.rows);
     expect(rows.length).toBe(trail.changes.reduce((sum, change) => sum + Number(change.after), 0));
-    expect(rows.filter((row) => row.table === "releaseProgress" && row.field === "seriesId")).toHaveLength(SWEEP_BUDGET + 12);
+    expect(rows.filter((row) => row.table === "releaseProgress" && row.field === "seriesId")).toHaveLength(readers + 2);
     for (const record of trail.records) expect(record.rows.length).toBeLessThanOrEqual(TRAIL_CHUNK);
     expect(JSON.stringify(trail.records)).not.toContain(s.reader);
     expect(trail.sweeps).toEqual([]);
@@ -649,14 +656,11 @@ describe("bounded personal repair work (Standards 1)", () => {
   }
 
   const addElse = (t: T) => t.run(async (ctx) => (await insertWithVol1(ctx, "Else")).seriesId);
-  /** How many rows under the moved book are still filed outside `seriesId`. */
-  const staleUnder = (t: T, s: Awaited<ReturnType<typeof seed>>, seriesId: Id<"series">, volumes: boolean) =>
+  /** How many passes on the moved book are still filed outside `seriesId`. */
+  const staleUnder = (t: T, s: Awaited<ReturnType<typeof seed>>, seriesId: Id<"series">) =>
     t.run(async (ctx) => {
       const passes = await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).collect();
-      const reads = volumes
-        ? await ctx.db.query("volumeProgress").withIndex("by_volume", (q) => q.eq("volumeId", s.unlabeled)).collect()
-        : [];
-      return [...passes, ...reads].filter((row) => row.seriesId !== seriesId).length;
+      return passes.filter((row) => row.seriesId !== seriesId).length;
     });
   const bulkPrivate = async (t: T) => {
     for (const username of ["dave", "bulk0", `bulk${SWEEP_BUDGET + 9}`]) {
@@ -680,7 +684,7 @@ describe("bounded personal repair work (Standards 1)", () => {
       retireVolumeIds: [],
     };
     expect(await runLegs(t, entry, () => bulkPrivate(t))).toEqual(["partial", "applied"]);
-    expect(await staleUnder(t, s, elseId, false)).toBe(0);
+    expect(await staleUnder(t, s, elseId)).toBe(0);
     expect((await trailOf(t)).sweeps).toEqual([]);
     // A re-run examines the same rows in bounded legs and changes nothing.
     expect(await runLegs(t, entry, () => bulkPrivate(t))).toEqual(["partial", "alreadyApplied"]);
@@ -709,7 +713,7 @@ describe("bounded personal repair work (Standards 1)", () => {
     const legs = await runLegs(t, entry, () => bulkPrivate(t));
     expect(legs[0]).toBe("partial");
     expect(legs.at(-1)).toBe("deferred");
-    expect(await staleUnder(t, s, elseId, true)).toBe(0);
+    expect(await staleUnder(t, s, elseId)).toBe(0);
     expect((await t.run(async (ctx) => await ctx.db.get(s.source)))?.status).toBe("active");
 
     // Stage 4 deals with the packaging Volumes; the merge then completes.
@@ -718,7 +722,7 @@ describe("bounded personal repair work (Standards 1)", () => {
     });
     expect((await runLegs(t, entry, () => bulkPrivate(t))).at(-1)).toBe("applied");
     expect((await t.run(async (ctx) => await ctx.db.get(s.source)))?.status).toBe("merged");
-    expect(await staleUnder(t, s, elseId, true)).toBe(0);
+    expect(await staleUnder(t, s, elseId)).toBe(0);
   });
 });
 

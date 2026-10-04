@@ -100,7 +100,6 @@ async function seedMergeFixture(t: TestT) {
     await ctx.db.insert("volumeProgress", {
       userId: daveId,
       volumeId: loserBook.volumeId,
-      seriesId: loser,
       readCount: 2,
     });
 
@@ -342,7 +341,8 @@ describe("sensitiveOps — merge", () => {
       readingStatus: "planToRead",
     });
     const progress = await t.run((ctx) => ctx.db.query("volumeProgress").collect());
-    expect(progress[0]).toMatchObject({ seriesId: survivor, readCount: 2 });
+    expect(progress[0]).toMatchObject({ volumeId: fixture.loserBook.volumeId, readCount: 2 });
+    expect(progress[0]?.seriesId).toBeUndefined();
 
     // The loser's volume joined the survivor's reading path after its own.
     const movedVolume = await t.run((ctx) => ctx.db.get(fixture.loserBook.volumeId));

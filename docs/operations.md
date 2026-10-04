@@ -97,6 +97,7 @@ a change now, or where nothing scheduled will.
 | The ANN description cleaner (`cleanAnnDescription`) | `npx convex run ann:repairDescriptions '{}'`. No fetches; safe to rerun. |
 | The Open Library description cleaner (`cleanOlDescription`) | `npx convex run openLibrary:repairDescriptions '{}'`. No fetches. |
 | The Held Books list, first deploy | `npx convex run imports:backfillHolds '{}'`. No fetches, no canonical writes; safe to rerun. A failed page ends the chain: rerun it, and it starts from the top. |
+| Volume Progress without a stored Series, first deploy | `npx convex run reading:unsetProgressSeries '{}'`. Clears `seriesId` on older `volumeProgress` rows, a page at a time; safe beside live reading and safe to rerun. A failed page ends the chain: rerun it. Then the field and its two indexes can be dropped ([known issues](known-issues.md#personal-data-and-tracking)). |
 | Any importer | Before deploying, not after: let running imports finish, or disable the sources and wait until no run is `running`. Required ([imports](imports.md#steady-state), "Deploying import code"). |
 | `FEATURES` in `convex/lib/features.ts` | Deploy both Convex and the Worker; both read the constant. |
 

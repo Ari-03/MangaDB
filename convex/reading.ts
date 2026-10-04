@@ -7,8 +7,9 @@
 // there.
 
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { activeVolumes, resolveActiveSeries } from "./catalog";
 import { editionCoverage } from "./catalogPages";
 import { getActive, mergeSurvivor, requireActive } from "./lib/merges";
@@ -167,10 +168,7 @@ async function passEntry(
   };
 }
 
-/**
- * Store one user's read count for a Volume: patch their row, or create it
- * under the Volume and (denormalized) its Series.
- */
+/** Store one user's read count for a Volume: patch their row, or create it. */
 async function putVolumeProgress(
   ctx: MutationCtx,
   userId: Id<"users">,
@@ -184,7 +182,6 @@ async function putVolumeProgress(
     await ctx.db.insert("volumeProgress", {
       userId,
       volumeId: volume._id,
-      seriesId: volume.seriesId,
       ...fields,
     });
   }
@@ -327,14 +324,15 @@ export const myReading = query({
       row.passes.push(await passEntry(ctx, pass, release, edition));
     }
 
-    // Read Volumes without a status or pass still put the Series here.
+    // Read Volumes without a status or pass still put their Series here.
     const progressRows = await ctx.db
       .query("volumeProgress")
       .withIndex("by_user_volume", (q) => q.eq("userId", user._id))
       .collect();
     for (const progress of progressRows) {
       if (progress.readCount < 1) continue;
-      await rowFor(progress.seriesId);
+      const volume = await getActive(ctx, "volumes", progress.volumeId);
+      if (volume) await rowFor(volume.seriesId);
     }
 
     const series = [...rows.values()];
@@ -722,5 +720,39 @@ export const setEditionsRead = mutation({
         ? await completedSuggestions(ctx, user._id, [...covered.values()])
         : [],
     };
+  },
+});
+
+// ---------- maintenance ----------
+
+/** Volume Progress rows one unsetProgressSeries page reads. */
+export const UNSET_SERIES_PAGE = 200;
+
+/**
+ * Clear the Series older Volume Progress rows still store (a row's Series
+ * is its Volume's; nothing reads the field). One page per transaction, the
+ * next scheduled after it; rows written meanwhile carry no Series and are
+ * left alone, so it is safe beside live reading and safe to rerun.
+ *
+ *   npx convex run reading:unsetProgressSeries '{}'
+ */
+export const unsetProgressSeries = internalMutation({
+  args: { cursor: v.optional(v.string()), unset: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    let unset = args.unset ?? 0;
+    const { page, isDone, continueCursor } = await ctx.db
+      .query("volumeProgress")
+      .paginate({ numItems: UNSET_SERIES_PAGE, cursor: args.cursor ?? null });
+    for (const row of page) {
+      if (row.seriesId === undefined) continue;
+      await ctx.db.patch(row._id, { seriesId: undefined });
+      unset++;
+    }
+    if (!isDone) {
+      await ctx.scheduler.runAfter(0, internal.reading.unsetProgressSeries, { cursor: continueCursor, unset });
+    } else {
+      console.log(`[reading.unsetProgressSeries] done: ${unset} rows cleared`);
+    }
+    return { unset, done: isDone };
   },
 });

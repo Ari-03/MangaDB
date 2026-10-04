@@ -12,6 +12,7 @@
 // Releases and Bundles; Split must never resurrect personal rows of a User whose account
 // was deleted; merges carry the denormalized references that follow the
 // moved rows (Unmapped Packaging Series, a pass's Series, imprint parents);
+// a read count's Series is its Volume's, through Splits and older manifests;
 // Release Variant merges move every pin by index, refuse variants of
 // different Releases and more pins than a Split can put back; and Split
 // reverses every chunk of the data repair's chunked publisher merge.
@@ -37,7 +38,7 @@ import {
 import { alice, bob, dave, makeT, purgeAccount, seedTeam, signedIn, type TestT as T } from "../test.helpers";
 import { hideRecord, insertBook, mergeAs, splitAs } from "../test.moderation";
 import { recountRatings } from "./ratings";
-import { IMPRINT_PREVIEW_CAP, stricterVisibility, VARIANT_MERGE_PIN_LIMIT } from "./sensitiveOps";
+import { impactOf, IMPRINT_PREVIEW_CAP, stricterVisibility, VARIANT_MERGE_PIN_LIMIT } from "./sensitiveOps";
 
 const asMod = (t: T) => signedIn(t, bob);
 const asReader = (t: T) => signedIn(t, dave);
@@ -106,7 +107,6 @@ describe("merge — Tracking Visibility", () => {
       await ctx.db.insert("volumeProgress", {
         userId: f.daveId,
         volumeId: f.loser.volumeId,
-        seriesId: f.loser.seriesId,
         readCount: 3,
       });
       await ctx.db.insert("collectionEntries", {
@@ -167,7 +167,6 @@ describe("merge — Tracking Visibility", () => {
       await ctx.db.insert("volumeProgress", {
         userId: f.daveId,
         volumeId: f.survivor.volumeId,
-        seriesId: f.survivor.seriesId,
         readCount: 5,
       });
     });
@@ -877,7 +876,6 @@ describe("split — never widens Tracking Visibility", () => {
       await ctx.db.insert("volumeProgress", {
         userId: f.daveId,
         volumeId: f.survivor.volumeId,
-        seriesId: f.survivor.seriesId,
         readCount: 5,
       });
     });
@@ -1431,6 +1429,125 @@ describe("merge — denormalized references", () => {
     await splitAs(t, { type: "release", id: f.loser.releaseId });
     const split = await t.run((ctx) => ctx.db.get(passId));
     expect(split).toMatchObject({ releaseId: f.loser.releaseId, seriesId: f.loser.seriesId });
+  });
+});
+
+// A read count's Series is its Volume's: no merge or Split keeps a copy of it.
+describe("merge — read counts follow their Volume", () => {
+  /** dave's /me reading shelf: each Series and how many of its Volumes he read. */
+  const shelf = async (t: T) =>
+    (await asReader(t).query(api.reading.myReading, {}))!.series.map((row) => ({ title: row.title, read: row.volumesRead }));
+  const read = (t: T, volumeId: Id<"volumes">, readCount = 1) =>
+    asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId, readCount });
+
+  it("files a read logged while its Series was merged under that Series after the Split", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await mergeSeries(t, f);
+    await read(t, f.loser.volumeId);
+    expect(await shelf(t)).toEqual([{ title: "Alpha", read: 1 }]);
+
+    await splitSeries(t, f);
+    expect(await shelf(t)).toEqual([{ title: "Alpha (dupe)", read: 1 }]);
+  });
+
+  it("files a read moved by a Volume merge inside a merged Series under its Volume's Series after the Series Split", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await read(t, f.loser.volumeId);
+    await mergeSeries(t, f);
+    // Both Volumes sit in Alpha now; the read moves to the surviving one.
+    await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    expect(await shelf(t)).toEqual([{ title: "Alpha", read: 1 }]);
+
+    await splitSeries(t, f);
+    expect(await shelf(t)).toEqual([{ title: "Alpha", read: 1 }]);
+  });
+
+  it("keeps a read count's Reading private across a Series merge, its Split and the next merge", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    // Private defaults with Alpha's Reading shared: the loser read has no
+    // state row, so only its Volume ties it to the loser.
+    await share(t, f.survivor.seriesId, ["reading"]);
+    await read(t, f.survivor.volumeId, 1);
+    await read(t, f.loser.volumeId, 2);
+    expect((await shared(t)).reading).toEqual([{ title: "Alpha", status: null, read: [1], passes: 0 }]);
+
+    await mergeSeries(t, f);
+    expect(await shared(t)).toEqual(NOTHING);
+    await splitSeries(t, f);
+    expect(await shared(t)).toEqual(NOTHING);
+
+    // Shared again, then merged again: the loser read still holds Alpha back.
+    await share(t, f.survivor.seriesId, ["reading"]);
+    expect((await shared(t)).reading).toEqual([{ title: "Alpha", status: null, read: [1], passes: 0 }]);
+    await mergeSeries(t, f);
+    expect(await shared(t)).toEqual(NOTHING);
+    await splitSeries(t, f);
+    expect(await shared(t)).toEqual(NOTHING);
+  });
+
+  it("counts a Series' read counts through its Volumes in the impact preview", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    const second = await secondLoserVolume(t, f);
+    await read(t, f.loser.volumeId);
+    await read(t, second, 3);
+    await read(t, f.survivor.volumeId);
+    const readCounts = (seriesId: Id<"series">) =>
+      t.run(async (ctx) => (await impactOf(ctx, { type: "series", id: seriesId })).find((row) => row.label === "Volume read counts"));
+
+    expect(await readCounts(f.loser.seriesId)).toEqual({ label: "Volume read counts", count: 2 });
+    await mergeSeries(t, f);
+    expect(await readCounts(f.survivor.seriesId)).toEqual({ label: "Volume read counts", count: 3 });
+    await splitSeries(t, f);
+    expect(await readCounts(f.loser.seriesId)).toEqual({ label: "Volume read counts", count: 2 });
+  });
+
+  it("splits a manifest that still logs a read count's Series, writing none", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    const aliceId = await t.run(async (ctx) => (await ctx.db.query("users").collect()).find((u) => u.username === alice.username)!._id);
+    // dave read both Volumes, so the merge removes his loser row; alice's moves.
+    await read(t, f.survivor.volumeId, 4);
+    await read(t, f.loser.volumeId, 2);
+    const aliceRow = await t.run((ctx) =>
+      ctx.db.insert("volumeProgress", { userId: aliceId, volumeId: f.loser.volumeId, readCount: 1 }),
+    );
+    const loserVolume = { type: "volume", id: f.loser.volumeId } as const;
+    await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, loserVolume);
+    // As such a merge was logged when each row stored its Series, and alice's
+    // row as it was left then.
+    await t.run(async (ctx) => {
+      const manifest = (await ctx.db.query("mergeManifests").collect()).find((m) => m.loserRef.id === f.loser.volumeId)!;
+      await ctx.db.patch(manifest._id, {
+        removed: manifest.removed.map((row) =>
+          row.table === "volumeProgress" ? { ...row, doc: { ...row.doc, seriesId: f.loser.seriesId } } : row,
+        ),
+        repointed: [
+          ...manifest.repointed,
+          { table: "volumeProgress", docId: aliceRow, field: "seriesId", before: f.loser.seriesId, after: f.survivor.seriesId },
+        ],
+      });
+      await ctx.db.patch(aliceRow, { seriesId: f.survivor.seriesId });
+    });
+
+    await splitAs(t, loserVolume);
+    const rows = await t.run((ctx) => ctx.db.query("volumeProgress").collect());
+    expect(rows.map(({ userId, volumeId, readCount, seriesId }) => ({ userId, volumeId, readCount, seriesId }))).toEqual(
+      expect.arrayContaining([
+        { userId: f.daveId, volumeId: f.survivor.volumeId, readCount: 4, seriesId: undefined },
+        { userId: f.daveId, volumeId: f.loser.volumeId, readCount: 2, seriesId: undefined },
+        // Moved back by its logged Volume; the Series it still stores is left alone.
+        { userId: aliceId, volumeId: f.loser.volumeId, readCount: 1, seriesId: f.survivor.seriesId },
+      ]),
+    );
+    expect(rows).toHaveLength(3);
+    expect(await shelf(t)).toEqual([
+      { title: "Alpha", read: 1 },
+      { title: "Alpha (dupe)", read: 1 },
+    ]);
   });
 });
 

@@ -5,17 +5,17 @@ is fixed.
 
 ## Personal data and tracking
 
-- **`volumeProgress.seriesId` goes stale after a Split.** The field is set
-  when a row is inserted, and Split (`applySplit` in
-  `convex/lib/sensitiveOps.ts`) reverts only the repoints its merge
-  recorded. Merge Series B into A, read a Volume of B, then split B: the
-  row still names A. A Volume merge inside the merged Series followed by
-  the Split goes wrong the other way: the surviving Volume's row is put
-  back under B. `reading.myReading` groups read Volumes by this field, so
-  `/me` files the reading row under the wrong Series. Reads per Volume
-  (`seriesTracking`) are right. The `by_user_series` index on
-  `volumeProgress` cannot be trusted until Split re-derives the field from
-  each Volume's Series and existing rows are backfilled.
+- **`volumeProgress.seriesId` is still in the schema.** A read count's
+  Series is its Volume's; nothing reads or writes the field, which is
+  optional and still set on older rows. Once
+  `npx convex run reading:unsetProgressSeries '{}'` has finished on every
+  deployment, a later deploy drops the field, its `by_series` and
+  `by_user_series` indexes, and the migration itself. Split keeps
+  skipping the field in older merge manifests (`RETIRED_FIELDS` in
+  `convex/lib/sensitiveOps.ts`).
+- **Volume Favorites and Comments carry a stored `seriesId` that a Split
+  does not re-derive.** Display derives the Series from the Volume, but
+  merge bookkeeping and the Comments thread lookup use the stored value.
 - **A sign-in without a username cannot be deleted on the site.**
   `users.deleteAccount` refuses an identity with no `users` row: no page
   offers deletion before a username is claimed, and deleting the Clerk

@@ -224,7 +224,7 @@ async function seedTwoUsers(t: TestT) {
       await ctx.db.insert("collectionEntries", { userId, releaseId, state: "owned" });
       await ctx.db.insert("userSeriesStates", { userId, seriesId, following: true, followPromptDismissed: false });
       await ctx.db.insert("releaseProgress", { userId, releaseId, seriesId });
-      await ctx.db.insert("volumeProgress", { userId, volumeId, seriesId, readCount: 1 });
+      await ctx.db.insert("volumeProgress", { userId, volumeId, readCount: 1 });
       const commentId = await ctx.db.insert("comments", {
         userId,
         seriesId,
@@ -343,7 +343,7 @@ describe("users.purgeUser", () => {
         await ctx.db.insert("collectionEntries", { userId: leaving, releaseId, state: "owned" });
       }
       for (let i = 0; i < 80; i++) {
-        await ctx.db.insert("volumeProgress", { userId: leaving, volumeId, seriesId, readCount: 1 });
+        await ctx.db.insert("volumeProgress", { userId: leaving, volumeId, readCount: 1 });
         await ctx.db.insert("favorites", { userId: leaving, seriesId });
       }
       await ctx.db.insert("ratings", { userId: staying, seriesId, score: 90, updatedAt: 0 });

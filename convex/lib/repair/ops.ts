@@ -1252,7 +1252,7 @@ const newMoves = (key: string): Moves => ({ key, trail: [], left: SWEEP_BUDGET, 
 /** The status of an entry that left personal work for its next leg. */
 const partial: Result = { status: "partial", reason: "personal tracking continues on the next call" };
 
-type PersonalTable = "volumeProgress" | "releaseProgress" | "favorites" | "comments" | "userSeriesStates" | "collectionEntries";
+type PersonalTable = "releaseProgress" | "favorites" | "comments" | "userSeriesStates" | "collectionEntries";
 
 /** Patch a personal row, logging each field that changes on the trail. */
 async function refile<T extends PersonalTable>(
@@ -1459,7 +1459,7 @@ async function carryingTracking<R>(
 
 /**
  * A repair re-parented this Volume (or merged another into it): re-file
- * what carries its Series (Volume Progress, Volume Favorites, Comments) and
+ * what carries its Series (Volume Favorites, Comments) and
  * each covering Edition's rows (followEdition) under the Series it now sits
  * in. Rows key on the Volume, so nothing collides; only stale rows move, so
  * a re-run heals any earlier move. Each table is a sweep (bounded legs).
@@ -1472,19 +1472,6 @@ async function followVolume(
 ) {
   const stale = (row: { seriesId: Id<"series"> }) => row.seriesId !== volume.seriesId;
   const to = { seriesId: volume.seriesId };
-  await sweep(
-    ctx,
-    moves,
-    `volumeProgress:${volume._id}`,
-    (after, count) =>
-      ctx.db
-        .query("volumeProgress")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
-        .take(count),
-    async (row) => {
-      if (stale(row)) await refile(ctx, audit, moves, "volumeProgress", row, to);
-    },
-  );
   await sweep(
     ctx,
     moves,
