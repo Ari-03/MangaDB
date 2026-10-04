@@ -639,11 +639,14 @@ npx convex run openLibrary:sync '{}'   # streams + self-continues to the end
 Without `OPENLIBRARY_DUMP_URL`, runs skip as "unconfigured".
 
 A run is a chain of links under one Import Run. A link hands off to the
-next after ten minutes from its start or after 20,000 dump lines,
-whichever comes first (`LINK_BUDGET_MS` and `DEFAULT_MAX_LINES` in
-`convex/openLibrary.ts`), and applies at least one line first. Time is
-checked before each line, so a link runs past ten minutes by at most one
-line's apply and a gate check, well inside Convex's 30-minute limit. A
+next at the first line it reaches ten minutes after its start, or after
+20,000 dump lines, whichever comes first (`LINK_BUDGET_MS` and
+`DEFAULT_MAX_LINES` in `convex/openLibrary.ts`), and applies at least one
+line first. Ten minutes is not a maximum. Time is checked only between
+lines, so a link overruns it by the line it is applying and a gate check,
+and by the next stream read. Neither a stream read nor the skip of the
+lines earlier links processed has a deadline: a stalled read, or a slow
+download of that prefix, can carry a link to Convex's 30-minute limit. A
 line bound alone was not enough: on staging on 2026-10-04 a link read
 about 1,000 dump lines every 2.8 minutes beside the Held Books backfill
 and a Yen Press sync, so 20,000 lines would have needed about 56

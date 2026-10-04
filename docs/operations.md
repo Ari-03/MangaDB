@@ -139,10 +139,17 @@ apply it at once from then on. For what the catalog already holds:
    this within its detail budget, after the books ahead of them in the
    listing (newest-modified first). At the daily run's 200 pages, N books
    read before take about N / 200 runs. To finish sooner, repeat
-   `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'`. At the
-   350 ms pace 1,000 pages take ten minutes or more, inside the 30-minute
-   action limit. While the backlog lasts, runs whose budget runs out
-   withdraw nothing. A re-read page that rates its book Mature or names an
+   `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'`. That call
+   may be ended at Convex's 30-minute action limit: it is one action with
+   no time bound, and if each of its 6,500 or so listing mutations and
+   1,000 applies took 0.17 s, as an Open Library line did on staging,
+   they would take about 21 minutes, and the 0.35 s wait before each of
+   1,000 page fetches and up to 1,000 covers about 12 more, before any
+   fetch latency ([known issues](known-issues.md#catalog-and-imports)).
+   An action ended there leaves its run `running` until the hourly tick
+   closes it as stranded; the pages it re-read stay re-read, so repeating
+   the call still finishes the backlog. While the backlog lasts, runs
+   whose budget runs out withdraw nothing. A re-read page that rates its book Mature or names an
    adult-only imprint makes the Series mature at once; its library row and
    pack entry follow in a scheduled job (`seriesBrowse:projectMature`), and
    the next rebuild sets them if that job failed.
@@ -207,8 +214,10 @@ links to.
 4. Only where Seven Seas observations exist (not production): let the
    syncs re-read book pages stored under an older parser, or repeat
    `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'` until done.
-   Each call runs in one action and has finished when it returns. Safe to
-   rerun. Step 2 of the same section says how to tell the re-read is done.
+   Each call runs in one action and has finished when it returns, unless
+   it is ended at the 30-minute action limit first. Safe to rerun. Step 2
+   of the same section says why it can be, and how to tell the re-read is
+   done.
 5. Rebuild the library: `npx convex run seriesBrowse:rebuild`. It sets
    the mature flags from the evidence (step 3 of the same section) and
    writes each Series card's list of jacket ISBNs (`coverIsbns`); a row
@@ -260,9 +269,10 @@ links to.
    takes is known only roughly: on staging, 57,766 editions in about two
    hours on 2026-09-27, and about 1,000 dump lines every 2.8 minutes on
    2026-10-04 with the Held Books backfill and a Yen Press sync running
-   beside it. The run is a chain of links of at most ten minutes each
-   ([Open Library](imports.md#open-library)). No run with ten-minute
-   links has yet been seen to finish on staging. A linked edition is reconciled again only when
+   beside it. The run is a chain of links, each handing off at the first
+   line it reaches after ten minutes; a stalled read or a slow download
+   can keep one going longer ([Open Library](imports.md#open-library)).
+   No run with ten-minute links has yet been seen to finish on staging. A linked edition is reconciled again only when
    today's parse changes its snapshot. Safe to rerun; each run downloads
    the dump ([Open Library](imports.md#open-library)). The backfill in
    step 6 reads stored snapshots, so it classifies such an edition by its

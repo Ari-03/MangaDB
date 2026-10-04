@@ -105,18 +105,22 @@ offset and no host that answers range requests, so any static URL can
 serve the dump. Continuing from a byte offset with HTTP Range, or
 splitting the dump into separate files, would save the repeated download.
 
-A link lasts at most ten minutes ([imports](imports.md#open-library)), so
-a run makes one download per ten minutes it runs. For today's dump of
-57,766 editions that is about 12 or 13 downloads at the pace of the
-runs of 2026-09-26 and 27 (111 and 126 minutes) and about 26 at the pace
-of 2026-10-04 (6,295 editions in 28 minutes, about four and a half hours
-for the whole dump), where 20,000-line links made four or five. Each
-download stops where its link stops, so together they read about half as
-many whole dumps.
+A link hands off at the first line it reaches after ten minutes
+([imports](imports.md#open-library)), so a run makes about one download
+per ten minutes it runs. For today's dump of 57,766 editions that is
+about 12 or 13 downloads at the pace of the runs of 2026-09-26 and 27
+(111 and 126 minutes) and about 26 at the pace of 2026-10-04 (6,295
+editions in 28 minutes, about four and a quarter hours for the whole
+dump), where 20,000-line links made four or five. Each download stops
+where its link stops, so together they read about half as many whole
+dumps.
 
-That changes if the dump grows until reading it up to a late link's
-first line takes much of that link's ten minutes, or if Open Library
-offers range requests.
+The design's limit: if downloading and skipping the prefix alone takes
+longer than ten minutes, every link applies exactly one line and
+downloads the prefix again, so the run crawls on, never stranded while
+that prefix takes under Convex's 30-minute limit. That changes if the
+dump grows until reading it up to a late link's first line takes much of
+that link's ten minutes, or if Open Library offers range requests.
 
 ## Staging
 

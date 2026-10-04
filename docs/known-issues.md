@@ -386,23 +386,43 @@ is fixed.
   and each link reads the series listing again (12 pages for 1,170
   series). Each fetch waits 1.1 s first. At about 8 s per fetch on
   average a link reaches the 30-minute limit, with the outcome the Yen
-  Press entry above describes.
+  Press entry above describes. A time budget checked per fetch, with a
+  cursor inside a series' volumes so a large series can be split across
+  links, is the fix.
+- **Kodansha's daily run is one action with no time bound.**
+  `kodansha:sync` reads the calendar and new-releases feeds, then applies
+  every (volume, format) in the roughly eight-week window and downloads
+  the covers those applies ask for, with no continuation. A rate-limited
+  request can spend up to four minutes waiting between its retries
+  (`politeFetch` in `convex/lib/http.ts`), so eight cover requests stuck
+  in retry waits take the action past the 30-minute limit, and its run
+  stays `running` until the hourly tick closes it as stranded. A
+  continuation cursor over the window's items, with a time budget, is the
+  fix.
 - **An ANN mirror link has no time bound.** `ann:sync` hands off after
-  40 detail batches (`maxBatches`), checked before each report page of
-  10 batches: up to 44 fetches and up to 2,000 `applyManga` mutations,
-  one per entry with an English release. At about 0.85 s per apply a link
-  reaches the 30-minute limit. How long an apply takes on today's
-  catalog under load is not measured.
+  40 detail batches (`maxBatches`), checked before each report page of up
+  to 10 batches. Four full report pages make 44 fetches and up to 2,000
+  `applyManga` mutations, one per entry with an English release, but
+  these are not upper bounds: a report page whose non-manga rows are
+  filtered out yields fewer batches, so a link can start its last page
+  at 39 batches and end at 49. A review reproduced 54 fetches (five
+  report pages and 49 detail batches), which allow 2,450 applies. At
+  about 0.85 s per apply four full pages reach the 30-minute limit. How
+  long an apply takes on today's catalog under load is not measured. A
+  time budget checked before each detail batch, with a cursor inside the
+  report page so a link can hand off mid-page, is the fix.
 - **ANN's page pass checks its time only before a fetch.**
-  `ann:syncReleasePages` hands off after 300 fetches or five minutes,
-  but reads the clock only before a line whose page needs fetching, and
-  only once the link has fetched one (`convex/ann.ts`). A line whose page
-  is stored is placed again with no check and counts toward neither
-  bound. A pass in which few lines are due a fetch walks every ANN
+  `ann:syncReleasePages` hands off after 300 fetches or five minutes.
+  The fetch count is checked once per page of 25 candidates, so a link
+  can make up to 324 fetches. It reads the clock only before a line whose
+  page needs fetching, and only once the link has fetched one
+  (`convex/ann.ts`). A line whose page is stored is placed again with no
+  check and counts toward neither bound. A pass in which few lines are due a fetch walks every ANN
   release line, 25 per query, and places every unlinked one again in a
   single link, which passes the 30-minute limit once there are enough of
   them. How many unlinked lines staging or production holds is not
-  established.
+  established. A time check before every candidate and every page,
+  fetched or not, with the existing hand-off, is the fix.
 - **A Seven Seas run is one action with no time bound.**
   `sevenSeas:sync` reads every listing page (100 books each, 6,000+
   books), runs `noteListing` for each listed book, then fetches up to
@@ -414,7 +434,30 @@ is fixed.
   [After deploying the 2026-10 known-issues round](operations.md#after-deploying-the-2026-10-known-issues-round)
   runs it with `maxDetailFetches` at 1,000. An action ended at 30
   minutes leaves its run `running` until the hourly tick closes it as
-  stranded.
+  stranded. A cursor over the listing and its book pages, with a time
+  budget that hands off to a continuation, is the fix.
+- **ANN's description backfill has no time check on a scan that finds
+  nothing.** `ann:backfillDescriptions` reads the clock only before a
+  line it handles, once it has handled one, so a stretch of pages (200
+  release lines per query) with no line needing a description is scanned
+  with no time check. It opens no Import Run, so nothing is stranded, but
+  an action ended at 30 minutes schedules no continuation and the
+  backfill stops there. A time check after every scanned page, carrying
+  the scan cursor, is the fix.
+- **Three whole-catalog passes have no time check.** None opens an
+  Import Run, so none can strand one, and each takes longer as the
+  catalog grows. `ann:listRefreshCandidates` scans every ANN release
+  line, 100 per query, in one action and returns the list at the end;
+  `repair:metrics` reads the observations of four sources and eight
+  catalog tables whole into one action. Ended at 30 minutes, either
+  returns nothing. Both are read-only reports: a cursor argument, so each
+  call covers one stretch and returns where to go on, is the fix.
+  `seriesBrowse:rebuild` checks its three-minute budget only during its
+  walk over the Series; its last action then sweeps stale rows, repacks
+  `seriesStatsPacks` and recounts the catalog with no time check, and
+  ended at 30 minutes leaves those undone until the next rebuild. Making
+  those phases steps of the same continuation, with the budget checked
+  between them, is the fix.
 
 ## Review queue
 
