@@ -50,14 +50,44 @@ async function setup() {
     ) => {
       const editionId = await insertEdition(ctx, { publisherId });
       await insertCoverage(ctx, { editionId, volumeId: series.volumeId });
-      return await insertRelease(ctx, { editionId, format, pubDate, publisherId, seriesIds: [series.seriesId] });
+      return await insertRelease(ctx, {
+        editionId,
+        format,
+        pubDate,
+        publisherId,
+        seriesIds: [series.seriesId],
+      });
     };
 
-    const aFuturePhysical = await makeRelease(a, "physical", { year: 2026, month: 9, day: 15, sort: 20260915 });
-    const aFutureDigital = await makeRelease(a, "digital", { year: 2026, month: 9, day: 20, sort: 20260920 });
-    const aPastThisMonth = await makeRelease(a, "physical", { year: 2026, month: 8, day: 10, sort: 20260810 });
-    const aTbaThisMonth = await makeRelease(a, "physical", { year: 2026, month: 8, sort: 20260800 });
-    const bFutureDigital = await makeRelease(b, "digital", { year: 2026, month: 10, day: 1, sort: 20261001 });
+    const aFuturePhysical = await makeRelease(a, "physical", {
+      year: 2026,
+      month: 9,
+      day: 15,
+      sort: 20260915,
+    });
+    const aFutureDigital = await makeRelease(a, "digital", {
+      year: 2026,
+      month: 9,
+      day: 20,
+      sort: 20260920,
+    });
+    const aPastThisMonth = await makeRelease(a, "physical", {
+      year: 2026,
+      month: 8,
+      day: 10,
+      sort: 20260810,
+    });
+    const aTbaThisMonth = await makeRelease(a, "physical", {
+      year: 2026,
+      month: 8,
+      sort: 20260800,
+    });
+    const bFutureDigital = await makeRelease(b, "digital", {
+      year: 2026,
+      month: 10,
+      day: 1,
+      sort: 20261001,
+    });
 
     const bundleId = await insertBundle(ctx, {
       publicId: 41,
@@ -106,8 +136,15 @@ describeNoViewer(setup, {
     ["myUpcoming", (as) => as.query(api.follows.myUpcoming, { todaySort: TODAY })],
   ],
   mutations: [
-    ["setSeriesFollow", (as, { seriesA }) => as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: true })],
-    ["dismissFollowPrompt", (as, { seriesA }) => as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesA })],
+    [
+      "setSeriesFollow",
+      (as, { seriesA }) =>
+        as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: true }),
+    ],
+    [
+      "dismissFollowPrompt",
+      (as, { seriesA }) => as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesA }),
+    ],
   ],
 });
 
@@ -142,17 +179,13 @@ describe("follows.followedSeries", () => {
   it("lists only followed series, for the browser marker + filter", async () => {
     const { as, seriesA, seriesB } = await setup();
 
-    expect(
-      (await as.query(api.follows.followedSeries, {}))?.seriesPublicIds,
-    ).toEqual([]);
+    expect((await as.query(api.follows.followedSeries, {}))?.seriesPublicIds).toEqual([]);
 
     await follow(as, seriesA);
     // A dismissed-prompt row without a follow must not appear.
     await as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesB });
 
-    expect(
-      (await as.query(api.follows.followedSeries, {}))?.seriesPublicIds,
-    ).toEqual([1]);
+    expect((await as.query(api.follows.followedSeries, {}))?.seriesPublicIds).toEqual([1]);
   });
 });
 
@@ -213,12 +246,8 @@ describe("follows.myUpcoming", () => {
     // the current-month day-TBA release first, dated ones after; the release
     // dated earlier this month and unfollowed Series B never appear.
     const upcoming = await as.query(api.follows.myUpcoming, { todaySort: TODAY });
-    expect(upcoming?.items.map((item) => item.sort)).toEqual([
-      20260800, 20260915, 20260920,
-    ]);
-    expect(
-      upcoming?.items.every((item) => item.kind === "release" && item.followed),
-    ).toBe(true);
+    expect(upcoming?.items.map((item) => item.sort)).toEqual([20260800, 20260915, 20260920]);
+    expect(upcoming?.items.every((item) => item.kind === "release" && item.followed)).toBe(true);
   });
 
   it("the Physical/Digital preference scopes only the followed clause", async () => {
@@ -310,22 +339,32 @@ describe("follows belong to one user", () => {
     const { t, as, seriesA, seriesB, bFutureDigital } = await setup();
     await follow(as, seriesA);
     await as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesB });
-    await as.mutation(api.collection.setReleaseEntry, { releaseId: bFutureDigital, state: "wanted" });
+    await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: bFutureDigital,
+      state: "wanted",
+    });
     const followerRows = await stateRows(t);
     const followerUpcoming = await as.query(api.follows.myUpcoming, { todaySort: TODAY });
     expect(followerUpcoming?.items.length).toBeGreaterThan(0);
 
     const other = await withUser(t, OTHER);
-    expect(await other.query(api.follows.seriesFollow, { seriesPublicId: 1 })).toMatchObject({ following: false });
+    expect(await other.query(api.follows.seriesFollow, { seriesPublicId: 1 })).toMatchObject({
+      following: false,
+    });
     expect(await other.query(api.follows.followedSeries, {})).toEqual({ seriesPublicIds: [] });
     expect(await other.query(api.follows.myFollowing, {})).toEqual({ series: [] });
-    expect(await other.query(api.follows.myUpcoming, { todaySort: TODAY })).toEqual({ items: [], capped: false });
+    expect(await other.query(api.follows.myUpcoming, { todaySort: TODAY })).toEqual({
+      items: [],
+      capped: false,
+    });
 
     // Their unfollow and dismissal write rows of their own, never the follower's.
     await follow(other, seriesA, false);
     await other.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesA });
     const rows = await stateRows(t);
-    expect(rows.filter((row) => followerRows.some((mine) => mine._id === row._id))).toEqual(followerRows);
+    expect(rows.filter((row) => followerRows.some((mine) => mine._id === row._id))).toEqual(
+      followerRows,
+    );
     expect(rows).toHaveLength(followerRows.length + 1);
     expect(await as.query(api.follows.followedSeries, {})).toEqual({ seriesPublicIds: [1] });
     expect(await as.query(api.follows.myUpcoming, { todaySort: TODAY })).toEqual(followerUpcoming);

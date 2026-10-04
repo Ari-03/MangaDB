@@ -48,10 +48,7 @@ function ModProposePage() {
     );
   }
   return (
-    <ModGate
-      role="dataTeam"
-      refusal="Proposing changes needs an Editor (or stronger) role."
-    >
+    <ModGate role="dataTeam" refusal="Proposing changes needs an Editor (or stronger) role.">
       <ProposeForm type={type} editKey={key} />
     </ModGate>
   );
@@ -154,20 +151,19 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
       <Breadcrumbs trail={["Propose"]} />
       <h1>Propose a change: {form.title}</h1>
       <p className="section-hint">
-        Your submission goes to the shared review queue; a Moderator approves
-        it into the record's public history. Factual changes need source
-        evidence.
+        Your submission goes to the shared review queue; a Moderator approves it into the record's
+        public history. Factual changes need source evidence.
       </p>
       {form.overriddenFields.length > 0 ? (
         <p className="notice">
-          Human-corrected fields (imports never overwrite these):{" "}
-          {form.overriddenFields.join(", ")}.
+          Human-corrected fields (imports never overwrite these): {form.overriddenFields.join(", ")}
+          .
         </p>
       ) : null}
       {!editable ? (
         <p className="notice">
-          This record is {form.locked ? "locked" : form.status} and cannot be
-          changed by ordinary proposals.
+          This record is {form.locked ? "locked" : form.status} and cannot be changed by ordinary
+          proposals.
         </p>
       ) : (
         <form
@@ -180,9 +176,8 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
           {stale ? (
             <div className="notice" role="alert">
               <p>
-                This record was changed by someone else after you started
-                editing. Reload the latest version to continue; your unsaved
-                edits and ticked clears will be discarded.
+                This record was changed by someone else after you started editing. Reload the latest
+                version to continue; your unsaved edits and ticked clears will be discarded.
               </p>
               <button
                 type="button"
@@ -201,12 +196,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             </div>
           ) : null}
           {form.fields.map((field) => (
-            <FieldInput
-              key={field.name}
-              field={field}
-              values={values}
-              setValue={setValue}
-            />
+            <FieldInput key={field.name} field={field} values={values} setValue={setValue} />
           ))}
           {form.overrides.map((override) => (
             <label key={override.field}>
@@ -216,8 +206,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
                   checked={clears.has(override.field)}
                   onChange={(event) => toggleClear(override.field, event.target.checked)}
                 />{" "}
-                Clear the Human Override on {override.label} (
-                {writtenByLabel(override.writtenBy)})
+                Clear the Human Override on {override.label} ({writtenByLabel(override.writtenBy)})
               </span>
               <span className="field-help">{CLEAR_OVERRIDE_HINT}</span>
             </label>
@@ -241,8 +230,8 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
               placeholder="https://publisher.example/the-page-showing-the-fact"
             />
             <span className="field-help">
-              Required for factual changes (dates, ISBNs, titles…) — link the
-              page that shows the fact.
+              Required for factual changes (dates, ISBNs, titles…) — link the page that shows the
+              fact.
             </span>
           </label>
           <label>

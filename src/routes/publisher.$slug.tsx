@@ -1,9 +1,4 @@
-import {
-  createFileRoute,
-  Link,
-  notFound,
-  redirect,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -29,11 +24,7 @@ import {
   type YearMonth,
 } from "~/lib/month";
 import { ModEditLink } from "~/lib/moderation";
-import {
-  organizationJsonLd,
-  pageHead,
-  publisherTitleTag,
-} from "~/lib/seo";
+import { organizationJsonLd, pageHead, publisherTitleTag } from "~/lib/seo";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { slugParams } from "~/lib/slug";
 import { SeriesShelfItem } from "~/lib/shelfItem";
@@ -98,8 +89,7 @@ export const Route = createFileRoute("/publisher/$slug")({
       todaySort,
       topSeries: top.items,
       activeSeries: top.total,
-      seriesCount:
-        facets.publishers.find((p) => p.slug === params.slug)?.count ?? null,
+      seriesCount: facets.publishers.find((p) => p.slug === params.slug)?.count ?? null,
     };
   },
   // Title/description formulas, canonical link, and BreadcrumbList +
@@ -133,19 +123,16 @@ function PublisherNotFound() {
     <main>
       <h1>Publisher not found</h1>
       <p className="notice">
-        No publisher lives at this address.{" "}
-        <Link to="/releases">Browse the release calendar</Link>.
+        No publisher lives at this address. <Link to="/releases">Browse the release calendar</Link>.
       </p>
     </main>
   );
 }
 
-
 type Book = PublisherPageData["upcoming"][number];
 
 /** Still to come: dated today or later, or dated only to this month. */
-const stillToCome = (book: Book, todaySort: number) =>
-  book.sort >= todaySort || book.day === null;
+const stillToCome = (book: Book, todaySort: number) => book.sort >= todaySort || book.day === null;
 
 /** "Tue, Sep 29", or "Sep, date TBA" for a book dated only to its month. */
 function bookDate(book: Book): string {
@@ -227,9 +214,7 @@ function PublisherPage() {
               </Link>
             </p>
           ) : null}
-          {publisher.description ? (
-            <p className="pub-blurb">{publisher.description}</p>
-          ) : null}
+          {publisher.description ? <p className="pub-blurb">{publisher.description}</p> : null}
           {imprints.length > 0 ? (
             <p className="pub-imprints">
               Imprints:{" "}
@@ -246,11 +231,7 @@ function PublisherPage() {
           {/* The clear route into the main Releases browser, pre-filtered:
               cross-publisher comparison lives there. */}
           <p className="pub-cta">
-            <Link
-              className="btn btn-primary"
-              to="/releases"
-              search={{ publisher: publisher.slug }}
-            >
+            <Link className="btn btn-primary" to="/releases" search={{ publisher: publisher.slug }}>
               Every {publisher.name} release in the calendar
             </Link>
           </p>
@@ -301,9 +282,7 @@ function PublisherPage() {
             Nothing from {publisher.name} is dated in {monthTitle(month)}.
           </p>
         ) : null}
-        {toCome.length > 0 ? (
-          <BookShelf title="Still to come" books={toCome} eager />
-        ) : null}
+        {toCome.length > 0 ? <BookShelf title="Still to come" books={toCome} eager /> : null}
         {out.length > 0 ? <BookShelf title="Out already" books={out} /> : null}
         {thisMonth.capped ? (
           <p className="note lane-more">
@@ -316,14 +295,8 @@ function PublisherPage() {
         <section className="section">
           <div className="section-head">
             <h2 className="section-title">Top series</h2>
-            <p className="section-note">
-              Their biggest series with a release in the past year
-            </p>
-            <Link
-              className="section-link"
-              to="/series"
-              search={{ publisher: publisher.slug }}
-            >
+            <p className="section-note">Their biggest series with a release in the past year</p>
+            <Link className="section-link" to="/series" search={{ publisher: publisher.slug }}>
               All {seriesCount ?? ""} {publisher.name} series
             </Link>
           </div>
@@ -338,20 +311,14 @@ function PublisherPage() {
       <section className="section">
         <div className="section-head">
           <h2 className="section-title">After {monthName}</h2>
-          <p className="section-note">
-            The next {LANE_HORIZON_MONTHS} months as announced so far
-          </p>
-          <Link
-            className="section-link"
-            {...calendarMonth(addMonths(month, 1))}
-          >
+          <p className="section-note">The next {LANE_HORIZON_MONTHS} months as announced so far</p>
+          <Link className="section-link" {...calendarMonth(addMonths(month, 1))}>
             Open the calendar
           </Link>
         </div>
         {upcoming.length === 0 ? (
           <p className="notice">
-            Nothing from {publisher.name} announced for the next{" "}
-            {LANE_HORIZON_MONTHS} months yet.
+            Nothing from {publisher.name} announced for the next {LANE_HORIZON_MONTHS} months yet.
           </p>
         ) : (
           groupByMonth(upcoming).map((group) => (
@@ -466,7 +433,10 @@ function BookItem({ book, eager }: { book: Book; eager: boolean }) {
         </div>
         <p className="caption-sub pub-formats">
           {book.formats.map((format) => (
-            <span key={`${format.format}-${format.binding}`} className={`chip chip--${format.format}`}>
+            <span
+              key={`${format.format}-${format.binding}`}
+              className={`chip chip--${format.format}`}
+            >
               {formatLabel(format)}
             </span>
           ))}

@@ -9,20 +9,12 @@ import { Cover, coverIsbns } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { SeriesFollowControls } from "~/lib/follows";
 import { ConcealArt } from "~/lib/mature";
-import {
-  ModEditLink,
-  ProposeNewRecordsLink,
-  RecordHistory,
-} from "~/lib/moderation";
+import { ModEditLink, ProposeNewRecordsLink, RecordHistory } from "~/lib/moderation";
 import { RatingAggregate } from "~/lib/ratings";
 import { SeriesReadingControls, SeriesReadingProgress } from "~/lib/reading";
 import { SeriesReportAffordance } from "~/lib/report";
 import { ReviewsSection, TakePanel } from "~/lib/reviews";
-import {
-  bookSeriesJsonLd,
-  pageHead,
-  seriesTitleTag,
-} from "~/lib/seo";
+import { bookSeriesJsonLd, pageHead, seriesTitleTag } from "~/lib/seo";
 import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import {
   bookLabel,
@@ -157,7 +149,9 @@ function SeriesPage() {
   const heroIsbns = frontBook
     ? [
         ...coverIsbns([frontBook]),
-        ...(editionGroups[0]?.books.slice(1, 6) ?? []).flatMap((book) => coverIsbns([book]).slice(0, 1)),
+        ...(editionGroups[0]?.books.slice(1, 6) ?? []).flatMap((book) =>
+          coverIsbns([book]).slice(0, 1),
+        ),
       ]
     : [];
   // One path needs no picker; with several, the reader picks one.
@@ -201,20 +195,14 @@ function SeriesPage() {
                 {SOURCE_STATUS_LABELS[series.sourceStatus]}
               </span>
             ) : null}
-            <span className="chip">
-              {plural(volumes.length, "volume", "volumes")}
-            </span>
+            <span className="chip">{plural(volumes.length, "volume", "volumes")}</span>
             <RatingAggregate target={ratingTarget} initial={page.rating} />
             {editionGroups.length > 1 ? (
-              <span className="chip">
-                {plural(editionGroups.length, "edition", "editions")}
-              </span>
+              <span className="chip">{plural(editionGroups.length, "edition", "editions")}</span>
             ) : null}
           </div>
 
-          {series.synopsis ? (
-            <p className="series-synopsis">{series.synopsis}</p>
-          ) : null}
+          {series.synopsis ? <p className="series-synopsis">{series.synopsis}</p> : null}
 
           <dl className="facts">
             {series.sourceStatus ? (
@@ -227,16 +215,14 @@ function SeriesPage() {
             ) : null}
             <div>
               <dt className="fact-term">Volumes</dt>
-              <dd className="fact-def">
-                {volumes.length} in the canonical sequence
-              </dd>
+              <dd className="fact-def">{volumes.length} in the canonical sequence</dd>
             </div>
             {page.series.bookless ? (
               <div>
                 <dt className="fact-term">English packaging</dt>
                 <dd className="fact-def">
-                  No English books on file yet — the volumes are known, but no release has
-                  attached to them. This series is kept out of browse and search until one does.
+                  No English books on file yet — the volumes are known, but no release has attached
+                  to them. This series is kept out of browse and search until one does.
                 </dd>
               </div>
             ) : null}
@@ -256,10 +242,7 @@ function SeriesPage() {
                   {facts.publishers.map((publisher, i) => (
                     <span key={publisher.slug}>
                       {i > 0 ? ", " : ""}
-                      <Link
-                        to="/publisher/$slug"
-                        params={{ slug: publisher.slug }}
-                      >
+                      <Link to="/publisher/$slug" params={{ slug: publisher.slug }}>
                         {publisher.name}
                       </Link>
                     </span>
@@ -282,10 +265,7 @@ function SeriesPage() {
                           {i > 0 ? ", " : ""}
                           <Link
                             to="/series/$publicId/$slug"
-                            params={slugParams(
-                              member.publicId,
-                              member.title,
-                            )}
+                            params={slugParams(member.publicId, member.title)}
                           >
                             {member.title}
                           </Link>
@@ -332,8 +312,7 @@ function SeriesPage() {
           <div className="section-head">
             <h2 className="section-title">Editions</h2>
             <p className="section-note">
-              Each edition is its own run of books. Pick one to see its
-              reading path.
+              Each edition is its own run of books. Pick one to see its reading path.
             </p>
           </div>
           <EditionPicker
@@ -353,9 +332,7 @@ function SeriesPage() {
             <p className="section-note">
               {selected.publisher ? `${selected.publisher.name} · ` : ""}
               {plural(selected.books.length, "book", "books")}
-              {selected.kind === "line"
-                ? " in the publisher's own numbering"
-                : " in reading order"}
+              {selected.kind === "line" ? " in the publisher's own numbering" : " in reading order"}
             </p>
           </div>
           {/* Signed in, every cover wears its badges and offers Want /
@@ -373,20 +350,14 @@ function SeriesPage() {
         <section className="section reading-path">
           <div className="section-head">
             <h2 className="section-title">Volumes</h2>
-            <p className="section-note">
-              No English edition is on file for this series yet.
-            </p>
+            <p className="section-note">No English edition is on file for this series yet.</p>
           </div>
           {volumes.length === 0 ? (
             <p className="notice">No volumes are recorded for this series yet.</p>
           ) : (
             <div className="shelf">
               {volumes.map((volume) => (
-                <MissingVolume
-                  key={volume.publicId}
-                  volume={volume}
-                  seriesTitle={series.title}
-                />
+                <MissingVolume key={volume.publicId} volume={volume} seriesTitle={series.title} />
               ))}
             </div>
           )}
@@ -526,9 +497,7 @@ function FamilySection({
                     {member.title}
                   </Link>
                 )}
-                <div className="caption-meta">
-                  {isSelf ? <span>You are here</span> : null}
-                </div>
+                <div className="caption-meta">{isSelf ? <span>You are here</span> : null}</div>
               </div>
             </div>
           );

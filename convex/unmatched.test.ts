@@ -36,7 +36,16 @@ import {
   insertSeries,
   insertVolume,
 } from "./test.factories";
-import { alice, bob, makeT, seedRegistry, seedTeam, signedIn, tickingClock, type TestT } from "./test.helpers";
+import {
+  alice,
+  bob,
+  makeT,
+  seedRegistry,
+  seedTeam,
+  signedIn,
+  tickingClock,
+  type TestT,
+} from "./test.helpers";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -68,13 +77,27 @@ const SERIES = "Gamma Quest";
 const SLUG = "gamma-quest";
 const releaseDate = { year: 2026, month: 5, day: 12 };
 
-const volume3: Book = { title: "Gamma Quest Vol. 3", seriesTitle: SERIES, volumeLabel: "3", isbn13: ISBN };
+const volume3: Book = {
+  title: "Gamma Quest Vol. 3",
+  seriesTitle: SERIES,
+  volumeLabel: "3",
+  isbn13: ISBN,
+};
 
-const packaged = (title: string, packaging: Packaging): Book => ({ title, seriesTitle: SERIES, packaging, isbn13: ISBN });
+const packaged = (title: string, packaging: Packaging): Book => ({
+  title,
+  seriesTitle: SERIES,
+  packaging,
+  isbn13: ISBN,
+});
 
 /** A box set whose title states the Volumes it collects, as every parser reads it. */
 const boxSet: Book = {
-  ...packaged("Gamma Quest Box Set 1 (Vol. 1-2)", { lineName: "Box Set", linePosition: "1", coverRange: { from: "1", to: "2" } }),
+  ...packaged("Gamma Quest Box Set 1 (Vol. 1-2)", {
+    lineName: "Box Set",
+    linePosition: "1",
+    coverRange: { from: "1", to: "2" },
+  }),
   isBox: true,
 };
 
@@ -93,7 +116,9 @@ const unstatedBoxSet: Book = {
 function kodanshaPackaging(book: Book): Packaging | undefined {
   const packaging = book.packaging;
   if (packaging === undefined || packaging.lineName === null) return packaging;
-  const line = parseSeriesName(book.kodanshaSeries ?? `${book.seriesTitle} ${packaging.lineName}`).packaging;
+  const line = parseSeriesName(
+    book.kodanshaSeries ?? `${book.seriesTitle} ${packaging.lineName}`,
+  ).packaging;
   return line === null ? packaging : { ...line, linePosition: packaging.linePosition };
 }
 
@@ -178,11 +203,20 @@ async function apply(mutate: Mutate, source: Source, book: Book): Promise<ApplyR
       });
     case "prh":
       return await mutate(internal.prh.applyTitle, {
-        snapshot: { kind: "prhTitle", ...catalog, imprint: book.noImprint ? undefined : "Gamma Comics" },
+        snapshot: {
+          kind: "prhTitle",
+          ...catalog,
+          imprint: book.noImprint ? undefined : "Gamma Comics",
+        },
       });
     case "yenPress":
       return await mutate(internal.yenPress.applyTitle, {
-        snapshot: { kind: "yenTitle", ...catalog, imprint: book.noImprint ? undefined : "Yen Press", category: "manga" },
+        snapshot: {
+          kind: "yenTitle",
+          ...catalog,
+          imprint: book.noImprint ? undefined : "Yen Press",
+          category: "manga",
+        },
       });
   }
 }
@@ -219,7 +253,9 @@ async function dump(t: TestT): Promise<Dump> {
     }
     return found;
   });
-  return new Map(tables.flatMap(({ table, rows }) => rows.map((row) => [row._id, { table, row }] as const)));
+  return new Map(
+    tables.flatMap(({ table, rows }) => rows.map((row) => [row._id, { table, row }] as const)),
+  );
 }
 
 /** A row named by what it is, so ids never reach an expectation; `bare` leaves out its tags. */
@@ -282,7 +318,9 @@ function writes(before: Dump, after: Dump): string[] {
       continue;
     }
     const keys = new Set([...Object.keys(row), ...Object.keys(old.row)]);
-    const changed = [...keys].filter((key) => JSON.stringify(row[key]) !== JSON.stringify(old.row[key]));
+    const changed = [...keys].filter(
+      (key) => JSON.stringify(row[key]) !== JSON.stringify(old.row[key]),
+    );
     if (changed.length > 0) out.push(`~ ${table} ${changed.sort().join(", ")}`);
   }
   for (const id of before.keys()) if (!after.has(id)) out.push(`- ${alias(before, id)}`);
@@ -388,7 +426,10 @@ async function outcome(c: Case, source: Source): Promise<Outcome> {
 // ---------- the catalog each case starts from ----------
 
 /** "Gamma Quest" with Volumes 1 and 2 and nothing else. */
-async function gammaQuest(ctx: MutationCtx, fields: Partial<Doc<"series">> = {}): Promise<Id<"series">> {
+async function gammaQuest(
+  ctx: MutationCtx,
+  fields: Partial<Doc<"series">> = {},
+): Promise<Id<"series">> {
   const seriesId = await insertSeries(ctx, { title: SERIES, publicId: 1, ...fields });
   await insertVolume(ctx, { seriesId, position: 1 });
   await insertVolume(ctx, { seriesId, position: 2 });
@@ -409,7 +450,13 @@ async function isbnHolder(ctx: MutationCtx, seriesTitle: string, status: "active
   const volumeId = await insertVolume(ctx, { seriesId, position: 3 });
   const editionId = await insertEdition(ctx, { publisherId });
   await insertCoverage(ctx, { editionId, volumeId });
-  return await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], isbn13: ISBN, status });
+  return await insertRelease(ctx, {
+    editionId,
+    publisherId,
+    seriesIds: [seriesId],
+    isbn13: ISBN,
+    status,
+  });
 }
 
 const CASES: Case[] = [
@@ -433,7 +480,12 @@ const CASES: Case[] = [
     book: volume3,
     seed: async (ctx) => {
       const survivor = await gammaQuest(ctx, { title: "Gamma Quest Saga", publicId: 2 });
-      await insertSeries(ctx, { title: SERIES, publicId: 3, status: "merged", mergedIntoId: survivor });
+      await insertSeries(ctx, {
+        title: SERIES,
+        publicId: 3,
+        status: "merged",
+        mergedIntoId: survivor,
+      });
     },
   },
   {
@@ -462,7 +514,11 @@ const CASES: Case[] = [
     // Unmapped Packaging would be created under the locked Series.
     name: "Series locked, packaging with unknown coverage, Bootstrap Mode",
     bootstrap: true,
-    book: packaged("Gamma Quest Deluxe Edition 2", { lineName: "Deluxe Edition", linePosition: "2", coverRange: null }),
+    book: packaged("Gamma Quest Deluxe Edition 2", {
+      lineName: "Deluxe Edition",
+      linePosition: "2",
+      coverRange: null,
+    }),
     seed: (ctx) => gammaQuest(ctx, { locked: true }),
   },
   {
@@ -542,8 +598,18 @@ const CASES: Case[] = [
       await gammaQuest(ctx, { publicId: 2 });
     },
   },
-  { name: "missing Volume, Bootstrap Mode", bootstrap: true, book: volume3, seed: (ctx) => gammaQuest(ctx) },
-  { name: "missing Volume, steady state", bootstrap: false, book: volume3, seed: (ctx) => gammaQuest(ctx) },
+  {
+    name: "missing Volume, Bootstrap Mode",
+    bootstrap: true,
+    book: volume3,
+    seed: (ctx) => gammaQuest(ctx),
+  },
+  {
+    name: "missing Volume, steady state",
+    bootstrap: false,
+    book: volume3,
+    seed: (ctx) => gammaQuest(ctx),
+  },
   {
     name: "packaging with stated coverage, Bootstrap Mode",
     bootstrap: true,
@@ -628,25 +694,41 @@ const CASES: Case[] = [
   {
     name: "packaging with unknown coverage, Bootstrap Mode",
     bootstrap: true,
-    book: packaged("Gamma Quest Deluxe Edition 2", { lineName: "Deluxe Edition", linePosition: "2", coverRange: null }),
+    book: packaged("Gamma Quest Deluxe Edition 2", {
+      lineName: "Deluxe Edition",
+      linePosition: "2",
+      coverRange: null,
+    }),
     seed: (ctx) => gammaQuest(ctx),
   },
   {
     name: "packaging with unknown coverage, steady state",
     bootstrap: false,
-    book: packaged("Gamma Quest Deluxe Edition 2", { lineName: "Deluxe Edition", linePosition: "2", coverRange: null }),
+    book: packaged("Gamma Quest Deluxe Edition 2", {
+      lineName: "Deluxe Edition",
+      linePosition: "2",
+      coverRange: null,
+    }),
     seed: (ctx) => gammaQuest(ctx),
   },
   {
     name: "packaging with unknown coverage and no line name, Bootstrap Mode",
     bootstrap: true,
-    book: packaged("Gamma Quest Collection", { lineName: null, linePosition: null, coverRange: null }),
+    book: packaged("Gamma Quest Collection", {
+      lineName: null,
+      linePosition: null,
+      coverRange: null,
+    }),
     seed: (ctx) => gammaQuest(ctx),
   },
   {
     name: "packaging with unknown coverage, ambiguous Series, Bootstrap Mode",
     bootstrap: true,
-    book: packaged("Gamma Quest Deluxe Edition 2", { lineName: "Deluxe Edition", linePosition: "2", coverRange: null }),
+    book: packaged("Gamma Quest Deluxe Edition 2", {
+      lineName: "Deluxe Edition",
+      linePosition: "2",
+      coverRange: null,
+    }),
     seed: async (ctx) => {
       await gammaQuest(ctx);
       await gammaQuest(ctx, { publicId: 2 });
@@ -680,7 +762,11 @@ const CASES: Case[] = [
   {
     name: "packaging with unknown coverage on an ISBN a hidden Release holds",
     bootstrap: false,
-    book: packaged("Gamma Quest Deluxe Edition 2", { lineName: "Deluxe Edition", linePosition: "2", coverRange: null }),
+    book: packaged("Gamma Quest Deluxe Edition 2", {
+      lineName: "Deluxe Edition",
+      linePosition: "2",
+      coverRange: null,
+    }),
     seed: async (ctx) => {
       await gammaQuest(ctx);
       await isbnHolder(ctx, SERIES, "hidden");
@@ -731,7 +817,11 @@ const CASES: Case[] = [
     name: "packaging with unknown coverage and no imprint, Bootstrap Mode",
     bootstrap: true,
     book: {
-      ...packaged("Gamma Quest Deluxe Edition 2", { lineName: "Deluxe Edition", linePosition: "2", coverRange: null }),
+      ...packaged("Gamma Quest Deluxe Edition 2", {
+        lineName: "Deluxe Edition",
+        linePosition: "2",
+        coverRange: null,
+      }),
       noImprint: true,
     },
     seed: (ctx) => gammaQuest(ctx),
@@ -742,9 +832,19 @@ const CASES: Case[] = [
     bootstrap: false,
     book: volume3,
     seed: async (ctx) => {
-      const seriesId = await insertSeries(ctx, { title: "Old Name", publicId: 1, status: "hidden" });
+      const seriesId = await insertSeries(ctx, {
+        title: "Old Name",
+        publicId: 1,
+        status: "hidden",
+      });
       for (const sourceKey of ["sevenseas", "kodansha"]) {
-        await linkSeriesObservation(ctx, { sourceKey, seriesKey: SLUG, title: SERIES, seriesId, now: Date.now() });
+        await linkSeriesObservation(ctx, {
+          sourceKey,
+          seriesKey: SLUG,
+          title: SERIES,
+          seriesId,
+          now: Date.now(),
+        });
       }
     },
   },
@@ -877,14 +977,25 @@ async function queueThenApprove(source: Source, state: PublisherRow) {
   await seedTeam(t, [alice, bob]);
   const slug = IDENTITY[source].publisher;
   await t.run(async (ctx) => {
-    if (state === "hidden") await insertPublisher(ctx, { name: PUBLISHER_NAMES[source], slug, status: "hidden" });
+    if (state === "hidden")
+      await insertPublisher(ctx, { name: PUBLISHER_NAMES[source], slug, status: "hidden" });
     if (state === "merged") {
-      const survivor = await insertPublisher(ctx, { name: "Survivor House", slug: "survivor-house" });
-      await insertPublisher(ctx, { name: PUBLISHER_NAMES[source], slug, status: "merged", mergedIntoId: survivor });
+      const survivor = await insertPublisher(ctx, {
+        name: "Survivor House",
+        slug: "survivor-house",
+      });
+      await insertPublisher(ctx, {
+        name: PUBLISHER_NAMES[source],
+        slug,
+        status: "merged",
+        mergedIntoId: survivor,
+      });
     }
   });
   const publishers = async () =>
-    (await t.run((ctx) => ctx.db.query("publishers").collect())).map((row) => `${row.slug} ${row.status}`).sort();
+    (await t.run((ctx) => ctx.db.query("publishers").collect()))
+      .map((row) => `${row.slug} ${row.status}`)
+      .sort();
   const queued = await apply(t.mutation, source, volume3);
   const { book } = await observations(t, source);
   const proposalId = book.queuedProposalId!;
@@ -976,7 +1087,10 @@ async function hiddenAfterQueue(source: Source, decide: "open" | "rejected") {
   await apply(t.mutation, source, volume3);
   const proposalId = (await observations(t, source)).book.queuedProposalId!;
   if (decide === "rejected") {
-    await signedIn(t, bob).mutation(api.proposals.rejectProposal, { proposalId, note: "Not this one." });
+    await signedIn(t, bob).mutation(api.proposals.rejectProposal, {
+      proposalId,
+      note: "Not this one.",
+    });
   }
   await t.run((ctx) => insertSeries(ctx, { title: SERIES, publicId: 7, status: "hidden" }));
   const second = await apply(t.mutation, source, volume3);
@@ -1059,7 +1173,10 @@ async function lockThenApply(
     await apply(t.mutation, source, volume3);
     const proposalId = (await observations(t, source)).book.queuedProposalId!;
     if (opts.queued === "rejected") {
-      await signedIn(t, bob).mutation(api.proposals.rejectProposal, { proposalId, note: "Not this one." });
+      await signedIn(t, bob).mutation(api.proposals.rejectProposal, {
+        proposalId,
+        note: "Not this one.",
+      });
     }
   }
   await t.run((ctx) => ctx.db.patch(seriesId, { locked: true }));
@@ -1067,7 +1184,12 @@ async function lockThenApply(
   const whileLocked = await holdState(t, source);
   if (!opts.stillLocked) await t.run(unlock);
   const next = await apply(t.mutation, source, opts.next);
-  return { locked: result(locked), whileLocked, next: result(next), after: await holdState(t, source) };
+  return {
+    locked: result(locked),
+    whileLocked,
+    next: result(next),
+    after: await holdState(t, source),
+  };
 }
 
 const LOCKED = `recordOnly, unchanged, reason "locked series"`;
@@ -1077,7 +1199,9 @@ const FLAG = `reason "ISBN ${ISBN} matches an existing release with a dissimilar
 describe("an apply that finds the Series unlocked leaves no lock hold, through every source", () => {
   it("answers a rejected Proposal's book as already queued, and drops its listed lock hold", async () => {
     for (const source of SOURCES) {
-      expect(await lockThenApply(source, { flagged: true, queued: "rejected", next: volume3 })).toEqual({
+      expect(
+        await lockThenApply(source, { flagged: true, queued: "rejected", next: volume3 }),
+      ).toEqual({
         locked: LOCKED,
         whileLocked: { note: LOCK_NOTE, listed: "series" },
         next: `alreadyQueued, unchanged, ${FLAG}`,
@@ -1088,7 +1212,9 @@ describe("an apply that finds the Series unlocked leaves no lock hold, through e
 
   it("answers a book in review as already queued, and drops its lock note", async () => {
     for (const source of SOURCES) {
-      expect(await lockThenApply(source, { flagged: true, queued: "inReview", next: volume3 })).toEqual({
+      expect(
+        await lockThenApply(source, { flagged: true, queued: "inReview", next: volume3 }),
+      ).toEqual({
         locked: LOCKED,
         whileLocked: { note: LOCK_NOTE, listed: null },
         next: `alreadyQueued, unchanged, ${FLAG}`,
@@ -1235,7 +1361,10 @@ describe("Kodansha's packaging note, through the calendar", () => {
 describe("Kodansha's packaging note, through a volume page", () => {
   it("quotes no coverage when the title repeats its series name's range, on a sized line", async () => {
     expect(
-      await volumePageNote("Gamma Quest 3-in-1 Edition (Vol. 1-3)", "Gamma Quest 3-in-1 Edition Volume 2 (Vol. 1-3)"),
+      await volumePageNote(
+        "Gamma Quest 3-in-1 Edition (Vol. 1-3)",
+        "Gamma Quest 3-in-1 Edition Volume 2 (Vol. 1-3)",
+      ),
     ).toBe(
       `"Gamma Quest 3-in-1 Edition Volume 2 (Vol. 1-3)" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
     );
@@ -1243,7 +1372,10 @@ describe("Kodansha's packaging note, through a volume page", () => {
 
   it("quotes a range of its own in its title", async () => {
     expect(
-      await volumePageNote("Gamma Quest 3-in-1 Edition (Vol. 1-3)", "Gamma Quest 3-in-1 Edition Volume 2 (Vol. 4-6)"),
+      await volumePageNote(
+        "Gamma Quest 3-in-1 Edition (Vol. 1-3)",
+        "Gamma Quest 3-in-1 Edition Volume 2 (Vol. 4-6)",
+      ),
     ).toBe(
       `"Gamma Quest 3-in-1 Edition Volume 2 (Vol. 4-6)" is 3-in-1 Edition of "Gamma Quest", stating Volumes 4-6 in its title. The Kodansha importer does not place packaging — an Editor maps it.`,
     );
@@ -1252,7 +1384,10 @@ describe("Kodansha's packaging note, through a volume page", () => {
   // The page's own title states nothing, so only the series name's gapped list stops the size.
   it("quotes no line size under a series name listing Volumes with a gap", async () => {
     expect(
-      await volumePageNote("Gamma Quest 3-in-1 Edition (Vol. 1 & 3)", "Gamma Quest 3-in-1 Edition Volume 2"),
+      await volumePageNote(
+        "Gamma Quest 3-in-1 Edition (Vol. 1 & 3)",
+        "Gamma Quest 3-in-1 Edition Volume 2",
+      ),
     ).toBe(
       `"Gamma Quest 3-in-1 Edition Volume 2" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
     );
@@ -1276,8 +1411,16 @@ function each(
   template: (s: Identity) => Outcome,
   overrides: Partial<Record<Source, (s: Identity) => Partial<Outcome>>> = {},
 ): Record<Source, Outcome> {
-  const at = (source: Source) => ({ ...template(IDENTITY[source]), ...overrides[source]?.(IDENTITY[source]) });
-  return { sevenSeas: at("sevenSeas"), kodansha: at("kodansha"), prh: at("prh"), yenPress: at("yenPress") };
+  const at = (source: Source) => ({
+    ...template(IDENTITY[source]),
+    ...overrides[source]?.(IDENTITY[source]),
+  });
+  return {
+    sevenSeas: at("sevenSeas"),
+    kodansha: at("kodansha"),
+    prh: at("prh"),
+    yenPress: at("yenPress"),
+  };
 }
 
 /** The series link a Seven Seas or Kodansha run writes; the catalog-title feeds keep none. */
@@ -1374,24 +1517,22 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     proposal: null,
     second: { result: "unchanged, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
   })),
-  "Series missing, steady state: the queued Proposal": each(
-    (s) => ({
-      result: "queued, changed",
-      hold: null,
-      created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
-      seriesLink: null,
-      proposal: {
-        comment: `"Gamma Quest Vol. 3" observed at ${s.name} needs a brand-new Series — steady-state creation gate.`,
-        ops: [
-          `series series {"altTitles":[],"title":"Gamma Quest"}`,
-          `volumes volume-1 {"label":"3","seriesId":"series"}`,
-          `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
-          RELEASE_OP,
-        ],
-      },
-      second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
-    }),
-  ),
+  "Series missing, steady state: the queued Proposal": each((s) => ({
+    result: "queued, changed",
+    hold: null,
+    created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+    seriesLink: null,
+    proposal: {
+      comment: `"Gamma Quest Vol. 3" observed at ${s.name} needs a brand-new Series — steady-state creation gate.`,
+      ops: [
+        `series series {"altTitles":[],"title":"Gamma Quest"}`,
+        `volumes volume-1 {"label":"3","seriesId":"series"}`,
+        `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+        RELEASE_OP,
+      ],
+    },
+    second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
+  })),
   "Series hidden, steady state": each((s) => ({
     result: `recordOnly, unchanged, reason "hidden series"`,
     hold: `series: "Gamma Quest" is Series 1 ("Gamma Quest"), which an Editor hid — not recreated by an import.`,
@@ -1483,66 +1624,63 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     }),
     { kodansha: kodanshaBox },
   ),
-  "ISBN on an active Release of another Series": each(
-    (s) => ({
-      result: `needsReview, changed, reason "ISBN 9781999000300 matches an existing release with a dissimilar title"`,
-      hold: null,
-      created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
-      seriesLink: link(s, `series "Gamma Quest"`),
-      proposal: {
-        comment: "Flagged by the matching ladder (rung 2): ISBN 9781999000300 matches an existing release with a dissimilar title. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
-        ops: [
-          `volumes volume-1 {"label":"3","seriesId":"series \\"Gamma Quest\\""}`,
-          `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
-          RELEASE_OP,
-        ],
-      },
-      second: {
-        result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 matches an existing release with a dissimilar title"`,
-        writes: ["~ sourceObservations lastSeenAt"],
-      },
-    }),
-  ),
-  "ISBN on two active Releases": each(
-    (s) => ({
-      result: `needsReview, changed, reason "ISBN 9781999000300 matches 2 distinct active Releases"`,
-      hold: null,
-      created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
-      seriesLink: link(s, `series "Gamma Quest"`),
-      proposal: {
-        comment: "Flagged by the matching ladder (rung 2): ISBN 9781999000300 matches 2 distinct active Releases. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
-        ops: [
-          `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume 3 of series \\"Gamma Quest\\""}]}`,
-          RELEASE_OP,
-        ],
-      },
-      second: {
-        result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 matches 2 distinct active Releases"`,
-        writes: ["~ sourceObservations lastSeenAt"],
-      },
-    }),
-  ),
-  "ISBN on a hidden Release": each(
-    (s) => ({
-      result: `needsReview, changed, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
-      hold: null,
-      created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
-      seriesLink: null,
-      proposal: {
-        comment: "Flagged by the matching ladder (rung 2): ISBN 9781999000300 belongs to a Release an Editor hid. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
-        ops: [
-          `series series {"altTitles":[],"title":"Gamma Quest"}`,
-          `volumes volume-1 {"label":"3","seriesId":"series"}`,
-          `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
-          RELEASE_OP,
-        ],
-      },
-      second: {
-        result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
-        writes: ["~ sourceObservations lastSeenAt"],
-      },
-    }),
-  ),
+  "ISBN on an active Release of another Series": each((s) => ({
+    result: `needsReview, changed, reason "ISBN 9781999000300 matches an existing release with a dissimilar title"`,
+    hold: null,
+    created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+    seriesLink: link(s, `series "Gamma Quest"`),
+    proposal: {
+      comment:
+        "Flagged by the matching ladder (rung 2): ISBN 9781999000300 matches an existing release with a dissimilar title. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
+      ops: [
+        `volumes volume-1 {"label":"3","seriesId":"series \\"Gamma Quest\\""}`,
+        `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+        RELEASE_OP,
+      ],
+    },
+    second: {
+      result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 matches an existing release with a dissimilar title"`,
+      writes: ["~ sourceObservations lastSeenAt"],
+    },
+  })),
+  "ISBN on two active Releases": each((s) => ({
+    result: `needsReview, changed, reason "ISBN 9781999000300 matches 2 distinct active Releases"`,
+    hold: null,
+    created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+    seriesLink: link(s, `series "Gamma Quest"`),
+    proposal: {
+      comment:
+        "Flagged by the matching ladder (rung 2): ISBN 9781999000300 matches 2 distinct active Releases. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
+      ops: [
+        `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume 3 of series \\"Gamma Quest\\""}]}`,
+        RELEASE_OP,
+      ],
+    },
+    second: {
+      result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 matches 2 distinct active Releases"`,
+      writes: ["~ sourceObservations lastSeenAt"],
+    },
+  })),
+  "ISBN on a hidden Release": each((s) => ({
+    result: `needsReview, changed, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+    hold: null,
+    created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+    seriesLink: null,
+    proposal: {
+      comment:
+        "Flagged by the matching ladder (rung 2): ISBN 9781999000300 belongs to a Release an Editor hid. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
+      ops: [
+        `series series {"altTitles":[],"title":"Gamma Quest"}`,
+        `volumes volume-1 {"label":"3","seriesId":"series"}`,
+        `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+        RELEASE_OP,
+      ],
+    },
+    second: {
+      result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+      writes: ["~ sourceObservations lastSeenAt"],
+    },
+  })),
   "ambiguous Series title, steady state": each(
     (s) => ({
       result: `needsReview, changed, reason "2 same-titled Series"`,
@@ -1790,38 +1928,39 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       }),
     },
   ),
-  "packaging titled as the calendar titles it, under a series name stating a range, steady state": each(
-    (s) => ({
-      result: "queued, changed",
-      hold: null,
-      created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
-      seriesLink: null,
-      proposal: {
-        comment: `"Gamma Quest Omnibus (Vol. 1-3) Volume 2" observed at ${s.name} needs multi-Volume Coverage and an Edition Line (deluxe/omnibus/box-set packaging) — steady-state creation gate. Edition Line: Omnibus.`,
-        ops: [
-          `volumes volume-3 {"label":"3","seriesId":"series \\"Gamma Quest\\""}`,
-          `editionLines edition-line {"joinExisting":true,"name":"Omnibus","publisherSlug":"${s.publisher}","seriesId":"series \\"Gamma Quest\\""}`,
-          `editions edition {"editionLineId":"edition-line","linePosition":"2","publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume 1 of series \\"Gamma Quest\\""},{"extent":"complete","order":2,"volume":"volume 2 of series \\"Gamma Quest\\""},{"extent":"complete","order":3,"volume":"volume-3"}]}`,
-          RELEASE_OP,
-        ],
-      },
-      second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
-    }),
-    {
-      sevenSeas: (s) => ({ seriesLink: link(s, `series "Gamma Quest"`) }),
-      kodansha: (s) => ({
-        result: `recordOnly, unchanged, reason "packaging without coverage"`,
-        hold: `packaging under series "Gamma Quest": "Gamma Quest Omnibus (Vol. 1-3) Volume 2" is Omnibus of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
-        created: ["placementHold"],
-        seriesLink: link(s, `series "Gamma Quest"`),
-        proposal: null,
-        second: {
-          result: `recordOnly, unchanged, reason "packaging without coverage"`,
-          writes: ["~ sourceObservations lastSeenAt"],
+  "packaging titled as the calendar titles it, under a series name stating a range, steady state":
+    each(
+      (s) => ({
+        result: "queued, changed",
+        hold: null,
+        created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+        seriesLink: null,
+        proposal: {
+          comment: `"Gamma Quest Omnibus (Vol. 1-3) Volume 2" observed at ${s.name} needs multi-Volume Coverage and an Edition Line (deluxe/omnibus/box-set packaging) — steady-state creation gate. Edition Line: Omnibus.`,
+          ops: [
+            `volumes volume-3 {"label":"3","seriesId":"series \\"Gamma Quest\\""}`,
+            `editionLines edition-line {"joinExisting":true,"name":"Omnibus","publisherSlug":"${s.publisher}","seriesId":"series \\"Gamma Quest\\""}`,
+            `editions edition {"editionLineId":"edition-line","linePosition":"2","publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume 1 of series \\"Gamma Quest\\""},{"extent":"complete","order":2,"volume":"volume 2 of series \\"Gamma Quest\\""},{"extent":"complete","order":3,"volume":"volume-3"}]}`,
+            RELEASE_OP,
+          ],
         },
+        second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
       }),
-    },
-  ),
+      {
+        sevenSeas: (s) => ({ seriesLink: link(s, `series "Gamma Quest"`) }),
+        kodansha: (s) => ({
+          result: `recordOnly, unchanged, reason "packaging without coverage"`,
+          hold: `packaging under series "Gamma Quest": "Gamma Quest Omnibus (Vol. 1-3) Volume 2" is Omnibus of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+          created: ["placementHold"],
+          seriesLink: link(s, `series "Gamma Quest"`),
+          proposal: null,
+          second: {
+            result: `recordOnly, unchanged, reason "packaging without coverage"`,
+            writes: ["~ sourceObservations lastSeenAt"],
+          },
+        }),
+      },
+    ),
   "packaging with line-size coverage, Bootstrap Mode": each(
     (s) => ({
       result: "created, changed, releaseId",
@@ -2088,27 +2227,26 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       }),
     },
   ),
-  "ISBN on a hidden Release, ambiguous Series title": each(
-    (s) => ({
-      result: `needsReview, changed, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
-      hold: null,
-      created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
-      seriesLink: null,
-      proposal: {
-        comment: "Flagged by the matching ladder (rung 2): ISBN 9781999000300 belongs to a Release an Editor hid. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
-        ops: [
-          `series series {"altTitles":[],"title":"Gamma Quest"}`,
-          `volumes volume-1 {"label":"3","seriesId":"series"}`,
-          `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
-          RELEASE_OP,
-        ],
-      },
-      second: {
-        result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
-        writes: ["~ sourceObservations lastSeenAt"],
-      },
-    }),
-  ),
+  "ISBN on a hidden Release, ambiguous Series title": each((s) => ({
+    result: `needsReview, changed, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+    hold: null,
+    created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+    seriesLink: null,
+    proposal: {
+      comment:
+        "Flagged by the matching ladder (rung 2): ISBN 9781999000300 belongs to a Release an Editor hid. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
+      ops: [
+        `series series {"altTitles":[],"title":"Gamma Quest"}`,
+        `volumes volume-1 {"label":"3","seriesId":"series"}`,
+        `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+        RELEASE_OP,
+      ],
+    },
+    second: {
+      result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+      writes: ["~ sourceObservations lastSeenAt"],
+    },
+  })),
   "no imprint, ambiguous Series title": each(
     (s) => ({
       result: `needsReview, changed, reason "2 same-titled Series"`,
@@ -2204,7 +2342,8 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
       seriesLink: null,
       proposal: {
-        comment: "Flagged by the matching ladder (rung 2): ISBN 9781999000300 belongs to a Release an Editor hid. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
+        comment:
+          "Flagged by the matching ladder (rung 2): ISBN 9781999000300 belongs to a Release an Editor hid. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
         ops: [
           `series series {"altTitles":[],"title":"Gamma Quest"}`,
           `volumes volume-1 {"label":"3","seriesId":"series"}`,

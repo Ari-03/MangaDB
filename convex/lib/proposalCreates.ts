@@ -46,11 +46,7 @@ import { labelsEqual } from "./matching";
 import { joinableEdition, siblingEditions, unmappedSiblings, volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
 import { seriesSearchText } from "./searchMatch";
-import {
-  fieldDescriptor,
-  normalizeFieldValue,
-  type RecordType,
-} from "./moderationFields";
+import { fieldDescriptor, normalizeFieldValue, type RecordType } from "./moderationFields";
 
 // ---------- shapes ----------
 
@@ -144,7 +140,10 @@ export const MAX_OPS_PER_PROPOSAL = 25;
 /** Refuse an op set over the bulk cap (`bulkCap`). */
 export function checkOpCount(count: number): void {
   if (count > MAX_OPS_PER_PROPOSAL) {
-    fail("bulkCap", `One proposal carries at most ${MAX_OPS_PER_PROPOSAL} operations — split unrelated work.`);
+    fail(
+      "bulkCap",
+      `One proposal carries at most ${MAX_OPS_PER_PROPOSAL} operations — split unrelated work.`,
+    );
   }
 }
 
@@ -164,7 +163,9 @@ export const marksJoin = (op: CreateOpInput): boolean =>
 
 /** The records a plan's placement joins matched but may not join: the Proposal is stale. */
 export const unjoinable = (plans: CreatePlan[]): Unjoinable[] =>
-  plans.flatMap((plan) => ("unavailable" in plan && plan.unavailable !== undefined ? [plan.unavailable] : []));
+  plans.flatMap((plan) =>
+    "unavailable" in plan && plan.unavailable !== undefined ? [plan.unavailable] : [],
+  );
 
 /** Refuse a malformed create op. */
 function bad(message: string): never {
@@ -280,13 +281,10 @@ export async function planCreateOps(
           tempId: op.tempId,
           fields: {
             title: title as string,
-            altTitles: (viaRegistry("series", "altTitles", fields.altTitles) ??
-              []) as string[],
-            sourceStatus: viaRegistry(
-              "series",
-              "sourceStatus",
-              fields.sourceStatus,
-            ) as string | undefined,
+            altTitles: (viaRegistry("series", "altTitles", fields.altTitles) ?? []) as string[],
+            sourceStatus: viaRegistry("series", "sourceStatus", fields.sourceStatus) as
+              | string
+              | undefined,
           },
         });
         break;
@@ -301,16 +299,17 @@ export async function planCreateOps(
         );
         const label = viaRegistry("volume", "label", fields.label) as string | undefined;
         // A placement's Volume an import created meanwhile is that Volume.
-        const join = fields.joinExisting === true && series.kind === "id" ? await joinedVolume(ctx, series.id, label) : {};
+        const join =
+          fields.joinExisting === true && series.kind === "id"
+            ? await joinedVolume(ctx, series.id, label)
+            : {};
         plans.push({
           table,
           tempId: op.tempId,
           series,
           fields: {
             label,
-            synopsis: viaRegistry("volume", "synopsis", fields.synopsis) as
-              | string
-              | undefined,
+            synopsis: viaRegistry("volume", "synopsis", fields.synopsis) as string | undefined,
           },
           ...join,
         });
@@ -343,7 +342,9 @@ export async function planCreateOps(
                   .query("editionLines")
                   .withIndex("by_series", (q) => q.eq("seriesId", series.id))
                   .collect()
-              ).filter((line) => line.publisherId === publisherId && line.name.toLowerCase() === wanted)
+              ).filter(
+                (line) => line.publisherId === publisherId && line.name.toLowerCase() === wanted,
+              )
             : [];
         const stored = named.find((line) => line.status === "active");
         // An op flagged `joinExisting` (the importer's queued guesses) names
@@ -401,7 +402,11 @@ export async function planCreateOps(
           | undefined;
         const join =
           fields.joinExisting === true
-            ? await storedSibling(ctx, { publisherId, coverage, editionLine, linePosition, unmapped }, planByTemp)
+            ? await storedSibling(
+                ctx,
+                { publisherId, coverage, editionLine, linePosition, unmapped },
+                planByTemp,
+              )
             : {};
         plans.push({
           table,
@@ -426,9 +431,7 @@ export async function planCreateOps(
         if (format !== "physical" && format !== "digital") {
           bad('A new release needs a format: "physical" or "digital".');
         }
-        const binding = viaRegistry("release", "binding", fields.binding) as
-          | string
-          | undefined;
+        const binding = viaRegistry("release", "binding", fields.binding) as string | undefined;
         // Hard invariant (CONTEXT.md): Binding applies only to physical.
         if (format === "digital" && binding !== undefined) {
           bad("Binding applies only to physical releases.");
@@ -438,7 +441,8 @@ export async function planCreateOps(
         const isbn10 = viaRegistry("release", "isbn10", fields.isbn10) as string | undefined;
         if (isbn13 !== undefined) isbnClaims.push({ field: "isbn13", isbn: isbn13, by: "create" });
         if (isbn10 !== undefined) isbnClaims.push({ field: "isbn10", isbn: isbn10, by: "create" });
-        const placement = fields.placement === undefined ? undefined : await planPlacement(ctx, fields.placement);
+        const placement =
+          fields.placement === undefined ? undefined : await planPlacement(ctx, fields.placement);
         plans.push({
           table,
           tempId: op.tempId,
@@ -456,11 +460,9 @@ export async function planCreateOps(
             price: viaRegistry("release", "price", fields.price) as
               | { amountCents: number; currency: string }
               | undefined,
-            description: viaRegistry(
-              "release",
-              "description",
-              fields.description,
-            ) as string | undefined,
+            description: viaRegistry("release", "description", fields.description) as
+              | string
+              | undefined,
           },
         });
         break;
@@ -640,7 +642,9 @@ async function joinedVolume(
   ).filter((volume) => labelsEqual(volume.label, label ?? null));
   const active = sameLabel.find((volume) => volume.status === "active");
   if (active !== undefined) return { existingId: active._id };
-  return sameLabel[0] !== undefined ? { unavailable: { type: "volume", id: sameLabel[0]._id } } : {};
+  return sameLabel[0] !== undefined
+    ? { unavailable: { type: "volume", id: sameLabel[0]._id } }
+    : {};
 }
 
 /**
@@ -710,11 +714,14 @@ async function planPlacement(
       ? ctx.db.normalizeId("sourceObservations", placement.observationId)
       : null;
   const seriesId =
-    typeof placement.seriesId === "string" ? ctx.db.normalizeId("series", placement.seriesId) : null;
+    typeof placement.seriesId === "string"
+      ? ctx.db.normalizeId("series", placement.seriesId)
+      : null;
   if (observationId === null || seriesId === null) {
     return bad("A placed release names its observation and Series by ID.");
   }
-  if ((await ctx.db.get(observationId)) === null) return bad("The observation this release places no longer exists.");
+  if ((await ctx.db.get(observationId)) === null)
+    return bad("The observation this release places no longer exists.");
   return { observationId, seriesId };
 }
 
@@ -783,7 +790,11 @@ export async function unavailableCreateRefs(
       if (stored !== null && !stored.active) unavailable.set(stored.id, REFERENCED_TYPES[table]);
     }
     // The importer's form names the publisher by slug; ID wins when both are set.
-    const fields = op.fields as { publisherId?: unknown; publisherSlug?: unknown; placement?: unknown } | null;
+    const fields = op.fields as {
+      publisherId?: unknown;
+      publisherSlug?: unknown;
+      placement?: unknown;
+    } | null;
     const byId = typeof fields?.publisherId === "string" && fields.publisherId !== "";
     const slug = fields?.publisherSlug;
     const namesPublisher = op.table === "editions" || op.table === "editionLines";
@@ -797,7 +808,10 @@ export async function unavailableCreateRefs(
     // A placement goes under its Series only while the Series is open to
     // edits: hidden, merged or locked since, it is stale like any record.
     const placement = fields?.placement;
-    const placed = typeof placement === "object" && placement !== null && "seriesId" in placement ? placement.seriesId : undefined;
+    const placed =
+      typeof placement === "object" && placement !== null && "seriesId" in placement
+        ? placement.seriesId
+        : undefined;
     if (op.table === "releases" && typeof placed === "string") {
       const seriesId = ctx.db.normalizeId("series", placed);
       const series = seriesId !== null ? await ctx.db.get(seriesId) : null;
@@ -832,7 +846,9 @@ async function planCoverage(
   const raw = fields.volumeCoverage ?? [];
   if (unmapped) {
     if (Array.isArray(raw) && raw.length === 0) return [];
-    return bad("Unmapped Packaging covers no Volumes yet: drop its coverage rows or its unmapped mark.");
+    return bad(
+      "Unmapped Packaging covers no Volumes yet: drop its coverage rows or its unmapped mark.",
+    );
   }
   if (!Array.isArray(raw) || raw.length === 0) {
     return bad(
@@ -860,9 +876,7 @@ async function planCoverage(
       return bad('Coverage extent must be "complete" or "partial".');
     }
     const note =
-      typeof row.note === "string" && row.note.trim() !== ""
-        ? row.note.trim()
-        : undefined;
+      typeof row.note === "string" && row.note.trim() !== "" ? row.note.trim() : undefined;
     coverage.push({ volume, order, extent: row.extent, note });
   }
   return coverage;
@@ -915,7 +929,9 @@ export async function applyCreatePlan(
 ): Promise<CreatedRecord> {
   // The stale gate stops these first; never create a twin of one.
   if ("unavailable" in plan && plan.unavailable !== undefined) {
-    return bad(`A ${plan.unavailable.type} this placement matches is hidden, locked or merged away.`);
+    return bad(
+      `A ${plan.unavailable.type} this placement matches is hidden, locked or merged away.`,
+    );
   }
   switch (plan.table) {
     case "series": {
@@ -926,9 +942,7 @@ export async function applyCreatePlan(
         title: plan.fields.title,
         altTitles: plan.fields.altTitles,
         searchText: seriesSearchText(plan.fields.title, plan.fields.altTitles),
-        sourceStatus: plan.fields.sourceStatus as
-          | Doc<"series">["sourceStatus"]
-          | undefined,
+        sourceStatus: plan.fields.sourceStatus as Doc<"series">["sourceStatus"] | undefined,
       });
       temp.set(plan.tempId, id);
       return {

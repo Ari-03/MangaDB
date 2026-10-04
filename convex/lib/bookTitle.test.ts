@@ -23,50 +23,28 @@ function split(title: string, seriesNumber?: number | string) {
 
 describe("parseBookTitle — volume markers", () => {
   it("reads every marker spelling, with or without a space", () => {
-    expect(split("Chainsaw Man, Vol. 22")).toEqual([
-      "Chainsaw Man",
-      "22",
-      null,
-    ]);
-    expect(split("Alpi the Soul Sender Vol.5")).toEqual([
-      "Alpi the Soul Sender",
-      "5",
-      null,
-    ]);
+    expect(split("Chainsaw Man, Vol. 22")).toEqual(["Chainsaw Man", "22", null]);
+    expect(split("Alpi the Soul Sender Vol.5")).toEqual(["Alpi the Soul Sender", "5", null]);
     expect(split("Berserk Volume 41")).toEqual(["Berserk", "41", null]);
-    expect(split("Flowers of Evil, Volume 4")).toEqual([
-      "Flowers of Evil",
-      "4",
-      null,
-    ]);
+    expect(split("Flowers of Evil, Volume 4")).toEqual(["Flowers of Evil", "4", null]);
     expect(split("One Piece #3")).toEqual(["One Piece", "3", null]);
     expect(split("Homestuck, Book 4")).toEqual(["Homestuck", "4", null]);
-    expect(split("Paradise Kiss, Part 1")).toEqual([
-      "Paradise Kiss",
-      "1",
-      null,
-    ]);
+    expect(split("Paradise Kiss, Part 1")).toEqual(["Paradise Kiss", "1", null]);
     expect(split("Rising of the Shield Hero Volume 08")).toEqual([
       "Rising of the Shield Hero",
       "8",
       null,
     ]);
-    expect(split("Sudoku Plus, Volume Two")).toEqual([
-      "Sudoku Plus",
-      "2",
-      null,
-    ]);
+    expect(split("Sudoku Plus, Volume Two")).toEqual(["Sudoku Plus", "2", null]);
   });
 
   it("keeps a per-volume subtitle out of the series title", () => {
-    expect(
-      split("Lone Wolf and Cub Volume 7: Cloud Dragon, Wind Tiger"),
-    ).toEqual(["Lone Wolf and Cub", "7", "Cloud Dragon, Wind Tiger"]);
-    expect(split("Buddha: Volume 3: Devadatta")).toEqual([
-      "Buddha",
-      "3",
-      "Devadatta",
+    expect(split("Lone Wolf and Cub Volume 7: Cloud Dragon, Wind Tiger")).toEqual([
+      "Lone Wolf and Cub",
+      "7",
+      "Cloud Dragon, Wind Tiger",
     ]);
+    expect(split("Buddha: Volume 3: Devadatta")).toEqual(["Buddha", "3", "Devadatta"]);
     expect(split("World's End Harem Vol. 14 - After World")).toEqual([
       "World's End Harem",
       "14",
@@ -110,8 +88,14 @@ describe("parseBookTitle — volume markers", () => {
       });
     }
     // After a "Vol." marker a listed item may still repeat it.
-    expect(parseBookTitle("Alpha Vol. 3 + Vol. 4").packaging?.coverRange).toEqual({ from: "3", to: "4" });
-    expect(parseBookTitle("Alpha #1 & #3").packaging).toMatchObject({ coverRange: null, coverageGapped: true });
+    expect(parseBookTitle("Alpha Vol. 3 + Vol. 4").packaging?.coverRange).toEqual({
+      from: "3",
+      to: "4",
+    });
+    expect(parseBookTitle("Alpha #1 & #3").packaging).toMatchObject({
+      coverRange: null,
+      coverageGapped: true,
+    });
   });
 
   it("splits at the last marker, not an earlier one inside the name", () => {
@@ -133,32 +117,18 @@ describe("parseBookTitle — volume markers", () => {
       volumeLabel: "4",
       formatTags: ["Mature Hardcover"],
     });
-    expect(
-      parseBookTitle("Betrothed to My Sister's Ex (Manga) Vol. 6"),
-    ).toMatchObject({
+    expect(parseBookTitle("Betrothed to My Sister's Ex (Manga) Vol. 6")).toMatchObject({
       seriesTitle: "Betrothed to My Sister's Ex",
       volumeLabel: "6",
     });
-    expect(split("My Beautiful Man, Volume 6 (Manga)")).toEqual([
-      "My Beautiful Man",
-      "6",
-      null,
-    ]);
+    expect(split("My Beautiful Man, Volume 6 (Manga)")).toEqual(["My Beautiful Man", "6", null]);
     expect(split("I Ship My Rival x Me (The Comic / Manhua) Vol. 2")).toEqual([
       "I Ship My Rival x Me",
       "2",
       null,
     ]);
-    expect(split("Hellsing Volume 9 (Second Edition)")).toEqual([
-      "Hellsing",
-      "9",
-      null,
-    ]);
-    expect(split("Plus-Sized Elf Vol. 4 (Rerelease)")).toEqual([
-      "Plus-Sized Elf",
-      "4",
-      null,
-    ]);
+    expect(split("Hellsing Volume 9 (Second Edition)")).toEqual(["Hellsing", "9", null]);
+    expect(split("Plus-Sized Elf Vol. 4 (Rerelease)")).toEqual(["Plus-Sized Elf", "4", null]);
   });
 
   it("reads a volume noted only in brackets", () => {
@@ -167,9 +137,7 @@ describe("parseBookTitle — volume markers", () => {
       "2",
       null,
     ]);
-    expect(
-      parseBookTitle("Himouto! Umaru-chan Vol. G1 (Vol. 13)"),
-    ).toMatchObject({
+    expect(parseBookTitle("Himouto! Umaru-chan Vol. G1 (Vol. 13)")).toMatchObject({
       seriesTitle: "Himouto! Umaru-chan",
       volumeLabel: "G1",
     });
@@ -183,9 +151,9 @@ describe("parseBookTitle — volume markers", () => {
   });
 
   it("never treats a book kind as a volume marker", () => {
-    expect(
-      split("Cells at Work! Picture Book 3: I'm Not Scared of Shots!")[0],
-    ).toBe("Cells at Work! Picture Book 3: I'm Not Scared of Shots!");
+    expect(split("Cells at Work! Picture Book 3: I'm Not Scared of Shots!")[0]).toBe(
+      "Cells at Work! Picture Book 3: I'm Not Scared of Shots!",
+    );
   });
 });
 
@@ -196,31 +164,15 @@ describe("parseBookTitle — unmarked trailing numbers", () => {
       volumeLabel: "5",
       bareNumber: true,
     });
-    expect(split("Battle Angel Alita 3 (Paperback)")).toEqual([
-      "Battle Angel Alita",
-      "3",
-      null,
-    ]);
-    expect(split("BAKEMONOGATARI (manga) 11", 11)).toEqual([
-      "BAKEMONOGATARI",
-      "11",
-      null,
-    ]);
+    expect(split("Battle Angel Alita 3 (Paperback)")).toEqual(["Battle Angel Alita", "3", null]);
+    expect(split("BAKEMONOGATARI (manga) 11", 11)).toEqual(["BAKEMONOGATARI", "11", null]);
   });
 
   it("splits when the number equals the source's own volume number", () => {
     expect(split("Negima! 19", 19)).toEqual(["Negima!", "19", null]);
-    expect(split("Buddha 3: Devadatta", 3)).toEqual([
-      "Buddha",
-      "3",
-      "Devadatta",
-    ]);
+    expect(split("Buddha 3: Devadatta", 3)).toEqual(["Buddha", "3", "Devadatta"]);
     expect(split("The Limit, 3", 3)).toEqual(["The Limit", "3", null]);
-    expect(split("Say I Love You. 11", 11)).toEqual([
-      "Say I Love You.",
-      "11",
-      null,
-    ]);
+    expect(split("Say I Love You. 11", 11)).toEqual(["Say I Love You.", "11", null]);
     expect(split("Mechanical Buddy Universe 1.0 03", 3)).toEqual([
       "Mechanical Buddy Universe 1.0",
       "3",
@@ -248,17 +200,9 @@ describe("parseBookTitle — unmarked trailing numbers", () => {
     expect(split("No. 6", 6)).toEqual(["No. 6", null, null]);
     expect(split("Kaiju No. 8", 8)).toEqual(["Kaiju No. 8", null, null]);
     expect(split("No. 6 Volume 7")).toEqual(["No. 6", "7", null]);
-    expect(split("Mob Psycho 100 Volume 5")).toEqual([
-      "Mob Psycho 100",
-      "5",
-      null,
-    ]);
+    expect(split("Mob Psycho 100 Volume 5")).toEqual(["Mob Psycho 100", "5", null]);
     // A franchise ordinal on a title with no number never becomes a label.
-    expect(split("orange -future-", 3)).toEqual([
-      "orange -future-",
-      null,
-      null,
-    ]);
+    expect(split("orange -future-", 3)).toEqual(["orange -future-", null, null]);
     expect(split("Pop Team Epic, Second Season", 2)).toEqual([
       "Pop Team Epic, Second Season",
       null,
@@ -315,9 +259,7 @@ describe("parseBookTitle — unmarked trailing numbers", () => {
         packaging: null,
       });
     }
-    expect(
-      split("Welcome to Demon School! Iruma-kun: IruMafia Edition 7", 7),
-    ).toEqual([
+    expect(split("Welcome to Demon School! Iruma-kun: IruMafia Edition 7", 7)).toEqual([
       "Welcome to Demon School! Iruma-kun: IruMafia Edition",
       "7",
       null,
@@ -336,7 +278,12 @@ describe("parseBookTitle — packaging", () => {
     };
   };
   /** What `packaging` returns for a packaged synthetic "Alpha" book: no Volume label, no box. */
-  const packagedAlpha = <P,>(found: P) => ({ seriesTitle: "Alpha", volumeLabel: null, packaging: found, isBox: false });
+  const packagedAlpha = <P>(found: P) => ({
+    seriesTitle: "Alpha",
+    volumeLabel: null,
+    packaging: found,
+    isBox: false,
+  });
 
   it("maps an omnibus to its line position and the volumes it collects", () => {
     expect(packaging("Noragami Omnibus 7 (Vol. 19-21)", 7)).toEqual({
@@ -349,24 +296,18 @@ describe("parseBookTitle — packaging", () => {
       },
       isBox: false,
     });
-    expect(packaging("Tokyo Revengers (Omnibus) Vol. 23-24").packaging).toEqual(
-      {
-        lineName: "Omnibus",
-        linePosition: null,
-        coverRange: { from: "23", to: "24" },
-      },
-    );
+    expect(packaging("Tokyo Revengers (Omnibus) Vol. 23-24").packaging).toEqual({
+      lineName: "Omnibus",
+      linePosition: null,
+      coverRange: { from: "23", to: "24" },
+    });
     expect(packaging("High-Rise Invasion Omnibus 5-6").packaging).toEqual({
       lineName: "Omnibus",
       linePosition: null,
       coverRange: { from: "5", to: "6" },
     });
-    expect(packaging("Blue Giant Omnibus Vols. 5-6").seriesTitle).toBe(
-      "Blue Giant",
-    );
-    expect(
-      packaging("The Way of the Househusband, Vol. 1-3 (Omnibus)"),
-    ).toMatchObject({
+    expect(packaging("Blue Giant Omnibus Vols. 5-6").seriesTitle).toBe("Blue Giant");
+    expect(packaging("The Way of the Househusband, Vol. 1-3 (Omnibus)")).toMatchObject({
       seriesTitle: "The Way of the Househusband",
       packaging: { lineName: "Omnibus", coverRange: { from: "1", to: "3" } },
     });
@@ -385,17 +326,12 @@ describe("parseBookTitle — packaging", () => {
       volumeLabel: null,
       packaging: { lineName: "Omnibus", linePosition: "1" },
     });
-    expect(
-      packaging("Astro Boy Omnibus Volume 7", 7).packaging?.linePosition,
-    ).toBe("7");
+    expect(packaging("Astro Boy Omnibus Volume 7", 7).packaging?.linePosition).toBe("7");
   });
 
   it("reads deluxe, collector's, n-in-1, anniversary and complete lines", () => {
     expect(
-      packaging(
-        "Monster Musume: Deluxe Edition 1 (Vol. 1-3 Hardcover Omnibus)",
-        1,
-      ),
+      packaging("Monster Musume: Deluxe Edition 1 (Vol. 1-3 Hardcover Omnibus)", 1),
     ).toMatchObject({
       seriesTitle: "Monster Musume",
       packaging: {
@@ -420,19 +356,17 @@ describe("parseBookTitle — packaging", () => {
       lineName: "Deluxe",
       linePosition: "1",
     });
-    expect(
-      packaging("Blade of the Immortal Deluxe Volume 10").seriesTitle,
-    ).toBe("Blade of the Immortal");
+    expect(packaging("Blade of the Immortal Deluxe Volume 10").seriesTitle).toBe(
+      "Blade of the Immortal",
+    );
     expect(packaging("Rozen Maiden Collector's Edition Vol. 2")).toMatchObject({
       seriesTitle: "Rozen Maiden",
       packaging: { lineName: "Collector's Edition", linePosition: "2" },
     });
-    expect(
-      packaging("Tarot Café: The Collector’s Edition, Volume 2").seriesTitle,
-    ).toBe("Tarot Café");
-    expect(
-      packaging("Aoashi (3-in-1 Edition) Volume 2 (Vol. 4,5,6)", 2),
-    ).toMatchObject({
+    expect(packaging("Tarot Café: The Collector’s Edition, Volume 2").seriesTitle).toBe(
+      "Tarot Café",
+    );
+    expect(packaging("Aoashi (3-in-1 Edition) Volume 2 (Vol. 4,5,6)", 2)).toMatchObject({
       seriesTitle: "Aoashi",
       packaging: {
         lineName: "3-in-1 Edition",
@@ -440,9 +374,7 @@ describe("parseBookTitle — packaging", () => {
         coverRange: { from: "4", to: "6" },
       },
     });
-    expect(
-      packaging("Darwin's Game (3-in-1 Edition) (Vol.1, 2, 3) Vol.1").packaging,
-    ).toEqual({
+    expect(packaging("Darwin's Game (3-in-1 Edition) (Vol.1, 2, 3) Vol.1").packaging).toEqual({
       lineName: "3-in-1 Edition",
       linePosition: "1",
       coverRange: { from: "1", to: "3" },
@@ -451,24 +383,16 @@ describe("parseBookTitle — packaging", () => {
       seriesTitle: "MARS",
       packaging: { lineName: "30th Anniversary Edition" },
     });
-    expect(
-      packaging("Soul Eater: The Perfect Edition 03").packaging,
-    ).toMatchObject({
+    expect(packaging("Soul Eater: The Perfect Edition 03").packaging).toMatchObject({
       lineName: "Perfect Edition",
       linePosition: "3",
     });
-    expect(
-      packaging("orange: The Complete Collection 1").packaging,
-    ).toMatchObject({
+    expect(packaging("orange: The Complete Collection 1").packaging).toMatchObject({
       lineName: "Complete Collection",
       linePosition: "1",
     });
-    expect(packaging("Ajin: Demi-Human Complete 3").seriesTitle).toBe(
-      "Ajin: Demi-Human",
-    );
-    expect(
-      packaging("Sailor Moon 9 (Naoko Takeuchi Collection)", 9),
-    ).toMatchObject({
+    expect(packaging("Ajin: Demi-Human Complete 3").seriesTitle).toBe("Ajin: Demi-Human");
+    expect(packaging("Sailor Moon 9 (Naoko Takeuchi Collection)", 9)).toMatchObject({
       seriesTitle: "Sailor Moon",
       volumeLabel: null,
       packaging: { lineName: "Naoko Takeuchi Collection", linePosition: "9" },
@@ -482,7 +406,11 @@ describe("parseBookTitle — packaging", () => {
       ["Witch Hat Atelier: Grimoire Edition 2", "Grimoire Edition", "2"],
       ["Vagabond Definitive Edition, Vol. 4", "Definitive Edition", "4"],
       // tidyLineName drops binding words: "Hardcover" is not part of the line name.
-      ["Attack on Titan Definitive Hardcover Collection 1 (Vol. 1-3)", "Definitive Collection", "1"],
+      [
+        "Attack on Titan Definitive Hardcover Collection 1 (Vol. 1-3)",
+        "Definitive Collection",
+        "1",
+      ],
       ["The Legend of Zelda: Legendary Edition, Vol. 2", "Legendary Edition", "2"],
       ["Fruits Basket Ultimate Edition Volume 6", "Ultimate Edition", "6"],
       ["Parasyte Full Color Collection 1", "Full Color Collection", "1"],
@@ -493,11 +421,16 @@ describe("parseBookTitle — packaging", () => {
     for (const [title, lineName, linePosition] of cases) {
       expect(packaging(title).packaging, title).toMatchObject({ lineName, linePosition });
     }
-    expect(packaging("Attack on Titan Definitive Hardcover Collection 1 (Vol. 1-3)").packaging).toMatchObject({
+    expect(
+      packaging("Attack on Titan Definitive Hardcover Collection 1 (Vol. 1-3)").packaging,
+    ).toMatchObject({
       coverRange: { from: "1", to: "3" },
     });
     // Reprints and variants are not packaging.
-    for (const title of ["Black Jack Volume 3, Special Edition", "Usagi Yojimbo Saga Volume 1 Limited Edition"]) {
+    for (const title of [
+      "Black Jack Volume 3, Special Edition",
+      "Usagi Yojimbo Saga Volume 1 Limited Edition",
+    ]) {
       expect(packaging(title).packaging, title).toBeNull();
     }
   });
@@ -513,16 +446,13 @@ describe("parseBookTitle — packaging", () => {
       },
       isBox: true,
     });
-    expect(
-      packaging("Attack on Titan Season 3 Part 2 Manga Box Set"),
-    ).toMatchObject({
+    expect(packaging("Attack on Titan Season 3 Part 2 Manga Box Set")).toMatchObject({
       seriesTitle: "Attack on Titan",
       packaging: { lineName: "Box Set", linePosition: "Season 3 Part 2" },
       isBox: true,
     });
     expect(
-      packaging("Attack on Titan The Final Season Part 2 Manga Box Set")
-        .packaging,
+      packaging("Attack on Titan The Final Season Part 2 Manga Box Set").packaging,
     ).toMatchObject({ linePosition: "Final Season Part 2" });
     expect(packaging("Twilight Out of Focus Box Set")).toMatchObject({
       seriesTitle: "Twilight Out of Focus",
@@ -533,22 +463,17 @@ describe("parseBookTitle — packaging", () => {
       packaging: { coverRange: { from: "1", to: "2" } },
       isBox: true,
     });
+    expect(packaging("Sherlock: A Scandal in Belgravia 1-2 Slipcase Set").seriesTitle).toBe(
+      "Sherlock: A Scandal in Belgravia",
+    );
     expect(
-      packaging("Sherlock: A Scandal in Belgravia 1-2 Slipcase Set")
-        .seriesTitle,
-    ).toBe("Sherlock: A Scandal in Belgravia");
-    expect(
-      packaging(
-        "Sailor Moon Manga Box Set Vol. 1-6 (Naoko Takeuchi Collection)",
-      ),
+      packaging("Sailor Moon Manga Box Set Vol. 1-6 (Naoko Takeuchi Collection)"),
     ).toMatchObject({
       seriesTitle: "Sailor Moon",
       packaging: { lineName: "Box Set", coverRange: { from: "1", to: "6" } },
       isBox: true,
     });
-    expect(
-      packaging("Battle Angel Alita Deluxe Complete Series Box Set"),
-    ).toMatchObject({
+    expect(packaging("Battle Angel Alita Deluxe Complete Series Box Set")).toMatchObject({
       seriesTitle: "Battle Angel Alita",
       isBox: true,
     });
@@ -564,9 +489,7 @@ describe("parseBookTitle — packaging", () => {
       seriesTitle: "Astro Boy",
       packaging: { coverRange: { from: "1", to: "2" } },
     });
-    expect(packaging("Tomo-chan Is a Girl! Volumes 1-3").seriesTitle).toBe(
-      "Tomo-chan Is a Girl!",
-    );
+    expect(packaging("Tomo-chan Is a Girl! Volumes 1-3").seriesTitle).toBe("Tomo-chan Is a Girl!");
   });
 
   // B18: a list with a gap names exactly its Volumes; a from–to range over
@@ -594,9 +517,9 @@ describe("parseBookTitle — packaging", () => {
       coverRange: null,
       coverageGapped: true,
     });
-    expect(
-      packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & 11)").packaging,
-    ).toMatchObject({ linePosition: "5", coverRange: null, coverageGapped: true });
+    expect(packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & 11)").packaging).toMatchObject(
+      { linePosition: "5", coverRange: null, coverageGapped: true },
+    );
     expect(packaging("Alpha Vol. 1-3, 5").packaging).toMatchObject({
       coverRange: null,
       coverageGapped: true,
@@ -621,11 +544,21 @@ describe("parseBookTitle — packaging", () => {
       "Alpha 3-in-1 Edition 1 (Includes Vols. 1 and 3)",
     ]) {
       expect(packaging(title), title).toEqual(
-        packagedAlpha({ lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true }),
+        packagedAlpha({
+          lineName: "3-in-1 Edition",
+          linePosition: "1",
+          coverRange: null,
+          coverageGapped: true,
+        }),
       );
     }
-    expect(packaging("Alpha Vol. 1 & Vol. 3").packaging).toMatchObject({ coverRange: null, coverageGapped: true });
-    expect(packaging("Alpha 3-in-1 Edition 1 (Vol. 1, Vol. 2 and Vol. 3)").packaging?.coverRange).toEqual({
+    expect(packaging("Alpha Vol. 1 & Vol. 3").packaging).toMatchObject({
+      coverRange: null,
+      coverageGapped: true,
+    });
+    expect(
+      packaging("Alpha 3-in-1 Edition 1 (Vol. 1, Vol. 2 and Vol. 3)").packaging?.coverRange,
+    ).toEqual({
       from: "1",
       to: "3",
     });
@@ -643,7 +576,12 @@ describe("parseBookTitle — packaging", () => {
       "Alpha 3-in-1 Edition 1 (Vol. 1, 2, and 4)",
     ]) {
       expect(packaging(title), title).toEqual(
-        packagedAlpha({ lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true }),
+        packagedAlpha({
+          lineName: "3-in-1 Edition",
+          linePosition: "1",
+          coverRange: null,
+          coverageGapped: true,
+        }),
       );
     }
     expect(packaging("Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1 & 3").packaging).toEqual({
@@ -662,12 +600,20 @@ describe("parseBookTitle — packaging", () => {
       from: "1",
       to: "3",
     });
-    expect(packaging("Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1-3").packaging?.coverRange).toEqual({
+    expect(
+      packaging("Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1-3").packaging?.coverRange,
+    ).toEqual({
       from: "1",
       to: "3",
     });
-    expect(packaging("Alpha Vol. 10-11+EX").packaging?.coverRange).toEqual({ from: "10", to: "11" });
-    expect(parseBookTitle("Alpha Vol. 18+1")).toMatchObject({ volumeLabel: "18+1", packaging: null });
+    expect(packaging("Alpha Vol. 10-11+EX").packaging?.coverRange).toEqual({
+      from: "10",
+      to: "11",
+    });
+    expect(parseBookTitle("Alpha Vol. 18+1")).toMatchObject({
+      volumeLabel: "18+1",
+      packaging: null,
+    });
   });
 
   // W02: a title statement reads only its Volume designation. Page counts
@@ -679,9 +625,15 @@ describe("parseBookTitle — packaging", () => {
       ["Alpha Deluxe Edition 1 (Including Vol. 1 with 16 pages of art)", { from: "1", to: "1" }],
       ["Alpha Deluxe Edition 1 (Contains Vol. 9 in a 600-page hardcover)", { from: "9", to: "9" }],
       ["Alpha Deluxe Edition 1 (Collects Vol. 1 of 10)", { from: "1", to: "1" }],
-      ["Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 16 pages of art)", { from: "1", to: "3" }],
+      [
+        "Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 16 pages of art)",
+        { from: "1", to: "3" },
+      ],
       ["Alpha 3-in-1 Edition 1 (Collecting Vol. 1 plus 16 pages of art)", { from: "1", to: "1" }],
-      ["Alpha Deluxe Edition 1 (Collecting Vol. 1 and Vol. 2 bonus stories)", { from: "1", to: "2" }],
+      [
+        "Alpha Deluxe Edition 1 (Collecting Vol. 1 and Vol. 2 bonus stories)",
+        { from: "1", to: "2" },
+      ],
     ];
     for (const [title, coverRange] of cases) {
       const found = packaging(title).packaging;
@@ -689,7 +641,8 @@ describe("parseBookTitle — packaging", () => {
       expect(found?.coverageGapped, title).toBeUndefined();
     }
     expect(
-      packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & Ashen Victor)").packaging?.coverRange,
+      packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & Ashen Victor)").packaging
+        ?.coverRange,
     ).toEqual({ from: "9", to: "9" });
   });
 
@@ -704,7 +657,10 @@ describe("parseBookTitle — packaging", () => {
       "Alpha Deluxe Edition 1 (Collecting Vols. 1-3, 4 bonus stories)",
       "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
     ]) {
-      expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
+      expect(packaging(title).packaging, title).toMatchObject({
+        coverRange: null,
+        coverageGapped: true,
+      });
     }
     // A bare number after a join is read when the statement ends after it,
     // as in a blurb ("Collects volumes 1-3 plus 4").
@@ -720,10 +676,16 @@ describe("parseBookTitle — packaging", () => {
     const read: Array<[string, { from: string; to: string }]> = [
       ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2)", { from: "1", to: "2" }],
       ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4)", { from: "1", to: "4" }],
-      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4 bonus stories)", { from: "1", to: "4" }],
+      [
+        "Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4 bonus stories)",
+        { from: "1", to: "4" },
+      ],
       ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vols. 4-6)", { from: "1", to: "6" }],
       ["Alpha Deluxe Edition 1 (Collects Vol. 1 as well as Vol. 2)", { from: "1", to: "2" }],
-      ["Alpha Deluxe Edition 1 (Collects Vol. 1 along with Vol. 2 and a bonus chapter)", { from: "1", to: "2" }],
+      [
+        "Alpha Deluxe Edition 1 (Collects Vol. 1 along with Vol. 2 and a bonus chapter)",
+        { from: "1", to: "2" },
+      ],
       ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus #4)", { from: "1", to: "4" }],
       ["Alpha Deluxe Edition 1 (Collects Vols. 1-3, plus 4-6 in one book)", { from: "1", to: "6" }],
       ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2 plus Vol. 3)", { from: "1", to: "3" }],
@@ -747,7 +709,10 @@ describe("parseBookTitle — packaging", () => {
       // collected, and a title has no size to settle it. Never shortened.
       "Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)",
     ]) {
-      expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
+      expect(packaging(title).packaging, title).toMatchObject({
+        coverRange: null,
+        coverageGapped: true,
+      });
     }
   });
 
@@ -780,7 +745,10 @@ describe("parseBookTitle — packaging", () => {
       "plus Vol. 4'S bonus chapter",
     ]) {
       const title = `Alpha Deluxe Edition 1 (Collects Vols. 1-3 ${tail})`;
-      expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
+      expect(packaging(title).packaging, title).toMatchObject({
+        coverRange: null,
+        coverageGapped: true,
+      });
     }
   });
 
@@ -826,7 +794,8 @@ describe("parseBookTitle — packaging", () => {
     }
     // The review's own titles.
     expect(
-      packaging("Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)").packaging,
+      packaging("Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)")
+        .packaging,
     ).toEqual({ lineName: "Deluxe Edition", linePosition: null, ...REJECTED });
     expect(packaging("Alpha, Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)")).toEqual(
       packagedAlpha({ lineName: null, linePosition: null, ...REJECTED }),
@@ -863,7 +832,9 @@ describe("parseBookTitle — packaging", () => {
       linePosition: "1",
       coverRange: { from: "1", to: "3" },
     });
-    expect(packaging("Alpha (3-in-1 Edition), Vol. 1-3: Includes Vols. 1-3").packaging?.coverRange).toEqual({
+    expect(
+      packaging("Alpha (3-in-1 Edition), Vol. 1-3: Includes Vols. 1-3").packaging?.coverRange,
+    ).toEqual({
       from: "1",
       to: "3",
     });
@@ -882,11 +853,20 @@ describe("parseBookTitle — packaging", () => {
       linePosition: null,
       ...REJECTED,
     });
-    for (const title of ["Alpha, Vol. 1-3: Includes Vols. 1 & 3", "Alpha, Vol. 1-3: Includes Vols. 1-6"]) {
-      expect(packaging(title).packaging, title).toEqual({ lineName: null, linePosition: null, ...REJECTED });
+    for (const title of [
+      "Alpha, Vol. 1-3: Includes Vols. 1 & 3",
+      "Alpha, Vol. 1-3: Includes Vols. 1-6",
+    ]) {
+      expect(packaging(title).packaging, title).toEqual({
+        lineName: null,
+        linePosition: null,
+        ...REJECTED,
+      });
     }
     // A subtitle statement against a bracket range on a line-less book.
-    expect(packaging("Alpha, Vol. 1: Includes Vols. 1-3 (Vol. 4-6)").packaging).toMatchObject(REJECTED);
+    expect(packaging("Alpha, Vol. 1: Includes Vols. 1-3 (Vol. 4-6)").packaging).toMatchObject(
+      REJECTED,
+    );
     // Agreement maps.
     expect(packaging("Alpha Omnibus 1-3 Vol. 1-3").packaging).toEqual({
       lineName: "Omnibus",
@@ -908,7 +888,11 @@ describe("parseBookTitle — packaging", () => {
     }
     // A plain Volume's subtitle stays display text: nothing makes it packaging.
     const plain = parseBookTitle("Alpha, Vol. 1: Includes Vols. 1 & 3");
-    expect(plain).toMatchObject({ volumeLabel: "1", volumeSubtitle: "Includes Vols. 1 & 3", packaging: null });
+    expect(plain).toMatchObject({
+      volumeLabel: "1",
+      volumeSubtitle: "Includes Vols. 1 & 3",
+      packaging: null,
+    });
   });
 
   // N04 follow-up: what else a title states about its coverage is read only
@@ -927,7 +911,9 @@ describe("parseBookTitle — packaging", () => {
         ...REJECTED,
       });
       // A real PRH title names its line and its coverage in one bracket.
-      expect(packaging("The Walking Cat: A Cat's-Eye-View of the Zombie Apocalypse (Omnibus Vol. 1-3)")).toEqual({
+      expect(
+        packaging("The Walking Cat: A Cat's-Eye-View of the Zombie Apocalypse (Omnibus Vol. 1-3)"),
+      ).toEqual({
         seriesTitle: "The Walking Cat: A Cat's-Eye-View of the Zombie Apocalypse",
         volumeLabel: null,
         packaging: { lineName: "Omnibus", linePosition: null, coverRange: ONE_TO_THREE },
@@ -956,7 +942,9 @@ describe("parseBookTitle — packaging", () => {
         ["Alpha 3-in-1 Edition 2: Includes Vols. 1 & 3", "2"],
       ] as const) {
         const lineName = title.includes("Deluxe") ? "Deluxe Edition" : "3-in-1 Edition";
-        expect(packaging(title), title).toEqual(packagedAlpha({ lineName, linePosition, ...REJECTED }));
+        expect(packaging(title), title).toEqual(
+          packagedAlpha({ lineName, linePosition, ...REJECTED }),
+        );
       }
       // Real Viz titles: the statement no longer swallows the line into the Series.
       expect(packaging("Dragonball 3-in-1 Edition 1: Includes vols. 1, 2 & 3")).toEqual({
@@ -1012,7 +1000,10 @@ describe("parseBookTitle — packaging", () => {
 
     it("reads a carried subtitle's Volume list beside a packaged book's own designation", () => {
       for (const subtitle of ["Vol. 1 & 3", "Vol. 4-6"]) {
-        expect(parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle }).packaging, subtitle).toMatchObject(REJECTED);
+        expect(
+          parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle }).packaging,
+          subtitle,
+        ).toMatchObject(REJECTED);
       }
       for (const subtitle of ["Vol. 1-3", "Vol. 2"]) {
         expect(parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle }).packaging, subtitle).toEqual({
@@ -1023,38 +1014,47 @@ describe("parseBookTitle — packaging", () => {
       }
       // "Alpha (3-in-1 Edition), Vol. 1" is "Alpha 3-in-1 Edition 1": the same subtitle reads the same.
       for (const subtitle of ["Vol. 1 & 3", "Vols. 4-6", "Vols. 1-3"]) {
-        expect(parseBookTitle("Alpha (3-in-1 Edition), Vol. 1", { subtitle }).packaging, subtitle).toEqual(
-          parseBookTitle("Alpha 3-in-1 Edition 1", { subtitle }).packaging,
-        );
+        expect(
+          parseBookTitle("Alpha (3-in-1 Edition), Vol. 1", { subtitle }).packaging,
+          subtitle,
+        ).toEqual(parseBookTitle("Alpha 3-in-1 Edition 1", { subtitle }).packaging);
       }
-      expect(parseBookTitle("Alpha (3-in-1 Edition), Vol. 1", { subtitle: "Vol. 1 & 3" }).packaging).toEqual({
+      expect(
+        parseBookTitle("Alpha (3-in-1 Edition), Vol. 1", { subtitle: "Vol. 1 & 3" }).packaging,
+      ).toEqual({
         lineName: "3-in-1 Edition",
         linePosition: "1",
         ...REJECTED,
       });
       // A real OpenLibrary pair.
-      expect(parseBookTitle("Aoashi (3-in-1 Edition) Volume 3", { subtitle: "Vol. 7,8,9" }).packaging).toEqual({
+      expect(
+        parseBookTitle("Aoashi (3-in-1 Edition) Volume 3", { subtitle: "Vol. 7,8,9" }).packaging,
+      ).toEqual({
         lineName: "3-in-1 Edition",
         linePosition: "3",
         coverRange: { from: "7", to: "9" },
       });
       // The carried list's own subtitle is a statement too.
       expect(
-        parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle: "Vol. 1-3: Includes Vols. 1 & 3" }).packaging,
+        parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle: "Vol. 1-3: Includes Vols. 1 & 3" })
+          .packaging,
       ).toMatchObject(REJECTED);
       expect(
-        parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle: "Vol. 1-3: Includes Vols. 1-3" }).packaging,
+        parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle: "Vol. 1-3: Includes Vols. 1-3" })
+          .packaging,
       ).toEqual({ lineName: "Omnibus", linePosition: null, coverRange: ONE_TO_THREE });
       // A plain Volume keeps its label, and a Part list is no Volume list.
       expect(parseBookTitle("Alpha, Vol. 1", { subtitle: "Vols. 1 & 3" })).toMatchObject({
         volumeLabel: "1",
         packaging: null,
       });
-      expect(parseBookTitle("Alpha (Omnibus), Vol. 2", { subtitle: "Part 1-2" }).packaging).toEqual({
-        lineName: "Omnibus",
-        linePosition: "2",
-        coverRange: null,
-      });
+      expect(parseBookTitle("Alpha (Omnibus), Vol. 2", { subtitle: "Part 1-2" }).packaging).toEqual(
+        {
+          lineName: "Omnibus",
+          linePosition: "2",
+          coverRange: null,
+        },
+      );
     });
 
     // The verdict's second site: the packaging bracket the bare number peels
@@ -1070,7 +1070,8 @@ describe("parseBookTitle — packaging", () => {
         parseBookTitle("Alpha (3-in-1 Edition), Vol. 2", { subtitle }).packaging,
       );
       expect(
-        parseBookTitle("Alpha (Omnibus) 2 (Manga)", { subtitle: "Vol. 4-6: Includes Vols. 4 & 6" }).packaging,
+        parseBookTitle("Alpha (Omnibus) 2 (Manga)", { subtitle: "Vol. 4-6: Includes Vols. 4 & 6" })
+          .packaging,
       ).toEqual({ lineName: "Omnibus", linePosition: "2", ...REJECTED });
     });
 
@@ -1081,9 +1082,14 @@ describe("parseBookTitle — packaging", () => {
         ["Alpha Omnibus Vol. 1-3", "Includes Vols. 1-6"],
         ["Dragon Ball (3-in-1 Edition), Vol. 1", "Includes vols. 1 & 3"],
       ] as const) {
-        expect(parseBookTitle(title, { subtitle }).packaging, `${title} / ${subtitle}`).toMatchObject(REJECTED);
+        expect(
+          parseBookTitle(title, { subtitle }).packaging,
+          `${title} / ${subtitle}`,
+        ).toMatchObject(REJECTED);
       }
-      expect(parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle: "Includes Vols. 1-3" }).packaging).toEqual({
+      expect(
+        parseBookTitle("Alpha Omnibus Vol. 1-3", { subtitle: "Includes Vols. 1-3" }).packaging,
+      ).toEqual({
         lineName: "Omnibus",
         linePosition: null,
         coverRange: ONE_TO_THREE,
@@ -1130,7 +1136,9 @@ describe("parseBookTitle — packaging", () => {
         expect(found.seriesTitle, title).toBe(seriesTitle);
         expect(found.packaging, title).toMatchObject(REJECTED);
       }
-      expect(parseBookTitle("Alpha Vol. 1-3", { subtitle: "Omnibus 1 & 3" }).packaging).toMatchObject(REJECTED);
+      expect(
+        parseBookTitle("Alpha Vol. 1-3", { subtitle: "Omnibus 1 & 3" }).packaging,
+      ).toMatchObject(REJECTED);
       // Years are no Volumes, and a plain book is no packaging.
       expect(packaging("The Complete Peanuts 1950-1954 Gift Box Set").packaging).toEqual({
         lineName: "Box Set",
@@ -1150,7 +1158,11 @@ describe("parseBookTitle — packaging", () => {
     // the one the title always had.
     it("leaves an unmarked list and a Part or Book list in the name", () => {
       for (const [title, seriesTitle, found] of [
-        ["Persona 3 & 4 Omnibus 1", "Persona 3 & 4", { lineName: "Omnibus", linePosition: "1", coverRange: null }],
+        [
+          "Persona 3 & 4 Omnibus 1",
+          "Persona 3 & 4",
+          { lineName: "Omnibus", linePosition: "1", coverRange: null },
+        ],
         [
           "Persona 3 & 4 3-in-1 Edition 1",
           "Persona 3 & 4",
@@ -1161,7 +1173,11 @@ describe("parseBookTitle — packaging", () => {
           "Tokyo 24-7",
           { lineName: "Deluxe Edition", linePosition: "1", coverRange: null },
         ],
-        ["Alpha Book 1-2 Omnibus 1", "Alpha Book 1-2", { lineName: "Omnibus", linePosition: "1", coverRange: null }],
+        [
+          "Alpha Book 1-2 Omnibus 1",
+          "Alpha Book 1-2",
+          { lineName: "Omnibus", linePosition: "1", coverRange: null },
+        ],
         [
           "Alpha Part 1-2 Omnibus 1 (Vol. 1-3)",
           "Alpha Part 1-2",
@@ -1182,15 +1198,27 @@ describe("parseBookTitle — packaging", () => {
           "Alpha 1 & 3",
           { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null },
         ],
-        ["Alpha 1, 2 & 3 Omnibus 2", "Alpha 1, 2 & 3", { lineName: "Omnibus", linePosition: "2", coverRange: null }],
-        ["Alpha 1 & 3 (Omnibus) Vol. 2", "Alpha 1 & 3", { lineName: "Omnibus", linePosition: "2", coverRange: null }],
+        [
+          "Alpha 1, 2 & 3 Omnibus 2",
+          "Alpha 1, 2 & 3",
+          { lineName: "Omnibus", linePosition: "2", coverRange: null },
+        ],
+        [
+          "Alpha 1 & 3 (Omnibus) Vol. 2",
+          "Alpha 1 & 3",
+          { lineName: "Omnibus", linePosition: "2", coverRange: null },
+        ],
         [
           "Alpha 1-3 (Vol. 4-6)",
           "Alpha 1-3",
           { lineName: null, linePosition: null, coverRange: { from: "4", to: "6" } },
         ],
         // A phrase's range beside a lone number is no statement of its own.
-        ["Alpha Omnibus 1-3 Vol. 2", "Alpha", { lineName: "Omnibus", linePosition: "2", coverRange: null }],
+        [
+          "Alpha Omnibus 1-3 Vol. 2",
+          "Alpha",
+          { lineName: "Omnibus", linePosition: "2", coverRange: null },
+        ],
         [
           "Alpha Omnibus 1-3 Box Set",
           "Alpha Omnibus",
@@ -1201,7 +1229,10 @@ describe("parseBookTitle — packaging", () => {
         expect(parsed.seriesTitle, title).toBe(seriesTitle);
         expect(parsed.packaging, title).toEqual(found);
       }
-      expect(parseBookTitle("Alpha, Part 1, Vol. 2")).toMatchObject({ volumeLabel: "2", packaging: null });
+      expect(parseBookTitle("Alpha, Part 1, Vol. 2")).toMatchObject({
+        volumeLabel: "2",
+        packaging: null,
+      });
       // A whole title with a list is never cut into a name and a range.
       expect(parseBookTitle("Getting smart with Lotus 1-2-3", { seriesNumber: 1 })).toMatchObject({
         seriesTitle: "Getting smart with Lotus 1-2-3",
@@ -1276,7 +1307,12 @@ describe("parseBookTitle — packaging", () => {
         ["Alpha Vol. 3: Box Set 1: Includes Vols. 1-3", "Alpha", "3"],
         ["Catch-22, Volume Two: Omnibus 2 (Vol. 2): Contains Volumes 1, 2, and 3", "Catch-22", "2"],
       ] as const) {
-        expect(parseBookTitle(title), title).toMatchObject({ seriesTitle, volumeLabel, packaging: null, isBox: false });
+        expect(parseBookTitle(title), title).toMatchObject({
+          seriesTitle,
+          volumeLabel,
+          packaging: null,
+          isBox: false,
+        });
       }
       for (const [title, seriesTitle] of [
         ["Alpha Omnibus Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha Omnibus"],
@@ -1290,7 +1326,9 @@ describe("parseBookTitle — packaging", () => {
           isBox: false,
         });
       }
-      expect(packaging("Blade Runner 2049: Vol. 4-6: Complete 3: Includes Vol. 4 (Vol. 4-6)")).toEqual({
+      expect(
+        packaging("Blade Runner 2049: Vol. 4-6: Complete 3: Includes Vol. 4 (Vol. 4-6)"),
+      ).toEqual({
         seriesTitle: "Blade Runner 2049",
         volumeLabel: null,
         packaging: { lineName: null, linePosition: null, coverRange: { from: "4", to: "6" } },
@@ -1326,7 +1364,10 @@ describe("parseBookTitle — packaging", () => {
         ["Alpha (Omnibus) Volume 2", "Vol. 4-6-8"],
         ["Alpha (Omnibus) Volume 2", "Vol. 2 - 4-6"],
       ] as const) {
-        expect(parseBookTitle(title, { subtitle }).packaging, `${title} / ${subtitle}`).toMatchObject(REJECTED);
+        expect(
+          parseBookTitle(title, { subtitle }).packaging,
+          `${title} / ${subtitle}`,
+        ).toMatchObject(REJECTED);
       }
     });
 
@@ -1337,7 +1378,9 @@ describe("parseBookTitle — packaging", () => {
       expect(packaging("Alpha 2 Omnibus (Light Novel) 1 & 3")).toEqual(
         packagedAlpha({ lineName: "Omnibus", linePosition: "2", coverRange: null }),
       );
-      expect(parseBookTitle("Area 51, Omnibus Vol. 1-3 (Light Novel), 1 & 3 (Hardcover)")).toMatchObject({
+      expect(
+        parseBookTitle("Area 51, Omnibus Vol. 1-3 (Light Novel), 1 & 3 (Hardcover)"),
+      ).toMatchObject({
         seriesTitle: "Area",
         isNovel: true,
         packaging: { lineName: "Omnibus", linePosition: "51", coverRange: null },
@@ -1349,26 +1392,16 @@ describe("parseBookTitle — packaging", () => {
 describe("parseBookTitle — novels and text hygiene", () => {
   it("marks prose and light novels, but not graphic novels", () => {
     expect(
-      parseBookTitle(
-        "Grandmaster of Demonic Cultivation: Mo Dao Zu Shi (Novel) Vol. 4",
-      ),
+      parseBookTitle("Grandmaster of Demonic Cultivation: Mo Dao Zu Shi (Novel) Vol. 4"),
     ).toMatchObject({
       seriesTitle: "Grandmaster of Demonic Cultivation: Mo Dao Zu Shi",
       volumeLabel: "4",
       isNovel: true,
     });
+    expect(isNovelTitle("Her Royal Highness Seems to Be Angry, Volume 3 (Light Novel)")).toBe(true);
+    expect(isNovelTitle("Little Mushroom (Deluxe Hardcover Novel) Vol. 2")).toBe(true);
     expect(
-      isNovelTitle(
-        "Her Royal Highness Seems to Be Angry, Volume 3 (Light Novel)",
-      ),
-    ).toBe(true);
-    expect(
-      isNovelTitle("Little Mushroom (Deluxe Hardcover Novel) Vol. 2"),
-    ).toBe(true);
-    expect(
-      isNovelTitle(
-        "Saving 80,000 Gold in Another World for My Retirement 8 (light novel)",
-      ),
+      isNovelTitle("Saving 80,000 Gold in Another World for My Retirement 8 (light novel)"),
     ).toBe(true);
     expect(isNovelTitle("Bizenghast: The Novel")).toBe(true);
     expect(isNovelTitle("Afro Samurai Vol.1 (Graphic Novel)")).toBe(false);
@@ -1376,13 +1409,10 @@ describe("parseBookTitle — novels and text hygiene", () => {
   });
 
   it("decodes entities and collapses whitespace", () => {
-    expect(
-      parseBookTitle("Betrothed to My Sister&#8217;s Ex (Manga) Vol. 6")
-        .seriesTitle,
-    ).toBe("Betrothed to My Sister’s Ex");
-    expect(parseBookTitle("A  Century of Temptation").seriesTitle).toBe(
-      "A Century of Temptation",
+    expect(parseBookTitle("Betrothed to My Sister&#8217;s Ex (Manga) Vol. 6").seriesTitle).toBe(
+      "Betrothed to My Sister’s Ex",
     );
+    expect(parseBookTitle("A  Century of Temptation").seriesTitle).toBe("A Century of Temptation");
     expect(
       parseBookTitle(
         "Blue Sheep Reverie Volume 3\n            \n                Blue Sheep Reverie",
@@ -1391,16 +1421,13 @@ describe("parseBookTitle — novels and text hygiene", () => {
   });
 
   it("keeps styled dashes and name parentheticals", () => {
-    expect(parseBookTitle("orange -future-").seriesTitle).toBe(
-      "orange -future-",
+    expect(parseBookTitle("orange -future-").seriesTitle).toBe("orange -future-");
+    expect(parseBookTitle("Marrying the Dark Knight (For Her Money)").seriesTitle).toBe(
+      "Marrying the Dark Knight (For Her Money)",
     );
-    expect(
-      parseBookTitle("Marrying the Dark Knight (For Her Money)").seriesTitle,
-    ).toBe("Marrying the Dark Knight (For Her Money)");
-    expect(
-      parseBookTitle("Slow Life In Another World (I Wish!) (Manga) Vol. 9")
-        .seriesTitle,
-    ).toBe("Slow Life In Another World (I Wish!)");
+    expect(parseBookTitle("Slow Life In Another World (I Wish!) (Manga) Vol. 9").seriesTitle).toBe(
+      "Slow Life In Another World (I Wish!)",
+    );
   });
 });
 
@@ -1425,35 +1452,21 @@ describe("canonicalLabel / rangeLabels", () => {
 describe("outOfScopeReason", () => {
   it("classifies the scope audit's clear-cut classes", () => {
     expect(outOfScopeReason("The Seven Deadly Sins (Novel)")).toBe("novel");
-    expect(outOfScopeReason("Cowboy Bebop - Playing Cards")).toBe(
-      "merchandise",
-    );
-    expect(outOfScopeReason("SPY x FAMILY S1 Activity Book")).toBe(
-      "merchandise",
-    );
-    expect(outOfScopeReason("Attack on Titan Coloring Book")).toBe(
-      "merchandise",
-    );
-    expect(outOfScopeReason("Official Frieren Advent Calendar")).toBe(
-      "merchandise",
-    );
+    expect(outOfScopeReason("Cowboy Bebop - Playing Cards")).toBe("merchandise");
+    expect(outOfScopeReason("SPY x FAMILY S1 Activity Book")).toBe("merchandise");
+    expect(outOfScopeReason("Attack on Titan Coloring Book")).toBe("merchandise");
+    expect(outOfScopeReason("Official Frieren Advent Calendar")).toBe("merchandise");
     expect(outOfScopeReason("Number Place: Blue")).toBe("merchandise");
-    expect(outOfScopeReason("Monster Musume: Monster Girl Papercrafts")).toBe(
-      "merchandise",
-    );
+    expect(outOfScopeReason("Monster Musume: Monster Girl Papercrafts")).toBe("merchandise");
     expect(outOfScopeReason("TOKYOPOP Manga Showcase 2024")).toBe("sampler");
     expect(outOfScopeReason("Cells at Work! Picture Book 5")).toBe("childrensBook");
     expect(outOfScopeReason("Chi's Sweet Home Board Book")).toBe("childrensBook");
     expect(outOfScopeReason("The Picture of Dorian Gray, Book 1")).toBeNull();
     expect(outOfScopeReason("Adults' Picture Book")).toBeNull();
-    expect(outOfScopeReason("Star Collector, Chapter 1, FREE SAMPLE")).toBe(
+    expect(outOfScopeReason("Star Collector, Chapter 1, FREE SAMPLE")).toBe("sampler");
+    expect(outOfScopeReason("Lullaby of the Dawn, Booklet #1 (Convention Exclusive)")).toBe(
       "sampler",
     );
-    expect(
-      outOfScopeReason(
-        "Lullaby of the Dawn, Booklet #1 (Convention Exclusive)",
-      ),
-    ).toBe("sampler");
     expect(
       outOfScopeReason(
         "La Bendición Del Oficial Del Cielo, Volumen 1 (Manhua) – Versión en Español",
@@ -1484,7 +1497,12 @@ describe("parseBookTitle — bare roman numerals and +1 extras", () => {
   it("reads a bare trailing roman numeral as a provisional volume number", () => {
     expect(roman("BARBARITIES I")).toEqual(["BARBARITIES", "1", true, true]);
     expect(roman("BARBARITIES IV")).toEqual(["BARBARITIES", "4", true, true]);
-    expect(roman("Monster Girl Encyclopedia II")).toEqual(["Monster Girl Encyclopedia", "2", true, true]);
+    expect(roman("Monster Girl Encyclopedia II")).toEqual([
+      "Monster Girl Encyclopedia",
+      "2",
+      true,
+      true,
+    ]);
   });
 
   it("leaves pronouns and marked titles alone", () => {

@@ -250,7 +250,9 @@ export function splitReleaseTitle(
   const editionLineHint =
     DESIGNATOR_PACKAGING.test(designator) ||
     (titleWord !== undefined && !entryName.toLowerCase().includes(titleWord.toLowerCase()));
-  const { label, multi, ...stated } = readCoverage(designator.slice(marker.index + marker[0].length));
+  const { label, multi, ...stated } = readCoverage(
+    designator.slice(marker.index + marker[0].length),
+  );
   return {
     title,
     label,
@@ -279,7 +281,9 @@ export type AnnManga = Omit<AnnMangaSnapshot, "kind" | "url" | "credits" | "matu
  * entries carry no rating at all, so its absence proves nothing.
  */
 export function isMatureEntry(body: string): boolean {
-  const rating = /<info[^>]*type="Objectionable content"[^>]*>\s*([A-Z]+)\s*<\/info>/.exec(body)?.[1];
+  const rating = /<info[^>]*type="Objectionable content"[^>]*>\s*([A-Z]+)\s*<\/info>/.exec(
+    body,
+  )?.[1];
   if (rating === "MA" || rating === "AO") return true;
   return /<info[^>]*type="(?:Genres|Themes)"[^>]*>\s*(?:erotica|hentai)\s*<\/info>/i.test(body);
 }
@@ -500,7 +504,16 @@ const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
  * accident.", "Script by day, art by night.") must stay. Extend it when a
  * new page needs a word.
  */
-const LOWERCASE_NAME_WORDS = new Set(["atsushi", "check", "em", "est", "great", "tartan", "ufotable", "und"]);
+const LOWERCASE_NAME_WORDS = new Set([
+  "atsushi",
+  "check",
+  "em",
+  "est",
+  "great",
+  "tartan",
+  "ufotable",
+  "und",
+]);
 const MAX_LOOSE_NAME_WORDS = 5;
 const NAME_JOINERS = new Set(["and", "&", "with", "/"]);
 const SENTENCE_END = /[.!?…"”’)]$/;
@@ -543,11 +556,19 @@ function creditTail(words: string[], start: number, loose = false): CreditClause
   for (let clause = 0; clause < MAX_CLAUSES; clause++) {
     const role = creditRoleAt(words, at);
     if (role === 0) return null;
-    const current = { role: words.slice(at, at + role).join(" ").toLowerCase(), names: 0, lower: false };
+    const current = {
+      role: words
+        .slice(at, at + role)
+        .join(" ")
+        .toLowerCase(),
+      names: 0,
+      lower: false,
+    };
     clauses.push(current);
     at += role;
     // ANN's doubled prefix: "Story and art by Written by Koji Kumeta."
-    for (let again = creditRoleAt(words, at); again > 0; again = creditRoleAt(words, at)) at += again;
+    for (let again = creditRoleAt(words, at); again > 0; again = creditRoleAt(words, at))
+      at += again;
     for (;;) {
       const word = words[at];
       if (word === undefined) return null;
@@ -571,7 +592,11 @@ function creditTail(words: string[], start: number, loose = false): CreditClause
       // follows is copy ("Story by X. Romance between …"). Only an initial
       // ("J. K.") or a name with a bang before its last word ("Oh! great.")
       // goes on.
-      if (/[.!?]$/.test(word) && !/^\p{L}\.$/u.test(word) && !(word.endsWith("!") && at === words.length - 1)) {
+      if (
+        /[.!?]$/.test(word) &&
+        !/^\p{L}\.$/u.test(word) &&
+        !(word.endsWith("!") && at === words.length - 1)
+      ) {
         return null;
       }
       // "X and Y", "X & Y": the list goes on.
@@ -591,7 +616,9 @@ function isNameList(words: string[]): boolean {
   return (
     words.length > 0 &&
     words.length <= MAX_NAME_WORDS &&
-    words.every((w) => NAME_WORD.test(w.replace(/[.,;:!?]+$/, "")) || NAME_JOINERS.has(w.toLowerCase()))
+    words.every(
+      (w) => NAME_WORD.test(w.replace(/[.,;:!?]+$/, "")) || NAME_JOINERS.has(w.toLowerCase()),
+    )
   );
 }
 
@@ -627,7 +654,8 @@ function stripCreditTail(text: string): string {
     const [first] = clauses;
     // One name word: only ANN's fused "Story and art by CLAMP.", and only
     // a capitalized one ("Story and art by everyone." is prose).
-    if (clauses.length === 1 && first!.names === 1 && (!isStoryAndArt(first!) || first!.lower)) continue;
+    if (clauses.length === 1 && first!.names === 1 && (!isStoryAndArt(first!) || first!.lower))
+      continue;
     return words.slice(0, at).join(" ");
   }
   return text;
@@ -726,8 +754,9 @@ function pageDescription(html: string): string | undefined {
       ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
       : /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*?)<\/div>/i
   ).exec(field)?.[1];
-  const inline =
-    bounded ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
+  const inline = bounded
+    ? field.replace(/<\/p>\s*$/i, "")
+    : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
   const text = cleanBlurb(div ?? inline);
   return text !== undefined ? cleanAnnDescription(text) : undefined;
 }

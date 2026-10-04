@@ -49,7 +49,12 @@ import {
 } from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
-import { PACK_SPAN, patchPackEntry, seriesStatsRow, type PackEntry as Entry } from "./lib/seriesStats";
+import {
+  PACK_SPAN,
+  patchPackEntry,
+  seriesStatsRow,
+  type PackEntry as Entry,
+} from "./lib/seriesStats";
 import { withExceptionCapture } from "./lib/posthog";
 
 export const SORTS = [
@@ -142,7 +147,9 @@ export const rebuild = internalAction({
       // Then the packs the filtered views read, from the rows as they now are.
       let blocks = 0;
       for (;;) {
-        const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: blocks });
+        const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, {
+          block: blocks,
+        });
         blocks++;
         if (!more) break;
       }
@@ -304,7 +311,8 @@ export const repackBlock = internalMutation({
         .take(MAX_PACKS);
       for (const pack of beyond) await ctx.db.delete(pack._id);
       const config = await ctx.db.query("appConfig").first();
-      if (!config) await ctx.db.insert("appConfig", { bootstrapMode: false, seriesPacksReady: true });
+      if (!config)
+        await ctx.db.insert("appConfig", { bootstrapMode: false, seriesPacksReady: true });
       else if (!config.seriesPacksReady) await ctx.db.patch(config._id, { seriesPacksReady: true });
     }
     return more !== null;
@@ -491,9 +499,16 @@ export function letterFor(titleSort: string): string {
 function isDayKey(key: number): boolean {
   const month = Math.floor(key / 100) % 100;
   const day = key % 100;
-  return Number.isInteger(key) && key >= 10000101 && key <= 99991231 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+  return (
+    Number.isInteger(key) &&
+    key >= 10000101 &&
+    key <= 99991231 &&
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= 31
+  );
 }
-
 
 // ---------- Browse (public) ----------
 
@@ -652,7 +667,8 @@ function timingTest(timing: Timing, today: number | undefined): (entry: Entry) =
 function matcher(f: Filters, today: number | undefined): ((entry: Entry) => boolean) | null {
   const tests: Array<(entry: Entry) => boolean> = [];
   const publishers = new Set(f.publishers?.filter(Boolean));
-  if (publishers.size > 0) tests.push((entry) => entry.publishers.some((p) => publishers.has(p.slug)));
+  if (publishers.size > 0)
+    tests.push((entry) => entry.publishers.some((p) => publishers.has(p.slug)));
   if (f.volumes) {
     const { min, max } = VOLUME_RANGES[f.volumes];
     tests.push((entry) => entry.volumeCount >= min && entry.volumeCount <= max);
@@ -662,7 +678,8 @@ function matcher(f: Filters, today: number | undefined): ((entry: Entry) => bool
   if (status) tests.push((entry) => entry.sourceStatus === status);
   if (format === "physical") tests.push((entry) => entry.hasPhysical);
   if (format === "digital") tests.push((entry) => entry.hasDigital);
-  if (letter && /^[a-z#]$/.test(letter)) tests.push((entry) => letterFor(entry.titleSort) === letter);
+  if (letter && /^[a-z#]$/.test(letter))
+    tests.push((entry) => letterFor(entry.titleSort) === letter);
   const words = searchWords(f.q ?? "");
   if (words.length > 0) {
     tests.push((entry) => {
@@ -765,35 +782,47 @@ async function readChunk(
       case "title":
         return [
           table().withIndex("by_title", (r) => same(r.eq("titleSort", str))),
-          table().withIndex("by_title", (r) => (asc ? r.gt("titleSort", str) : r.lt("titleSort", str))),
+          table().withIndex("by_title", (r) =>
+            asc ? r.gt("titleSort", str) : r.lt("titleSort", str),
+          ),
         ];
       case "recent":
         return [table().withIndex("by_publicId", (r) => same(r))];
       case "volumes":
         return [
           table().withIndex("by_volumes", (r) => same(r.eq("volumeCount", num))),
-          table().withIndex("by_volumes", (r) => (asc ? r.gt("volumeCount", num) : r.lt("volumeCount", num))),
+          table().withIndex("by_volumes", (r) =>
+            asc ? r.gt("volumeCount", num) : r.lt("volumeCount", num),
+          ),
         ];
       case "latest":
         return [
           table().withIndex("by_latest", (r) => same(r.eq("latestReleaseSort", num))),
-          table().withIndex("by_latest", (r) => (asc ? r.gt("latestReleaseSort", num) : r.lt("latestReleaseSort", num))),
+          table().withIndex("by_latest", (r) =>
+            asc ? r.gt("latestReleaseSort", num) : r.lt("latestReleaseSort", num),
+          ),
         ];
       case "upcoming":
         return [
           table().withIndex("by_next", (r) => same(r.eq("nextReleaseSort", num))),
-          table().withIndex("by_next", (r) => (asc ? r.gt("nextReleaseSort", num) : r.lt("nextReleaseSort", num))),
+          table().withIndex("by_next", (r) =>
+            asc ? r.gt("nextReleaseSort", num) : r.lt("nextReleaseSort", num),
+          ),
           ...(zerosLast ? [zerosAfter(-1)] : []),
         ];
       case "followers":
         return [
           table().withIndex("by_followers", (r) => same(r.eq("followers", num))),
-          table().withIndex("by_followers", (r) => (asc ? r.gt("followers", num) : r.lt("followers", num))),
+          table().withIndex("by_followers", (r) =>
+            asc ? r.gt("followers", num) : r.lt("followers", num),
+          ),
         ];
       case "collectors":
         return [
           table().withIndex("by_collectors", (r) => same(r.eq("collectors", num))),
-          table().withIndex("by_collectors", (r) => (asc ? r.gt("collectors", num) : r.lt("collectors", num))),
+          table().withIndex("by_collectors", (r) =>
+            asc ? r.gt("collectors", num) : r.lt("collectors", num),
+          ),
         ];
     }
   })();
@@ -1009,4 +1038,3 @@ export const facets = query({
     };
   },
 });
-

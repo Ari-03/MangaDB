@@ -10,19 +10,20 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { type FunctionReference, paginationOptsValidator } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import {
-  internalAction,
-  internalMutation,
-  internalQuery,
-  query,
-} from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getSourceByKey, recordSourceOutcome } from "./importSources";
 import { todaySortKey } from "./lib/dates";
 import { releasesOf } from "./lib/editionRows";
 import { sendAdminEmail } from "./lib/email";
 import { isStranded, lastActiveAt } from "./lib/importRuns";
-import { clearHold, type HoldKind, holdOf, proposalInReview, recordUnplaced } from "./lib/observations";
+import {
+  clearHold,
+  type HoldKind,
+  holdOf,
+  proposalInReview,
+  recordUnplaced,
+} from "./lib/observations";
 import type { OlEditionSnapshot } from "./lib/openLibrary";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
@@ -89,7 +90,9 @@ export const stopIfAutomatic = internalMutation({
     const run = await ctx.db.get(args.runId);
     const sourceKey = args.sourceKey ?? run?.sourceKey;
     if (!run) {
-      console.warn(`[imports] ${sourceKey ?? "unknown source"}: run ${args.runId} does not exist; its chain stops`);
+      console.warn(
+        `[imports] ${sourceKey ?? "unknown source"}: run ${args.runId} does not exist; its chain stops`,
+      );
       return true;
     }
     if (run.sourceKey !== sourceKey) {
@@ -99,7 +102,9 @@ export const stopIfAutomatic = internalMutation({
       return true;
     }
     if (run.status !== "running") {
-      console.warn(`[imports] ${sourceKey}: run ${run._id} is already ${run.status}; its chain stops`);
+      console.warn(
+        `[imports] ${sourceKey}: run ${run._id} is already ${run.status}; its chain stops`,
+      );
       return true;
     }
     const source = await getSourceByKey(ctx, run.sourceKey);
@@ -109,7 +114,10 @@ export const stopIfAutomatic = internalMutation({
     }
     // Its own status, not "succeeded": the sweep is incomplete. The note
     // always fits: it follows the first MAX_RUN_ERRORS - 1 carried errors.
-    const errors = [...args.errors.slice(0, MAX_RUN_ERRORS - 1), "Stopped: the source was disabled mid-run."];
+    const errors = [
+      ...args.errors.slice(0, MAX_RUN_ERRORS - 1),
+      "Stopped: the source was disabled mid-run.",
+    ];
     const finishedAt = Date.now();
     await ctx.db.patch(args.runId, {
       status: "stopped",
@@ -312,8 +320,8 @@ export const dashboard = query({
     }
     return rows.sort(
       (a, b) =>
-        Number(b.healthState === "unhealthy") -
-          Number(a.healthState === "unhealthy") || a.key.localeCompare(b.key),
+        Number(b.healthState === "unhealthy") - Number(a.healthState === "unhealthy") ||
+        a.key.localeCompare(b.key),
     );
   },
 });
@@ -383,11 +391,7 @@ const CADENCE_INTERVALS_MS: Record<string, number> = {
 };
 
 /** Is a source with this cadence due, given its last run start time? */
-export function isDue(
-  cadence: string,
-  lastStartedAt: number | null,
-  now: number,
-): boolean {
+export function isDue(cadence: string, lastStartedAt: number | null, now: number): boolean {
   const interval = CADENCE_INTERVALS_MS[cadence.trim().toLowerCase()];
   if (interval === undefined) return false;
   if (lastStartedAt === null) return true;
@@ -399,10 +403,7 @@ export function isDue(
 // ships. All five v1 sources, Yen Press, and the Kodansha
 // backlist crawl have adapters;
 // adapters take only optional tuning args, so dispatching with {} is valid.
-const ADAPTERS: Record<
-  string,
-  FunctionReference<"action", "internal", Record<string, unknown>>
-> = {
+const ADAPTERS: Record<string, FunctionReference<"action", "internal", Record<string, unknown>>> = {
   sevenseas: internal.sevenSeas.sync,
   kodansha: internal.kodansha.sync,
   ann: internal.ann.sync,
@@ -542,12 +543,18 @@ export const attachCover = internalMutation({
     const frozen = release.status !== "active" || release.locked === true;
     if (frozen || same) {
       await drop(incoming, current?.storageId);
-      return { attached: false, held: same && !frozen ? (current.storageId ?? "placeholder") : null };
+      return {
+        attached: false,
+        held: same && !frozen ? (current.storageId ?? "placeholder") : null,
+      };
     }
     const siblings = await releasesOf(ctx, release.editionId);
     const storageId =
       siblings.find(
-        (r) => r._id !== release._id && r.status === "active" && r.coverImage?.sourceUrl === args.sourceUrl,
+        (r) =>
+          r._id !== release._id &&
+          r.status === "active" &&
+          r.coverImage?.sourceUrl === args.sourceUrl,
       )?.coverImage?.storageId ??
       incoming ??
       current?.storageId;
@@ -572,8 +579,7 @@ export function possiblyFuture(
   pubDate: { year: number; month?: number; day?: number },
   now: number,
 ): boolean {
-  const latest =
-    pubDate.year * 10000 + (pubDate.month ?? 12) * 100 + (pubDate.day ?? 31);
+  const latest = pubDate.year * 10000 + (pubDate.month ?? 12) * 100 + (pubDate.day ?? 31);
   return latest > todaySortKey(new Date(now));
 }
 
@@ -650,9 +656,7 @@ export const markWithdrawn = internalMutation({
         const suppressions = await ctx.db
           .query("conflictSuppressions")
           .withIndex("by_key", (q) =>
-            q
-              .eq("ref.type", obs.recordRef!.type)
-              .eq("ref.id", obs.recordRef!.id as never),
+            q.eq("ref.type", obs.recordRef!.type).eq("ref.id", obs.recordRef!.id as never),
           )
           .collect();
         for (const row of suppressions) {
@@ -689,14 +693,19 @@ export const heldBooks = query({
     const holds = ctx.db.query("placementHolds");
     const ordered =
       sourceKey !== undefined && kind !== undefined
-        ? holds.withIndex("by_source_kind_held", (q) => q.eq("sourceKey", sourceKey).eq("kind", kind))
+        ? holds.withIndex("by_source_kind_held", (q) =>
+            q.eq("sourceKey", sourceKey).eq("kind", kind),
+          )
         : sourceKey !== undefined
           ? holds.withIndex("by_source_held", (q) => q.eq("sourceKey", sourceKey))
           : kind !== undefined
             ? holds.withIndex("by_kind_held", (q) => q.eq("kind", kind))
             : holds.withIndex("by_held");
     const result = await ordered.order("desc").paginate(paginationOpts);
-    return { ...result, page: await Promise.all(result.page.map((hold) => heldBook(ctx, hold, viewer._id))) };
+    return {
+      ...result,
+      page: await Promise.all(result.page.map((hold) => heldBook(ctx, hold, viewer._id))),
+    };
   },
 });
 
@@ -717,7 +726,10 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id
     | undefined;
   const text = (value: unknown) => (typeof value === "string" ? value : null);
   const series = hold.seriesId !== undefined ? await ctx.db.get(hold.seriesId) : null;
-  const queued = observation?.queuedProposalId !== undefined ? await ctx.db.get(observation.queuedProposalId) : null;
+  const queued =
+    observation?.queuedProposalId !== undefined
+      ? await ctx.db.get(observation.queuedProposalId)
+      : null;
   return {
     holdId: hold._id,
     sourceKey: hold.sourceKey,
@@ -754,15 +766,25 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id
  * note of lib/pipeline.ts removedSeriesFor.
  */
 export function storedHoldKind(reason: string): HoldKind | null {
-  if (/^ANN lists no ISBN|^A store-exclusive or variant cover|" is a prose imprint:|" publishes in another language:/.test(reason)) {
+  if (
+    /^ANN lists no ISBN|^A store-exclusive or variant cover|" is a prose imprint:|" publishes in another language:/.test(
+      reason,
+    )
+  ) {
     return null;
   }
-  if (LOCK_NOTE.test(reason) || /which an Editor hid|has no unique base Series|no linked active Series|^The Series is locked/.test(reason)) {
+  if (
+    LOCK_NOTE.test(reason) ||
+    /which an Editor hid|has no unique base Series|no linked active Series|^The Series is locked/.test(
+      reason,
+    )
+  ) {
     return "series";
   }
   if (/^ISBN \d+ is |already has a \w+ .* Release \(ISBN/.test(reason)) return "isbn";
   if (/^No Volume .* under the Series|but the Series lacks/.test(reason)) return "volumeMissing";
-  if (/packaging|Packaging|Box set|Edition Line|with no stated coverage/.test(reason)) return "packaging";
+  if (/packaging|Packaging|Box set|Edition Line|with no stated coverage/.test(reason))
+    return "packaging";
   return "other";
 }
 
@@ -811,7 +833,11 @@ export const backfillHolds = internalMutation({
     cleared: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const counts = { held: args.held ?? 0, classified: args.classified ?? 0, cleared: args.cleared ?? 0 };
+    const counts = {
+      held: args.held ?? 0,
+      classified: args.classified ?? 0,
+      cleared: args.cleared ?? 0,
+    };
     const { page, isDone, continueCursor } = await ctx.db
       .query("sourceObservations")
       .paginate({ numItems: BACKFILL_PAGE, cursor: args.cursor ?? null });
@@ -844,19 +870,27 @@ export const backfillHolds = internalMutation({
       if (note === undefined) continue;
       const kind = storedHoldKind(note.reason);
       const outOfScope =
-        kind !== null && observation.sourceKey === ANN && observation.snapshot?.kind === "annRelease"
+        kind !== null &&
+        observation.sourceKey === ANN &&
+        observation.snapshot?.kind === "annRelease"
           ? lineOutOfScope(observation.snapshot as AnnReleaseSnapshot)
           : null;
       if (outOfScope !== null) {
-        if (await recordUnplaced(ctx, observation, { kind: null, reason: outOfScope }, Date.now())) counts.cleared++;
+        if (await recordUnplaced(ctx, observation, { kind: null, reason: outOfScope }, Date.now()))
+          counts.cleared++;
       } else if (row === null && kind !== null) {
-        if (await recordUnplaced(ctx, observation, { kind, reason: note.reason }, note.at)) counts.held++;
+        if (await recordUnplaced(ctx, observation, { kind, reason: note.reason }, note.at))
+          counts.held++;
       } else if (row !== null && kind === null) {
-        if (await recordUnplaced(ctx, observation, { kind, reason: note.reason }, note.at)) counts.cleared++;
+        if (await recordUnplaced(ctx, observation, { kind, reason: note.reason }, note.at))
+          counts.cleared++;
       }
     }
     if (!isDone) {
-      await ctx.scheduler.runAfter(0, internal.imports.backfillHolds, { cursor: continueCursor, ...counts });
+      await ctx.scheduler.runAfter(0, internal.imports.backfillHolds, {
+        cursor: continueCursor,
+        ...counts,
+      });
     } else {
       console.log(
         `[imports.backfillHolds] done: ${counts.held} held from notes, ${counts.classified} Open Library editions held, ${counts.cleared} holds or stale notes cleared`,

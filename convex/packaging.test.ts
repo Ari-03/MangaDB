@@ -21,9 +21,15 @@ async function setup() {
     const publisherId = await insertPublisher(ctx, { name: "Dark Horse" });
     const seriesId = await insertSeries(ctx, { publicId: 1, title: "Berserk" });
     const volumeIds = [];
-    for (let position = 1; position <= 6; position++) volumeIds.push(await insertVolume(ctx, { seriesId, position }));
+    for (let position = 1; position <= 6; position++)
+      volumeIds.push(await insertVolume(ctx, { seriesId, position }));
     const editionLineId = await insertEditionLine(ctx, { seriesId, publisherId, name: "Deluxe" });
-    const editionId = await insertEdition(ctx, { publisherId, editionLineId, linePosition: "2", coverageUnmapped: true });
+    const editionId = await insertEdition(ctx, {
+      publisherId,
+      editionLineId,
+      linePosition: "2",
+      coverageUnmapped: true,
+    });
     const releaseId = await insertRelease(ctx, {
       editionId,
       binding: "hardcover",
@@ -83,10 +89,12 @@ describe("packaging — Unmapped Packaging queue and mapping", () => {
         .query("revisions")
         .withIndex("by_record", (q) => q.eq("ref.type", "edition").eq("ref.id", editionId))
         .collect();
-      expect(revisions.map((r) => r.changes.map((c) => c.field)).flat().sort()).toEqual([
-        "coverageUnmapped",
-        "volumeCoverage",
-      ]);
+      expect(
+        revisions
+          .map((r) => r.changes.map((c) => c.field))
+          .flat()
+          .sort(),
+      ).toEqual(["coverageUnmapped", "volumeCoverage"]);
       expect(revisions.every((r) => r.author.kind === "user")).toBe(true);
     });
     // Gone from the queue.
@@ -97,11 +105,15 @@ describe("packaging — Unmapped Packaging queue and mapping", () => {
   it("refuses Editors, empty comments, unknown Volumes and backwards ranges", async () => {
     const { t, editionId } = await setup();
     const map = (subject: string, args: { from: string; to: string; comment: string }) =>
-      t.withIdentity({ subject }).mutation(api.packaging.mapEditionCoverage, { editionId, ...args });
+      t
+        .withIdentity({ subject })
+        .mutation(api.packaging.mapEditionCoverage, { editionId, ...args });
     await expect(map(EDITOR, { from: "1", to: "3", comment: "x" })).rejects.toMatchObject({
       data: { code: "forbidden" },
     });
-    await expect(map(MOD, { from: "1", to: "3", comment: "  " })).rejects.toThrow(/commentRequired/);
+    await expect(map(MOD, { from: "1", to: "3", comment: "  " })).rejects.toThrow(
+      /commentRequired/,
+    );
     await expect(map(MOD, { from: "1", to: "9", comment: "x" })).rejects.toThrow(/unknownVolume/);
     await expect(map(MOD, { from: "3", to: "1", comment: "x" })).rejects.toThrow(/badRange/);
   });
@@ -127,7 +139,9 @@ describe("packaging — Bookless Series queue", () => {
       volumeCount: 6,
       sources: [{ sourceKey: "ann", recordId: "manga:2298" }],
     });
-    await expect(t.withIdentity({ subject: PLAIN }).query(api.packaging.booklessQueue, {})).rejects.toMatchObject({
+    await expect(
+      t.withIdentity({ subject: PLAIN }).query(api.packaging.booklessQueue, {}),
+    ).rejects.toMatchObject({
       data: { code: "forbidden" },
     });
   });

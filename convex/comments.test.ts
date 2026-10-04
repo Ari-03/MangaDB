@@ -12,7 +12,18 @@ import type { Id } from "./_generated/dataModel";
 import { COMMENT_POLICY } from "./comments";
 import type { PageTargetRef } from "./lib/ratings";
 import { insertEdition, insertPublisher, insertVolume } from "./test.factories";
-import { ADMIN, EDITOR, MOD, alice, bob, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
+import {
+  ADMIN,
+  EDITOR,
+  MOD,
+  alice,
+  bob,
+  makeT,
+  purgeAccount,
+  seedTeam,
+  signedIn,
+  type TestT,
+} from "./test.helpers";
 import { merge, series, seriesWithVolume, split, volume } from "./test.tracking";
 
 // These tests cover Comments switched on; features.test.ts covers them off.
@@ -54,7 +65,11 @@ async function seed(t: TestT) {
   return await t.run(async (ctx) => {
     const mk = async (publicId: number, title: string) => {
       const { seriesId, volumeId } = await seriesWithVolume(ctx, publicId, title);
-      const volume2Id = await insertVolume(ctx, { seriesId, publicId: publicId * 10 + 2, position: 2 });
+      const volume2Id = await insertVolume(ctx, {
+        seriesId,
+        publicId: publicId * 10 + 2,
+        position: 2,
+      });
       return { seriesId, volumeId, volume2Id };
     };
     return {
@@ -103,7 +118,9 @@ function post(
   extra: { parentId?: Id<"comments">; spoiler?: boolean; onVolume?: boolean } = {},
 ) {
   return t.withIdentity({ subject }).mutation(api.comments.post, {
-    target: extra.onVolume ? { kind: "volume", id: ids.one.volumeId } : { kind: "series", id: ids.one.seriesId },
+    target: extra.onVolume
+      ? { kind: "volume", id: ids.one.volumeId }
+      : { kind: "series", id: ids.one.seriesId },
     body,
     spoiler: extra.spoiler ?? false,
     ...(extra.parentId ? { parentId: extra.parentId } : {}),
@@ -116,10 +133,14 @@ const listAs = (t: TestT, subject: string | null, target: PageTargetRef = series
     : t.withIdentity({ subject }).query(api.comments.list, { target });
 
 /** bob's decision on one Comment. */
-const moderate = (t: TestT, commentId: Id<"comments">, action: FunctionArgs<typeof api.comments.moderate>["action"]) =>
-  signedIn(t, bob).mutation(api.comments.moderate, { commentId, action });
+const moderate = (
+  t: TestT,
+  commentId: Id<"comments">,
+  action: FunctionArgs<typeof api.comments.moderate>["action"],
+) => signedIn(t, bob).mutation(api.comments.moderate, { commentId, action });
 
-const statusOf = (t: TestT, commentId: Id<"comments">) => t.run(async (ctx) => (await ctx.db.get(commentId))?.status);
+const statusOf = (t: TestT, commentId: Id<"comments">) =>
+  t.run(async (ctx) => (await ctx.db.get(commentId))?.status);
 const auditActions = (t: TestT) =>
   t.run(async (ctx) => (await ctx.db.query("commentAudit").collect()).map((row) => row.action));
 
@@ -145,8 +166,15 @@ describe("comments.post: hold rules", () => {
   it("holds a body with more than two links", async () => {
     const t = makeT();
     const ids = await trustedSetup(t);
-    expect((await post(t, AUTHOR, ids, "See https://a.example and http://b.example")).held).toBe(false);
-    const spam = await post(t, AUTHOR, ids, "https://a.example https://b.example HTTPS://c.example");
+    expect((await post(t, AUTHOR, ids, "See https://a.example and http://b.example")).held).toBe(
+      false,
+    );
+    const spam = await post(
+      t,
+      AUTHOR,
+      ids,
+      "https://a.example https://b.example HTTPS://c.example",
+    );
     expect(spam.held).toBe(true);
     expect(await statusOf(t, spam.commentId)).toBe("pending");
   });
@@ -161,8 +189,12 @@ describe("comments.post: hold rules", () => {
   it("holds the body to 1-2,000 characters, trimmed", async () => {
     const t = makeT();
     const ids = await trustedSetup(t);
-    await expect(post(t, AUTHOR, ids, "   \n  ")).rejects.toMatchObject({ data: { code: "commentEmpty" } });
-    await expect(post(t, AUTHOR, ids, "x".repeat(COMMENT_POLICY.maxLength + 1))).rejects.toMatchObject({
+    await expect(post(t, AUTHOR, ids, "   \n  ")).rejects.toMatchObject({
+      data: { code: "commentEmpty" },
+    });
+    await expect(
+      post(t, AUTHOR, ids, "x".repeat(COMMENT_POLICY.maxLength + 1)),
+    ).rejects.toMatchObject({
       data: { code: "commentTooLong" },
     });
     await post(t, AUTHOR, ids, "x".repeat(COMMENT_POLICY.maxLength));
@@ -174,7 +206,9 @@ describe("comments.post: hold rules", () => {
   it("requires a claimed, unsuspended account", async () => {
     const t = makeT();
     const ids = await seed(t);
-    await expect(post(t, "user_nobody", ids)).rejects.toMatchObject({ data: { code: "usernameRequired" } });
+    await expect(post(t, "user_nobody", ids)).rejects.toMatchObject({
+      data: { code: "usernameRequired" },
+    });
     await expect(
       t.mutation(api.comments.post, {
         target: { kind: "series", id: ids.one.seriesId },
@@ -191,14 +225,20 @@ describe("replies", () => {
     const ids = await trustedSetup(t);
     const top = await post(t, AUTHOR, ids);
     const reply = await post(t, OTHER, ids, "Agreed.", { parentId: top.commentId });
-    await expect(post(t, AUTHOR, ids, "Deeper.", { parentId: reply.commentId })).rejects.toMatchObject({
+    await expect(
+      post(t, AUTHOR, ids, "Deeper.", { parentId: reply.commentId }),
+    ).rejects.toMatchObject({
       data: { code: "replyDepth" },
     });
-    await expect(post(t, OTHER, ids, "Wrong page.", { parentId: top.commentId, onVolume: true })).rejects.toMatchObject({
+    await expect(
+      post(t, OTHER, ids, "Wrong page.", { parentId: top.commentId, onVolume: true }),
+    ).rejects.toMatchObject({
       data: { code: "wrongTarget" },
     });
     await moderate(t, top.commentId, "hide");
-    await expect(post(t, OTHER, ids, "Too late.", { parentId: top.commentId })).rejects.toMatchObject({
+    await expect(
+      post(t, OTHER, ids, "Too late.", { parentId: top.commentId }),
+    ).rejects.toMatchObject({
       data: { code: "closed" },
     });
   });
@@ -259,15 +299,23 @@ describe("author edit and delete", () => {
     const ids = await trustedSetup(t);
     const { commentId } = await post(t, AUTHOR, ids);
     await expect(
-      t.withIdentity({ subject: OTHER }).mutation(api.comments.edit, { commentId, body: "mine now", spoiler: false }),
+      t
+        .withIdentity({ subject: OTHER })
+        .mutation(api.comments.edit, { commentId, body: "mine now", spoiler: false }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
     await expect(
-      t.withIdentity({ subject: MOD }).mutation(api.comments.edit, { commentId, body: "mod edit", spoiler: false }),
+      t
+        .withIdentity({ subject: MOD })
+        .mutation(api.comments.edit, { commentId, body: "mod edit", spoiler: false }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
     const author = t.withIdentity({ subject: AUTHOR });
     await author.mutation(api.comments.edit, { commentId, body: "Fixed a typo.", spoiler: true });
-    expect((await listAs(t, null))!.items[0]).toMatchObject({ body: "Fixed a typo.", spoiler: true, edited: true });
+    expect((await listAs(t, null))!.items[0]).toMatchObject({
+      body: "Fixed a typo.",
+      spoiler: true,
+      edited: true,
+    });
 
     const result = await author.mutation(api.comments.edit, {
       commentId,
@@ -289,13 +337,15 @@ describe("author edit and delete", () => {
     expect(await statusOf(t, commentId)).toBe("removed");
     expect((await listAs(t, AUTHOR))!.items).toEqual([]);
     await expect(
-      t.withIdentity({ subject: AUTHOR }).mutation(api.comments.edit, { commentId, body: "back", spoiler: false }),
+      t
+        .withIdentity({ subject: AUTHOR })
+        .mutation(api.comments.edit, { commentId, body: "back", spoiler: false }),
     ).rejects.toMatchObject({ data: { code: "badState" } });
     expect(await auditActions(t)).toEqual(["remove"]);
     // A Moderator cannot restore what its author deleted.
-    await expect(
-      moderate(t, commentId, "restore"),
-    ).rejects.toMatchObject({ data: { code: "authorDeleted" } });
+    await expect(moderate(t, commentId, "restore")).rejects.toMatchObject({
+      data: { code: "authorDeleted" },
+    });
   });
 });
 
@@ -305,7 +355,9 @@ describe("reports", () => {
     const ids = await trustedSetup(t);
     const { commentId } = await post(t, AUTHOR, ids);
     const reportAs = (subject: string, note?: string) =>
-      t.withIdentity({ subject }).mutation(api.comments.report, { commentId, reason: "spam", ...(note ? { note } : {}) });
+      t
+        .withIdentity({ subject })
+        .mutation(api.comments.report, { commentId, reason: "spam", ...(note ? { note } : {}) });
 
     await expect(reportAs(AUTHOR)).rejects.toMatchObject({ data: { code: "ownComment" } });
     await expect(reportAs(R1, "x".repeat(COMMENT_POLICY.noteMaxLength + 1))).rejects.toMatchObject({
@@ -337,7 +389,9 @@ describe("reports", () => {
     let limited = false;
     for (const commentId of targets) {
       try {
-        await t.withIdentity({ subject: R1 }).mutation(api.comments.report, { commentId, reason: "other" });
+        await t
+          .withIdentity({ subject: R1 })
+          .mutation(api.comments.report, { commentId, reason: "other" });
       } catch (err) {
         expect(err).toMatchObject({ data: { kind: "RateLimited" } });
         limited = true;
@@ -353,7 +407,9 @@ describe("posting rate limit", () => {
     const t = makeT();
     const ids = await trustedSetup(t);
     for (let i = 0; i < 5; i++) await post(t, AUTHOR, ids, `Take ${i}`);
-    await expect(post(t, AUTHOR, ids, "One too many")).rejects.toMatchObject({ data: { kind: "RateLimited" } });
+    await expect(post(t, AUTHOR, ids, "One too many")).rejects.toMatchObject({
+      data: { kind: "RateLimited" },
+    });
   });
 });
 
@@ -362,8 +418,14 @@ describe("moderation", () => {
     const t = makeT();
     const ids = await seed(t);
     const { commentId } = await post(t, AUTHOR, ids); // new account: pending
-    const act = (subject: string, action: "approve" | "hide" | "unhide" | "remove" | "restore", reason?: string) =>
-      t.withIdentity({ subject }).mutation(api.comments.moderate, { commentId, action, ...(reason ? { reason } : {}) });
+    const act = (
+      subject: string,
+      action: "approve" | "hide" | "unhide" | "remove" | "restore",
+      reason?: string,
+    ) =>
+      t
+        .withIdentity({ subject })
+        .mutation(api.comments.moderate, { commentId, action, ...(reason ? { reason } : {}) });
 
     await expect(act(OTHER, "approve")).rejects.toMatchObject({ data: { code: "forbidden" } });
     await expect(act(EDITOR, "approve")).rejects.toMatchObject({ data: { code: "forbidden" } });
@@ -380,7 +442,13 @@ describe("moderation", () => {
     expect(await statusOf(t, commentId)).toBe("approved");
 
     const audit = await t.run((ctx) => ctx.db.query("commentAudit").collect());
-    expect(audit.map((row) => row.action)).toEqual(["approve", "hide", "unhide", "remove", "restore"]);
+    expect(audit.map((row) => row.action)).toEqual([
+      "approve",
+      "hide",
+      "unhide",
+      "remove",
+      "restore",
+    ]);
     expect(audit[1]).toMatchObject({ reason: "Off-topic", actor: { kind: "user" } });
   });
 
@@ -389,7 +457,9 @@ describe("moderation", () => {
     const ids = await trustedSetup(t);
     const { commentId } = await post(t, AUTHOR, ids);
     for (const subject of [R1, R2]) {
-      await t.withIdentity({ subject }).mutation(api.comments.report, { commentId, reason: "spoiler" });
+      await t
+        .withIdentity({ subject })
+        .mutation(api.comments.report, { commentId, reason: "spoiler" });
     }
     await moderate(t, commentId, "approve");
     const row = await t.run((ctx) => ctx.db.get(commentId));
@@ -471,7 +541,10 @@ describe("visibility", () => {
 
     // The removed thread's placeholder keeps its reply, and no author.
     const placeholder = (await listAs(t, null))!.items[0]!;
-    expect(placeholder).toMatchObject({ username: null, replies: [{ body: "A reply that keeps the thread" }] });
+    expect(placeholder).toMatchObject({
+      username: null,
+      replies: [{ body: "A reply that keeps the thread" }],
+    });
   });
 });
 
@@ -491,10 +564,14 @@ describe("the queue", () => {
       note: "not about the manga",
     });
     for (const subject of [R1, R2]) {
-      await t.withIdentity({ subject }).mutation(api.comments.report, { commentId: twice.commentId, reason: "spam" });
+      await t
+        .withIdentity({ subject })
+        .mutation(api.comments.report, { commentId: twice.commentId, reason: "spam" });
     }
 
-    await expect(t.withIdentity({ subject: OTHER }).query(api.comments.queue, { tab: "pending" })).rejects.toMatchObject({
+    await expect(
+      t.withIdentity({ subject: OTHER }).query(api.comments.queue, { tab: "pending" }),
+    ).rejects.toMatchObject({
       data: { code: "forbidden" },
     });
     expect(await t.withIdentity({ subject: OTHER }).query(api.comments.queueCounts, {})).toBeNull();
@@ -518,15 +595,27 @@ describe("the queue", () => {
     expect(reported.rows[0]!.reasons).toEqual({ spam: 2 });
     expect(reported.rows[1]!.notes).toEqual([{ reason: "offTopic", note: "not about the manga" }]);
 
-    expect(await editor.query(api.comments.queueCounts, {})).toEqual({ pending: 1, reported: 2, hidden: 0 });
-    await t.withIdentity({ subject: R3 }).mutation(api.comments.report, { commentId: twice.commentId, reason: "spam" });
-    expect(await editor.query(api.comments.queueCounts, {})).toEqual({ pending: 1, reported: 1, hidden: 1 });
-    expect((await editor.query(api.comments.queue, { tab: "hidden" })).rows[0]!.body).toBe("Reported twice");
+    expect(await editor.query(api.comments.queueCounts, {})).toEqual({
+      pending: 1,
+      reported: 2,
+      hidden: 0,
+    });
+    await t
+      .withIdentity({ subject: R3 })
+      .mutation(api.comments.report, { commentId: twice.commentId, reason: "spam" });
+    expect(await editor.query(api.comments.queueCounts, {})).toEqual({
+      pending: 1,
+      reported: 1,
+      hidden: 1,
+    });
+    expect((await editor.query(api.comments.queue, { tab: "hidden" })).rows[0]!.body).toBe(
+      "Reported twice",
+    );
 
     await moderate(t, once.commentId, "remove");
-    expect((await editor.query(api.comments.queue, { tab: "removed" })).rows.map((row) => row.body)).toEqual([
-      "Reported once",
-    ]);
+    expect(
+      (await editor.query(api.comments.queue, { tab: "removed" })).rows.map((row) => row.body),
+    ).toEqual(["Reported once"]);
   });
 });
 
@@ -537,8 +626,12 @@ describe("upkeep", () => {
     const theirs = await post(t, AUTHOR, ids, "Leaving soon");
     await post(t, OTHER, ids, "Reply that stays", { parentId: theirs.commentId });
     const other = await post(t, OTHER, ids, "Reported by the leaver");
-    await t.withIdentity({ subject: AUTHOR }).mutation(api.comments.report, { commentId: other.commentId, reason: "spam" });
-    await t.withIdentity({ subject: R1 }).mutation(api.comments.report, { commentId: theirs.commentId, reason: "spam" });
+    await t
+      .withIdentity({ subject: AUTHOR })
+      .mutation(api.comments.report, { commentId: other.commentId, reason: "spam" });
+    await t
+      .withIdentity({ subject: R1 })
+      .mutation(api.comments.report, { commentId: theirs.commentId, reason: "spam" });
 
     await purgeAccount(t, AUTHOR);
 
@@ -546,7 +639,9 @@ describe("upkeep", () => {
     const leaverId = theirs.commentId;
     expect(rows.find((row) => row._id === leaverId)).toBeUndefined();
     // Only the leaver's own seeded history went with them.
-    expect(rows.filter((row) => row.body.startsWith("Earlier"))).toHaveLength(4 * COMMENT_POLICY.minApprovedComments);
+    expect(rows.filter((row) => row.body.startsWith("Earlier"))).toHaveLength(
+      4 * COMMENT_POLICY.minApprovedComments,
+    );
     expect(rows.find((row) => row.body === "Reply that stays")!.parentId).toBeUndefined();
     expect(rows.find((row) => row.body === "Reported by the leaver")!.reportCount).toBe(0);
     expect(await t.run((ctx) => ctx.db.query("commentReports").collect())).toEqual([]);
@@ -560,13 +655,28 @@ describe("upkeep", () => {
     const t = makeT();
     const ids = await trustedSetup(t);
     await post(t, AUTHOR, ids, "On the survivor");
-    const onLoser = (body: string, target: { kind: "series"; id: Id<"series"> } | { kind: "volume"; id: Id<"volumes"> }) =>
-      t.withIdentity({ subject: OTHER }).mutation(api.comments.post, { target, body, spoiler: false });
+    const onLoser = (
+      body: string,
+      target: { kind: "series"; id: Id<"series"> } | { kind: "volume"; id: Id<"volumes"> },
+    ) =>
+      t
+        .withIdentity({ subject: OTHER })
+        .mutation(api.comments.post, { target, body, spoiler: false });
     await onLoser("On the loser", { kind: "series", id: ids.two.seriesId });
-    const volumeComment = await onLoser("On the loser's volume", { kind: "volume", id: ids.two.volumeId });
+    const volumeComment = await onLoser("On the loser's volume", {
+      kind: "volume",
+      id: ids.two.volumeId,
+    });
 
-    await merge(signedIn(t, bob), { type: "series", id: ids.one.seriesId }, { type: "series", id: ids.two.seriesId });
-    expect((await listAs(t, null))!.items.map((item) => item.body)).toEqual(["On the loser", "On the survivor"]);
+    await merge(
+      signedIn(t, bob),
+      { type: "series", id: ids.one.seriesId },
+      { type: "series", id: ids.two.seriesId },
+    );
+    expect((await listAs(t, null))!.items.map((item) => item.body)).toEqual([
+      "On the loser",
+      "On the survivor",
+    ]);
     const moved = await t.run((ctx) => ctx.db.get(volumeComment.commentId));
     expect(moved).toMatchObject({ seriesId: ids.one.seriesId, volumeId: ids.two.volumeId });
     // The old URL's page resolves to the survivor's comments too.
@@ -581,8 +691,14 @@ describe("upkeep", () => {
       body: "On volume 2",
       spoiler: false,
     });
-    await merge(signedIn(t, bob), { type: "volume", id: ids.one.volumeId }, { type: "volume", id: ids.one.volume2Id });
-    expect((await listAs(t, null, volume(11)))!.items.map((item) => item.body)).toEqual(["On volume 2"]);
+    await merge(
+      signedIn(t, bob),
+      { type: "volume", id: ids.one.volumeId },
+      { type: "volume", id: ids.one.volume2Id },
+    );
+    expect((await listAs(t, null, volume(11)))!.items.map((item) => item.body)).toEqual([
+      "On volume 2",
+    ]);
   });
 });
 
@@ -597,7 +713,13 @@ const userIdOf = (t: TestT, subject: string) =>
   });
 
 /** Insert `count` top-level Comments by `subject` on Series 1, oldest first. */
-async function insertHeads(t: TestT, ids: Ids, subject: string, count: number, status: "approved" | "removed" | "pending") {
+async function insertHeads(
+  t: TestT,
+  ids: Ids,
+  subject: string,
+  count: number,
+  status: "approved" | "removed" | "pending",
+) {
   const userId = await userIdOf(t, subject);
   return await t.run(async (ctx) => {
     const made = [];
@@ -634,7 +756,9 @@ describe("shadowing as a status", () => {
     expect(before!.items).toHaveLength(COMMENT_POLICY.page);
     expect(before!.hasMore).toBe(true);
 
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.setShadowed, { commentId: spam[0]!, shadowed: true });
+    await t
+      .withIdentity({ subject: MOD })
+      .mutation(api.comments.setShadowed, { commentId: spam[0]!, shadowed: true });
     expect(await statusOf(t, spam[0]!)).toBe("shadowed");
     const after = await listAs(t, null);
     expect(after!.items.map((item) => item.body)).toEqual(["An honest, older comment"]);
@@ -650,7 +774,9 @@ describe("shadowing as a status", () => {
     expect(fresh.held).toBe(false);
     expect(await statusOf(t, fresh.commentId)).toBe("shadowed");
 
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.setShadowed, { commentId: spam[0]!, shadowed: false });
+    await t
+      .withIdentity({ subject: MOD })
+      .mutation(api.comments.setShadowed, { commentId: spam[0]!, shadowed: false });
     expect(await statusOf(t, spam[0]!)).toBe("approved");
     expect(await statusOf(t, fresh.commentId)).toBe("approved");
     const restored = await listAs(t, null);
@@ -662,7 +788,9 @@ describe("shadowing as a status", () => {
     const t = makeT();
     const ids = await trustedSetup(t);
     const held = await post(t, R2, ids, "https://a https://b https://c");
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.setShadowed, { commentId: held.commentId, shadowed: true });
+    await t
+      .withIdentity({ subject: MOD })
+      .mutation(api.comments.setShadowed, { commentId: held.commentId, shadowed: true });
     expect(await statusOf(t, held.commentId)).toBe("pending");
     await moderate(t, held.commentId, "approve");
     expect(await statusOf(t, held.commentId)).toBe("shadowed");
@@ -673,7 +801,9 @@ describe("shadowing as a status", () => {
     const ids = await trustedSetup(t);
     const held = await post(t, R2, ids, "https://a https://b https://c");
     const shown = await post(t, R2, ids, "Published before the shadowing");
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.setShadowed, { commentId: shown.commentId, shadowed: true });
+    await t
+      .withIdentity({ subject: MOD })
+      .mutation(api.comments.setShadowed, { commentId: shown.commentId, shadowed: true });
     // An approved row past setShadowed's cap: only the author's flag hides it.
     await t.run((ctx) => ctx.db.patch(shown.commentId, { status: "approved" }));
     expect((await listAs(t, null))!.items).toEqual([]);
@@ -687,9 +817,9 @@ describe("shadowing as a status", () => {
     expect(await statusOf(t, held.commentId)).toBe("shadowed");
     // The queue still flags the author as shadowed, and names nobody.
     await t.run((ctx) => ctx.db.patch(shown.commentId, { reportCount: 1 }));
-    expect((await signedIn(t, bob).query(api.comments.queue, { tab: "reported" })).rows).toMatchObject([
-      { commentId: shown.commentId, username: null, authorShadowed: true },
-    ]);
+    expect(
+      (await signedIn(t, bob).query(api.comments.queue, { tab: "reported" })).rows,
+    ).toMatchObject([{ commentId: shown.commentId, username: null, authorShadowed: true }]);
   });
 });
 
@@ -728,7 +858,14 @@ describe("placeholders", () => {
 
     for (const subject of [null, R1]) {
       const [item] = (await listAs(t, subject))!.items;
-      expect(item).toMatchObject({ state: "withheld", body: "", username: null, own: false, createdAt: 0, edited: false });
+      expect(item).toMatchObject({
+        state: "withheld",
+        body: "",
+        username: null,
+        own: false,
+        createdAt: 0,
+        edited: false,
+      });
       expect(item!.replies.map((reply) => reply.body)).toEqual(["A reply that keeps it"]);
     }
     expect((await listAs(t, OTHER))!.items[0]).toMatchObject({ state: "hidden", own: true });
@@ -763,10 +900,15 @@ describe("reply cap", () => {
     const repliers = [OTHER, R1, R2, R3, MOD, ADMIN, EDITOR];
     const made = [];
     for (const subject of repliers) {
-      made.push((await post(t, subject, ids, `Reply by ${subject}`, { parentId: head.commentId })).commentId);
+      made.push(
+        (await post(t, subject, ids, `Reply by ${subject}`, { parentId: head.commentId }))
+          .commentId,
+      );
     }
     // The author's own held reply shows inline even past the cap.
-    await post(t, AUTHOR, ids, "Own held reply https://a https://b https://c", { parentId: head.commentId });
+    await post(t, AUTHOR, ids, "Own held reply https://a https://b https://c", {
+      parentId: head.commentId,
+    });
     expect((await t.run((ctx) => ctx.db.get(head.commentId)))!.replyCount).toBe(repliers.length);
 
     const anon = (await listAs(t, null))!.items[0]!;
@@ -775,17 +917,30 @@ describe("reply cap", () => {
     const mine = (await listAs(t, AUTHOR))!.items[0]!;
     expect(mine.replies.at(-1)).toMatchObject({ state: "pending", own: true });
 
-    const all = await t.query(api.comments.replies, { target: series(1), commentId: head.commentId });
-    expect(all!.map((reply) => reply.body)).toEqual(repliers.map((subject) => `Reply by ${subject}`));
-    expect(await t.query(api.comments.replies, { target: series(2), commentId: head.commentId })).toBeNull();
-    expect(await t.query(api.comments.replies, { target: series(1), commentId: made[0]! })).toBeNull();
+    const all = await t.query(api.comments.replies, {
+      target: series(1),
+      commentId: head.commentId,
+    });
+    expect(all!.map((reply) => reply.body)).toEqual(
+      repliers.map((subject) => `Reply by ${subject}`),
+    );
+    expect(
+      await t.query(api.comments.replies, { target: series(2), commentId: head.commentId }),
+    ).toBeNull();
+    expect(
+      await t.query(api.comments.replies, { target: series(1), commentId: made[0]! }),
+    ).toBeNull();
 
     // Status changes keep the count in step.
     await moderate(t, made[0]!, "hide");
     await t.withIdentity({ subject: R1 }).mutation(api.comments.remove, { commentId: made[1]! });
-    expect((await t.run((ctx) => ctx.db.get(head.commentId)))!.replyCount).toBe(repliers.length - 2);
+    expect((await t.run((ctx) => ctx.db.get(head.commentId)))!.replyCount).toBe(
+      repliers.length - 2,
+    );
     await moderate(t, made[0]!, "unhide");
-    expect((await t.run((ctx) => ctx.db.get(head.commentId)))!.replyCount).toBe(repliers.length - 1);
+    expect((await t.run((ctx) => ctx.db.get(head.commentId)))!.replyCount).toBe(
+      repliers.length - 1,
+    );
   });
 
   it("caps a page at maxThreads", async () => {
@@ -809,7 +964,9 @@ describe("guards", () => {
     // Its author may reply under their own held Comment.
     await post(t, AUTHOR, ids, "Adding context", { parentId: held.commentId });
     const gone = await post(t, AUTHOR, ids, "Gone soon");
-    await t.withIdentity({ subject: AUTHOR }).mutation(api.comments.remove, { commentId: gone.commentId });
+    await t
+      .withIdentity({ subject: AUTHOR })
+      .mutation(api.comments.remove, { commentId: gone.commentId });
     await expect(post(t, OTHER, ids, "Hi", { parentId: gone.commentId })).rejects.toMatchObject({
       data: { code: "closed" },
     });
@@ -821,7 +978,9 @@ describe("guards", () => {
     const { commentId } = await post(t, AUTHOR, ids);
     await moderate(t, commentId, "hide");
     await expect(
-      t.withIdentity({ subject: AUTHOR }).mutation(api.comments.edit, { commentId, body: "Sneaky", spoiler: false }),
+      t
+        .withIdentity({ subject: AUTHOR })
+        .mutation(api.comments.edit, { commentId, body: "Sneaky", spoiler: false }),
     ).rejects.toMatchObject({ data: { code: "badState" } });
   });
 
@@ -830,10 +989,14 @@ describe("guards", () => {
     const ids = await trustedSetup(t);
     const held = await post(t, AUTHOR, ids, "https://a https://b https://c");
     const gone = await post(t, AUTHOR, ids, "Gone");
-    await t.withIdentity({ subject: AUTHOR }).mutation(api.comments.remove, { commentId: gone.commentId });
+    await t
+      .withIdentity({ subject: AUTHOR })
+      .mutation(api.comments.remove, { commentId: gone.commentId });
     for (const commentId of [held.commentId, gone.commentId]) {
       await expect(
-        t.withIdentity({ subject: R1 }).mutation(api.comments.report, { commentId, reason: "spam" }),
+        t
+          .withIdentity({ subject: R1 })
+          .mutation(api.comments.report, { commentId, reason: "spam" }),
       ).rejects.toMatchObject({ data: { code: "notFound" } });
     }
   });
@@ -845,13 +1008,17 @@ describe("guards", () => {
     await suspend(t, OTHER);
     await expect(post(t, OTHER, ids)).rejects.toMatchObject({ data: { code: "suspended" } });
     await expect(
-      t.withIdentity({ subject: OTHER }).mutation(api.comments.report, { commentId, reason: "spam" }),
+      t
+        .withIdentity({ subject: OTHER })
+        .mutation(api.comments.report, { commentId, reason: "spam" }),
     ).rejects.toMatchObject({ data: { code: "suspended" } });
     await suspend(t, MOD);
+    await expect(moderate(t, commentId, "hide")).rejects.toMatchObject({
+      data: { code: "suspended" },
+    });
     await expect(
-      moderate(t, commentId, "hide"),
-    ).rejects.toMatchObject({ data: { code: "suspended" } });
-    await expect(t.withIdentity({ subject: MOD }).query(api.comments.queue, { tab: "pending" })).rejects.toMatchObject({
+      t.withIdentity({ subject: MOD }).query(api.comments.queue, { tab: "pending" }),
+    ).rejects.toMatchObject({
       data: { code: "suspended" },
     });
     expect(await t.withIdentity({ subject: MOD }).query(api.comments.queueCounts, {})).toBeNull();
@@ -861,9 +1028,9 @@ describe("guards", () => {
     const t = makeT();
     const ids = await trustedSetup(t);
     const { commentId } = await post(t, AUTHOR, ids);
-    await expect(
-      moderate(t, commentId, "approve"),
-    ).rejects.toMatchObject({ data: { code: "badState" } });
+    await expect(moderate(t, commentId, "approve")).rejects.toMatchObject({
+      data: { code: "badState" },
+    });
   });
 
   it("refuses an Edition target at the validator: Comments stay on Series and Volume pages", async () => {
@@ -902,7 +1069,9 @@ describe("queue order and counts", () => {
     const ids = await trustedSetup(t);
     const reheld = await post(t, OTHER, ids, "Clean at first");
     for (const subject of [R1, R2]) {
-      await t.withIdentity({ subject }).mutation(api.comments.report, { commentId: reheld.commentId, reason: "spam" });
+      await t
+        .withIdentity({ subject })
+        .mutation(api.comments.report, { commentId: reheld.commentId, reason: "spam" });
     }
     const later = await post(t, AUTHOR, ids, "Held later https://a https://b https://c");
     await t.withIdentity({ subject: OTHER }).mutation(api.comments.edit, {
@@ -910,7 +1079,9 @@ describe("queue order and counts", () => {
       body: "Now https://a https://b https://c",
       spoiler: false,
     });
-    const pending = await t.withIdentity({ subject: EDITOR }).query(api.comments.queue, { tab: "pending" });
+    const pending = await t
+      .withIdentity({ subject: EDITOR })
+      .query(api.comments.queue, { tab: "pending" });
     expect(pending.rows.map((row) => [row.commentId, row.reportCount])).toEqual([
       [reheld.commentId, 2],
       [later.commentId, 0],
@@ -921,7 +1092,9 @@ describe("queue order and counts", () => {
     const t = makeT();
     const ids = await trustedSetup(t);
     await insertHeads(t, ids, OTHER, 105, "pending");
-    expect(await t.withIdentity({ subject: EDITOR }).query(api.comments.queueCounts, {})).toMatchObject({ pending: 100 });
+    expect(
+      await t.withIdentity({ subject: EDITOR }).query(api.comments.queueCounts, {}),
+    ).toMatchObject({ pending: 100 });
   });
 });
 
@@ -943,7 +1116,10 @@ describe("upkeep, more", () => {
     expect(orphan.parentId).toBeUndefined();
     expect(orphan.replyCount).toBe(0);
     expect(rows.find((row) => row._id === elsewhere.commentId)!.replyCount).toBe(0);
-    expect((await listAs(t, null))!.items.map((item) => item.body)).toEqual(["Other thread", "Someone else's reply"]);
+    expect((await listAs(t, null))!.items.map((item) => item.body)).toEqual([
+      "Other thread",
+      "Someone else's reply",
+    ]);
   });
 
   it("a Volume merge across Series repoints seriesId", async () => {
@@ -954,12 +1130,18 @@ describe("upkeep, more", () => {
       body: "On the other Series' volume",
       spoiler: false,
     });
-    await merge(signedIn(t, bob), { type: "volume", id: ids.one.volumeId }, { type: "volume", id: ids.two.volumeId });
+    await merge(
+      signedIn(t, bob),
+      { type: "volume", id: ids.one.volumeId },
+      { type: "volume", id: ids.two.volumeId },
+    );
     expect(await t.run((ctx) => ctx.db.get(moved.commentId))).toMatchObject({
       seriesId: ids.one.seriesId,
       volumeId: ids.one.volumeId,
     });
-    expect((await listAs(t, null, volume(11)))!.items.map((item) => item.body)).toEqual(["On the other Series' volume"]);
+    expect((await listAs(t, null, volume(11)))!.items.map((item) => item.body)).toEqual([
+      "On the other Series' volume",
+    ]);
   });
 
   it("a split puts merged Comments back", async () => {
@@ -971,11 +1153,17 @@ describe("upkeep, more", () => {
       spoiler: false,
     });
     const mod = signedIn(t, bob);
-    await merge(mod, { type: "series", id: ids.one.seriesId }, { type: "series", id: ids.two.seriesId });
+    await merge(
+      mod,
+      { type: "series", id: ids.one.seriesId },
+      { type: "series", id: ids.two.seriesId },
+    );
     expect((await t.run((ctx) => ctx.db.get(onLoser.commentId)))!.seriesId).toBe(ids.one.seriesId);
     await split(mod, { type: "series", id: ids.two.seriesId });
     expect((await t.run((ctx) => ctx.db.get(onLoser.commentId)))!.seriesId).toBe(ids.two.seriesId);
-    expect((await listAs(t, null, series(2)))!.items.map((item) => item.body)).toEqual(["On the loser"]);
+    expect((await listAs(t, null, series(2)))!.items.map((item) => item.body)).toEqual([
+      "On the loser",
+    ]);
     expect((await listAs(t, null))!.items).toEqual([]);
   });
 });

@@ -1,11 +1,5 @@
 /// <reference types="vite/client" />
-import {
-  createRootRoute,
-  HeadContent,
-  Link,
-  Outlet,
-  Scripts,
-} from "@tanstack/react-router";
+import { createRootRoute, HeadContent, Link, Outlet, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { AppProviders, BrandMark, SiteHeader } from "~/providers";
@@ -74,8 +68,8 @@ function SiteFooter() {
             MangaDB
           </Link>
           <p className="footer-blurb">
-            An open database of English manga volume releases. Every edition,
-            every release date, and the shelf you keep at home.
+            An open database of English manga volume releases. Every edition, every release date,
+            and the shelf you keep at home.
           </p>
         </div>
         <div className="footer-cols">
@@ -85,7 +79,9 @@ function SiteFooter() {
             <Link to="/releases">Release calendar</Link>
             <Link to="/authors">Authors</Link>
             <Link to="/publishers">Publishers</Link>
-            <Link to="/search" search={{ q: "" }}>Search</Link>
+            <Link to="/search" search={{ q: "" }}>
+              Search
+            </Link>
           </div>
           <div className="footer-col">
             <h4>The data</h4>

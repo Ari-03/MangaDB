@@ -240,7 +240,12 @@ export async function placeUnmatched(
   // A locked Series takes no new books from an import. A book with no
   // publisher could not be created anyway, so the lock does not hold it
   // (step 4 records it); it still drops a lock hold left from before.
-  const held = await holdUnderLock(ctx, observation, publisher !== undefined ? seriesId : null, now);
+  const held = await holdUnderLock(
+    ctx,
+    observation,
+    publisher !== undefined ? seriesId : null,
+    now,
+  );
   if (held !== null) return held;
 
   // Ambiguity always queues flagged (spec §6), in Bootstrap Mode or out of
@@ -261,7 +266,9 @@ export async function placeUnmatched(
     const quoted = options.ambiguityQuotesBook ? book.title : seriesTitle;
     return await queue(
       `"${quoted}" matches ${book.ambiguousSeries} same-titled Series — the importer never guesses.`,
-      options.ambiguityQuotesBook ? "ambiguous series" : `${book.ambiguousSeries} same-titled Series`,
+      options.ambiguityQuotesBook
+        ? "ambiguous series"
+        : `${book.ambiguousSeries} same-titled Series`,
     );
   }
 

@@ -12,7 +12,17 @@ import {
   insertSeries,
   insertVolume,
 } from "./test.factories";
-import { alice, bob, drain, makeT, reader, seedTeam, signedIn, withUser, type TestT } from "./test.helpers";
+import {
+  alice,
+  bob,
+  drain,
+  makeT,
+  reader,
+  seedTeam,
+  signedIn,
+  withUser,
+  type TestT,
+} from "./test.helpers";
 import { hideRecord, mergeAs, splitAs } from "./test.moderation";
 import { describeNoViewer, seriesWithVolume } from "./test.tracking";
 
@@ -39,13 +49,21 @@ async function setup() {
 
     const standard = await insertEdition(ctx, { publicId: 21, publisherId });
     await insertCoverage(ctx, { editionId: standard, volumeId: v1 });
-    const standardRelease = await insertRelease(ctx, { ...release, editionId: standard, binding: "paperback" });
+    const standardRelease = await insertRelease(ctx, {
+      ...release,
+      editionId: standard,
+      binding: "paperback",
+    });
 
     const omnibus = await insertEdition(ctx, { publicId: 22, publisherId });
     for (const [order, volumeId] of [v1, v2, v3].entries()) {
       await insertCoverage(ctx, { editionId: omnibus, volumeId, order: order + 1 });
     }
-    const omnibusRelease = await insertRelease(ctx, { ...release, editionId: omnibus, binding: "hardcover" });
+    const omnibusRelease = await insertRelease(ctx, {
+      ...release,
+      editionId: omnibus,
+      binding: "hardcover",
+    });
 
     // Split digital edition: only *part* of Vol 3.
     const split = await insertEdition(ctx, { publicId: 23, publisherId });
@@ -55,16 +73,34 @@ async function setup() {
       extent: "partial",
       note: "First half of volume 3",
     });
-    const splitRelease = await insertRelease(ctx, { ...release, editionId: split, format: "digital" });
+    const splitRelease = await insertRelease(ctx, {
+      ...release,
+      editionId: split,
+      format: "digital",
+    });
 
-    return { publisherId, seriesId, v1, v2, v3, omnibus, standardRelease, omnibusRelease, splitRelease };
+    return {
+      publisherId,
+      seriesId,
+      v1,
+      v2,
+      v3,
+      omnibus,
+      standardRelease,
+      omnibusRelease,
+      splitRelease,
+    };
   });
   const as = await withUser(t, reader);
   return { t, as, ...ids };
 }
 
 /** What undoCompletion takes back from a completePass result. */
-function undoArgs({ completedAt, volumeIds, percent }: FunctionReturnType<typeof api.reading.completePass>) {
+function undoArgs({
+  completedAt,
+  volumeIds,
+  percent,
+}: FunctionReturnType<typeof api.reading.completePass>) {
   return { completedAt, volumeIds, percent };
 }
 
@@ -83,30 +119,64 @@ async function readCount(t: TestT, volumeId: Id<"volumes">): Promise<number> {
 describeNoViewer(setup, {
   queries: [
     ["seriesTracking", (as) => as.query(api.reading.seriesTracking, { seriesPublicId: 1 })],
-    ["passForRelease", (as, { standardRelease }) => as.query(api.reading.passForRelease, { releaseId: standardRelease })],
+    [
+      "passForRelease",
+      (as, { standardRelease }) =>
+        as.query(api.reading.passForRelease, { releaseId: standardRelease }),
+    ],
     ["myReading", (as) => as.query(api.reading.myReading, {})],
   ],
   mutations: [
     [
       "setSeriesReadingStatus",
-      (as, { seriesId }) => as.mutation(api.reading.setSeriesReadingStatus, { seriesId, status: "reading" }),
+      (as, { seriesId }) =>
+        as.mutation(api.reading.setSeriesReadingStatus, { seriesId, status: "reading" }),
     ],
-    ["startPass", (as, { standardRelease }) => as.mutation(api.reading.startPass, { releaseId: standardRelease })],
+    [
+      "startPass",
+      (as, { standardRelease }) =>
+        as.mutation(api.reading.startPass, { releaseId: standardRelease }),
+    ],
     [
       "setPassPercent",
-      (as, { standardRelease }) => as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 50 }),
+      (as, { standardRelease }) =>
+        as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 50 }),
     ],
-    ["completePass", (as, { standardRelease }) => as.mutation(api.reading.completePass, { releaseId: standardRelease })],
+    [
+      "completePass",
+      (as, { standardRelease }) =>
+        as.mutation(api.reading.completePass, { releaseId: standardRelease }),
+    ],
     [
       "undoCompletion",
       (as, { standardRelease }) =>
-        as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, completedAt: 1, volumeIds: [] }),
+        as.mutation(api.reading.undoCompletion, {
+          releaseId: standardRelease,
+          completedAt: 1,
+          volumeIds: [],
+        }),
     ],
-    ["cancelPass", (as, { standardRelease }) => as.mutation(api.reading.cancelPass, { releaseId: standardRelease })],
-    ["setVolumeReadCount", (as, { v1 }) => as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 1 })],
-    ["adjustVolumeReadCount", (as, { v1 }) => as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v1, delta: 1 })],
-    ["setEditionRead", (as) => as.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true })],
-    ["setEditionsRead", (as) => as.mutation(api.reading.setEditionsRead, { editionPublicIds: [21, 22], read: true })],
+    [
+      "cancelPass",
+      (as, { standardRelease }) =>
+        as.mutation(api.reading.cancelPass, { releaseId: standardRelease }),
+    ],
+    [
+      "setVolumeReadCount",
+      (as, { v1 }) => as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 1 }),
+    ],
+    [
+      "adjustVolumeReadCount",
+      (as, { v1 }) => as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v1, delta: 1 }),
+    ],
+    [
+      "setEditionRead",
+      (as) => as.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true }),
+    ],
+    [
+      "setEditionsRead",
+      (as) => as.mutation(api.reading.setEditionsRead, { editionPublicIds: [21, 22], read: true }),
+    ],
   ],
 });
 
@@ -134,7 +204,11 @@ describe("reading.seriesTracking", () => {
     await seedTeam(t, [alice, bob, reader]);
     const { survivor, loser, volumeId } = await t.run(async (ctx) => {
       const survivor = await insertSeries(ctx, { publicId: 1, title: "Vinland Saga" });
-      const { seriesId: loser, volumeId } = await seriesWithVolume(ctx, 2, "Vinland Saga (duplicate)");
+      const { seriesId: loser, volumeId } = await seriesWithVolume(
+        ctx,
+        2,
+        "Vinland Saga (duplicate)",
+      );
       return { survivor, loser, volumeId };
     });
     await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser });
@@ -172,16 +246,12 @@ describe("reading.startPass", () => {
       releaseId: standardRelease,
     });
     // The prompt material: this series is not in "Reading".
-    expect(first.suggestReading).toEqual([
-      { seriesId, title: "Vinland Saga" },
-    ]);
+    expect(first.suggestReading).toEqual([{ seriesId, title: "Vinland Saga" }]);
 
     // Declining the prompt changes nothing: the status stays unchosen.
     const tracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 1 });
     expect(tracking?.readingStatus).toBeNull();
-    expect(tracking?.passes).toEqual([
-      { releaseId: standardRelease, percent: null },
-    ]);
+    expect(tracking?.passes).toEqual([{ releaseId: standardRelease, percent: null }]);
 
     // Starting again is a no-op, not a second pass.
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
@@ -320,7 +390,10 @@ describe("reading.undoCompletion", () => {
     expect(done.volumeIds).toEqual([v1, v2, v3]);
     expect(done.percent).toBeUndefined();
 
-    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) });
+    const undo = await as.mutation(api.reading.undoCompletion, {
+      releaseId: omnibusRelease,
+      ...undoArgs(done),
+    });
     expect(undo.decremented).toBe(3);
     expect(await readCount(t, v1)).toBe(0);
     expect(await readCount(t, v2)).toBe(0);
@@ -335,7 +408,10 @@ describe("reading.undoCompletion", () => {
     const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
     expect(done.percent).toBe(40);
 
-    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(done),
+    });
     expect(await passOn(as, standardRelease)).toEqual({ percent: 40 });
   });
 
@@ -346,7 +422,10 @@ describe("reading.undoCompletion", () => {
     const done = await as.mutation(api.reading.completePass, { releaseId: splitRelease });
     expect(done.volumeIds).toEqual([]);
 
-    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: splitRelease, ...undoArgs(done) });
+    const undo = await as.mutation(api.reading.undoCompletion, {
+      releaseId: splitRelease,
+      ...undoArgs(done),
+    });
     expect(undo.decremented).toBe(0);
     expect(await readCount(t, v3)).toBe(0);
     expect(await passOn(as, splitRelease)).toEqual({ percent: 60 });
@@ -363,7 +442,10 @@ describe("reading.undoCompletion", () => {
       }
     });
 
-    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) });
+    const undo = await as.mutation(api.reading.undoCompletion, {
+      releaseId: omnibusRelease,
+      ...undoArgs(done),
+    });
     expect(undo.decremented).toBe(3);
     expect(await readCount(t, v2)).toBe(0);
     expect(await readCount(t, v3)).toBe(0);
@@ -378,7 +460,10 @@ describe("reading.undoCompletion", () => {
       releaseId: standardRelease,
     });
 
-    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(second) });
+    await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(second),
+    });
     expect(await readCount(t, v1)).toBe(1);
   });
 
@@ -397,7 +482,10 @@ describe("reading.undoCompletion", () => {
     expect(second.completedAt).not.toBe(first.completedAt);
 
     // Undoing the *older* completion touches nothing and restores no pass.
-    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(first) });
+    const undo = await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(first),
+    });
     expect(undo.decremented).toBe(0);
     expect(await readCount(t, v1)).toBe(2);
     expect(await passOn(as, standardRelease)).toBeNull();
@@ -410,7 +498,10 @@ describe("reading.undoCompletion", () => {
     await new Promise((resolve) => setTimeout(resolve, 2));
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 3 });
 
-    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    const undo = await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(done),
+    });
     expect(undo.decremented).toBe(0);
     expect(await readCount(t, v1)).toBe(3);
     expect(await passOn(as, standardRelease)).toBeNull();
@@ -424,7 +515,10 @@ describe("reading.undoCompletion", () => {
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     await as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 10 });
 
-    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(done),
+    });
     expect(await readCount(t, v1)).toBe(0);
     expect(await passOn(as, standardRelease)).toEqual({ percent: 10 });
   });
@@ -434,18 +528,30 @@ describe("reading.undoCompletion", () => {
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 2 });
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
-    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(done),
+    });
     expect(await readCount(t, v1)).toBe(2);
 
-    const again = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    const again = await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(done),
+    });
     expect(again.decremented).toBe(0);
     expect(await readCount(t, v1)).toBe(2);
 
     // A completion that counted nothing: its pass comes back once.
     await as.mutation(api.reading.startPass, { releaseId: splitRelease });
     const partial = await as.mutation(api.reading.completePass, { releaseId: splitRelease });
-    await as.mutation(api.reading.undoCompletion, { releaseId: splitRelease, ...undoArgs(partial) });
-    await as.mutation(api.reading.undoCompletion, { releaseId: splitRelease, ...undoArgs(partial) });
+    await as.mutation(api.reading.undoCompletion, {
+      releaseId: splitRelease,
+      ...undoArgs(partial),
+    });
+    await as.mutation(api.reading.undoCompletion, {
+      releaseId: splitRelease,
+      ...undoArgs(partial),
+    });
     const passes = await t.run(async (ctx) => await ctx.db.query("releaseProgress").collect());
     expect(passes.map((pass) => pass.releaseId)).toEqual([standardRelease, splitRelease]);
   });
@@ -458,7 +564,10 @@ describe("reading.undoCompletion", () => {
     const done = await as.mutation(api.reading.completePass, { releaseId: omnibusRelease });
     await mergeAs(t, { type: "volume", id: v1 }, { type: "volume", id: v2 });
 
-    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) });
+    const undo = await as.mutation(api.reading.undoCompletion, {
+      releaseId: omnibusRelease,
+      ...undoArgs(done),
+    });
     expect(undo.decremented).toBe(2);
     expect(await readCount(t, v1)).toBe(1);
     expect(await readCount(t, v3)).toBe(0);
@@ -472,7 +581,10 @@ describe("reading.undoCompletion", () => {
     const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
     await hideRecord(t, { type: "series", id: seriesId });
 
-    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    const undo = await as.mutation(api.reading.undoCompletion, {
+      releaseId: standardRelease,
+      ...undoArgs(done),
+    });
     expect(undo.decremented).toBe(1);
     expect(await readCount(t, v1)).toBe(0);
     expect(await passOn(as, standardRelease)).toEqual({ percent: 40 });
@@ -521,9 +633,7 @@ describe("reading.setVolumeReadCount", () => {
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
     expect(await readCount(t, v2)).toBe(2);
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 0 });
-    const rows = await t.run(
-      async (ctx) => await ctx.db.query("volumeProgress").collect(),
-    );
+    const rows = await t.run(async (ctx) => await ctx.db.query("volumeProgress").collect());
     expect(rows).toHaveLength(0);
   });
 
@@ -574,9 +684,7 @@ describe("reading.adjustVolumeReadCount", () => {
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
-    const rows = await t.run(
-      async (ctx) => await ctx.db.query("volumeProgress").collect(),
-    );
+    const rows = await t.run(async (ctx) => await ctx.db.query("volumeProgress").collect());
     expect(rows).toHaveLength(0);
   });
 
@@ -591,12 +699,10 @@ describe("reading.adjustVolumeReadCount", () => {
 describe("reading.passForRelease", () => {
   it("distinguishes signed out (null) from signed in without a pass", async () => {
     const { t, as, standardRelease } = await setup();
-    expect(
-      await t.query(api.reading.passForRelease, { releaseId: standardRelease }),
-    ).toBeNull();
-    expect(
-      await as.query(api.reading.passForRelease, { releaseId: standardRelease }),
-    ).toEqual({ pass: null });
+    expect(await t.query(api.reading.passForRelease, { releaseId: standardRelease })).toBeNull();
+    expect(await as.query(api.reading.passForRelease, { releaseId: standardRelease })).toEqual({
+      pass: null,
+    });
   });
 });
 
@@ -763,9 +869,13 @@ describe("reading progress belongs to one user", () => {
       passes: [],
     });
     expect(
-      (await other.query(api.reading.seriesTracking, { seriesPublicId: 1 }))?.volumes.map((v) => v.readCount),
+      (await other.query(api.reading.seriesTracking, { seriesPublicId: 1 }))?.volumes.map(
+        (v) => v.readCount,
+      ),
     ).toEqual([0, 0, 0]);
-    expect(await other.query(api.reading.passForRelease, { releaseId: standardRelease })).toEqual({ pass: null });
+    expect(await other.query(api.reading.passForRelease, { releaseId: standardRelease })).toEqual({
+      pass: null,
+    });
     expect(await other.query(api.reading.myReading, {})).toMatchObject({ series: [] });
 
     // The reader's pass is not theirs to move, complete or cancel.
@@ -778,16 +888,25 @@ describe("reading progress belongs to one user", () => {
     await other.mutation(api.reading.cancelPass, { releaseId: standardRelease });
     // Nor are the reader's completion, read counts or status theirs to undo,
     // even sending back the reader's own completion and Volume ids.
-    expect(await other.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) })).toEqual({
+    expect(
+      await other.mutation(api.reading.undoCompletion, {
+        releaseId: omnibusRelease,
+        ...undoArgs(done),
+      }),
+    ).toEqual({
       decremented: 0,
     });
-    expect(await other.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: false })).toMatchObject({
+    expect(
+      await other.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: false }),
+    ).toMatchObject({
       changed: 0,
     });
     await other.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
     await other.mutation(api.reading.setSeriesReadingStatus, { seriesId });
 
-    expect(await as.query(api.reading.seriesTracking, { seriesPublicId: 1 })).toEqual(readerTracking);
+    expect(await as.query(api.reading.seriesTracking, { seriesPublicId: 1 })).toEqual(
+      readerTracking,
+    );
     expect(await as.query(api.reading.myReading, {})).toEqual(readerOverview);
     expect(await as.query(api.reading.passForRelease, { releaseId: standardRelease })).toEqual({
       pass: { percent: 40 },
@@ -803,13 +922,18 @@ describe("reading.unsetProgressSeries", () => {
     const stored = await t.run(async (ctx) => {
       const ids: Array<Id<"volumeProgress">> = [];
       for (let i = 0; i < UNSET_SERIES_PAGE * 2 + UNSET_SERIES_PAGE / 2; i++) {
-        ids.push(await ctx.db.insert("volumeProgress", { userId, volumeId: v1, seriesId, readCount: 1 }));
+        ids.push(
+          await ctx.db.insert("volumeProgress", { userId, volumeId: v1, seriesId, readCount: 1 }),
+        );
       }
       return ids;
     });
     const rows = () => t.run(async (ctx) => await ctx.db.query("volumeProgress").collect());
 
-    expect(await t.mutation(internal.reading.unsetProgressSeries, {})).toEqual({ unset: UNSET_SERIES_PAGE, done: false });
+    expect(await t.mutation(internal.reading.unsetProgressSeries, {})).toEqual({
+      unset: UNSET_SERIES_PAGE,
+      done: false,
+    });
     // A read lands between pages, and a not-yet-visited row is reread.
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
     await t.run((ctx) => ctx.db.patch(stored.at(-1)!, { readCount: 5 }));
@@ -822,7 +946,10 @@ describe("reading.unsetProgressSeries", () => {
     expect(after.find((row) => row._id === meanwhile._id)).toEqual(meanwhile);
     expect(after.find((row) => row._id === stored.at(-1))?.readCount).toBe(5);
 
-    expect(await t.mutation(internal.reading.unsetProgressSeries, {})).toEqual({ unset: 0, done: false });
+    expect(await t.mutation(internal.reading.unsetProgressSeries, {})).toEqual({
+      unset: 0,
+      done: false,
+    });
     await drain(t);
     expect(await rows()).toEqual(after);
   });

@@ -99,13 +99,29 @@ async function oneVolume(ctx: MutationCtx) {
   const publisherId = await insertPublisher(ctx);
   const seriesId = await insertSeries(ctx);
   const volumeId = await insertVolume(ctx, { seriesId });
-  const edition = async ({ status = "active", covers = true }: { status?: "active" | "hidden"; covers?: boolean } = {}) => {
+  const edition = async ({
+    status = "active",
+    covers = true,
+  }: {
+    status?: "active" | "hidden";
+    covers?: boolean;
+  } = {}) => {
     const editionId = await insertEdition(ctx, { status, publisherId });
     if (covers) await insertCoverage(ctx, { editionId, volumeId });
     return editionId;
   };
-  const release = async (editionId: Id<"editions">, format: "physical" | "digital", over: Overrides<"releases"> = {}) => {
-    const id = await insertRelease(ctx, { editionId, format, publisherId, seriesIds: [seriesId], ...over });
+  const release = async (
+    editionId: Id<"editions">,
+    format: "physical" | "digital",
+    over: Overrides<"releases"> = {},
+  ) => {
+    const id = await insertRelease(ctx, {
+      editionId,
+      format,
+      publisherId,
+      seriesIds: [seriesId],
+      ...over,
+    });
     return (await ctx.db.get(id))!;
   };
   return { edition, release };
@@ -125,7 +141,8 @@ describe("releaseCover", () => {
       const lonely = await release(await edition({ covers: false }), "physical");
 
       const cache = jacketCache(ctx);
-      const isbns = async (r: Doc<"releases">, c = cache) => (await releaseCover(ctx, r, c)).coverIsbns;
+      const isbns = async (r: Doc<"releases">, c = cache) =>
+        (await releaseCover(ctx, r, c)).coverIsbns;
       // The ebook looks art up by its print sibling's ISBN first, then its own.
       expect(await isbns(ebook)).toEqual(["9780000000002", "9780000000001"]);
       expect(await isbns(bare)).toEqual(["9780000000002", "9780000000001"]);
@@ -156,7 +173,8 @@ async function oneEdition(ctx: MutationCtx) {
   const editionId = await edition({ covers: false });
   return {
     editionId,
-    release: (format: "physical" | "digital", over: Overrides<"releases"> = {}) => release(editionId, format, over),
+    release: (format: "physical" | "digital", over: Overrides<"releases"> = {}) =>
+      release(editionId, format, over),
   };
 }
 
@@ -167,8 +185,14 @@ describe("jacketCache", () => {
     const t = makeT();
     await t.run(async (ctx) => {
       const { editionId, release } = await oneEdition(ctx);
-      const digital = await release("digital", { isbn13: "9798898302498", pubDate: dated(20261007) });
-      const print = await release("physical", { isbn13: "9798888778661", pubDate: dated(20261104) });
+      const digital = await release("digital", {
+        isbn13: "9798898302498",
+        pubDate: dated(20261007),
+      });
+      const print = await release("physical", {
+        isbn13: "9798888778661",
+        pubDate: dated(20261104),
+      });
       const cache = jacketCache(ctx);
       const both = ["9798888778661", "9798898302498"];
       expect((await releaseCover(ctx, digital, cache)).coverIsbns).toEqual(both);
@@ -183,7 +207,11 @@ describe("jacketCache", () => {
       const { editionId, release } = await oneEdition(ctx);
       await release("physical", { isbn13: "9780000000003", pubDate: dated(20260301) });
       await release("digital", { isbn13: "9780000000001", pubDate: dated(20260101) });
-      await release("physical", { isbn13: "9780000000009", pubDate: dated(20250101), status: "hidden" });
+      await release("physical", {
+        isbn13: "9780000000009",
+        pubDate: dated(20250101),
+        status: "hidden",
+      });
       await release("physical", { isbn13: "9780000000002", pubDate: dated(20260201) });
       await release("physical", { isbn13: "9780000000002", pubDate: dated(20260501) });
       await release("digital", { isbn13: "9780000000004" });
@@ -212,7 +240,10 @@ describe("jacketCache", () => {
       });
       await release("physical", { pubDate: dated(20260115), coverImage: { storageId: svg } });
       await release("physical", { pubDate: dated(20260201), coverImage: { storageId: art } });
-      const own = await release("physical", { pubDate: dated(20260301), coverImage: { storageId: ownArt } });
+      const own = await release("physical", {
+        pubDate: dated(20260301),
+        coverImage: { storageId: ownArt },
+      });
       const bare = await release("digital");
 
       const artUrl = await ctx.storage.getUrl(art);

@@ -53,9 +53,12 @@ async function generalSeries({ t }: Seeded) {
 }
 
 const bundlePage = ({ t }: Seeded) => t.query(api.catalogPages.bundlePage, { publicId: 4 });
-const editionPage = ({ t }: Seeded, publicId: number) => t.query(api.catalogPages.editionPage, { publicId });
+const editionPage = ({ t }: Seeded, publicId: number) =>
+  t.query(api.catalogPages.editionPage, { publicId });
 const sitemapIds = async ({ t }: Seeded, entity: "edition" | "bundle") =>
-  (await t.query(api.seo.sitemapPage, { entity, paginationOpts: PAGE })).entries.map((entry) => entry.publicId);
+  (await t.query(api.seo.sitemapPage, { entity, paginationOpts: PAGE })).entries.map(
+    (entry) => entry.publicId,
+  );
 
 describe("Bundle maturity from hidden members (R14)", () => {
   for (const hidden of ["release", "edition"] as const) {
@@ -66,7 +69,9 @@ describe("Bundle maturity from hidden members (R14)", () => {
       expect((await bundlePage(seeded))?.mature).toBe(true);
       expect(await sitemapIds(seeded, "bundle")).toEqual([]);
       await seeded.t.run((ctx) =>
-        ctx.db.patch(hidden === "release" ? seeded.ids.releaseId : seeded.ids.editionId, { status: "hidden" }),
+        ctx.db.patch(hidden === "release" ? seeded.ids.releaseId : seeded.ids.editionId, {
+          status: "hidden",
+        }),
       );
       const page = await bundlePage(seeded);
       expect(page?.members).toEqual([]);
@@ -97,7 +102,11 @@ describe("Bundle maturity from hidden members (R14)", () => {
     const seeded = await seed();
     const { ids } = seeded;
     await seeded.t.run(async (ctx) => {
-      const survivor = await insertEdition(ctx, { status: "hidden", publicId: 5, publisherId: ids.publisherId });
+      const survivor = await insertEdition(ctx, {
+        status: "hidden",
+        publicId: 5,
+        publisherId: ids.publisherId,
+      });
       await insertCoverage(ctx, { editionId: survivor, volumeId: ids.volumeId });
       await ctx.db.patch(ids.editionId, { status: "merged", mergedIntoId: survivor });
     });
@@ -113,7 +122,10 @@ describe("Bundle maturity from hidden members (R14)", () => {
     const general = await generalSeries(seeded);
     // The box set's member merged away from a general book into the mature one.
     await seeded.t.run(async (ctx) => {
-      const generalEdition = await insertEdition(ctx, { publicId: 6, publisherId: ids.publisherId });
+      const generalEdition = await insertEdition(ctx, {
+        publicId: 6,
+        publisherId: ids.publisherId,
+      });
       await insertCoverage(ctx, { editionId: generalEdition, volumeId: general.volumeId });
       const loser = await insertRelease(ctx, {
         status: "merged",
@@ -181,7 +193,11 @@ describe("Edition maturity from its line and covered content (R15)", () => {
         linePosition: "1",
         coverageUnmapped: true,
       });
-      const releaseId = await insertRelease(ctx, { editionId, publisherId: ids.publisherId, seriesIds: [ids.seriesId] });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId: ids.publisherId,
+        seriesIds: [ids.seriesId],
+      });
       return { lineId, editionId, releaseId };
     });
   }
@@ -252,7 +268,9 @@ describe("Edition maturity from its line and covered content (R15)", () => {
   it("leaves a general Unmapped Packaging on the sitemap", async () => {
     const seeded = await seed();
     await unmapped(seeded);
-    await seeded.t.run((ctx) => ctx.db.patch(seeded.ids.seriesId, { mature: undefined, status: "hidden" }));
+    await seeded.t.run((ctx) =>
+      ctx.db.patch(seeded.ids.seriesId, { mature: undefined, status: "hidden" }),
+    );
     expect((await editionPage(seeded, 7))?.mature).toBe(false);
     expect(await sitemapIds(seeded, "edition")).toContain(7);
   });

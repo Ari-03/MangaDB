@@ -45,9 +45,7 @@ export const Route = createFileRoute("/u/$username")({
   head: ({ loaderData }) => ({
     meta: [
       {
-        title: loaderData
-          ? `@${loaderData.username} — ${SITE_NAME}`
-          : `Profile — ${SITE_NAME}`,
+        title: loaderData ? `@${loaderData.username} — ${SITE_NAME}` : `Profile — ${SITE_NAME}`,
       },
       // Profiles are public-but-noindex (spec §11): reachable by link, never
       // by search engine.
@@ -64,8 +62,8 @@ function ProfileNotFound() {
       <div className="acct-head">
         <h1 className="acct-title">No shelf here</h1>
         <p className="acct-kicker">
-          No one on {SITE_NAME} goes by that name — the username may have
-          changed since the link was made.
+          No one on {SITE_NAME} goes by that name — the username may have changed since the link was
+          made.
         </p>
       </div>
       <p className="notfound-cta">
@@ -80,8 +78,7 @@ function ProfileNotFound() {
 function ProfilePage() {
   const profile = Route.useLoaderData();
   const { ownership, reading, ratings, reviews } = profile;
-  const ownsAnything =
-    ownership.releases.length > 0 || ownership.bundles.length > 0;
+  const ownsAnything = ownership.releases.length > 0 || ownership.bundles.length > 0;
   const sharesNothing =
     !ownsAnything && reading.length === 0 && ratings.length === 0 && reviews.length === 0;
 
@@ -90,8 +87,7 @@ function ProfilePage() {
       <div className="acct-head">
         <h1 className="acct-title">@{profile.username}</h1>
         <p className="acct-kicker">
-          What @{profile.username} shares on {SITE_NAME} — current state, not a
-          history.
+          What @{profile.username} shares on {SITE_NAME} — current state, not a history.
         </p>
         {sharesNothing ? null : (
           <div className="acct-stats">
@@ -128,9 +124,7 @@ function ProfilePage() {
             {reviews.length > 0 ? (
               <div className="acct-stat">
                 <div className="acct-num">{reviews.length}</div>
-                <div className="acct-label">
-                  {reviews.length === 1 ? "Review" : "Reviews"}
-                </div>
+                <div className="acct-label">{reviews.length === 1 ? "Review" : "Reviews"}</div>
               </div>
             ) : null}
           </div>
@@ -146,9 +140,8 @@ function ProfilePage() {
           </div>
           <div className="empty-note">
             <p>
-              @{profile.username} keeps their shelf private. Nothing here is
-              hidden from you in particular — tracking on {SITE_NAME} is
-              private until its owner opens it.
+              @{profile.username} keeps their shelf private. Nothing here is hidden from you in
+              particular — tracking on {SITE_NAME} is private until its owner opens it.
             </p>
           </div>
         </div>
@@ -182,9 +175,7 @@ function releaseFacts(row: {
   variantName: string | null;
 }) {
   const form =
-    row.format === "physical"
-      ? `Physical${row.binding ? ` · ${row.binding}` : ""}`
-      : "Digital";
+    row.format === "physical" ? `Physical${row.binding ? ` · ${row.binding}` : ""}` : "Digital";
   return `${form}${row.variantName ? ` · ${row.variantName} variant` : ""}`;
 }
 
@@ -224,11 +215,7 @@ function ReleaseItem({ row }: { row: ReleaseRow }) {
 }
 
 /** Owned Releases (with selected Variants) and Bundles with derived members. */
-function OwnershipSection({
-  ownership,
-}: {
-  ownership: PublicProfileData["ownership"];
-}) {
+function OwnershipSection({ ownership }: { ownership: PublicProfileData["ownership"] }) {
   return (
     <section className="me-section">
       <div className="section-head">
@@ -255,9 +242,7 @@ function OwnershipSection({
             </h3>
             <p className="boxset-note">
               Box set
-              {bundle.members.length > 0
-                ? ` · ${bundle.members.length} books inside`
-                : ""}
+              {bundle.members.length > 0 ? ` · ${bundle.members.length} books inside` : ""}
             </p>
           </div>
           {bundle.members.length > 0 ? (
@@ -274,11 +259,7 @@ function OwnershipSection({
 }
 
 /** Series Reading Status, Volume read counts, and active pass percentages. */
-function ReadingSection({
-  reading,
-}: {
-  reading: PublicProfileData["reading"];
-}) {
+function ReadingSection({ reading }: { reading: PublicProfileData["reading"] }) {
   return (
     <section className="me-section">
       <div className="section-head">
@@ -306,9 +287,7 @@ function ReadingSection({
                 </h3>
                 <div className="reading-meta">
                   <span className="chip">
-                    {series.readingStatus
-                      ? STATUS_LABELS[series.readingStatus]
-                      : "Untracked"}
+                    {series.readingStatus ? STATUS_LABELS[series.readingStatus] : "Untracked"}
                   </span>
                   {series.totalVolumes > 0 ? (
                     <span>
@@ -349,10 +328,7 @@ function ReadingSection({
                         Reading{" "}
                         <Link
                           to="/edition/$publicId/$slug"
-                          params={slugParams(
-                            pass.editionPublicId,
-                            pass.editionTitle,
-                          )}
+                          params={slugParams(pass.editionPublicId, pass.editionTitle)}
                           hash={pass.anchor}
                         >
                           {pass.editionTitle}
@@ -408,11 +384,7 @@ function TargetLink({
  * Rated Series and omnibus Editions, highest first — only those whose
  * Series' Reading the user shares.
  */
-function RatingsSection({
-  ratings,
-}: {
-  ratings: PublicProfileData["ratings"];
-}) {
+function RatingsSection({ ratings }: { ratings: PublicProfileData["ratings"] }) {
   return (
     <section className="me-section">
       <div className="section-head">
@@ -432,11 +404,7 @@ function RatingsSection({
 }
 
 /** Every visible Review, newest first; spoilers fold behind a button. */
-function ReviewsSection({
-  reviews,
-}: {
-  reviews: PublicProfileData["reviews"];
-}) {
+function ReviewsSection({ reviews }: { reviews: PublicProfileData["reviews"] }) {
   return (
     <section className="me-section">
       <div className="section-head">
@@ -454,11 +422,7 @@ function ReviewsSection({
   );
 }
 
-function ProfileReview({
-  review,
-}: {
-  review: PublicProfileData["reviews"][number];
-}) {
+function ProfileReview({ review }: { review: PublicProfileData["reviews"][number] }) {
   const [revealed, setRevealed] = useState(false);
   return (
     <article className="review-card">

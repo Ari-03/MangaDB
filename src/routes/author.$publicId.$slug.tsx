@@ -6,11 +6,7 @@ import { catalogQuery, type AuthorPageData } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
 import { SeriesShelfItem } from "~/lib/shelfItem";
 import { plural } from "~/lib/format";
-import {
-  authorTitleTag,
-  pageHead,
-  personJsonLd,
-} from "~/lib/seo";
+import { authorTitleTag, pageHead, personJsonLd } from "~/lib/seo";
 import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { authorPath, parsePublicId } from "~/lib/slug";
 
@@ -46,7 +42,10 @@ export const Route = createFileRoute("/author/$publicId/$slug")({
     // The same count the page leads with: Series they wrote or drew.
     const series = loaderData.series.filter(made);
     const path = authorPath(author.publicId, author.name);
-    const titles = series.slice(0, 3).map((s) => s.title).join(", ");
+    const titles = series
+      .slice(0, 3)
+      .map((s) => s.title)
+      .join(", ");
     return pageHead({
       title: authorTitleTag(author.name),
       description: `Manga by ${author.name} in English: ${series.length} series${titles ? `, including ${titles}` : ""}, with every edition and release date.`,
@@ -60,7 +59,6 @@ export const Route = createFileRoute("/author/$publicId/$slug")({
   notFoundComponent: () => <NotFound noun="Author" browse="authors" />,
 });
 
-
 /** "Story & Art on 12 · Original creator on 3": what they did, how often. */
 function roleSummary(series: ReadonlyArray<AuthorSeries>): string {
   const counts = new Map<CreditRole, number>();
@@ -72,7 +70,6 @@ function roleSummary(series: ReadonlyArray<AuthorSeries>): string {
     .map(([role, n]) => `${ROLE_NAMES[role]} on ${n}`)
     .join(" · ");
 }
-
 
 function AuthorPage() {
   const { author, series: all } = Route.useLoaderData();

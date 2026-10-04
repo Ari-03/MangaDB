@@ -115,7 +115,10 @@ export function applyConsent(consent: AnalyticsConsent) {
   // A denial stored by an earlier page load. Read before reset(), which clears it.
   needsOptIn ||= posthog.has_opted_out_capturing();
   // identify() records itself in posthog-js's persisted `$user_state`.
-  if (posthog.get_property("$user_state") === "identified" && posthog.get_distinct_id() !== userId) {
+  if (
+    posthog.get_property("$user_state") === "identified" &&
+    posthog.get_distinct_id() !== userId
+  ) {
     posthog.reset();
   }
   if (needsOptIn) {

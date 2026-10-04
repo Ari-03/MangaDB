@@ -10,7 +10,7 @@ export function convexUrl() {
     (typeof process === "undefined" ? undefined : process.env.VITE_CONVEX_URL);
   if (!url) {
     throw new Error(
-      "VITE_CONVEX_URL is not set. Locally, run `npx convex dev`, which writes it to .env.local (README, \"Run it locally\"); for a deploy, see docs/configuration.md.",
+      'VITE_CONVEX_URL is not set. Locally, run `npx convex dev`, which writes it to .env.local (README, "Run it locally"); for a deploy, see docs/configuration.md.',
     );
   }
   return url;

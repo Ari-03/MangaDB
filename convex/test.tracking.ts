@@ -36,7 +36,11 @@ export const UNCLAIMED = { subject: "user_unclaimed" };
  */
 export const NO_VIEWER = [
   { caller: "signed out", as: (t: TestT): Accessor => t, refusal: "unauthenticated" },
-  { caller: "pending claim", as: (t: TestT) => signedIn(t, UNCLAIMED), refusal: "usernameRequired" },
+  {
+    caller: "pending claim",
+    as: (t: TestT) => signedIn(t, UNCLAIMED),
+    refusal: "usernameRequired",
+  },
 ] as const;
 
 /** A named call of one public function, made by `as` against a suite's setup. */

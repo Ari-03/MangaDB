@@ -6,11 +6,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 
 /** One user's state row for one Series, or null. */
-export async function seriesStateRow(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  seriesId: Id<"series">,
-) {
+export async function seriesStateRow(ctx: QueryCtx, userId: Id<"users">, seriesId: Id<"series">) {
   return await ctx.db
     .query("userSeriesStates")
     .withIndex("by_user_series", (q) => q.eq("userId", userId).eq("seriesId", seriesId))

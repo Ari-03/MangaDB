@@ -40,7 +40,13 @@ import { coverageOf, coveringOf, releasesOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
-import { clearHold, getObservation, linkObservation, recordUnplaced, upsertObservation } from "./observations";
+import {
+  clearHold,
+  getObservation,
+  linkObservation,
+  recordUnplaced,
+  upsertObservation,
+} from "./observations";
 import { applyRetrying } from "./occ";
 import { allocatePublicId } from "./publicIds";
 import {
@@ -930,7 +936,13 @@ export type CreationArgs = {
 type CreatedRecord = {
   ref: {
     type:
-      "publisher" | "series" | "volume" | "editionLine" | "edition" | "release" | "releaseBundle";
+      | "publisher"
+      | "series"
+      | "volume"
+      | "editionLine"
+      | "edition"
+      | "release"
+      | "releaseBundle";
     id: string;
   };
   table: string;
@@ -1044,7 +1056,8 @@ async function ensureVolumes(
 }
 
 /** Whether a Release may be filed under this Edition: active and unlocked. */
-export const joinableEdition = (edition: Doc<"editions">) => edition.status === "active" && !edition.locked;
+export const joinableEdition = (edition: Doc<"editions">) =>
+  edition.status === "active" && !edition.locked;
 
 /**
  * Every Edition, in any state, by this publisher covering exactly these
@@ -1087,7 +1100,9 @@ export async function findSiblingEdition(
   volumeIds: Id<"volumes">[],
   line: { id: Id<"editionLines">; position: string | null } | null,
 ): Promise<Id<"editions"> | null> {
-  return (await siblingEditions(ctx, publisherId, volumeIds, line)).find(joinableEdition)?._id ?? null;
+  return (
+    (await siblingEditions(ctx, publisherId, volumeIds, line)).find(joinableEdition)?._id ?? null
+  );
 }
 
 /**
@@ -1628,11 +1643,7 @@ async function addLateBundleMembers(
   bundle: Doc<"releaseBundles">,
   args: BundleMembersArgs,
 ): Promise<{ expected: number; added: number; conflict?: string }> {
-  if (
-    bundle.status !== "active" ||
-    bundle.locked ||
-    bundle.overriddenFields?.includes("members")
-  ) {
+  if (bundle.status !== "active" || bundle.locked || bundle.overriddenFields?.includes("members")) {
     return { expected: 0, added: 0 };
   }
   // In page order: by `order`, then creation.

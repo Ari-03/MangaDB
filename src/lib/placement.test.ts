@@ -12,9 +12,32 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { recordUnplaced } from "../../convex/lib/observations";
 import { parseDumpLine } from "../../convex/lib/openLibrary";
-import { insertObservation, insertPublisher, insertSeries, insertVolume } from "../../convex/test.factories";
-import { alice, bob, carol, makeT, seedTeam, signedIn, type TestT, type TestUser } from "../../convex/test.helpers";
-import { harness, mount, press, resetHarness, setQuery, settle, text, type Host } from "./test.react";
+import {
+  insertObservation,
+  insertPublisher,
+  insertSeries,
+  insertVolume,
+} from "../../convex/test.factories";
+import {
+  alice,
+  bob,
+  carol,
+  makeT,
+  seedTeam,
+  signedIn,
+  type TestT,
+  type TestUser,
+} from "../../convex/test.helpers";
+import {
+  harness,
+  mount,
+  press,
+  resetHarness,
+  setQuery,
+  settle,
+  text,
+  type Host,
+} from "./test.react";
 
 // The page's navigate spy, and the Proposal the Proposal page's route names.
 const fakes = vi.hoisted(() => {
@@ -47,7 +70,8 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("~/lib/viewer", () => ({ useIsDataTeam: () => true, useIsModerator: () => false }));
 
 const imports = (await import("../routes/mod.imports")).Route.options.component as () => ReactNode;
-const proposal = (await import("../routes/mod.proposal.$id")).Route.options.component as () => ReactNode;
+const proposal = (await import("../routes/mod.proposal.$id")).Route.options
+  .component as () => ReactNode;
 
 /** An Open Library edition's snapshot, as the dump parser stores it. */
 const olSnapshot = (key: string, title: string, isbn: string) =>
@@ -81,12 +105,25 @@ async function seed(t: TestT) {
       kind: "volumeMissing" | "packaging" | "series",
       seriesId?: Id<"series">,
     ) => {
-      const id = await insertObservation(ctx, { sourceKey: "openlibrary", sourceRecordId: snapshot.key, snapshot });
-      await recordUnplaced(ctx, (await ctx.db.get(id))!, { kind, reason: "Held.", seriesId }, Date.now());
+      const id = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: snapshot.key,
+        snapshot,
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(id))!,
+        { kind, reason: "Held.", seriesId },
+        Date.now(),
+      );
       return id;
     };
     return {
-      alice1: await hold(olSnapshot("/books/OL1M", "Alice in Borderland, Vol. 1", "9781974728374"), "volumeMissing", aliceId),
+      alice1: await hold(
+        olSnapshot("/books/OL1M", "Alice in Borderland, Vol. 1", "9781974728374"),
+        "volumeMissing",
+        aliceId,
+      ),
       vagabond4: await hold(
         olSnapshot("/books/OL2M", "Vagabond Definitive Edition, Vol. 4", "9781974700400"),
         "packaging",
@@ -106,10 +143,14 @@ async function show(t: TestT, user: TestUser) {
   setQuery(api.imports.recentRuns, []);
   setQuery(
     api.imports.heldBooks,
-    (await as.query(api.imports.heldBooks, { paginationOpts: { numItems: 25, cursor: null } })).page,
+    (await as.query(api.imports.heldBooks, { paginationOpts: { numItems: 25, cursor: null } }))
+      .page,
   );
   if (fakes.proposalId !== null) {
-    setQuery(api.proposals.proposalDetail, await as.query(api.proposals.proposalDetail, { proposalId: fakes.proposalId }));
+    setQuery(
+      api.proposals.proposalDetail,
+      await as.query(api.proposals.proposalDetail, { proposalId: fakes.proposalId }),
+    );
   }
 }
 
@@ -124,7 +165,9 @@ function row(tree: Host[], title: string): Host[] {
 }
 
 const typeInto = (input: Host | undefined, value: string) =>
-  (input!.props.onChange as (event: unknown) => void)({ target: { value, checked: value === "on" } });
+  (input!.props.onChange as (event: unknown) => void)({
+    target: { value, checked: value === "on" },
+  });
 
 beforeEach(() => {
   resetHarness();
@@ -141,14 +184,28 @@ describe("Held books on /mod/imports", () => {
     await settle();
     const proposals = await t.run((ctx) => ctx.db.query("proposals").collect());
     expect(proposals).toHaveLength(1);
-    expect(fakes.navigate).toHaveBeenCalledWith({ to: "/mod/proposal/$id", params: { id: proposals[0]!._id } });
-    expect(await t.run(async (ctx) => (await ctx.db.get(alice1))?.queuedProposalId)).toBe(proposals[0]!._id);
+    expect(fakes.navigate).toHaveBeenCalledWith({
+      to: "/mod/proposal/$id",
+      params: { id: proposals[0]!._id },
+    });
+    expect(await t.run(async (ctx) => (await ctx.db.get(alice1))?.queuedProposalId)).toBe(
+      proposals[0]!._id,
+    );
 
     await show(t, carol);
     const marked = row(mount(imports), "Alice in Borderland, Vol. 1");
-    expect(marked.some((host) => host.type === "button" && text(host.props.children) === "Prepare placement")).toBe(false);
-    expect(text(marked.map((host) => (host.type === "span" ? host.props.children : null)))).toContain("Placement Draft");
-    expect(marked.find((host) => host.type === "a" && text(host.props.children) === "Open the Proposal")?.props.params).toEqual({
+    expect(
+      marked.some(
+        (host) => host.type === "button" && text(host.props.children) === "Prepare placement",
+      ),
+    ).toBe(false);
+    expect(
+      text(marked.map((host) => (host.type === "span" ? host.props.children : null))),
+    ).toContain("Placement Draft");
+    expect(
+      marked.find((host) => host.type === "a" && text(host.props.children) === "Open the Proposal")
+        ?.props.params,
+    ).toEqual({
       id: proposals[0]!._id,
     });
   });
@@ -156,9 +213,13 @@ describe("Held books on /mod/imports", () => {
   it("offers another member Prepare placement beside a Draft that is not theirs, and only the link beside their own", async () => {
     const t = makeT();
     const { alice1 } = await seed(t);
-    const first = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
+    const first = await signedIn(t, carol).mutation(api.placement.preparePlacement, {
+      observationId: alice1,
+    });
     const buttons = (tree: Host[]) =>
-      row(tree, "Alice in Borderland, Vol. 1").filter((host) => host.type === "button").map((host) => text(host.props.children));
+      row(tree, "Alice in Borderland, Vol. 1")
+        .filter((host) => host.type === "button")
+        .map((host) => text(host.props.children));
     await show(t, carol);
     expect(buttons(mount(imports))).toEqual([]);
     await show(t, bob);
@@ -166,11 +227,19 @@ describe("Held books on /mod/imports", () => {
     press(row(mount(imports), "Alice in Borderland, Vol. 1"), "Prepare placement").click();
     await settle();
     const proposals = await t.run((ctx) => ctx.db.query("proposals").collect());
-    expect(proposals.map((proposal) => [proposal._id === (first.status === "prepared" ? first.proposalId : null), proposal.state])).toEqual([
+    expect(
+      proposals.map((proposal) => [
+        proposal._id === (first.status === "prepared" ? first.proposalId : null),
+        proposal.state,
+      ]),
+    ).toEqual([
       [true, "withdrawn"],
       [false, "draft"],
     ]);
-    expect(fakes.navigate).toHaveBeenCalledWith({ to: "/mod/proposal/$id", params: { id: proposals[1]!._id } });
+    expect(fakes.navigate).toHaveBeenCalledWith({
+      to: "/mod/proposal/$id",
+      params: { id: proposals[1]!._id },
+    });
   });
 
   it("says why a book cannot be prepared, and writes nothing", async () => {
@@ -179,8 +248,12 @@ describe("Held books on /mod/imports", () => {
     await show(t, carol);
     press(row(mount(imports), "Nobody, Vol. 1"), "Prepare placement").click();
     await settle();
-    const refusal = row(mount(imports), "Nobody, Vol. 1").find((host) => host.props.className === "form-error");
-    expect(text(refusal?.props.children)).toMatch(/^Cannot prepare: No single active, unlocked Series fits this book/);
+    const refusal = row(mount(imports), "Nobody, Vol. 1").find(
+      (host) => host.props.className === "form-error",
+    );
+    expect(text(refusal?.props.children)).toMatch(
+      /^Cannot prepare: No single active, unlocked Series fits this book/,
+    );
     expect(fakes.navigate).not.toHaveBeenCalled();
     expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toEqual([]);
   });
@@ -189,13 +262,17 @@ describe("Held books on /mod/imports", () => {
 describe("the placement panel on the Proposal page", () => {
   async function preparedVagabond(t: TestT) {
     const { vagabond4 } = await seed(t);
-    const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: vagabond4 });
+    const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, {
+      observationId: vagabond4,
+    });
     if (result.status === "unavailable") throw new Error(result.reason);
     fakes.proposalId = result.proposalId;
     return result.proposalId;
   }
   const pageText = (tree: Host[]) =>
-    tree.filter((host) => host.type === "li" || host.props.className === "notice").map((host) => text(host.props.children));
+    tree
+      .filter((host) => host.type === "li" || host.props.className === "notice")
+      .map((host) => text(host.props.children));
 
   it("shows the source beside what approval creates, keeps Submit off until the coverage is stated, then saves it", async () => {
     const t = makeT();
@@ -213,7 +290,9 @@ describe("the placement panel on the Proposal page", () => {
         "Edition Line: Definitive Edition 4 (new line)",
       ]),
     );
-    expect(pageText(before).some((line) => line.includes("cannot be submitted until you state it"))).toBe(true);
+    expect(
+      pageText(before).some((line) => line.includes("cannot be submitted until you state it")),
+    ).toBe(true);
     expect(press(before, "Submit for review").disabled).toBe(true);
 
     const inputs = before.filter((host) => host.type === "input");
@@ -225,7 +304,9 @@ describe("the placement panel on the Proposal page", () => {
 
     await show(t, carol);
     const after = mount(proposal);
-    expect(pageText(after)).toContain("Edition at viz-media covering: Volume 10, Volume 11, Volume 12 (new)");
+    expect(pageText(after)).toContain(
+      "Edition at viz-media covering: Volume 10, Volume 11, Volume 12 (new)",
+    );
     expect(press(after, "Submit for review").disabled).toBe(false);
     press(after, "Submit for review").click();
     await settle();
@@ -235,7 +316,9 @@ describe("the placement panel on the Proposal page", () => {
   it("suggests Volume 1 for Alice's book 1, saving it only when the author accepts it, and fills the form with it", async () => {
     const t = makeT();
     const { alice1 } = await seed(t);
-    const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
+    const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, {
+      observationId: alice1,
+    });
     if (result.status === "unavailable") throw new Error(result.reason);
     fakes.proposalId = result.proposalId;
     await show(t, carol);
@@ -253,15 +336,17 @@ describe("the placement panel on the Proposal page", () => {
     await show(t, carol);
     const after = mount(proposal);
     expect(pageText(after)).toContain("Edition at viz-media covering: Volume 1 (new)");
-    expect(after.some((host) => host.type === "button" && text(host.props.children) === "Accept Volume 1")).toBe(false);
+    expect(
+      after.some(
+        (host) => host.type === "button" && text(host.props.children) === "Accept Volume 1",
+      ),
+    ).toBe(false);
     expect(press(after, "Submit for review").disabled).toBe(false);
-    expect(after.filter((host) => host.type === "input").map((host) => host.props.value ?? host.props.checked)).toEqual([
-      "1",
-      "1",
-      false,
-      "",
-      "",
-    ]);
+    expect(
+      after
+        .filter((host) => host.type === "input")
+        .map((host) => host.props.value ?? host.props.checked),
+    ).toEqual(["1", "1", false, "", ""]);
 
     // A later Save, say of the comment alone, keeps Volume 1.
     const comment = after.find((host) => host.type === "textarea");
@@ -273,7 +358,9 @@ describe("the placement panel on the Proposal page", () => {
     const saved = mount(proposal);
     expect(saved.some((host) => host.props.className === "form-error")).toBe(false);
     expect(pageText(saved)).toContain("Edition at viz-media covering: Volume 1 (new)");
-    expect((await t.run((ctx) => ctx.db.get(result.proposalId)))?.draft?.comment).toBe("Volume 1, checked against the cover.");
+    expect((await t.run((ctx) => ctx.db.get(result.proposalId)))?.draft?.comment).toBe(
+      "Volume 1, checked against the cover.",
+    );
   });
 
   it("shows another member the placement without the form", async () => {

@@ -35,18 +35,13 @@ export const Route = createFileRoute("/mod/proposal/$id")({
 function ProposalPage() {
   const { id } = Route.useParams();
   return (
-    <ModGate
-      role="dataTeam"
-      refusal="Pending proposals are Data-Team-only in v1."
-    >
+    <ModGate role="dataTeam" refusal="Pending proposals are Data-Team-only in v1.">
       <ProposalDetail id={id} />
     </ModGate>
   );
 }
 
-type Detail = NonNullable<
-  FunctionReturnType<typeof api.proposals.proposalDetail>
->;
+type Detail = NonNullable<FunctionReturnType<typeof api.proposals.proposalDetail>>;
 type RenderedOps = Detail["versions"][number]["ops"];
 type RenderedEvidence = Detail["versions"][number]["evidence"];
 type Placement = NonNullable<Detail["placement"]>;
@@ -54,7 +49,11 @@ type Placement = NonNullable<Detail["placement"]>;
 /** "2026-10-13", "2026-10" or "2026": a source date at the precision it gives. */
 function partialDate(date: { year: number; month?: number; day?: number }): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return [String(date.year), ...(date.month !== undefined ? [pad(date.month)] : []), ...(date.day !== undefined ? [pad(date.day)] : [])].join("-");
+  return [
+    String(date.year),
+    ...(date.month !== undefined ? [pad(date.month)] : []),
+    ...(date.day !== undefined ? [pad(date.day)] : []),
+  ].join("-");
 }
 
 /** How the placed Edition's coverage reads. */
@@ -121,7 +120,10 @@ function PlacementPanel({
       await setPlacement({
         proposalId,
         coverage: stated ?? (unmapped ? "unmapped" : { from, to: to.trim() === "" ? from : to }),
-        line: stated === null && lineName.trim() !== "" ? { name: lineName, position: linePosition.trim() || null } : null,
+        line:
+          stated === null && lineName.trim() !== ""
+            ? { name: lineName, position: linePosition.trim() || null }
+            : null,
         comment: changeComment,
       });
       // An accepted Volume is the coverage now, outside any line.
@@ -146,7 +148,9 @@ function PlacementPanel({
           <li>Volume label: {book.label ?? "none (a book number on a line is not a Volume)"}</li>
           <li>
             Edition Line:{" "}
-            {book.line ? `${book.line.name}${book.line.position ? ` ${book.line.position}` : ""}` : "none"}
+            {book.line
+              ? `${book.line.name}${book.line.position ? ` ${book.line.position}` : ""}`
+              : "none"}
           </li>
           {book.statedRange ? (
             <li>
@@ -177,7 +181,10 @@ function PlacementPanel({
         <li>
           Series:{" "}
           {placement.series ? (
-            <Link to="/series/$publicId/$slug" params={slugParams(placement.series.publicId, placement.series.title)}>
+            <Link
+              to="/series/$publicId/$slug"
+              params={slugParams(placement.series.publicId, placement.series.title)}
+            >
               {placement.series.title}
             </Link>
           ) : (
@@ -185,7 +192,10 @@ function PlacementPanel({
           )}{" "}
           (existing; never created here)
         </li>
-        <li>Edition at {placement.publisherSlug ?? "(unknown publisher)"} covering: {coverageText(coverage)}</li>
+        <li>
+          Edition at {placement.publisherSlug ?? "(unknown publisher)"} covering:{" "}
+          {coverageText(coverage)}
+        </li>
         <li>
           Edition Line:{" "}
           {placement.line
@@ -195,8 +205,8 @@ function PlacementPanel({
         <li>
           Release: {placement.release.format ?? "?"}
           {placement.release.binding ? `, ${placement.release.binding}` : ""}
-          {placement.release.isbn13 ? `, ISBN ${placement.release.isbn13}` : ""}; approval links the source's
-          record to it
+          {placement.release.isbn13 ? `, ISBN ${placement.release.isbn13}` : ""}; approval links the
+          source's record to it
         </li>
       </ul>
       <p className="notice">
@@ -205,9 +215,9 @@ function PlacementPanel({
       </p>
       {coverage.kind === "pending" ? (
         <p className="notice">
-          Its coverage is yours to state: the canonical Volumes it collects (one Volume is a range of
-          one), or Unmapped Packaging under its line. A book number is a position in its line, not a
-          Volume number. The Draft cannot be submitted until you state it.
+          Its coverage is yours to state: the canonical Volumes it collects (one Volume is a range
+          of one), or Unmapped Packaging under its line. A book number is a position in its line,
+          not a Volume number. The Draft cannot be submitted until you state it.
         </p>
       ) : null}
       {editable && coverage.kind === "pending" && suggestion !== null ? (
@@ -235,20 +245,32 @@ function PlacementPanel({
             <legend>Covered Volumes</legend>
             <label>
               First
-              <input value={from} disabled={unmapped} onChange={(event) => edit({ from: event.target.value })} />
+              <input
+                value={from}
+                disabled={unmapped}
+                onChange={(event) => edit({ from: event.target.value })}
+              />
             </label>
             <label>
               Last
-              <input value={to} disabled={unmapped} onChange={(event) => edit({ to: event.target.value })} />
+              <input
+                value={to}
+                disabled={unmapped}
+                onChange={(event) => edit({ to: event.target.value })}
+              />
             </label>
           </fieldset>
           <label>
-            <input type="checkbox" checked={unmapped} onChange={(event) => edit({ unmapped: event.target.checked })} />{" "}
+            <input
+              type="checkbox"
+              checked={unmapped}
+              onChange={(event) => edit({ unmapped: event.target.checked })}
+            />{" "}
             Unmapped Packaging (no source states which Volumes it collects)
           </label>
           <span className="field-help">
-            Volumes of the range the Series lacks are created on approval; never size the range from the
-            line's name.
+            Volumes of the range the Series lacks are created on approval; never size the range from
+            the line's name.
           </span>
           <label>
             Edition Line
@@ -257,11 +279,18 @@ function PlacementPanel({
           </label>
           <label>
             Line position
-            <input value={linePosition} onChange={(event) => edit({ linePosition: event.target.value })} />
+            <input
+              value={linePosition}
+              onChange={(event) => edit({ linePosition: event.target.value })}
+            />
           </label>
           <label>
             Change comment (required)
-            <textarea value={changeComment} onChange={(event) => setChangeComment(event.target.value)} rows={2} />
+            <textarea
+              value={changeComment}
+              onChange={(event) => setChangeComment(event.target.value)}
+              rows={2}
+            />
           </label>
           <div className="mod-actions">
             <button type="submit" className="btn btn-sm" disabled={busy}>
@@ -284,8 +313,7 @@ function OpsList({ ops }: { ops: RenderedOps }) {
           {op.kind === "create" ? (
             <>
               <p>
-                <strong>{op.summary}</strong>{" "}
-                <code className="temp-id">temp:{op.tempId}</code>
+                <strong>{op.summary}</strong> <code className="temp-id">temp:{op.tempId}</code>
               </p>
               <ul className="revision-changes">
                 {Object.entries(op.fields ?? {}).map(([field, value]) =>
@@ -307,15 +335,12 @@ function OpsList({ ops }: { ops: RenderedOps }) {
                   (base: revision #{op.base.seq}
                   {op.base.comment ? ` — ${op.base.comment}` : ""})
                 </span>{" "}
-                {op.stale ? (
-                  <span className="chip mod-chip mod-chip--bad">stale</span>
-                ) : null}
+                {op.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
               </p>
               <ul className="revision-changes">
                 {op.changes.map((change) => (
                   <li key={change.field}>
-                    <code>{change.field}</code>:{" "}
-                    <del>{renderFieldValue(change.before)}</del> →{" "}
+                    <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
                     <ins>{renderFieldValue(change.after)}</ins>
                   </li>
                 ))}
@@ -325,22 +350,19 @@ function OpsList({ ops }: { ops: RenderedOps }) {
             <>
               <p>
                 <strong>
-                  Clear the Human Override on {op.fieldLabel} of {op.recordType}:{" "}
-                  {op.recordTitle}
+                  Clear the Human Override on {op.fieldLabel} of {op.recordType}: {op.recordTitle}
                 </strong>{" "}
                 <span className="proposal-base">
                   (base: revision #{op.base.seq}
                   {op.base.comment ? ` — ${op.base.comment}` : ""})
                 </span>{" "}
-                {op.stale ? (
-                  <span className="chip mod-chip mod-chip--bad">stale</span>
-                ) : null}
+                {op.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
               </p>
               <ul className="revision-changes">
                 {op.kept ? (
                   <li>
-                    <code>{op.field}</code> keeps its value:{" "}
-                    {renderFieldValue(op.kept.value)} ({writtenByLabel(op.kept.writtenBy)})
+                    <code>{op.field}</code> keeps its value: {renderFieldValue(op.kept.value)} (
+                    {writtenByLabel(op.kept.writtenBy)})
                   </li>
                 ) : null}
                 <li>{CLEAR_OVERRIDE_HINT}</li>
@@ -438,10 +460,7 @@ function ProposalDetail({ id }: { id: string }) {
   }
 
   const proposalId = detail.proposalId as Id<"proposals">;
-  const run = async (
-    action: () => Promise<unknown>,
-    okMessage: string | null = null,
-  ) => {
+  const run = async (action: () => Promise<unknown>, okMessage: string | null = null) => {
     setBusy(true);
     setError(null);
     setInfo(null);
@@ -492,9 +511,7 @@ function ProposalDetail({ id }: { id: string }) {
       <div className="mod-title-row">
         <h1>Proposal</h1>
         <ProposalStateChip state={detail.state} />
-        {detail.stale ? (
-          <span className="chip mod-chip mod-chip--bad">stale</span>
-        ) : null}
+        {detail.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
       </div>
       <p className="section-hint">
         By{" "}
@@ -509,52 +526,48 @@ function ProposalDetail({ id }: { id: string }) {
 
       {detail.stale && detail.state === "inReview" ? (
         <p className="notice">
-          A record this proposal touches changed since submission. Approval is
-          blocked until the author explicitly rebases and resubmits — there is
-          no silent rebase.
+          A record this proposal touches changed since submission. Approval is blocked until the
+          author explicitly rebases and resubmits — there is no silent rebase.
         </p>
       ) : null}
 
       {/* ---- author actions ---- */}
-      {detail.viewer.isAuthor &&
-      (detail.state === "draft" || detail.state === "inReview") ? (
+      {detail.viewer.isAuthor && (detail.state === "draft" || detail.state === "inReview") ? (
         <section className="proposal-actions">
           <h2>Your proposal</h2>
           <div className="mod-actions">
-          {detail.state === "draft" ? (
+            {detail.state === "draft" ? (
+              <button
+                className="btn btn-sm btn-primary"
+                disabled={busy || coveragePending}
+                onClick={() => void onSubmitDraft()}
+              >
+                Submit for review
+              </button>
+            ) : null}
             <button
-              className="btn btn-sm btn-primary"
-              disabled={busy || coveragePending}
-              onClick={() => void onSubmitDraft()}
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  const { dropped } = await rebaseProposal({ proposalId });
+                  setInfo(
+                    dropped.length > 0
+                      ? `Rebased to Draft. Dropped: ${dropped.join("; ")}.`
+                      : "Rebased to Draft against the current records.",
+                  );
+                })
+              }
             >
-              Submit for review
+              Rebase onto current records
             </button>
-          ) : null}
-          <button
-            className="btn btn-sm"
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                const { dropped } = await rebaseProposal({ proposalId });
-                setInfo(
-                  dropped.length > 0
-                    ? `Rebased to Draft. Dropped: ${dropped.join("; ")}.`
-                    : "Rebased to Draft against the current records.",
-                );
-              })
-            }
-          >
-            Rebase onto current records
-          </button>
-          <button
-            className="btn btn-sm"
-            disabled={busy}
-            onClick={() =>
-              void run(() => withdrawProposal({ proposalId }), "Withdrawn.")
-            }
-          >
-            Withdraw
-          </button>
+            <button
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() => void run(() => withdrawProposal({ proposalId }), "Withdrawn.")}
+            >
+              Withdraw
+            </button>
           </div>
           {pendingWarnings ? (
             <div className="notice">
@@ -584,18 +597,14 @@ function ProposalDetail({ id }: { id: string }) {
             <button
               className="btn btn-sm"
               disabled={busy}
-              onClick={() =>
-                void run(() => claimProposal({ proposalId }), "Claimed.")
-              }
+              onClick={() => void run(() => claimProposal({ proposalId }), "Claimed.")}
             >
               Claim
             </button>
             <button
               className="btn btn-sm"
               disabled={busy}
-              onClick={() =>
-                void run(() => unclaimProposal({ proposalId }), "Unclaimed.")
-              }
+              onClick={() => void run(() => unclaimProposal({ proposalId }), "Unclaimed.")}
             >
               Unclaim
             </button>
@@ -637,10 +646,7 @@ function ProposalDetail({ id }: { id: string }) {
               className="btn btn-sm"
               disabled={busy || decisionNote.trim() === ""}
               onClick={() =>
-                void run(
-                  () => rejectProposal({ proposalId, note: decisionNote }),
-                  "Rejected.",
-                )
+                void run(() => rejectProposal({ proposalId, note: decisionNote }), "Rejected.")
               }
             >
               Reject
@@ -703,8 +709,8 @@ function ProposalDetail({ id }: { id: string }) {
       <section className="proposal-notes">
         <h2>Internal discussion</h2>
         <p className="section-hint">
-          Data-Team-only. Public record history shows only the final diff,
-          author, approver, and change comment.
+          Data-Team-only. Public record history shows only the final diff, author, approver, and
+          change comment.
         </p>
         {detail.notes.length === 0 ? (
           <p className="section-hint">No notes yet.</p>

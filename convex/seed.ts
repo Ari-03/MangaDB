@@ -46,11 +46,7 @@ const tgStandardIsbns = [
 ] as const;
 const tgReIsbns = ["9781999000219", "9781999000226"] as const;
 const quietIsbns = ["9781999000318", "9781999000325", "9781999000332"] as const;
-const upcomingIsbns = [
-  "9781999000707",
-  "9781999000714",
-  "9781999000721",
-] as const;
+const upcomingIsbns = ["9781999000707", "9781999000714", "9781999000721"] as const;
 
 async function addSeries(
   ctx: MutationCtx,
@@ -289,8 +285,7 @@ export const run = internalMutation({
         isbn13: tgStandardIsbns[i],
         pubDate: on(2015, 6 + i, 16),
         price: usd(1299),
-        description:
-          "Back-cover blurb for the standard paperback. Fake seed data.",
+        description: "Back-cover blurb for the standard paperback. Fake seed data.",
         publisherId: viz,
         seriesIds: [tokyoGhoul.id],
       });
@@ -467,7 +462,7 @@ export const run = internalMutation({
       const zeroBased = anchor.year * 12 + (anchor.month - 1) + delta;
       return {
         year: Math.floor(zeroBased / 12),
-        month: ((zeroBased % 12) + 12) % 12 + 1,
+        month: (((zeroBased % 12) + 12) % 12) + 1,
       };
     };
     const prevMonth = shifted(-1);

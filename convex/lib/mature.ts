@@ -65,9 +65,7 @@ export function visibleTo(showMature: boolean | undefined, mature: boolean | und
  */
 export function listed(series: Doc<"series">, showMature: boolean | undefined): boolean {
   return (
-    series.status === "active" &&
-    series.bookless !== true &&
-    visibleTo(showMature, series.mature)
+    series.status === "active" && series.bookless !== true && visibleTo(showMature, series.mature)
   );
 }
 
@@ -115,7 +113,10 @@ export async function sourceRatesMature(
  * and pack entries. A Series flips once per transaction, so a mutation
  * schedules at most one job per Series it flips.
  */
-export async function applyMatureEvidence(ctx: MutationCtx, observation: Doc<"sourceObservations">) {
+export async function applyMatureEvidence(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+) {
   const ref = observation.recordRef;
   let seriesIds: Id<"series">[];
   if (ref?.type === "series") {
@@ -154,7 +155,11 @@ export async function applyMatureEvidence(ctx: MutationCtx, observation: Doc<"so
  * rebuilt, or bookless) has nothing to update, and one already carrying the
  * flag is left as it is.
  */
-export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
+export async function syncMatureProjection(
+  ctx: MutationCtx,
+  series: Doc<"series">,
+  mature: boolean,
+) {
   const flag = mature ? { mature: true as const } : { mature: undefined };
   const row = await seriesStatsRow(ctx, series._id);
   if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);

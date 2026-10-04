@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  normalizeUsername,
-  RESERVED_USERNAMES,
-  validateUsername,
-} from "./usernames";
+import { normalizeUsername, RESERVED_USERNAMES, validateUsername } from "./usernames";
 
 describe("normalizeUsername", () => {
   it("lowercases and trims", () => {

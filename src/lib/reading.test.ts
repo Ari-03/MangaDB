@@ -17,7 +17,19 @@ import {
   insertVolume,
 } from "../../convex/test.factories";
 import { makeT, reader, withUser, type Accessor, type TestT } from "../../convex/test.helpers";
-import { click, harness, hold, mount, press, render, resetHarness, setQuery, settle, text, type Host } from "./test.react";
+import {
+  click,
+  harness,
+  hold,
+  mount,
+  press,
+  render,
+  resetHarness,
+  setQuery,
+  settle,
+  text,
+  type Host,
+} from "./test.react";
 
 vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
@@ -40,7 +52,10 @@ async function signIn(t: TestT) {
 
 /** Render the controls from the tracking query as it stands right now. */
 async function renderNow(as: Accessor) {
-  setQuery(api.reading.seriesTracking, await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }));
+  setQuery(
+    api.reading.seriesTracking,
+    await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }),
+  );
   return render(VolumeReadCount({ seriesPublicId: 1, volumePublicId: 11 }));
 }
 
@@ -102,7 +117,12 @@ async function seedRelease(t: TestT) {
     const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
     const editionId = await insertEdition(ctx, { publicId: 500, publisherId });
     await insertCoverage(ctx, { editionId, volumeId });
-    const releaseId = await insertRelease(ctx, { editionId, binding: "paperback", publisherId, seriesIds: [seriesId] });
+    const releaseId = await insertRelease(ctx, {
+      editionId,
+      binding: "paperback",
+      publisherId,
+      seriesIds: [seriesId],
+    });
     return { volumeId, releaseId };
   });
 }

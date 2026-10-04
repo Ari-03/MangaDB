@@ -21,10 +21,16 @@
 }
 /* the hero already sits under the breadcrumb, so the first shelf below it
    needs less air than a section that follows another section */
-.series-hero + .section { padding-block-start: 34px; }
+.series-hero + .section {
+  padding-block-start: 34px;
+}
 
-.series-cover { position: relative; }
-.series-cover .cover { border-radius: 3px 7px 7px 3px; }
+.series-cover {
+  position: relative;
+}
+.series-cover .cover {
+  border-radius: 3px 7px 7px 3px;
+}
 .series-cover::after {
   content: "";
   position: absolute;
@@ -39,13 +45,27 @@
 }
 
 /* the cloth binding scales with the hero, not with a shelf thumbnail */
-.series-cover .cover-ph { padding: 26px 20px 20px 32px; }
-.series-cover .cover-ph::before { width: 16px; }
-.series-cover .cover-ph-title { font-size: 1.42rem; -webkit-line-clamp: 7; }
-.series-cover .cover-ph-foot { font-size: 0.8rem; padding-top: 10px; }
+.series-cover .cover-ph {
+  padding: 26px 20px 20px 32px;
+}
+.series-cover .cover-ph::before {
+  width: 16px;
+}
+.series-cover .cover-ph-title {
+  font-size: 1.42rem;
+  -webkit-line-clamp: 7;
+}
+.series-cover .cover-ph-foot {
+  font-size: 0.8rem;
+  padding-top: 10px;
+}
 
-.series-hero-aside .note { margin-top: 28px; }
-.series-hero-aside .note + .note { margin-top: 8px; }
+.series-hero-aside .note {
+  margin-top: 28px;
+}
+.series-hero-aside .note + .note {
+  margin-top: 8px;
+}
 
 .series-title {
   font-size: clamp(2.1rem, 1.5rem + 2.2vw, 3.1rem);
@@ -59,8 +79,15 @@
   gap: 8px;
   margin-top: 16px;
 }
-.chips a.chip { transition: border-color 140ms ease, color 140ms ease; }
-.chips a.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chips a.chip {
+  transition:
+    border-color 140ms ease,
+    color 140ms ease;
+}
+.chips a.chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 .facts {
   margin: 24px 0 0;
@@ -87,8 +114,13 @@
   font-weight: 600;
   color: var(--text-dim);
 }
-.fact-def a { border-bottom: 1px solid var(--line-strong); }
-.fact-def a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.fact-def a {
+  border-bottom: 1px solid var(--line-strong);
+}
+.fact-def a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 
 /* --- The tracking bar ---------------------------------------------------
    Reading Status and progress, then per-Series visibility, both signed-in
@@ -107,8 +139,12 @@
   grid-template-columns: minmax(0, 1fr);
 }
 /* signed out, every group is empty: no bar at all */
-.owner-bar:not(:has(.track-group > *)) { display: none; }
-.track-group:empty { display: none; }
+.owner-bar:not(:has(.track-group > *)) {
+  display: none;
+}
+.track-group:empty {
+  display: none;
+}
 
 /* each group: a small-caps kicker, its controls, a one-line hint */
 .track-group {
@@ -118,7 +154,9 @@
   flex-wrap: wrap;
   gap: 10px 12px;
 }
-.track-group--reading .progress { flex: 1 1 100%; }
+.track-group--reading .progress {
+  flex: 1 1 100%;
+}
 /* sharing is the quiet second: one footer line under a hairline, its label
    inline, so it never competes with reading for width */
 .track-group--sharing {
@@ -126,8 +164,14 @@
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
-.track-group:empty + .track-group--sharing { margin-top: 0; padding-top: 0; border-top: 0; }
-.track-group--sharing .track-kicker { flex-basis: auto; }
+.track-group:empty + .track-group--sharing {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.track-group--sharing .track-kicker {
+  flex-basis: auto;
+}
 .track-kicker {
   flex-basis: 100%;
   white-space: nowrap;
@@ -143,9 +187,16 @@
   line-height: 1.45;
   color: var(--text-mute);
 }
-.track-group .select { font-size: 0.85rem; }
+.track-group .select {
+  font-size: 0.85rem;
+}
 /* the sharing popover's anchor is the group itself */
-.track-group--sharing .vis-pop { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; }
+.track-group--sharing .vis-pop {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  align-items: center;
+}
 
 .follow-btn {
   display: inline-flex;
@@ -159,22 +210,40 @@
   font-size: 0.86rem;
   font-weight: 700;
   cursor: pointer;
-  transition: border-color 130ms ease, color 130ms ease, background 130ms ease;
+  transition:
+    border-color 130ms ease,
+    color 130ms ease,
+    background 130ms ease;
 }
-.follow-btn svg { width: 13px; height: 13px; }
-.follow-btn:hover { border-color: var(--accent); color: var(--accent); }
+.follow-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.follow-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .follow-btn.is-following {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
 }
-.follow-btn.is-following:hover { background: var(--gold); border-color: var(--gold); color: var(--accent-ink); }
-.fav-btn:disabled { cursor: progress; opacity: 0.75; }
+.follow-btn.is-following:hover {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--accent-ink);
+}
+.fav-btn:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
 
 /* Per-Series visibility (lib/sharing.tsx) is a popover: its button wears
    the bar's pill, and the panel floats over whatever is below, so opening
    it never moves the bar or the shelf. */
-.vis-pop { position: relative; }
+.vis-pop {
+  position: relative;
+}
 .vis-pop-btn {
   display: inline-flex;
   align-items: center;
@@ -187,13 +256,22 @@
   font-size: 0.86rem;
   font-weight: 700;
   cursor: pointer;
-  transition: border-color 130ms ease, color 130ms ease;
+  transition:
+    border-color 130ms ease,
+    color 130ms ease;
 }
-.vis-pop-btn svg { width: 14px; height: 14px; }
+.vis-pop-btn svg {
+  width: 14px;
+  height: 14px;
+}
 .vis-pop-btn:hover,
-.vis-pop-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.vis-pop-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .vis-pop-dot {
-  width: 7px; height: 7px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--accent);
 }
@@ -218,7 +296,9 @@
   font-size: 0.82rem;
   color: var(--text-mute);
 }
-.vis-pop-panel .vis-hint a { color: var(--accent); }
+.vis-pop-panel .vis-hint a {
+  color: var(--accent);
+}
 /* label left, the two-way pill right, one line per surface */
 .vis-pop-panel .vis-field {
   display: flex;
@@ -226,9 +306,18 @@
   justify-content: space-between;
   gap: 16px;
 }
-.vis-pop-panel .vis-field + .vis-field { margin-top: 10px; }
-.vis-pop-panel .vis-legend { font-weight: 700; color: var(--text-dim); font-size: 0.84rem; }
-.vis-pop-panel .seg-opt span { padding: 5px 12px; font-size: 0.8rem; }
+.vis-pop-panel .vis-field + .vis-field {
+  margin-top: 10px;
+}
+.vis-pop-panel .vis-legend {
+  font-weight: 700;
+  color: var(--text-dim);
+  font-size: 0.84rem;
+}
+.vis-pop-panel .seg-opt span {
+  padding: 5px 12px;
+  font-size: 0.8rem;
+}
 
 .progress {
   flex: 1 1 200px;
@@ -280,26 +369,48 @@
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
-  transition: border-color 140ms ease, background 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
 }
-.edition-card:hover { border-color: var(--line-strong); }
+.edition-card:hover {
+  border-color: var(--line-strong);
+}
 .edition-card.is-selected {
   border-color: var(--accent);
   background: linear-gradient(180deg, var(--surface-2), var(--surface));
 }
-.edition-card-cover .cover-ph { padding: 8px 6px 6px 12px; }
-.edition-card-cover .cover-ph-title { font-size: 0.72rem; }
-.edition-card-body { display: grid; gap: 4px; min-width: 0; }
+.edition-card-cover .cover-ph {
+  padding: 8px 6px 6px 12px;
+}
+.edition-card-cover .cover-ph-title {
+  font-size: 0.72rem;
+}
+.edition-card-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
 .edition-card-name {
   font-family: var(--display);
   font-weight: 700;
   font-size: 1.08rem;
 }
-.edition-card.is-selected .edition-card-name { color: var(--accent); }
-.edition-card-meta { font-size: 0.82rem; color: var(--text-dim); }
+.edition-card.is-selected .edition-card-name {
+  color: var(--accent);
+}
+.edition-card-meta {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
 
-.shelf-item--missing .cover { opacity: 0.38; filter: saturate(0.4); }
-.shelf-item--missing .caption-meta { font-style: italic; }
+.shelf-item--missing .cover {
+  opacity: 0.38;
+  filter: saturate(0.4);
+}
+.shelf-item--missing .caption-meta {
+  font-style: italic;
+}
 
 /* Volume Progress: a durable read count, edited in place. Sits in the shelf
    caption on the Series page and in the tracking card on the Volume page. */
@@ -325,7 +436,10 @@
   font-weight: 700;
   cursor: pointer;
 }
-.volume-read .read-adjust:hover { border-color: var(--accent); color: var(--accent); }
+.volume-read .read-adjust:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* --- Series Family ------------------------------------------------------ */
 
@@ -355,8 +469,17 @@
   font-size: 0.9rem;
   color: var(--text-dim);
 }
-.report-form { display: grid; gap: 12px; max-width: 46rem; }
-.report-field { display: grid; gap: 6px; font-size: 0.9rem; font-weight: 700; }
+.report-form {
+  display: grid;
+  gap: 12px;
+  max-width: 46rem;
+}
+.report-field {
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
 .report-form textarea {
   width: 100%;
   padding: 10px 12px;
@@ -367,9 +490,16 @@
   font-weight: 400;
   resize: vertical;
 }
-.report-form textarea::placeholder { color: var(--text-mute); }
-.report-actions { display: flex; gap: 10px; }
-[data-theme="light"] .form-error { color: #a23c15; }
+.report-form textarea::placeholder {
+  color: var(--text-mute);
+}
+.report-actions {
+  display: flex;
+  gap: 10px;
+}
+[data-theme="light"] .form-error {
+  color: #a23c15;
+}
 
 /* --- Volume page --------------------------------------------------------
    The book itself on the left with what the viewer owns and has read under
@@ -383,8 +513,12 @@
   padding-block: 10px 30px;
 }
 
-.volume-cover { position: relative; }
-.volume-cover .cover { border-radius: 4px 9px 9px 4px; }
+.volume-cover {
+  position: relative;
+}
+.volume-cover .cover {
+  border-radius: 4px 9px 9px 4px;
+}
 .volume-cover::after {
   content: "";
   position: absolute;
@@ -396,11 +530,22 @@
   border-top: 1px solid var(--ledge-edge);
   box-shadow: var(--ledge-shadow);
 }
-.volume-cover .cover-ph { padding: 30px 24px 22px 36px; }
-.volume-cover .cover-ph::before { width: 19px; }
-.volume-cover .cover-ph-series { font-size: 1rem; }
-.volume-cover .cover-ph-num { font-size: 4.6rem; }
-.volume-cover .cover-ph-title { font-size: 1.6rem; -webkit-line-clamp: 7; }
+.volume-cover .cover-ph {
+  padding: 30px 24px 22px 36px;
+}
+.volume-cover .cover-ph::before {
+  width: 19px;
+}
+.volume-cover .cover-ph-series {
+  font-size: 1rem;
+}
+.volume-cover .cover-ph-num {
+  font-size: 4.6rem;
+}
+.volume-cover .cover-ph-title {
+  font-size: 1.6rem;
+  -webkit-line-clamp: 7;
+}
 
 /* Ownership and read count, under the TakePanel. Both render nothing signed
    out (and ownership nothing with nothing owned), leaving the card's blocks
@@ -412,10 +557,18 @@
   background: var(--surface);
   font-size: 0.88rem;
 }
-.track-card:not(:has(> :not(:empty))) { display: none; }
-.track-card > :empty { display: none; }
-.track-card .volume-read { margin-top: 0; }
-.track-card .volume-ownership + .volume-read { margin-top: 12px; }
+.track-card:not(:has(> :not(:empty))) {
+  display: none;
+}
+.track-card > :empty {
+  display: none;
+}
+.track-card .volume-read {
+  margin-top: 0;
+}
+.track-card .volume-ownership + .volume-read {
+  margin-top: 12px;
+}
 
 /* --- The viewer's take under the cover ----------------------------------
    The TakePanel (lib/reviews.tsx, styled in ratings.css) and, on the Volume
@@ -430,27 +583,46 @@
    rather than the cover column's. Stacked (under 720px), everything flows
    in source order: cover, panel, tracking card, body. */
 @media (min-width: 721px) {
-  .series-hero { grid-template-rows: auto 1fr; row-gap: 0; }
-  .volume-hero { grid-template-rows: auto auto 1fr; row-gap: 0; }
+  .series-hero {
+    grid-template-rows: auto 1fr;
+    row-gap: 0;
+  }
+  .volume-hero {
+    grid-template-rows: auto auto 1fr;
+    row-gap: 0;
+  }
   .series-hero-aside,
   .volume-hero-aside,
   .series-hero > .take-panel,
   .volume-hero > .take-panel,
-  .volume-hero > .track-card { grid-column: 1; }
+  .volume-hero > .track-card {
+    grid-column: 1;
+  }
   .series-hero-body,
-  .volume-hero-body { grid-column: 2; grid-row: 1 / -1; }
+  .volume-hero-body {
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
   /* clear the ledge the cover stands on */
-  .series-hero > .take-panel { margin-top: 30px; }
+  .series-hero > .take-panel {
+    margin-top: 30px;
+  }
   .volume-hero > .take-panel,
-  .volume-hero > .track-card { margin-top: 44px; }
-  .volume-hero > .take-panel + .track-card { margin-top: 14px; }
+  .volume-hero > .track-card {
+    margin-top: 44px;
+  }
+  .volume-hero > .take-panel + .track-card {
+    margin-top: 14px;
+  }
   .series-hero > .take-panel:has(.review-form),
   .volume-hero > .take-panel:has(.review-form) {
     grid-column: 1 / -1;
     grid-row: -1;
     margin-top: 30px;
   }
-  .volume-hero:has(> .take-panel .review-form) > .track-card { margin-top: 44px; }
+  .volume-hero:has(> .take-panel .review-form) > .track-card {
+    margin-top: 44px;
+  }
 }
 
 .volume-title {
@@ -465,16 +637,22 @@
   color: var(--text-dim);
   line-height: 1.68;
 }
-.synopsis p + p { margin-top: 12px; }
+.synopsis p + p {
+  margin-top: 12px;
+}
 /* A borrowed description's source ("From the … edition") sits tight above it. */
-.synopsis .note + p { margin-top: 6px; }
+.synopsis .note + p {
+  margin-top: 6px;
+}
 
 .volume-editions-head {
   margin-top: 38px;
   margin-bottom: 18px;
 }
 
-.vol-edition + .vol-edition { margin-top: 26px; }
+.vol-edition + .vol-edition {
+  margin-top: 26px;
+}
 .vol-edition-head {
   display: flex;
   align-items: baseline;
@@ -484,11 +662,16 @@
 }
 .vol-edition-name {
   font-family: var(--display);
-  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 30;
+  font-variation-settings:
+    "SOFT" 40,
+    "WONK" 1,
+    "opsz" 30;
   font-weight: 700;
   font-size: 1.12rem;
 }
-.vol-edition-name a:hover { color: var(--accent); }
+.vol-edition-name a:hover {
+  color: var(--accent);
+}
 .vol-edition-extent {
   font-size: 0.84rem;
   color: var(--text-mute);
@@ -500,7 +683,9 @@
   font-size: 0.84rem;
   color: var(--text-mute);
 }
-.vol-edition .coverage-chips { margin: 0 0 12px; }
+.vol-edition .coverage-chips {
+  margin: 0 0 12px;
+}
 
 /* --- Reading passes and prompts -----------------------------------
    A pass is a reading attempt through one Release; nothing here ever writes
@@ -524,7 +709,10 @@
   font-weight: 700;
   cursor: pointer;
 }
-.pass-controls button:hover { border-color: var(--accent); color: var(--accent); }
+.pass-controls button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .pass-slider {
   display: inline-flex;
   align-items: center;
@@ -540,8 +728,13 @@
   min-width: 2.6rem;
   font-variant-numeric: tabular-nums;
 }
-.pass-cancel { color: var(--text-mute); }
-.pass-facts { color: var(--text-mute); font-size: 0.84rem; }
+.pass-cancel {
+  color: var(--text-mute);
+}
+.pass-facts {
+  color: var(--text-mute);
+  font-size: 0.84rem;
+}
 
 .prompt {
   display: inline-flex;
@@ -565,7 +758,10 @@
   font-weight: 700;
   cursor: pointer;
 }
-.prompt button:hover { border-color: var(--accent); color: var(--accent); }
+.prompt button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .prompt-line {
   display: inline-flex;
   align-items: center;
@@ -577,31 +773,65 @@
 
 @media (max-width: 960px) {
   /* column gaps only: the rows keep the 0 gap set above */
-  .series-hero { grid-template-columns: 186px minmax(0, 1fr); column-gap: 28px; }
-  .volume-hero { grid-template-columns: 236px minmax(0, 1fr); column-gap: 32px; }
+  .series-hero {
+    grid-template-columns: 186px minmax(0, 1fr);
+    column-gap: 28px;
+  }
+  .volume-hero {
+    grid-template-columns: 236px minmax(0, 1fr);
+    column-gap: 32px;
+  }
 }
 
 @media (max-width: 720px) {
   /* stacked: the hero's gap spaces cover, TakePanel, tracking card and body */
-  .series-hero { grid-template-columns: 1fr; gap: 30px; }
-  .series-cover { max-width: 190px; }
-  .series-hero-aside .note { margin-top: 24px; }
-  .volume-hero { grid-template-columns: 1fr; gap: 34px; }
-  .volume-cover { max-width: 210px; }
-  .facts { gap: 14px 20px; }
-  .track-group .select { flex: 1 1 auto; min-width: 0; }
+  .series-hero {
+    grid-template-columns: 1fr;
+    gap: 30px;
+  }
+  .series-cover {
+    max-width: 190px;
+  }
+  .series-hero-aside .note {
+    margin-top: 24px;
+  }
+  .volume-hero {
+    grid-template-columns: 1fr;
+    gap: 34px;
+  }
+  .volume-cover {
+    max-width: 210px;
+  }
+  .facts {
+    gap: 14px 20px;
+  }
+  .track-group .select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
   .vis-pop-btn,
-  .follow-btn { width: 100%; justify-content: center; }
-  .vis-pop-panel { right: 0; }
-  .vis-pop-panel .vis-field { flex-wrap: wrap; }
-  .vol-edition-extent { flex-basis: 100%; }
+  .follow-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .vis-pop-panel {
+    right: 0;
+  }
+  .vis-pop-panel .vis-field {
+    flex-wrap: wrap;
+  }
+  .vol-edition-extent {
+    flex-basis: 100%;
+  }
 }
 
 /* Motion here is only ever a response to a pointer or a disclosure; when the
    viewer asks for less, drop it entirely. */
 @media (prefers-reduced-motion: reduce) {
   .follow-btn,
-  .edition-card { transition: none; }
+  .edition-card {
+    transition: none;
+  }
 }
 
 /* --- Authors ---------------------------------------------------------------
@@ -623,13 +853,19 @@
   flex-wrap: wrap;
   gap: 0 4px;
 }
-.byline-part .dot { margin-right: 6px; }
-.byline-role { color: var(--text-mute); }
+.byline-part .dot {
+  margin-right: 6px;
+}
+.byline-role {
+  color: var(--text-mute);
+}
 .byline-name {
   color: var(--text);
   font-weight: 700;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  transition: color 140ms ease, border-color 140ms ease;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease;
 }
 .byline-name:hover {
   color: var(--accent);
@@ -643,18 +879,26 @@
   font-size: clamp(2.1rem, 1.5rem + 2.2vw, 3.1rem);
   letter-spacing: -0.026em;
 }
-.author-hero .chips { margin-top: 14px; }
+.author-hero .chips {
+  margin-top: 14px;
+}
 .author-roles {
   margin-top: 12px;
   color: var(--text-dim);
 }
-.author-credit { margin-top: 8px; }
+.author-credit {
+  margin-top: 8px;
+}
 .author-credit a,
 .authors-note a {
   color: var(--accent);
   font-weight: 700;
 }
-.author-role-chips { gap: 6px; flex-wrap: wrap; white-space: normal; }
+.author-role-chips {
+  gap: 6px;
+  flex-wrap: wrap;
+  white-space: normal;
+}
 
 .authors-note {
   margin: 10px 0 28px;

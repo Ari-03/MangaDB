@@ -48,7 +48,10 @@ export const stats = query({
         if (stored) return [table, { count: stored[table], capped: false }] as const;
         const docs = await ctx.db.query(table).take(COUNT_CAP + 1);
         const active = docs.filter((doc) => doc.status === "active").length;
-        return [table, { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP }] as const;
+        return [
+          table,
+          { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP },
+        ] as const;
       }),
     );
     return Object.fromEntries(entries) as Record<CountedTable, { count: number; capped: boolean }>;
@@ -141,13 +144,15 @@ export const recentSeries = query({
       // Bookless Series (no books yet) are not a taste of the catalog, and
       // Mature Series only for a viewer who opted in.
       if (!listed(doc, showMature)) continue;
-      const entry = { publicId: doc.publicId, title: doc.title, ...(await seriesCover(ctx, doc._id)) };
+      const entry = {
+        publicId: doc.publicId,
+        title: doc.title,
+        ...(await seriesCover(ctx, doc._id)),
+      };
       (entry.coverUrl || entry.coverIsbns.length > 0 ? jacketed : cloth).push(entry);
       if (jacketed.length === take) break;
     }
-    return [...jacketed, ...cloth]
-      .slice(0, take)
-      .sort((a, b) => b.publicId - a.publicId);
+    return [...jacketed, ...cloth].slice(0, take).sort((a, b) => b.publicId - a.publicId);
   },
 });
 
@@ -379,10 +384,10 @@ export const search = query({
       authorHits(ctx, trimmed, SEARCH_AUTHORS, showMature),
     ]);
     const wholeIds = new Set(hits.whole.map((doc) => doc._id));
-    const ranked = [
-      ...hits.whole,
-      ...hits.active.filter((doc) => !wholeIds.has(doc._id)),
-    ].slice(0, SEARCH_LIMIT);
+    const ranked = [...hits.whole, ...hits.active.filter((doc) => !wholeIds.has(doc._id))].slice(
+      0,
+      SEARCH_LIMIT,
+    );
     const [series, didYouMean] = await Promise.all([
       Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
       hits.whole.length === 0 && !names && authors.length === 0
@@ -430,9 +435,7 @@ export const suggest = query({
     const shown = better ? hits.whole : hits.active;
     const [series, didYouMean] = await Promise.all([
       Promise.all(
-        shown
-          .slice(0, SUGGEST_LIMIT)
-          .map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
+        shown.slice(0, SUGGEST_LIMIT).map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
       ),
       nearMissCards(ctx, misses),
     ]);
@@ -591,9 +594,7 @@ export const seriesPage = query({
     const editions = [];
     for (const edition of (await seriesEditions(ctx, series._id, volumeDocs)).editions.values()) {
       const publisher = await ctx.db.get(edition.publisherId);
-      const line = edition.editionLineId
-        ? await ctx.db.get(edition.editionLineId)
-        : null;
+      const line = edition.editionLineId ? await ctx.db.get(edition.editionLineId) : null;
 
       // The Edition's ordered Coverage within this Series.
       const coverageRows = await coverageOf(ctx, edition._id);
@@ -609,7 +610,9 @@ export const seriesPage = query({
         });
       }
 
-      const releaseDocs = (await releasesOf(ctx, edition._id)).filter((doc) => doc.status === "active");
+      const releaseDocs = (await releasesOf(ctx, edition._id)).filter(
+        (doc) => doc.status === "active",
+      );
       // A book's jacket: the first stored cover among its Releases; the page
       // falls back to ISBN-derived art (lib/cover.tsx) when there is none.
       let editionCover: string | null = null;
@@ -627,14 +630,11 @@ export const seriesPage = query({
           pubDate: release.pubDate ?? null,
         });
       }
-      releases.sort(
-        (a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity),
-      );
+      releases.sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));
 
       editions.push({
         publicId: edition.publicId,
-        publisher:
-          publisherLink(publisher),
+        publisher: publisherLink(publisher),
         lineName: line && line.status === "active" ? line.name : null,
         linePosition: edition.linePosition ?? null,
         coverage,

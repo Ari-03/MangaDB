@@ -25,13 +25,28 @@ import { applyCreatePlan, planCreateOps, type CreateOpInput } from "./proposalCr
 
 /** A Series "Noragami" with Volume "1", a Kodansha Edition on it, and one physical Release (`release` overrides it). */
 const catalog = (ctx: MutationCtx, release: Overrides<"releases"> = {}) =>
-  seedCatalog(ctx, { publisher: { name: "Kodansha" }, series: { publicId: 1, title: "Noragami" }, release });
+  seedCatalog(ctx, {
+    publisher: { name: "Kodansha" },
+    series: { publicId: 1, title: "Noragami" },
+    release,
+  });
 
 type Catalog = Awaited<ReturnType<typeof catalog>>;
 
 /** Another Release of the catalog's Edition holding `isbn13`. */
-const holder = (ctx: MutationCtx, c: Catalog, isbn13: string, status: "active" | "hidden" = "active") =>
-  insertRelease(ctx, { status, editionId: c.editionId, publisherId: c.publisherId, seriesIds: [c.seriesId], isbn13 });
+const holder = (
+  ctx: MutationCtx,
+  c: Catalog,
+  isbn13: string,
+  status: "active" | "hidden" = "active",
+) =>
+  insertRelease(ctx, {
+    status,
+    editionId: c.editionId,
+    publisherId: c.publisherId,
+    seriesIds: [c.seriesId],
+    isbn13,
+  });
 
 const releaseOp = (tempId: string, editionId: string, isbn13: string): CreateOpInput => ({
   kind: "create",
@@ -70,7 +85,12 @@ describe("planCreateOps — Release ISBN identity (B12)", () => {
       const c = await catalog(ctx);
       const { editionId, publisherId, seriesId } = c;
       await holder(ctx, c, "9781646519026", "hidden");
-      await insertRelease(ctx, { editionId, isbn10: "1646519020", publisherId, seriesIds: [seriesId] });
+      await insertRelease(ctx, {
+        editionId,
+        isbn10: "1646519020",
+        publisherId,
+        seriesIds: [seriesId],
+      });
       await expect(
         planCreateOps(ctx, [
           {
@@ -137,7 +157,11 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
 
   type World = Awaited<ReturnType<typeof world>>;
 
-  const setIsbn = (id: Id<"releases">, value: string | null, field: "isbn13" | "isbn10" = "isbn13") => ({
+  const setIsbn = (
+    id: Id<"releases">,
+    value: string | null,
+    field: "isbn13" | "isbn10" = "isbn13",
+  ) => ({
     kind: "update" as const,
     ref: { type: "release" as const, id },
     changes: [{ field, value }],
@@ -200,7 +224,10 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
     const otherId = await w.t.run((ctx) => holder(ctx, w.c, Y));
     await expect(
       w.asEditor.mutation(api.proposals.saveDraft, {
-        ops: [setIsbn(w.physicalId, "1646519020", "isbn10"), setIsbn(otherId, "1646519020", "isbn10")],
+        ops: [
+          setIsbn(w.physicalId, "1646519020", "isbn10"),
+          setIsbn(otherId, "1646519020", "isbn10"),
+        ],
         evidence: EVIDENCE,
         comment: "Both get the ISBN-10.",
       }),
@@ -331,7 +358,11 @@ describe("Edition Line membership through proposals (B16)", () => {
         planCreateOps(ctx, [edition({ publisherId: other, editionLineId: lineId })]),
       ).rejects.toMatchObject({ data: { code: "invalidCreate" } });
       // A line of another Series than the covered Volumes.
-      const foreign = await insertEditionLine(ctx, { seriesId: otherSeries, publisherId, name: "Deluxe" });
+      const foreign = await insertEditionLine(ctx, {
+        seriesId: otherSeries,
+        publisherId,
+        name: "Deluxe",
+      });
       await expect(
         planCreateOps(ctx, [edition({ publisherId, editionLineId: foreign })]),
       ).rejects.toMatchObject({ data: { code: "invalidCreate" } });
@@ -348,7 +379,9 @@ describe("Edition Line membership through proposals (B16)", () => {
       ).rejects.toMatchObject({ data: { code: "invalidCreate" } });
       // The valid reference plans cleanly.
       expect(
-        await planCreateOps(ctx, [edition({ publisherId, editionLineId: lineId, linePosition: "1" })]),
+        await planCreateOps(ctx, [
+          edition({ publisherId, editionLineId: lineId, linePosition: "1" }),
+        ]),
       ).toHaveLength(1);
     });
   });

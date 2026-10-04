@@ -60,9 +60,9 @@ export type QuickBook = {
  * Both queries dedupe across the shelf's items in the Convex client, so
  * every book subscribing costs one subscription each.
  */
-export type SeriesOverlay = NonNullable<
-  FunctionReturnType<typeof api.collection.seriesEntries>
-> & { volumesRead: ReadonlyMap<number, number> };
+export type SeriesOverlay = NonNullable<FunctionReturnType<typeof api.collection.seriesEntries>> & {
+  volumesRead: ReadonlyMap<number, number>;
+};
 
 export function useSeriesOverlay(seriesPublicId: number): SeriesOverlay | null {
   const entries = useQuery(api.collection.seriesEntries, { seriesPublicId });
@@ -92,8 +92,7 @@ export type OverlayBook = {
 export function quickBookFor(book: OverlayBook, overlay: SeriesOverlay): QuickBook {
   const ids = book.releases.map((release) => release.id);
   const entry = overlay.entries.find((row) => ids.includes(row.releaseId)) ?? null;
-  const preferred =
-    overlay.formatPreference === "both" ? "physical" : overlay.formatPreference;
+  const preferred = overlay.formatPreference === "both" ? "physical" : overlay.formatPreference;
   const target =
     entry?.releaseId ??
     book.releases.find((release) => release.format === preferred)?.id ??
@@ -377,9 +376,7 @@ export function RunActions({
 }) {
   const setMany = useMutation(api.collection.setManyReleaseEntries);
   const setRead = useMutation(api.reading.setEditionsRead);
-  const [busy, setBusy] = useState<{ action: RunAction; done: number; total: number } | null>(
-    null,
-  );
+  const [busy, setBusy] = useState<{ action: RunAction; done: number; total: number } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const claims = useRunClaims();
   const quick = books.map((book) => quickBookFor(book, overlay));
@@ -477,9 +474,7 @@ export function RunActions({
             type="button"
             className="run-btn"
             aria-pressed={pending === 0}
-            disabled={
-              pending === 0 || busy !== null || isClaimed(claims, claimFor(state, targets))
-            }
+            disabled={pending === 0 || busy !== null || isClaimed(claims, claimFor(state, targets))}
             title={
               pending === 0
                 ? `Every book here is ${ENTRY_LABELS[state].toLowerCase()}`
@@ -487,7 +482,10 @@ export function RunActions({
             }
             onClick={() => run(state)}
           >
-            {marking(state) ?? (pending === 0 ? `All ${ENTRY_LABELS[state].toLowerCase()}` : `${QUICK_LABELS[state]} all`)}
+            {marking(state) ??
+              (pending === 0
+                ? `All ${ENTRY_LABELS[state].toLowerCase()}`
+                : `${QUICK_LABELS[state]} all`)}
           </button>
         );
       })}

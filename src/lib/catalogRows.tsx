@@ -74,8 +74,7 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
         ) : null}
         {release.variants.length > 0 ? (
           <p className="release-variants">
-            Cover variants:{" "}
-            {release.variants.map((variant) => variant.name).join(", ")}
+            Cover variants: {release.variants.map((variant) => variant.name).join(", ")}
           </p>
         ) : null}
         {release.bundles.length > 0 ? (
@@ -141,9 +140,7 @@ export function CoverageChips({ coverage }: { coverage: CoverageChipData[] }) {
             params={slugParams(cov.volumePublicId, cov.volumeTitle)}
           >
             Vol {cov.label ?? `#${cov.position}`}
-            {cov.extent === "partial" ? (
-              <span className="chip-extent">partial</span>
-            ) : null}
+            {cov.extent === "partial" ? <span className="chip-extent">partial</span> : null}
           </Link>
         ))}
       </p>

@@ -60,9 +60,7 @@ export async function liveUser(
  * queries are null "without a viewer" in this sense. Mutations use
  * requireUser instead.
  */
-export async function viewerOrNull(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"users"> | null> {
+export async function viewerOrNull(ctx: QueryCtx | MutationCtx): Promise<Doc<"users"> | null> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return null;
   const user = await getUserBySubject(ctx, identity.subject);
@@ -74,9 +72,7 @@ export async function viewerOrNull(
  * (username claimed), not being deleted, and not suspended. Tracking slices
  * call this first.
  */
-export async function requireUser(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"users">> {
+export async function requireUser(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
   const identity = await requireIdentity(ctx);
   const user = await getUserBySubject(ctx, identity.subject);
   if (user?.deletingSince !== undefined) {

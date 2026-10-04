@@ -56,9 +56,9 @@ function UnmappedQueue({ canAct }: { canAct: boolean }) {
       <h2>Unmapped packaging</h2>
       <p className="section-hint">
         Omnibus, deluxe and collector's books whose publisher never stated which volumes they
-        collect. They already show under their line in the publisher's own numbering; mapping
-        them lets reading progress and ownership follow the volumes inside. Check the
-        publisher's page for the collected range, then map.
+        collect. They already show under their line in the publisher's own numbering; mapping them
+        lets reading progress and ownership follow the volumes inside. Check the publisher's page
+        for the collected range, then map.
       </p>
       <ModTools current="/mod/packaging" />
       {queue === undefined ? (
@@ -72,9 +72,7 @@ function UnmappedQueue({ canAct }: { canAct: boolean }) {
               <UnmappedRow key={row.editionId} row={row} canAct={canAct} />
             ))}
           </ul>
-          {queue.hasMore ? (
-            <p className="section-hint">More follow — map these first.</p>
-          ) : null}
+          {queue.hasMore ? <p className="section-hint">More follow — map these first.</p> : null}
         </>
       )}
     </main>
@@ -93,10 +91,7 @@ function UnmappedRow({ row, canAct }: { row: Row; canAct: boolean }) {
   return (
     <li>
       <div>
-        <Link
-          to="/edition/$publicId/$slug"
-          params={slugParams(row.editionPublicId, row.title)}
-        >
+        <Link to="/edition/$publicId/$slug" params={slugParams(row.editionPublicId, row.title)}>
           {row.title}
         </Link>{" "}
         <em>
@@ -104,7 +99,10 @@ function UnmappedRow({ row, canAct }: { row: Row; canAct: boolean }) {
           {row.isbns.length > 0 ? ` · ${row.isbns.join(", ")}` : ""}
         </em>{" "}
         — in{" "}
-        <Link to="/series/$publicId/$slug" params={slugParams(row.series.publicId, row.series.title)}>
+        <Link
+          to="/series/$publicId/$slug"
+          params={slugParams(row.series.publicId, row.series.title)}
+        >
           {row.series.title}
         </Link>
       </div>
@@ -147,7 +145,11 @@ function UnmappedRow({ row, canAct }: { row: Row; canAct: boolean }) {
             onChange={(event) => setComment(event.target.value)}
             required
           />
-          <button type="submit" className="btn btn-sm" disabled={busy || row.volumeLabels.length === 0}>
+          <button
+            type="submit"
+            className="btn btn-sm"
+            disabled={busy || row.volumeLabels.length === 0}
+          >
             {busy ? "Mapping…" : "Map"}
           </button>
           {error ? <span className="form-error">{error}</span> : null}
@@ -168,10 +170,10 @@ function BooklessSeries() {
     <section>
       <h2>Series without books</h2>
       <p className="section-hint">
-        Volumes are known but no English release ever attached, so these stay out of browse,
-        search and the sitemap. Common causes: the distributor has no publisher row, the only
-        releases are omnibus packaging, or ANN lists no ISBN. Fix the cause and the next rebuild
-        restores the series; hide it from its manage page if it does not belong.
+        Volumes are known but no English release ever attached, so these stay out of browse, search
+        and the sitemap. Common causes: the distributor has no publisher row, the only releases are
+        omnibus packaging, or ANN lists no ISBN. Fix the cause and the next rebuild restores the
+        series; hide it from its manage page if it does not belong.
       </p>
       {queue === undefined ? (
         <p className="notice">Loading…</p>
@@ -202,7 +204,10 @@ function BooklessSeries() {
                     ) : null,
                   )}
                 </em>{" "}
-                <Link to="/mod/manage/$type/$key" params={{ type: "series", key: String(row.publicId) }}>
+                <Link
+                  to="/mod/manage/$type/$key"
+                  params={{ type: "series", key: String(row.publicId) }}
+                >
                   Manage…
                 </Link>
               </li>

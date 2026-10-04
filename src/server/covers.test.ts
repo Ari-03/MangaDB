@@ -99,10 +99,9 @@ describe("coverResponse", () => {
 
   test("a body that breaks everywhere is a short-lived miss", async () => {
     const broken = () =>
-      new Response(
-        new ReadableStream({ start: (c) => c.error(new Error("connection reset")) }),
-        { headers: { "Content-Type": "image/jpeg" } },
-      );
+      new Response(new ReadableStream({ start: (c) => c.error(new Error("connection reset")) }), {
+        headers: { "Content-Type": "image/jpeg" },
+      });
     upstreams = [broken, status(404)];
     const res = await get();
     expect(res?.status).toBe(503);
@@ -484,7 +483,11 @@ describe("coversOnFile", () => {
     expect(await coversOnFile([{ need: 1, candidates: [isbn(70)] }], ORIGIN)).toEqual([]);
     await Promise.all(worker.background);
     await Promise.all(worker.background);
-    expect(covers.put).toHaveBeenCalledWith(`${isbn(70)}.jpg`, expect.anything(), expect.anything());
+    expect(covers.put).toHaveBeenCalledWith(
+      `${isbn(70)}.jpg`,
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   test("a failed R2 read is no jacket, and is asked again next time", async () => {

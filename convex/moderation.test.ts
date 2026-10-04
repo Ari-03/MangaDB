@@ -17,13 +17,26 @@ import {
   insertSourceRevision,
   type Overrides,
 } from "./test.factories";
-import { EDITOR, MOD, PLAIN, alice, bob, carol, dave, makeT, seedTeam, type TestT } from "./test.helpers";
+import {
+  EDITOR,
+  MOD,
+  PLAIN,
+  alice,
+  bob,
+  carol,
+  dave,
+  makeT,
+  seedTeam,
+  type TestT,
+} from "./test.helpers";
 
 const setup = (t: TestT) => seedTeam(t, [alice, bob, carol, dave]);
 
 /** "Alpha" (public id 1, alt title "A-side") unless overridden. */
 async function addSeries(t: TestT, overrides: Overrides<"series"> = {}) {
-  return await t.run((ctx) => insertSeries(ctx, { publicId: 1, title: "Alpha", altTitles: ["A-side"], ...overrides }));
+  return await t.run((ctx) =>
+    insertSeries(ctx, { publicId: 1, title: "Alpha", altTitles: ["A-side"], ...overrides }),
+  );
 }
 
 /** A Release on a bare Edition (public id 1) with no Series. */
@@ -86,9 +99,7 @@ describe("moderation.submitDirectEdit — the proposal write path", () => {
     );
     expect(versions).toHaveLength(1);
     expect(versions[0].versionNo).toBe(1);
-    expect(versions[0].changeComment).toBe(
-      "Official romanization per the publisher.",
-    );
+    expect(versions[0].changeComment).toBe("Official romanization per the publisher.");
     expect(versions[0].ops).toHaveLength(1);
     expect(versions[0].ops[0]).toMatchObject({ kind: "update" });
 
@@ -258,23 +269,18 @@ describe("moderation — implicit Human Override (spec §4)", () => {
     await setup(t);
     const seriesId = await addSeries(t);
     await withImportedTitle(t, seriesId);
-    const base = await t.run(async (ctx) =>
-      (await ctx.db.query("revisions").collect())[0],
-    );
+    const base = await t.run(async (ctx) => (await ctx.db.query("revisions").collect())[0]);
 
-    await t.withIdentity({ subject: MOD }).mutation(
-      api.moderation.submitDirectEdit,
-      {
-        ref: { type: "series", id: seriesId },
-        baseRevisionId: base._id,
-        changes: [
-          { field: "title", value: "Beta" },
-          // altTitles has no import provenance — must NOT become an override.
-          { field: "altTitles", value: ["B-side"] },
-        ],
-        comment: "Publisher renamed the series.",
-      },
-    );
+    await t.withIdentity({ subject: MOD }).mutation(api.moderation.submitDirectEdit, {
+      ref: { type: "series", id: seriesId },
+      baseRevisionId: base._id,
+      changes: [
+        { field: "title", value: "Beta" },
+        // altTitles has no import provenance — must NOT become an override.
+        { field: "altTitles", value: ["B-side"] },
+      ],
+      comment: "Publisher renamed the series.",
+    });
 
     const series = await t.run((ctx) => ctx.db.get(seriesId));
     expect(series?.overriddenFields).toEqual(["title"]);
@@ -296,9 +302,7 @@ describe("moderation — implicit Human Override (spec §4)", () => {
     expect(series?.overriddenFields).toBeUndefined();
 
     // An existing override survives later edits to other fields.
-    await t.run((ctx) =>
-      ctx.db.patch(seriesId, { overriddenFields: ["sourceStatus"] }),
-    );
+    await t.run((ctx) => ctx.db.patch(seriesId, { overriddenFields: ["sourceStatus"] }));
     await asMod.mutation(api.moderation.submitDirectEdit, {
       ref: { type: "series", id: seriesId },
       baseRevisionId: first.revisionId,
@@ -350,26 +354,26 @@ describe("moderation.recordHistory", () => {
     await setup(t);
     const survivor = await addSeries(t, { publicId: 1, title: "Alpha" });
     await t.run(async (ctx) => {
-      await insertSeries(ctx, { status: "merged", mergedIntoId: survivor, publicId: 2, title: "Alpha (dup)" });
+      await insertSeries(ctx, {
+        status: "merged",
+        mergedIntoId: survivor,
+        publicId: 2,
+        title: "Alpha (dup)",
+      });
       await insertSeries(ctx, { status: "hidden", publicId: 3, title: "Hidden" });
     });
-    await t.withIdentity({ subject: MOD }).mutation(
-      api.moderation.submitDirectEdit,
-      {
-        ref: { type: "series", id: survivor },
-        changes: [{ field: "title", value: "Beta" }],
-        comment: "Fix.",
-      },
-    );
+    await t.withIdentity({ subject: MOD }).mutation(api.moderation.submitDirectEdit, {
+      ref: { type: "series", id: survivor },
+      changes: [{ field: "title", value: "Beta" }],
+      comment: "Fix.",
+    });
 
     const viaLoser = await t.query(api.moderation.recordHistory, {
       type: "series",
       publicId: 2,
     });
     expect(viaLoser?.revisions).toHaveLength(1);
-    expect(
-      await t.query(api.moderation.recordHistory, { type: "series", publicId: 3 }),
-    ).toBeNull();
+    expect(await t.query(api.moderation.recordHistory, { type: "series", publicId: 3 })).toBeNull();
   });
 });
 
@@ -585,7 +589,12 @@ describe("moderation.sourceBlurbs", () => {
         sourceKey: "sevenseas",
         sourceRecordId: "series:alpha",
         recordRef: { type: "series", id: seriesId },
-        snapshot: { kind: "series", title: "Alpha", url: "https://ss.test/alpha", synopsis: "Alpha begins." },
+        snapshot: {
+          kind: "series",
+          title: "Alpha",
+          url: "https://ss.test/alpha",
+          synopsis: "Alpha begins.",
+        },
         lastSeenAt: 1,
       }),
     );

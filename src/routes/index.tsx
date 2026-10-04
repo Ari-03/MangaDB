@@ -137,9 +137,8 @@ function Home() {
         <div className="hero-copy">
           <h1 className="hero-title">Know what lands on the shelf this week.</h1>
           <p className="hero-sub">
-            MangaDB tracks every English manga volume, every edition that
-            collects it, and every release date — so you always know what to buy
-            next and what you already own.
+            MangaDB tracks every English manga volume, every edition that collects it, and every
+            release date — so you always know what to buy next and what you already own.
           </p>
           <div className="hero-cta">
             <Link className="btn btn-primary" to="/releases">
@@ -158,25 +157,16 @@ function Home() {
             ))}
           </div>
         </div>
-        {heroCovers.length > 0 ? (
-          <HeroShelf releases={heroCovers} />
-        ) : null}
+        {heroCovers.length > 0 ? <HeroShelf releases={heroCovers} /> : null}
       </section>
 
-      <ReleaseShelves
-        month={month}
-        todaySort={todaySort}
-        days={pools.days}
-        onFile={onFile}
-      />
+      <ReleaseShelves month={month} todaySort={todaySort} days={pools.days} onFile={onFile} />
 
       {newest.length > 0 ? (
         <section className="section">
           <div className="section-head">
             <h2 className="section-title">Recently added series</h2>
-            <p className="section-note">
-              The newest additions to the catalog
-            </p>
+            <p className="section-note">The newest additions to the catalog</p>
             <Link className="section-link" to="/search" search={{ q: "" }}>
               Search all series
             </Link>
@@ -308,9 +298,7 @@ function ReleaseShelves({
     <>
       <section className="section">
         <div className="section-head">
-          <h2 className="section-title">
-            {primaryHeading(primary.day, todaySort)}
-          </h2>
+          <h2 className="section-title">{primaryHeading(primary.day, todaySort)}</h2>
           <p className="section-note">
             {fullDate(month, primary.day)} — {plural(primary.releases.length, "book")}
           </p>
@@ -348,13 +336,7 @@ function ReleaseShelves({
 }
 
 /** A row of Releases as shelved books: cover, then the ledge and its label. */
-function Shelf({
-  releases,
-  eager = false,
-}: {
-  releases: Array<BrowseRelease>;
-  eager?: boolean;
-}) {
+function Shelf({ releases, eager = false }: { releases: Array<BrowseRelease>; eager?: boolean }) {
   return (
     <div className="shelf">
       {releases.map((release) => {
@@ -386,9 +368,7 @@ function Shelf({
               )}
               <div className="caption-meta">
                 {release.volumeLabel ? <span>{release.volumeLabel}</span> : null}
-                {release.volumeLabel && release.publisher ? (
-                  <span className="dot" />
-                ) : null}
+                {release.volumeLabel && release.publisher ? <span className="dot" /> : null}
                 {release.publisher ? <span>{release.publisher.name}</span> : null}
               </div>
             </div>
@@ -434,18 +414,15 @@ function EmptyMonth({ month }: { month: YearMonth }) {
         {["plank-a", "plank-b", "plank-c"].map((seed) => (
           <div className="ghost-spine" key={seed}>
             <span className="cover">
-              <span
-                className="cover-ph"
-                style={{ "--cloth": clothColor(seed) } as CSSProperties}
-              />
+              <span className="cover-ph" style={{ "--cloth": clothColor(seed) } as CSSProperties} />
             </span>
           </div>
         ))}
       </div>
       <div className="empty-note">
         <p>
-          No release in {monthTitle(month)} has a date on file yet. Dates land
-          here as publishers announce them — the agenda keeps every other month.
+          No release in {monthTitle(month)} has a date on file yet. Dates land here as publishers
+          announce them — the agenda keeps every other month.
         </p>
         <Link className="btn btn-primary" to="/releases">
           Open the release agenda

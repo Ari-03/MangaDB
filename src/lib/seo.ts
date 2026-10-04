@@ -54,10 +54,7 @@ export function volumeTitleTag(seriesTitle: string, label: string | null): strin
  * Edition title (convex/lib/titles.ts) already carries series + line +
  * position; the Publisher is appended when known.
  */
-export function editionTitleTag(
-  composedTitle: string,
-  publisherName: string | null,
-): string {
+export function editionTitleTag(composedTitle: string, publisherName: string | null): string {
   const name = publisherName ? `${composedTitle} (${publisherName})` : composedTitle;
   return `${name} – ISBN & Release Date | ${SITE_NAME}`;
 }
@@ -186,9 +183,7 @@ export function jsonLdScript(data: object) {
  * BreadcrumbList — on every catalog page. The last crumb may omit `path`
  * (the current page names itself).
  */
-export function breadcrumbListJsonLd(
-  crumbs: Array<{ name: string; path?: string }>,
-) {
+export function breadcrumbListJsonLd(crumbs: Array<{ name: string; path?: string }>) {
   return {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -202,11 +197,7 @@ export function breadcrumbListJsonLd(
 }
 
 /** BookSeries — on Series pages. */
-export function bookSeriesJsonLd(args: {
-  title: string;
-  altTitles: string[];
-  path: string;
-}) {
+export function bookSeriesJsonLd(args: { title: string; altTitles: string[]; path: string }) {
   return {
     "@context": "https://schema.org",
     "@type": "BookSeries",
@@ -257,10 +248,7 @@ export function isoPartialDate(
 }
 
 /** schema.org BookFormatType for a Release's Format/Binding. */
-export function schemaBookFormat(
-  format: "physical" | "digital",
-  binding: string | null,
-): string {
+export function schemaBookFormat(format: "physical" | "digital", binding: string | null): string {
   if (format === "digital") return "https://schema.org/EBook";
   return /hard\s*cover|hardback/i.test(binding ?? "")
     ? "https://schema.org/Hardcover"

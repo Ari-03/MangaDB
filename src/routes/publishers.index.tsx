@@ -18,7 +18,10 @@ export const Route = createFileRoute("/publishers/")({
     // The current month (UTC) is computed on the server so SSR and
     // hydration agree, like the Release Agenda.
     const anchor = currentMonth();
-    const data = await catalogQuery(api.publisher.monthBoard, { ...anchor, showMature: showMature() });
+    const data = await catalogQuery(api.publisher.monthBoard, {
+      ...anchor,
+      showMature: showMature(),
+    });
     return { anchor, data };
   },
   head: () =>

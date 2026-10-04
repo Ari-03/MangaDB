@@ -10,12 +10,7 @@
 
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import {
-  mutation,
-  query,
-  type MutationCtx,
-  type QueryCtx,
-} from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { editionCoverage } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { getSourceByKey } from "./importSources";
@@ -67,9 +62,7 @@ export async function getCanonical(
 export async function revisionsOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
   return await ctx.db
     .query("revisions")
-    .withIndex("by_record", (q) =>
-      q.eq("ref.type", ref.type).eq("ref.id", ref.id),
-    )
+    .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id))
     .order("desc")
     .collect();
 }
@@ -223,7 +216,10 @@ export async function applyUpdate(
   // base change before approval requires an explicit rebase, never a silent
   // one. For a direct edit this surfaces as "reload and re-edit".
   if ((latest?._id ?? null) !== args.baseRevisionId) {
-    fail("stale", "This record changed since the edit was loaded. Reload and re-apply your change.");
+    fail(
+      "stale",
+      "This record changed since the edit was loaded. Reload and re-apply your change.",
+    );
   }
 
   const patch: Record<string, unknown> = {};
@@ -234,14 +230,15 @@ export async function applyUpdate(
   if (ref.type === "series") {
     const series = doc as Doc<"series">;
     const title = ("title" in patch ? patch.title : series.title) as string;
-    const altTitles = ("altTitles" in patch
-      ? patch.altTitles
-      : series.altTitles) as string[];
+    const altTitles = ("altTitles" in patch ? patch.altTitles : series.altTitles) as string[];
     patch.searchText = seriesSearchText(title, altTitles);
     // A content rating decides `mature` now rather than at the next
     // library rebuild; clearing it hands the call back to the evidence,
     // which that rebuild re-reads (lib/mature.ts).
-    const rated = "contentRating" in patch ? ratedByDataTeam(patch.contentRating as Doc<"series">["contentRating"]) : null;
+    const rated =
+      "contentRating" in patch
+        ? ratedByDataTeam(patch.contentRating as Doc<"series">["contentRating"])
+        : null;
     if (rated !== null) {
       patch.mature = rated ? true : undefined;
       // The library's projections follow now too, not at the next rebuild.
@@ -315,7 +312,13 @@ export async function applyClearOverride(
   const before = doc.overriddenFields ?? [];
   const after = before.filter((name) => name !== field);
   await ctx.db.patch(ref.id, { overriddenFields: after.length > 0 ? after : undefined });
-  return await insertRevision(ctx, ref, latest, [{ field: "overriddenFields", before, after }], args.meta);
+  return await insertRevision(
+    ctx,
+    ref,
+    latest,
+    [{ field: "overriddenFields", before, after }],
+    args.meta,
+  );
 }
 
 /**
@@ -352,7 +355,10 @@ export const submitDirectClear = mutation({
   },
 });
 
-export type WrittenBy = { kind: "human" } | { kind: "source"; sourceKey: string } | { kind: "unrecorded" };
+export type WrittenBy =
+  | { kind: "human" }
+  | { kind: "source"; sourceKey: string }
+  | { kind: "unrecorded" };
 
 /**
  * Who wrote a field's current value, as the import rules weigh it: the
@@ -362,7 +368,9 @@ export type WrittenBy = { kind: "human" } | { kind: "source"; sourceKey: string 
 export function writtenBy(revisionsNewestFirst: Array<Doc<"revisions">>, field: string): WrittenBy {
   const author = latestTouch(revisionsNewestFirst, field)?.author;
   if (!author) return { kind: "unrecorded" };
-  return author.kind === "user" ? { kind: "human" } : { kind: "source", sourceKey: author.sourceKey };
+  return author.kind === "user"
+    ? { kind: "human" }
+    : { kind: "source", sourceKey: author.sourceKey };
 }
 
 /**
@@ -766,9 +774,7 @@ export const recordHistory = query({
                 kind: "source" as const,
                 sourceKey: revision.author.sourceKey,
               },
-        approver: revision.approvedBy
-          ? await usernameOf(revision.approvedBy)
-          : null,
+        approver: revision.approvedBy ? await usernameOf(revision.approvedBy) : null,
         citation: revision.citation ?? null,
       });
     }

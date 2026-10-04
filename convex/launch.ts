@@ -11,13 +11,7 @@ import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import {
-  action,
-  internalMutation,
-  internalQuery,
-  mutation,
-  query,
-} from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { todaySortKey } from "./lib/dates";
@@ -150,10 +144,7 @@ async function startStage(ctx: MutationCtx, stage: number) {
   const def = SEED_STAGES.find((s) => s.stage === stage);
   if (!def) return fail("invalidStage", "Seed stages are 1–4.");
   if (!(await getBootstrapMode(ctx))) {
-    return fail(
-      "bootstrapOff",
-      "Seeding runs under Bootstrap Mode (spec §7). Turn it on first.",
-    );
+    return fail("bootstrapOff", "Seeding runs under Bootstrap Mode (spec §7). Turn it on first.");
   }
   const { stages } = await stageStatuses(ctx);
   for (const prior of stages) {
@@ -254,7 +245,13 @@ export const seedPublishers = internalMutation({
         parented.push(pub.slug);
       }
     }
-    return { created, parented, markedDefunct, markedAdultOnly, total: CANONICAL_PUBLISHERS.length };
+    return {
+      created,
+      parented,
+      markedDefunct,
+      markedAdultOnly,
+      total: CANONICAL_PUBLISHERS.length,
+    };
   },
 });
 
@@ -391,7 +388,9 @@ async function eachPage<P extends { isDone: boolean; continueCursor: string }>(
 
 /** One SAMPLE_PAGE-sized page of active Series, after `cursor`. */
 function nextSeriesPage(ctx: ActionCtx, cursor: string | null): Promise<SeriesPage> {
-  return ctx.runQuery(internal.launch.seriesPage, { paginationOpts: { numItems: SAMPLE_PAGE, cursor } });
+  return ctx.runQuery(internal.launch.seriesPage, {
+    paginationOpts: { numItems: SAMPLE_PAGE, cursor },
+  });
 }
 
 /**
@@ -442,8 +441,10 @@ export const drawQaSample = action({
         .sort((a, b) => b[1] - a[1])
         .slice(0, QA_SAMPLE_SIZE)
         .map(([id]) => id as Id<"series">);
-      const docs: Array<{ id: Id<"series">; publicId: number; title: string }> =
-        await ctx.runQuery(internal.launch.seriesByIds, { ids: top });
+      const docs: Array<{ id: Id<"series">; publicId: number; title: string }> = await ctx.runQuery(
+        internal.launch.seriesByIds,
+        { ids: top },
+      );
       picked = docs.map((d) => ({
         seriesId: d.id,
         publicId: d.publicId,
@@ -587,10 +588,9 @@ export const runDuplicateSweep = action({
         bId: p.bId as Id<"series">,
         reason: p.reason,
       }));
-      const result: { inserted: number } = await ctx.runMutation(
-        internal.launch.recordSweepPairs,
-        { pairs: chunk },
-      );
+      const result: { inserted: number } = await ctx.runMutation(internal.launch.recordSweepPairs, {
+        pairs: chunk,
+      });
       inserted += result.inserted;
     }
     await ctx.runMutation(internal.launch.finishSweep, {

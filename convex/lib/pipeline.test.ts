@@ -39,7 +39,10 @@ const CITATION = {
 type Shared = "sourceKey" | "citation" | "importComment" | "tagBootstrapUnreviewed" | "now";
 
 /** createCanonicalRecords with the shared fields defaulted; a case overrides the source or the tag. */
-const create = (ctx: MutationCtx, args: Omit<CreationArgs, Shared> & Partial<Pick<CreationArgs, Shared>>) =>
+const create = (
+  ctx: MutationCtx,
+  args: Omit<CreationArgs, Shared> & Partial<Pick<CreationArgs, Shared>>,
+) =>
   createCanonicalRecords(ctx, {
     sourceKey: "prh",
     citation: CITATION,
@@ -259,7 +262,12 @@ describe("queueCreationProposal", () => {
           kind: "create",
           table: "releases",
           tempId: "release",
-          fields: { editionId: "edition", format: "physical", language: "en", isbn13: "9781646510001" },
+          fields: {
+            editionId: "edition",
+            format: "physical",
+            language: "en",
+            isbn13: "9781646510001",
+          },
         },
       ]);
     });
@@ -618,7 +626,10 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
           publisher: { name: "Kodansha", slug: "kodansha" },
         },
       });
-      for (const patch of [{ status: "hidden" as const }, { status: "active" as const, locked: true }]) {
+      for (const patch of [
+        { status: "hidden" as const },
+        { status: "active" as const, locked: true },
+      ]) {
         await ctx.db.patch(early.bundleId, patch);
         await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
         expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(0);
@@ -649,13 +660,13 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
       const one = await vol("1", "9780000000019");
       const three = await vol("3", "9780000000033");
       await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
-      expect(
-        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
-      ).toEqual([
-        [one, 1],
-        [two, 2],
-        [three, 3],
-      ]);
+      expect((await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order])).toEqual(
+        [
+          [one, 1],
+          [two, 2],
+          [three, 3],
+        ],
+      );
     });
   });
 
@@ -703,13 +714,13 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
 
       const one = await vol("1", "9780000000019");
       await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
-      expect(
-        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
-      ).toEqual([
-        [three, 1],
-        [two, 2],
-        [one, 3],
-      ]);
+      expect((await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order])).toEqual(
+        [
+          [three, 1],
+          [two, 2],
+          [one, 3],
+        ],
+      );
     });
   });
 
@@ -737,13 +748,13 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
 
       const one = await vol("1", "9780000000019");
       await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
-      expect(
-        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
-      ).toEqual([
-        [bonus, 1],
-        [two, 2],
-        [one, 3],
-      ]);
+      expect((await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order])).toEqual(
+        [
+          [bonus, 1],
+          [two, 2],
+          [one, 3],
+        ],
+      );
     });
   });
 });
@@ -849,7 +860,10 @@ describe("createCanonicalRecords — repairs stand", () => {
       const hidden = await publishedSeries(ctx, "Cells at Work! Picture Book", vertical);
       await ctx.db.patch(hidden, { status: "hidden" });
 
-      const result = await create(ctx, bookArgs(await observation(ctx, "9798888778449"), "kodansha"));
+      const result = await create(
+        ctx,
+        bookArgs(await observation(ctx, "9798888778449"), "kodansha"),
+      );
       expect(result.blocked).toBeUndefined();
       expect(result.seriesId).not.toBe(hidden);
       expect(result.releaseId).toBeDefined();

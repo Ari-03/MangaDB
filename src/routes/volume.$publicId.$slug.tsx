@@ -115,9 +115,7 @@ function VolumePage() {
   const publishers = [
     ...new Map(
       editions.flatMap((edition) =>
-        edition.publisher
-          ? [[edition.publisher.slug, edition.publisher.name] as const]
-          : [],
+        edition.publisher ? [[edition.publisher.slug, edition.publisher.name] as const] : [],
       ),
     ),
   ].map(([slug, name]) => ({ slug, name }));
@@ -145,9 +143,7 @@ function VolumePage() {
               // The Label goes on the cloth; an unlabeled Volume carries its
               // title instead, since it has no number to print.
               numbered={
-                volume.label !== null
-                  ? { series: series.title, number: volume.label }
-                  : undefined
+                volume.label !== null ? { series: series.title, number: volume.label } : undefined
               }
               lazy={false}
             />
@@ -170,10 +166,7 @@ function VolumePage() {
               stored Volume state. */}
           <VolumeOwnership volumePublicId={volume.publicId} />
           {/* Durable, edition-independent read count. */}
-          <VolumeReadCount
-            seriesPublicId={series.publicId}
-            volumePublicId={volume.publicId}
-          />
+          <VolumeReadCount seriesPublicId={series.publicId} volumePublicId={volume.publicId} />
         </div>
 
         <div className="volume-hero-body">
@@ -189,17 +182,12 @@ function VolumePage() {
             </Link>
             {/* Canonical numbering (spec §2): Position sorts, Label displays —
                 and neither is ever an Edition Line's own numbering. */}
-            <span
-              className="chip"
-              title="Position in the canonical reading order"
-            >
+            <span className="chip" title="Position in the canonical reading order">
               #{volume.position} in the reading path
             </span>
             <RatingAggregate target={ratingTarget} initial={page.rating} />
             <span className="chip">
-              {volume.label !== null
-                ? `Volume label “${volume.label}”`
-                : "Unnumbered volume"}
+              {volume.label !== null ? `Volume label “${volume.label}”` : "Unnumbered volume"}
             </span>
             {publishers.map((publisher) => (
               <Link
@@ -222,10 +210,7 @@ function VolumePage() {
                 From the{" "}
                 <Link
                   to="/edition/$publicId/$slug"
-                  params={slugParams(
-                    description.edition.publicId,
-                    description.edition.title,
-                  )}
+                  params={slugParams(description.edition.publicId, description.edition.title)}
                 >
                   {description.edition.publisherName ?? "English"} edition
                 </Link>
@@ -254,8 +239,8 @@ function VolumePage() {
 
           {editions.length === 0 ? (
             <p className="notice">
-              No release covers this volume yet. Its editions appear here as
-              soon as a publisher announces one.
+              No release covers this volume yet. Its editions appear here as soon as a publisher
+              announces one.
             </p>
           ) : null}
 
@@ -298,16 +283,11 @@ function CoveringEdition({ edition }: { edition: CoveringEditionData }) {
     <article className="vol-edition">
       <header className="vol-edition-head">
         <h3 className="vol-edition-name">
-          <Link
-            to="/edition/$publicId/$slug"
-            params={slugParams(edition.publicId, edition.title)}
-          >
+          <Link to="/edition/$publicId/$slug" params={slugParams(edition.publicId, edition.title)}>
             {edition.title}
           </Link>
         </h3>
-        {edition.publisher ? (
-          <span className="chip">{edition.publisher.name}</span>
-        ) : null}
+        {edition.publisher ? <span className="chip">{edition.publisher.name}</span> : null}
         {/* Edition Line Position is publisher package numbering — never
             the canonical volume number (spec §2). */}
         {edition.lineName ? (
@@ -323,13 +303,10 @@ function CoveringEdition({ edition }: { edition: CoveringEditionData }) {
         </span>
       </header>
 
-      {edition.extentNote ? (
-        <p className="vol-edition-note">{edition.extentNote}</p>
-      ) : null}
+      {edition.extentNote ? <p className="vol-edition-note">{edition.extentNote}</p> : null}
       {/* The omnibus case: the full ordered Coverage shows every Volume this
           Edition spans, each linking its own page. */}
-      {edition.coverage.length > 1 ||
-      edition.coverage.some((c) => c.extent === "partial") ? (
+      {edition.coverage.length > 1 || edition.coverage.some((c) => c.extent === "partial") ? (
         <CoverageChips coverage={edition.coverage} />
       ) : null}
 

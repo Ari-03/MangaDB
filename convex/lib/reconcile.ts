@@ -37,7 +37,8 @@ import { sameValue, valueHash } from "./values";
 
 /** The record types imports reconcile field-level today. */
 export type ReconcileRef =
-  { type: "release"; id: Id<"releases"> } | { type: "series"; id: Id<"series"> };
+  | { type: "release"; id: Id<"releases"> }
+  | { type: "series"; id: Id<"series"> };
 
 type FieldChange = { field: string; before: unknown; after: unknown };
 

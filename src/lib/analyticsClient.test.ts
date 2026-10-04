@@ -26,7 +26,10 @@ const session = vi.hoisted(() => ({
     | undefined,
 }));
 vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => session.auth }));
-vi.mock("convex/react", () => ({ useQuery: () => session.viewer, useMutation: () => async () => {} }));
+vi.mock("convex/react", () => ({
+  useQuery: () => session.viewer,
+  useMutation: () => async () => {},
+}));
 
 type Sent = { event: string; properties: Record<string, unknown>; raw: string };
 
@@ -63,7 +66,10 @@ function eventsIn(text: string): Array<{ event: string; properties: Record<strin
   const parsed: unknown = JSON.parse(json);
   const list = Array.isArray(parsed)
     ? parsed
-    : typeof parsed === "object" && parsed !== null && "batch" in parsed && Array.isArray(parsed.batch)
+    : typeof parsed === "object" &&
+        parsed !== null &&
+        "batch" in parsed &&
+        Array.isArray(parsed.batch)
       ? parsed.batch
       : [parsed];
   return list;
@@ -176,7 +182,9 @@ async function mountPage(path: string) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // Read when lib/analytics.tsx loads: without it the gate loads no client.
   vi.stubEnv("VITE_PUBLIC_POSTHOG_KEY", "phc_test");
-  const { act, Component, createElement, Fragment, StrictMode, useEffect, useState } = await import("react");
+  const { act, Component, createElement, Fragment, StrictMode, useEffect, useState } = await import(
+    "react"
+  );
   const { createRoot } = await import("react-dom/client");
   const { default: posthog } = await import("posthog-js");
   const { default: PostHogAnalytics } = await import("./analyticsClient");
@@ -222,7 +230,9 @@ async function mountPage(path: string) {
     posthog,
     container,
     render: async (consent: AnalyticsConsent) => {
-      await act(async () => root.render(createElement(PostHogAnalytics, { apiKey: "phc_test", consent })));
+      await act(async () =>
+        root.render(createElement(PostHogAnalytics, { apiKey: "phc_test", consent })),
+      );
       await settle();
     },
     renderWithSearch: async (consent: AnalyticsConsent, query: string) => {
@@ -279,7 +289,9 @@ const since = (from: number) => events.slice(from);
 
 /** Each event's name and distinct id, sorted: batched and instant sends can arrive either way round. */
 const named = (sent: Sent[]) =>
-  sent.map((e) => [e.event, e.properties.distinct_id]).sort((a, b) => String(a).localeCompare(String(b)));
+  sent
+    .map((e) => [e.event, e.properties.distinct_id])
+    .sort((a, b) => String(a).localeCompare(String(b)));
 
 const identified = (userId: string): AnalyticsConsent => ({
   status: "identified",
@@ -380,7 +392,8 @@ describe("analyticsClient against posthog-js", () => {
       ["$pageview", "user_a"],
       ["$set", "user_a"],
     ]);
-    for (const event of sent) expect(event.properties.$session_entry_url).toBe("https://mangadb.test/me");
+    for (const event of sent)
+      expect(event.properties.$session_entry_url).toBe("https://mangadb.test/me");
   });
 
   it("carries nothing from an opted-out account's pages to the next anonymous pageview after sign-out", async () => {
@@ -410,12 +423,16 @@ describe("analyticsClient against posthog-js", () => {
     const signedOut = events.length;
     await page.apply(ANONYMOUS);
     await page.go("/series/1");
-    expect(since(signedOut).map((e) => [e.event, e.properties.$pathname])).toEqual([["$pageview", "/series/1"]]);
+    expect(since(signedOut).map((e) => [e.event, e.properties.$pathname])).toEqual([
+      ["$pageview", "/series/1"],
+    ]);
     expect(since(signedOut)[0]!.properties.distinct_id).not.toBe("user_a");
 
     const reloaded = events.length;
     await openPage("/series/2", ANONYMOUS);
-    expect(since(reloaded).map((e) => [e.event, e.properties.$pathname])).toEqual([["$pageview", "/series/2"]]);
+    expect(since(reloaded).map((e) => [e.event, e.properties.$pathname])).toEqual([
+      ["$pageview", "/series/2"],
+    ]);
   });
 
   it("opts back in for a signed-out visit when an earlier load stored the opt-out", async () => {
@@ -427,9 +444,9 @@ describe("analyticsClient against posthog-js", () => {
     await page.apply(OFF);
     const reloaded = events.length;
     await openPage("/series/2", ANONYMOUS);
-    expect(since(reloaded).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
-      ["$pageview", anonymousId, "/series/2"],
-    ]);
+    expect(
+      since(reloaded).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+    ).toEqual([["$pageview", anonymousId, "/series/2"]]);
   });
 
   it("never sends under one account's id after another signs in, and never merges them", async () => {
@@ -586,7 +603,9 @@ describe("analyticsClient against posthog-js", () => {
       ["$set", "user_a"],
     ]);
     for (const event of sent) {
-      expect(event.properties.$session_entry_url).toBe(`https://mangadb.test/search?q=${OFF_TIME}-query`);
+      expect(event.properties.$session_entry_url).toBe(
+        `https://mangadb.test/search?q=${OFF_TIME}-query`,
+      );
       expect(event.properties.$session_entry_pathname).toBe("/search");
     }
   });
@@ -650,9 +669,9 @@ describe("analyticsClient against posthog-js", () => {
     const resumed = events.length;
     await page.render(identified("user_b"));
     await page.go("/series/2");
-    expect(since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
-      ["$pageview", "user_b", "/series/2"],
-    ]);
+    expect(
+      since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+    ).toEqual([["$pageview", "user_b", "/series/2"]]);
   });
 
   it("leaves the consent of a first mount with Off to `loaded`, storing no token-less opt-out", async () => {
@@ -732,9 +751,9 @@ describe("analyticsClient against posthog-js", () => {
     await page.go("/series/2");
     await page.renderGate();
     await page.go("/series/3");
-    expect(since(unmounted).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
-      ["$pageview", "user_b", "/series/3"],
-    ]);
+    expect(
+      since(unmounted).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+    ).toEqual([["$pageview", "user_b", "/series/3"]]);
     expect(page.posthog.has_opted_out_capturing()).toBe(false);
   });
 
@@ -761,9 +780,9 @@ describe("analyticsClient against posthog-js", () => {
       await page.render(identified("user_b"));
       const resumed = events.length;
       await page.go("/series/2");
-      expect(since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
-        ["$pageview", "user_b", "/series/2"],
-      ]);
+      expect(
+        since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]),
+      ).toEqual([["$pageview", "user_b", "/series/2"]]);
     },
   );
 
@@ -773,7 +792,10 @@ describe("analyticsClient against posthog-js", () => {
     await page.renderWithSearch(identified("user_b"), "second");
     expect(events.filter((e) => e.event === "search_performed")).toHaveLength(1);
     const renamed = events.length;
-    await page.renderWithSearch({ status: "identified", userId: "user_b", username: "renamed", role: null }, "third");
+    await page.renderWithSearch(
+      { status: "identified", userId: "user_b", username: "renamed", role: null },
+      "third",
+    );
     expect(
       since(renamed)
         .filter((e) => e.event === "search_performed")

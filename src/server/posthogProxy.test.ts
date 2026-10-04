@@ -89,7 +89,13 @@ describe("posthogProxyResponse", () => {
 
   it("passes upstream errors through, and never caches them", async () => {
     upstreamStatus = 503;
-    expect((await posthogProxyResponse(new Request("https://mangadb.org/_s/e/", { method: "POST", body: "b" })))?.status).toBe(503);
+    expect(
+      (
+        await posthogProxyResponse(
+          new Request("https://mangadb.org/_s/e/", { method: "POST", body: "b" }),
+        )
+      )?.status,
+    ).toBe(503);
     const asset = () => posthogProxyResponse(new Request("https://mangadb.org/_s/static/array.js"));
     expect((await asset())?.status).toBe(503);
     expect(cached.size).toBe(0);
@@ -100,7 +106,9 @@ describe("posthogProxyResponse", () => {
 
   it("drops a client-sent X-Forwarded-For when Cloudflare gave no IP", async () => {
     await posthogProxyResponse(
-      new Request("https://mangadb.org/_s/flags/?v=2", { headers: { "X-Forwarded-For": "198.51.100.9" } }),
+      new Request("https://mangadb.org/_s/flags/?v=2", {
+        headers: { "X-Forwarded-For": "198.51.100.9" },
+      }),
     );
     expect(new Headers(calls[0]!.init?.headers).get("x-forwarded-for")).toBeNull();
 
@@ -153,7 +161,11 @@ describe("posthogProxyResponse", () => {
       pull: (c) => (sent++ < 25 ? c.enqueue(chunk) : c.close()),
     });
     const res = await posthogProxyResponse(
-      new Request("https://mangadb.org/_s/e/", { method: "POST", body: upload, ...{ duplex: "half" } }),
+      new Request("https://mangadb.org/_s/e/", {
+        method: "POST",
+        body: upload,
+        ...{ duplex: "half" },
+      }),
     );
     expect(res?.status).toBe(200);
     // Byte count on success, so a failure message never prints 25 MB.

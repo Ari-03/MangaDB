@@ -29,8 +29,17 @@ async function seed(t: TestT) {
     await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
 
     const seriesId = await insertSeries(ctx, { publicId: 1, title: "Berserk" });
-    const hiddenSeries = await insertSeries(ctx, { status: "hidden", publicId: 2, title: "Hidden Series" });
-    await insertSeries(ctx, { status: "merged", publicId: 3, title: "Duplicate", mergedIntoId: seriesId });
+    const hiddenSeries = await insertSeries(ctx, {
+      status: "hidden",
+      publicId: 2,
+      title: "Hidden Series",
+    });
+    await insertSeries(ctx, {
+      status: "merged",
+      publicId: 3,
+      title: "Duplicate",
+      mergedIntoId: seriesId,
+    });
 
     const volumeId = await insertVolume(ctx, { publicId: 11, seriesId, label: "1" });
     // Volume of a hidden Series: hidden from the public site → no URL.
@@ -63,9 +72,7 @@ describe("seo.sitemapPage", () => {
   it("lists only active Series, lastmod from the latest Revision", async () => {
     const t = makeT();
     const { revisionId } = await seed(t);
-    const revisionTime = await t.run(
-      async (ctx) => (await ctx.db.get(revisionId))!._creationTime,
-    );
+    const revisionTime = await t.run(async (ctx) => (await ctx.db.get(revisionId))!._creationTime);
 
     const result = await t.query(api.seo.sitemapPage, {
       entity: "series",
@@ -122,9 +129,7 @@ describe("seo.sitemapPage", () => {
       entity: "bundle",
       paginationOpts: PAGE,
     });
-    expect(bundles.entries.map((e) => [e.publicId, e.title])).toEqual([
-      [31, "Berserk Box Set"],
-    ]);
+    expect(bundles.entries.map((e) => [e.publicId, e.title])).toEqual([[31, "Berserk Box Set"]]);
   });
 });
 

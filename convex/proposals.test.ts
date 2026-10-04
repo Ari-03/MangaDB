@@ -10,7 +10,13 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { queueCreationProposal } from "./lib/pipeline";
 import { MAX_OPS_PER_PROPOSAL } from "./lib/proposalCreates";
-import { insertObservation, insertPublisher, insertSeries, insertSourceRevision, insertVolume } from "./test.factories";
+import {
+  insertObservation,
+  insertPublisher,
+  insertSeries,
+  insertSourceRevision,
+  insertVolume,
+} from "./test.factories";
 import {
   ADMIN,
   EDITOR,
@@ -27,7 +33,11 @@ import {
 } from "./test.helpers";
 
 /** A second Moderator, for the claims test. */
-const beth = { subject: "user_mod2", username: "beth", role: "moderator" } as const satisfies TestUser;
+const beth = {
+  subject: "user_mod2",
+  username: "beth",
+  role: "moderator",
+} as const satisfies TestUser;
 
 const setup = (t: TestT) => seedTeam(t, [alice, bob, beth, carol, dave]);
 
@@ -77,9 +87,7 @@ const queueImport = (
     });
   });
 
-const URL_EVIDENCE = [
-  { kind: "url" as const, url: "https://publisher.example/announcement" },
-];
+const URL_EVIDENCE = [{ kind: "url" as const, url: "https://publisher.example/announcement" }];
 
 /** Draft + submit one title-update proposal as the Editor. */
 async function submitTitleProposal(t: TestT, seriesId: Id<"series">, title = "Beta") {
@@ -109,17 +117,13 @@ describe("proposals — authorization", () => {
     const proposalId = await submitTitleProposal(t, seriesId);
     for (const call of [
       () =>
-        t
-          .withIdentity({ subject: EDITOR })
-          .mutation(api.proposals.approveProposal, { proposalId }),
+        t.withIdentity({ subject: EDITOR }).mutation(api.proposals.approveProposal, { proposalId }),
       () =>
         t
           .withIdentity({ subject: EDITOR })
           .mutation(api.proposals.rejectProposal, { proposalId, note: "no" }),
       () =>
-        t
-          .withIdentity({ subject: EDITOR })
-          .mutation(api.proposals.claimProposal, { proposalId }),
+        t.withIdentity({ subject: EDITOR }).mutation(api.proposals.claimProposal, { proposalId }),
     ]) {
       await expect(call()).rejects.toMatchObject({ data: { code: "forbidden" } });
     }
@@ -127,9 +131,7 @@ describe("proposals — authorization", () => {
     await expect(
       t.withIdentity({ subject: PLAIN }).query(api.proposals.reviewQueue, {}),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
-    const queue = await t
-      .withIdentity({ subject: EDITOR })
-      .query(api.proposals.reviewQueue, {});
+    const queue = await t.withIdentity({ subject: EDITOR }).query(api.proposals.reviewQueue, {});
     expect(queue).toHaveLength(1);
   });
 });
@@ -267,7 +269,9 @@ describe("proposals — lifecycle", () => {
       }),
     ).rejects.toMatchObject({ data: { code: "duplicateRecord" } });
 
-    const hiddenId = await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 2, title: "Hidden" }));
+    const hiddenId = await t.run((ctx) =>
+      insertSeries(ctx, { status: "hidden", publicId: 2, title: "Hidden" }),
+    );
     await expect(
       asEditor.mutation(api.proposals.saveDraft, {
         ops: [titleOp(hiddenId, "Beta")],
@@ -401,9 +405,7 @@ describe("proposals — stale-base detection and explicit rebase", () => {
       proposalId,
     });
     expect(result.status).toBe("stale");
-    expect(result.stale).toEqual([
-      { type: "series", id: seriesId, reason: "baseChanged" },
-    ]);
+    expect(result.stale).toEqual([{ type: "series", id: seriesId, reason: "baseChanged" }]);
     // No silent rebase: nothing applied, proposal flagged, still in review.
     const proposal = await t.run((ctx) => ctx.db.get(proposalId));
     expect(proposal).toMatchObject({ state: "inReview", stale: true });
@@ -479,7 +481,8 @@ describe("proposals — stale-base detection and explicit rebase", () => {
     const seriesId = await addSeries(t);
     await addPublisher(t);
     const asMod = t.withIdentity({ subject: MOD });
-    const addVolume = () => t.run((ctx) => insertVolume(ctx, { seriesId, label: "1", position: 1 }));
+    const addVolume = () =>
+      t.run((ctx) => insertVolume(ctx, { seriesId, label: "1", position: 1 }));
     // The importer's real path: coverage over the existing Volume 1 by ID,
     // a temp-ID create for the missing Volume 2.
     const queue = (sourceRecordId: string) => queueImport(t, seriesId, sourceRecordId, ["1", "2"]);
@@ -488,9 +491,7 @@ describe("proposals — stale-base detection and explicit rebase", () => {
     const proposalId = await queue("alpha-omnibus");
     // A moderator merges Volume 1 into a duplicate row before review.
     const survivorId = await addVolume();
-    await t.run((ctx) =>
-      ctx.db.patch(volumeId, { status: "merged", mergedIntoId: survivorId }),
-    );
+    await t.run((ctx) => ctx.db.patch(volumeId, { status: "merged", mergedIntoId: survivorId }));
 
     const result = await asMod.mutation(api.proposals.approveProposal, { proposalId });
     expect(result.status).toBe("stale");
@@ -569,11 +570,7 @@ describe("proposals — temp-ID multi-record creation", () => {
     });
     expect(result.status).toBe("approved");
     if (result.status !== "approved") throw new Error("unreachable");
-    expect(result.created.map((c) => c.type)).toEqual([
-      "volume",
-      "edition",
-      "release",
-    ]);
+    expect(result.created.map((c) => c.type)).toEqual(["volume", "edition", "release"]);
 
     const volumes = await t.run((ctx) => ctx.db.query("volumes").collect());
     expect(volumes).toHaveLength(1);
@@ -694,9 +691,7 @@ describe("proposals — temp-ID multi-record creation", () => {
     // Unknown tables are never creatable.
     await expect(
       asEditor.mutation(api.proposals.saveDraft, {
-        ops: [
-          { kind: "create", table: "users", tempId: "u", fields: { username: "x" } },
-        ],
+        ops: [{ kind: "create", table: "users", tempId: "u", fields: { username: "x" } }],
         evidence: URL_EVIDENCE,
         comment: "No.",
       }),
@@ -758,7 +753,9 @@ describe("proposals — temp-ID multi-record creation", () => {
 
     // Queued the way the importers do: publisher by slug, a temp-ID Volume
     // create for vol 2, a real series ID as a string.
-    const proposalId = await queueImport(t, seriesId, "alpha-vol-2", ["2"], { isbn13: "9781999000721" });
+    const proposalId = await queueImport(t, seriesId, "alpha-vol-2", ["2"], {
+      isbn13: "9781999000721",
+    });
 
     const asMod = t.withIdentity({ subject: MOD });
     const queue = await asMod.query(api.proposals.reviewQueue, {
@@ -790,21 +787,18 @@ describe("proposals — the review queue", () => {
     const asMod = t.withIdentity({ subject: MOD });
 
     const updateId = await submitTitleProposal(t, seriesId, "Beta");
-    const { proposalId: createId } = await asEditor.mutation(
-      api.proposals.saveDraft,
-      {
-        ops: [
-          {
-            kind: "create",
-            table: "series",
-            tempId: "series",
-            fields: { title: "Brand New" },
-          },
-        ],
-        evidence: URL_EVIDENCE,
-        comment: "New license.",
-      },
-    );
+    const { proposalId: createId } = await asEditor.mutation(api.proposals.saveDraft, {
+      ops: [
+        {
+          kind: "create",
+          table: "series",
+          tempId: "series",
+          fields: { title: "Brand New" },
+        },
+      ],
+      evidence: URL_EVIDENCE,
+      comment: "New license.",
+    });
     await asEditor.mutation(api.proposals.submitProposal, {
       proposalId: createId,
       acknowledgeWarnings: ["newSeries"],
@@ -827,21 +821,15 @@ describe("proposals — the review queue", () => {
       author: "carol",
     });
     expect(byAuthor).toHaveLength(2);
-    expect(
-      await asMod.query(api.proposals.reviewQueue, { author: "bob" }),
-    ).toHaveLength(0);
+    expect(await asMod.query(api.proposals.reviewQueue, { author: "bob" })).toHaveLength(0);
 
     const warned = await asMod.query(api.proposals.reviewQueue, {
       warningsOnly: true,
     });
     expect(warned.map((row) => row.proposalId)).toEqual([createId]);
 
-    expect(
-      await asMod.query(api.proposals.reviewQueue, { staleOnly: true }),
-    ).toHaveLength(0);
-    expect(
-      await asMod.query(api.proposals.reviewQueue, { minAgeHours: 1 }),
-    ).toHaveLength(0);
+    expect(await asMod.query(api.proposals.reviewQueue, { staleOnly: true })).toHaveLength(0);
+    expect(await asMod.query(api.proposals.reviewQueue, { minAgeHours: 1 })).toHaveLength(0);
   });
 
   it("claims coordinate without exclusive authority", async () => {
@@ -906,9 +894,7 @@ describe("proposals — the review queue", () => {
 
     // Pending proposals are Data-Team-only in v1.
     await expect(
-      t
-        .withIdentity({ subject: PLAIN })
-        .query(api.proposals.proposalDetail, { proposalId }),
+      t.withIdentity({ subject: PLAIN }).query(api.proposals.proposalDetail, { proposalId }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
     const mine = await asEditor.query(api.proposals.myProposals, {});
@@ -941,14 +927,11 @@ describe("proposals — per-user rate limits", () => {
 
     // The limit is per user: the admin can still submit.
     const asAdmin = t.withIdentity({ subject: ADMIN });
-    const { proposalId: adminDraft } = await asAdmin.mutation(
-      api.proposals.saveDraft,
-      {
-        ops: [titleOp(seriesIds[5], "S5 fixed")],
-        evidence: URL_EVIDENCE,
-        comment: "Different user.",
-      },
-    );
+    const { proposalId: adminDraft } = await asAdmin.mutation(api.proposals.saveDraft, {
+      ops: [titleOp(seriesIds[5], "S5 fixed")],
+      evidence: URL_EVIDENCE,
+      comment: "Different user.",
+    });
     await asAdmin.mutation(api.proposals.submitProposal, {
       proposalId: adminDraft,
     });
@@ -996,7 +979,10 @@ describe("proposals — clearing a Human Override", () => {
     );
 
   /** Draft and submit `ops` as the Editor; a clear needs a reason but no evidence. */
-  async function submitAsEditor(t: TestT, ops: Array<ReturnType<typeof clearOp> | ReturnType<typeof titleOp>>) {
+  async function submitAsEditor(
+    t: TestT,
+    ops: Array<ReturnType<typeof clearOp> | ReturnType<typeof titleOp>>,
+  ) {
     const asEditor = t.withIdentity({ subject: EDITOR });
     const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
       ops,
@@ -1034,10 +1020,17 @@ describe("proposals — clearing a Human Override", () => {
     const before = await revisionsOf(t, seriesId);
     const proposalId = await submitAsEditor(t, [clearOp(seriesId)]);
     const version = await t.run(async (ctx) =>
-      (await ctx.db.query("proposalVersions").collect()).find((row) => row.proposalId === proposalId),
+      (await ctx.db.query("proposalVersions").collect()).find(
+        (row) => row.proposalId === proposalId,
+      ),
     );
     expect(version?.ops).toEqual([
-      { kind: "clearOverride", ref: SERIES(seriesId), field: "title", baseRevisionId: before.at(-1)!._id },
+      {
+        kind: "clearOverride",
+        ref: SERIES(seriesId),
+        field: "title",
+        baseRevisionId: before.at(-1)!._id,
+      },
     ]);
     // In review, nothing has changed yet.
     expect((await t.run((ctx) => ctx.db.get(seriesId)))?.overriddenFields).toEqual(["title"]);
@@ -1090,7 +1083,11 @@ describe("proposals — clearing a Human Override", () => {
     const asMod = t.withIdentity({ subject: MOD });
     const [first, latest] = await revisionsOf(t, seriesId);
 
-    const args = { ref: SERIES(seriesId), field: "title", comment: "Imports may weigh the title again." };
+    const args = {
+      ref: SERIES(seriesId),
+      field: "title",
+      comment: "Imports may weigh the title again.",
+    };
     await expect(
       asMod.mutation(api.moderation.submitDirectClear, { ...args, comment: " " }),
     ).rejects.toMatchObject({ data: { code: "commentRequired" } });
@@ -1106,12 +1103,21 @@ describe("proposals — clearing a Human Override", () => {
     expect(seq).toBe(3);
     const stored = await t.run(async (ctx) => ({
       proposal: await ctx.db.get(proposalId),
-      versions: (await ctx.db.query("proposalVersions").collect()).filter((row) => row.proposalId === proposalId),
+      versions: (await ctx.db.query("proposalVersions").collect()).filter(
+        (row) => row.proposalId === proposalId,
+      ),
       series: await ctx.db.get(seriesId),
     }));
     expect(stored.proposal).toMatchObject({ state: "approved", currentVersionNo: 1 });
     expect(stored.versions.map((row) => row.ops)).toEqual([
-      [{ kind: "clearOverride", ref: SERIES(seriesId), field: "title", baseRevisionId: latest!._id }],
+      [
+        {
+          kind: "clearOverride",
+          ref: SERIES(seriesId),
+          field: "title",
+          baseRevisionId: latest!._id,
+        },
+      ],
     ]);
     expect(stored.series?.overriddenFields).toBeUndefined();
     expect(stored.series?.title).toBe("Beta");
@@ -1128,7 +1134,11 @@ describe("proposals — clearing a Human Override", () => {
       await setup(t);
       const seriesId = await overriddenTitle(t);
       const asMod = t.withIdentity({ subject: MOD });
-      await asMod.mutation(operation, { ref: SERIES(seriesId), reason: "A dispute.", confirmImpact: true });
+      await asMod.mutation(operation, {
+        ref: SERIES(seriesId),
+        reason: "A dispute.",
+        confirmImpact: true,
+      });
       const revisions = await revisionsOf(t, seriesId);
       await expect(
         asMod.mutation(api.moderation.submitDirectClear, {
@@ -1204,7 +1214,10 @@ describe("proposals — clearing a Human Override", () => {
       const revisions = await revisionsOf(t, seriesId);
 
       const result = await asMod.mutation(api.proposals.approveProposal, { proposalId });
-      expect(result, how).toEqual({ status: "stale", stale: [{ type: "series", id: seriesId, reason }] });
+      expect(result, how).toEqual({
+        status: "stale",
+        stale: [{ type: "series", id: seriesId, reason }],
+      });
       expect(await t.run((ctx) => ctx.db.get(seriesId)), how).toEqual(series);
       expect(await revisionsOf(t, seriesId), how).toEqual(revisions);
       expect((await t.run((ctx) => ctx.db.get(proposalId)))?.state, how).toBe("inReview");
@@ -1231,15 +1244,21 @@ describe("proposals — clearing a Human Override", () => {
       changes: [{ field: "altTitles", value: ["B-side"] }],
       comment: "Alt title from the colophon.",
     });
-    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe("stale");
+    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe(
+      "stale",
+    );
 
-    expect(await asEditor.mutation(api.proposals.rebaseProposal, { proposalId })).toEqual({ dropped: [] });
+    expect(await asEditor.mutation(api.proposals.rebaseProposal, { proposalId })).toEqual({
+      dropped: [],
+    });
     const rebased = await t.run((ctx) => ctx.db.get(proposalId));
     expect(rebased?.draft?.ops).toEqual([
       { kind: "clearOverride", ref: SERIES(seriesId), field: "title", baseRevisionId: revisionId },
     ]);
     await asEditor.mutation(api.proposals.submitProposal, { proposalId });
-    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe("approved");
+    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe(
+      "approved",
+    );
     const series = await t.run((ctx) => ctx.db.get(seriesId));
     expect(series?.overriddenFields).toBeUndefined();
     expect(series?.altTitles).toEqual(["B-side"]);
@@ -1269,12 +1288,12 @@ describe("proposals — clearing a Human Override", () => {
       const series = await t.run((ctx) => ctx.db.get(seriesId));
       expect(series).toMatchObject({ altTitles: ["B-side"], title: "Beta" });
       expect(series?.overriddenFields).toBeUndefined();
-      const applied = updateFirst ? [["altTitles"], ["overriddenFields"]] : [["overriddenFields"], ["altTitles"]];
-      expect((await revisionsOf(t, seriesId)).map((row) => row.changes.map((change) => change.field))).toEqual([
-        ["title"],
-        ["title"],
-        ...applied,
-      ]);
+      const applied = updateFirst
+        ? [["altTitles"], ["overriddenFields"]]
+        : [["overriddenFields"], ["altTitles"]];
+      expect(
+        (await revisionsOf(t, seriesId)).map((row) => row.changes.map((change) => change.field)),
+      ).toEqual([["title"], ["title"], ...applied]);
     }
   });
 
@@ -1310,12 +1329,18 @@ describe("proposals — clearing a Human Override", () => {
     const pending = await asMod.query(api.proposals.proposalDetail, { proposalId });
     expect(pending?.versions[0]?.ops).toMatchObject([
       { kind: "update", stale: true },
-      { kind: "clearOverride", stale: true, kept: { value: "Gamma", writtenBy: { kind: "human" } } },
+      {
+        kind: "clearOverride",
+        stale: true,
+        kept: { value: "Gamma", writtenBy: { kind: "human" } },
+      },
     ]);
 
     await asEditor.mutation(api.proposals.rebaseProposal, { proposalId });
     await asEditor.mutation(api.proposals.submitProposal, { proposalId });
-    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe("approved");
+    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe(
+      "approved",
+    );
     // Approval itself moved the base: no version of a decided Proposal is stale,
     // and the record's live value is not what the clear was reviewed against.
     const decided = await asMod.query(api.proposals.proposalDetail, { proposalId });
@@ -1335,7 +1360,11 @@ describe("proposals — clearing a Human Override", () => {
     const asMod = t.withIdentity({ subject: MOD });
     const { releaseId } = await t.run(async (ctx) => {
       const publisherId = await insertPublisher(ctx, { name: "Pub" });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 9,
+        publisherId,
+      });
       return {
         releaseId: await ctx.db.insert("releases", {
           status: "active",
@@ -1368,7 +1397,9 @@ describe("proposals — clearing a Human Override", () => {
     // and the whole approval rolls back.
     const doomed = await submit();
     await t.run((ctx) => ctx.db.patch(releaseId, { format: "digital" }));
-    await expect(asMod.mutation(api.proposals.approveProposal, { proposalId: doomed })).rejects.toMatchObject({
+    await expect(
+      asMod.mutation(api.proposals.approveProposal, { proposalId: doomed }),
+    ).rejects.toMatchObject({
       data: { code: "invalidField" },
     });
     expect((await t.run((ctx) => ctx.db.get(seriesId)))?.overriddenFields).toEqual(["title"]);
@@ -1378,7 +1409,9 @@ describe("proposals — clearing a Human Override", () => {
 
     await t.run((ctx) => ctx.db.patch(releaseId, { format: "physical" }));
     const proposalId = await submit();
-    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe("approved");
+    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe(
+      "approved",
+    );
     expect((await t.run((ctx) => ctx.db.get(seriesId)))?.overriddenFields).toBeUndefined();
     expect((await t.run((ctx) => ctx.db.get(releaseId)))?.binding).toBe("hardcover");
   });

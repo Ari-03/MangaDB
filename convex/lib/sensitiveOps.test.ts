@@ -35,10 +35,24 @@ import {
   insertVariant,
   insertVolume,
 } from "../test.factories";
-import { alice, bob, dave, makeT, purgeAccount, seedTeam, signedIn, type TestT as T } from "../test.helpers";
+import {
+  alice,
+  bob,
+  dave,
+  makeT,
+  purgeAccount,
+  seedTeam,
+  signedIn,
+  type TestT as T,
+} from "../test.helpers";
 import { hideRecord, insertBook, mergeAs, splitAs } from "../test.moderation";
 import { recountRatings } from "./ratings";
-import { impactOf, IMPRINT_PREVIEW_CAP, stricterVisibility, VARIANT_MERGE_PIN_LIMIT } from "./sensitiveOps";
+import {
+  impactOf,
+  IMPRINT_PREVIEW_CAP,
+  stricterVisibility,
+  VARIANT_MERGE_PIN_LIMIT,
+} from "./sensitiveOps";
 
 const asMod = (t: T) => signedIn(t, bob);
 const asReader = (t: T) => signedIn(t, dave);
@@ -50,7 +64,11 @@ const firstPublisher = async (ctx: MutationCtx) => (await ctx.db.query("publishe
 async function insertSeriesWithBook(ctx: MutationCtx, publicId: number, title: string) {
   const seriesId = await insertSeries(ctx, { publicId, title });
   const volumeId = await insertVolume(ctx, { seriesId });
-  const { releaseId } = await insertBook(ctx, { publisherId: await firstPublisher(ctx), seriesId, volumeId });
+  const { releaseId } = await insertBook(ctx, {
+    publisherId: await firstPublisher(ctx),
+    seriesId,
+    volumeId,
+  });
   return { seriesId, volumeId, releaseId };
 }
 
@@ -73,11 +91,19 @@ async function setup(t: T) {
 type Fixture = Awaited<ReturnType<typeof setup>>;
 
 async function mergeSeries(t: T, f: Fixture) {
-  await mergeAs(t, { type: "series", id: f.survivor.seriesId }, { type: "series", id: f.loser.seriesId });
+  await mergeAs(
+    t,
+    { type: "series", id: f.survivor.seriesId },
+    { type: "series", id: f.loser.seriesId },
+  );
 }
 
 async function splitSeries(t: T, f: Fixture) {
-  await splitAs(t, { type: "series", id: f.loser.seriesId }, "The two series are actually different works.");
+  await splitAs(
+    t,
+    { type: "series", id: f.loser.seriesId },
+    "The two series are actually different works.",
+  );
 }
 
 const profile = (t: T) => t.query(api.sharing.publicProfile, { username: "dave" });
@@ -126,7 +152,9 @@ describe("merge — Tracking Visibility", () => {
 
     // The private loser data moved onto the survivor and stays private.
     const after = await profile(t);
-    expect(after?.reading.some((row) => row.readVolumes.some((v) => v.readCount === 3))).toBe(false);
+    expect(after?.reading.some((row) => row.readVolumes.some((v) => v.readCount === 3))).toBe(
+      false,
+    );
     expect(after?.ownership.releases).toEqual([]);
     const state = await t.run((ctx) =>
       ctx.db
@@ -145,8 +173,14 @@ describe("merge — Tracking Visibility", () => {
     const states = await t.run((ctx) => ctx.db.query("userSeriesStates").collect());
     const survivorState = states.find((s) => s.seriesId === f.survivor.seriesId);
     const loserState = states.find((s) => s.seriesId === f.loser.seriesId);
-    expect(survivorState).toMatchObject({ readingVisibility: "private", ownershipVisibility: "private" });
-    expect(loserState).toMatchObject({ readingVisibility: "private", ownershipVisibility: "private" });
+    expect(survivorState).toMatchObject({
+      readingVisibility: "private",
+      ownershipVisibility: "private",
+    });
+    expect(loserState).toMatchObject({
+      readingVisibility: "private",
+      ownershipVisibility: "private",
+    });
     expect(await shared(t)).toEqual(NOTHING);
   });
 
@@ -174,7 +208,9 @@ describe("merge — Tracking Visibility", () => {
     await mergeSeries(t, f);
 
     const after = await profile(t);
-    expect(after?.reading.some((row) => row.readVolumes.some((v) => v.readCount === 5))).toBe(false);
+    expect(after?.reading.some((row) => row.readVolumes.some((v) => v.readCount === 5))).toBe(
+      false,
+    );
 
     // The row goes back to the loser without the public override the merge
     // cleared: its status was private just before the Split.
@@ -233,27 +269,44 @@ type Surface = "ownership" | "reading";
 /** dave's explicit private override on a Series, for both surfaces unless `kinds` says otherwise. */
 async function hide(t: T, seriesId: Id<"series">, kinds: Surface[] = ["ownership", "reading"]) {
   for (const kind of kinds) {
-    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId, kind, visibility: "private" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId,
+      kind,
+      visibility: "private",
+    });
   }
 }
 
 /** dave's explicit public override on a Series, for both surfaces unless `kinds` says otherwise. */
 async function share(t: T, seriesId: Id<"series">, kinds: Surface[] = ["ownership", "reading"]) {
   for (const kind of kinds) {
-    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId, kind, visibility: "public" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+      seriesId,
+      kind,
+      visibility: "public",
+    });
   }
 }
 
 /** Clearing dave's one private Ownership choice shows his Owned Release: the checks before it were not vacuous. */
 async function expectShownWithout(t: T, seriesId: Id<"series">) {
-  await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId, kind: "ownership", visibility: "default" });
+  await asReader(t).mutation(api.sharing.setSeriesVisibility, {
+    seriesId,
+    kind: "ownership",
+    visibility: "default",
+  });
   expect((await shared(t)).releases).toBe(1);
 }
 
 /** A Bundle with the given member Releases. */
 const box = (t: T, publicId: number, name: string, members: Array<Id<"releases">>) =>
   t.run(async (ctx) => {
-    const bundleId = await insertBundle(ctx, { publicId, name, publisherId: await firstPublisher(ctx), format: "physical" });
+    const bundleId = await insertBundle(ctx, {
+      publicId,
+      name,
+      publisherId: await firstPublisher(ctx),
+      format: "physical",
+    });
     for (const releaseId of members) await insertBundleMember(ctx, { bundleId, releaseId });
     return bundleId;
   });
@@ -270,7 +323,11 @@ const bareEdition = (t: T, publicId: number, lineSeriesId: Id<"series"> | null) 
   t.run(async (ctx) => {
     const publisherId = await firstPublisher(ctx);
     const editionLineId = lineSeriesId
-      ? await insertEditionLine(ctx, { seriesId: lineSeriesId, publisherId, name: `Line ${publicId}` })
+      ? await insertEditionLine(ctx, {
+          seriesId: lineSeriesId,
+          publisherId,
+          name: `Line ${publicId}`,
+        })
       : undefined;
     const editionId = await insertEdition(ctx, { publicId, publisherId, editionLineId });
     const releaseId = await insertRelease(ctx, {
@@ -284,7 +341,10 @@ const bareEdition = (t: T, publicId: number, lineSeriesId: Id<"series"> | null) 
 /** An omnibus Edition covering the given Volumes in order, with no Release. */
 const omnibus = (t: T, publicId: number, volumeIds: Array<Id<"volumes">>) =>
   t.run(async (ctx) => {
-    const editionId = await insertEdition(ctx, { publicId, publisherId: await firstPublisher(ctx) });
+    const editionId = await insertEdition(ctx, {
+      publicId,
+      publisherId: await firstPublisher(ctx),
+    });
     for (const [index, volumeId] of volumeIds.entries()) {
       await insertCoverage(ctx, { editionId, volumeId, order: index + 1 });
     }
@@ -296,11 +356,20 @@ const secondLoserVolume = (t: T, f: Fixture) =>
   t.run((ctx) => insertVolume(ctx, { seriesId: f.loser.seriesId, position: 2 }));
 
 /** A merge that moves a Release to another Series, its Split, and the Release. */
-type MergeCase = { merge: () => Promise<unknown>; split: () => Promise<unknown>; releaseId: Id<"releases"> };
+type MergeCase = {
+  merge: () => Promise<unknown>;
+  split: () => Promise<unknown>;
+  releaseId: Id<"releases">;
+};
 
 // Merges that move a Release off the loser Series, shared by the Split tables below.
 const volumeMove = async (t: T, f: Fixture): Promise<MergeCase> => ({
-  merge: () => mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId }),
+  merge: () =>
+    mergeAs(
+      t,
+      { type: "volume", id: f.survivor.volumeId },
+      { type: "volume", id: f.loser.volumeId },
+    ),
   split: () => splitAs(t, { type: "volume", id: f.loser.volumeId }),
   releaseId: f.loser.releaseId,
 });
@@ -309,7 +378,8 @@ const editionMove = async (t: T, f: Fixture): Promise<MergeCase> => {
   const loserEdition = await editionOf(t, f.loser.releaseId);
   const survivorEdition = await editionOf(t, f.survivor.releaseId);
   return {
-    merge: () => mergeAs(t, { type: "edition", id: survivorEdition }, { type: "edition", id: loserEdition }),
+    merge: () =>
+      mergeAs(t, { type: "edition", id: survivorEdition }, { type: "edition", id: loserEdition }),
     split: () => splitAs(t, { type: "edition", id: loserEdition }),
     releaseId: f.loser.releaseId,
   };
@@ -320,7 +390,12 @@ const editionLineMove = async (t: T, f: Fixture): Promise<MergeCase> => {
   const packaging = await bareEdition(t, 52, f.loser.seriesId);
   const target = await bareEdition(t, 53, f.survivor.seriesId);
   return {
-    merge: () => mergeAs(t, { type: "editionLine", id: target.editionLineId! }, { type: "editionLine", id: packaging.editionLineId! }),
+    merge: () =>
+      mergeAs(
+        t,
+        { type: "editionLine", id: target.editionLineId! },
+        { type: "editionLine", id: packaging.editionLineId! },
+      ),
     split: () => splitAs(t, { type: "editionLine", id: packaging.editionLineId! }),
     releaseId: packaging.releaseId,
   };
@@ -333,7 +408,11 @@ describe("stricterVisibility", () => {
   it.each(values.flatMap((kept) => values.map((other) => [kept, other] as const)))(
     "never shows more than %s ∧ %s under any default",
     (kept, other) => {
-      const patch = stricterVisibility({ readingVisibility: kept }, [{ readingVisibility: other }], ["readingVisibility"]);
+      const patch = stricterVisibility(
+        { readingVisibility: kept },
+        [{ readingVisibility: other }],
+        ["readingVisibility"],
+      );
       const combined = "readingVisibility" in patch ? patch.readingVisibility : kept;
       for (const fallback of ["public", "private"] as const) {
         const shown = (combined ?? fallback) === "public";
@@ -345,33 +424,59 @@ describe("stricterVisibility", () => {
 
   it("treats a missing row as following the default", () => {
     expect(stricterVisibility(null, [null])).toEqual({});
-    expect(stricterVisibility({ ownershipVisibility: "public" }, [null])).toEqual({ ownershipVisibility: undefined });
-    expect(stricterVisibility(null, [{ readingVisibility: "private" }])).toEqual({ readingVisibility: "private" });
+    expect(stricterVisibility({ ownershipVisibility: "public" }, [null])).toEqual({
+      ownershipVisibility: undefined,
+    });
+    expect(stricterVisibility(null, [{ readingVisibility: "private" }])).toEqual({
+      readingVisibility: "private",
+    });
   });
 });
 
 describe("merge — Tracking Visibility of every affected User", () => {
   // Each way dave can track the loser without ever touching its state row.
-  const loserTracking: Array<[string, (t: T, f: Fixture) => Promise<unknown>, "ownershipVisibility" | "readingVisibility"]> = [
+  const loserTracking: Array<
+    [string, (t: T, f: Fixture) => Promise<unknown>, "ownershipVisibility" | "readingVisibility"]
+  > = [
     [
       "a Volume read count",
-      (t, f) => asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 3 }),
+      (t, f) =>
+        asReader(t).mutation(api.reading.setVolumeReadCount, {
+          volumeId: f.loser.volumeId,
+          readCount: 3,
+        }),
       "readingVisibility",
     ],
-    ["an active pass", (t, f) => asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId }), "readingVisibility"],
+    [
+      "an active pass",
+      (t, f) => asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId }),
+      "readingVisibility",
+    ],
     [
       "an Owned Release",
-      (t, f) => asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" }),
+      (t, f) =>
+        asReader(t).mutation(api.collection.setReleaseEntry, {
+          releaseId: f.loser.releaseId,
+          state: "owned",
+        }),
       "ownershipVisibility",
     ],
     [
       "an Owned Bundle",
-      async (t, f) => asReader(t).mutation(api.collection.setBundleEntry, { bundleId: await loserBox(t, f), state: "owned" }),
+      async (t, f) =>
+        asReader(t).mutation(api.collection.setBundleEntry, {
+          bundleId: await loserBox(t, f),
+          state: "owned",
+        }),
       "ownershipVisibility",
     ],
     [
       "a Series Rating",
-      (t, f) => asReader(t).mutation(api.ratings.set, { target: { kind: "series", id: f.loser.seriesId }, score: 70 }),
+      (t, f) =>
+        asReader(t).mutation(api.ratings.set, {
+          target: { kind: "series", id: f.loser.seriesId },
+          score: 70,
+        }),
       "readingVisibility",
     ],
   ];
@@ -409,9 +514,15 @@ describe("merge — Tracking Visibility of every affected User", () => {
     const t = makeT();
     const f = await setup(t);
     await share(t, f.survivor.seriesId, ["reading"]);
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.survivor.volumeId, readCount: 2 });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.survivor.volumeId,
+      readCount: 2,
+    });
     // Owning the loser touches Ownership only; Reading has nothing to guard.
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
     const before = await shared(t);
     expect(before.reading).toEqual([{ title: "Alpha", status: null, read: [2], passes: 0 }]);
 
@@ -425,9 +536,18 @@ describe("merge — Tracking Visibility of every affected User", () => {
     const f = await setup(t);
     await hide(t, f.loser.seriesId);
     // The survivor's state row exists but has no overrides of its own.
-    await asReader(t).mutation(api.reading.setSeriesReadingStatus, { seriesId: f.survivor.seriesId, status: "reading" });
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 4 });
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.reading.setSeriesReadingStatus, {
+      seriesId: f.survivor.seriesId,
+      status: "reading",
+    });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 4,
+    });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
 
     await mergeSeries(t, f);
     expect(await shared(t)).toEqual(NOTHING);
@@ -449,10 +569,16 @@ describe("merge — Tracking Visibility of every affected User", () => {
   it("keeps two explicitly public sides public", async () => {
     const t = makeT();
     const f = await setup(t);
-    for (const seriesId of [f.survivor.seriesId, f.loser.seriesId]) await share(t, seriesId, ["reading"]);
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 1 });
+    for (const seriesId of [f.survivor.seriesId, f.loser.seriesId])
+      await share(t, seriesId, ["reading"]);
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 1,
+    });
     await mergeSeries(t, f);
-    expect((await shared(t)).reading).toEqual([{ title: "Alpha", status: null, read: [1], passes: 0 }]);
+    expect((await shared(t)).reading).toEqual([
+      { title: "Alpha", status: null, read: [1], passes: 0 },
+    ]);
   });
 });
 
@@ -464,9 +590,17 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
   }
 
   const releaseMerge = (t: T, f: Fixture) =>
-    mergeAs(t, { type: "release", id: f.survivor.releaseId }, { type: "release", id: f.loser.releaseId });
+    mergeAs(
+      t,
+      { type: "release", id: f.survivor.releaseId },
+      { type: "release", id: f.loser.releaseId },
+    );
   const volumeMerge = (t: T, f: Fixture) =>
-    mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    mergeAs(
+      t,
+      { type: "volume", id: f.survivor.volumeId },
+      { type: "volume", id: f.loser.volumeId },
+    );
 
   it("keeps a moved pass private on a cross-Series Release merge, through Split and re-merge", async () => {
     const t = makeT();
@@ -479,14 +613,22 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     expect(await shared(t)).toEqual(NOTHING);
     // A later change of defaults cannot reveal it either: the survivor
     // Series now carries the loser's explicit exclusion.
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "private" });
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "private",
+    });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "public",
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
     // Split moves the pass back; the synthesized override stays, as Split
     // never widens.
     await splitAs(t, { type: "release", id: f.loser.releaseId });
-    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({ readingVisibility: "private" });
+    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({
+      readingVisibility: "private",
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
     await releaseMerge(t, f);
@@ -497,7 +639,10 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     const t = makeT();
     const f = await setup(t);
     await privateLoser(t, f, "ownership");
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
     expect(await shared(t)).toEqual(NOTHING);
     await releaseMerge(t, f);
     expect(await shared(t)).toEqual(NOTHING);
@@ -507,7 +652,10 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     const t = makeT();
     const f = await setup(t);
     await privateLoser(t, f, "ownership");
-    await asReader(t).mutation(api.collection.setBundleEntry, { bundleId: await loserBox(t, f), state: "owned" });
+    await asReader(t).mutation(api.collection.setBundleEntry, {
+      bundleId: await loserBox(t, f),
+      state: "owned",
+    });
     expect(await shared(t)).toEqual(NOTHING);
     await releaseMerge(t, f);
     expect(await shared(t)).toEqual(NOTHING);
@@ -520,8 +668,14 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     const f = await setup(t);
     await privateLoser(t, f, "reading");
     await hide(t, f.loser.seriesId, ["ownership"]);
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 2 });
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 2,
+    });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
     await volumeMerge(t, f);
@@ -536,8 +690,14 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
 
   /** The Series dave's pass on a Release is filed under. */
   const passSeries = (t: T, releaseId: Id<"releases">) =>
-    t.run(async (ctx) =>
-      (await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", releaseId)).unique())?.seriesId,
+    t.run(
+      async (ctx) =>
+        (
+          await ctx.db
+            .query("releaseProgress")
+            .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
+            .unique()
+        )?.seriesId,
     );
 
   it("moves an active pass to the survivor's Series on a cross-Series Volume merge, and Split takes it back", async () => {
@@ -554,7 +714,9 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     await splitAs(t, { type: "volume", id: f.loser.volumeId });
     expect(await passSeries(t, f.loser.releaseId)).toBe(f.loser.seriesId);
     expect(await shared(t)).toEqual(NOTHING);
-    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({ readingVisibility: "private" });
+    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({
+      readingVisibility: "private",
+    });
   });
 
   it("files a pass started after a cross-Series Volume merge under the loser on Split", async () => {
@@ -580,7 +742,11 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
     const loserEdition = await editionOf(t, f.loser.releaseId);
 
-    await mergeAs(t, { type: "edition", id: await editionOf(t, f.survivor.releaseId) }, { type: "edition", id: loserEdition });
+    await mergeAs(
+      t,
+      { type: "edition", id: await editionOf(t, f.survivor.releaseId) },
+      { type: "edition", id: loserEdition },
+    );
     expect(await passSeries(t, f.loser.releaseId)).toBe(f.survivor.seriesId);
     expect(await shared(t)).toEqual(NOTHING);
 
@@ -598,7 +764,11 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     await asReader(t).mutation(api.reading.startPass, { releaseId: packaging.releaseId });
     expect(await passSeries(t, packaging.releaseId)).toBe(f.loser.seriesId);
 
-    await mergeAs(t, { type: "editionLine", id: target.editionLineId! }, { type: "editionLine", id: packaging.editionLineId! });
+    await mergeAs(
+      t,
+      { type: "editionLine", id: target.editionLineId! },
+      { type: "editionLine", id: packaging.editionLineId! },
+    );
     expect(await passSeries(t, packaging.releaseId)).toBe(f.survivor.seriesId);
     expect(await shared(t)).toEqual(NOTHING);
 
@@ -615,14 +785,23 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     // with the survivor Series; both also collect the other's Volume.
     const survivorOmnibus = await omnibus(t, 700, [f.survivor.volumeId, f.loser.volumeId]);
     const loserOmnibus = await omnibus(t, 701, [f.loser.volumeId, f.survivor.volumeId]);
-    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: loserOmnibus }, score: 90 });
+    await asReader(t).mutation(api.ratings.set, {
+      target: { kind: "edition", id: loserOmnibus },
+      score: 90,
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
-    await mergeAs(t, { type: "edition", id: survivorOmnibus }, { type: "edition", id: loserOmnibus });
+    await mergeAs(
+      t,
+      { type: "edition", id: survivorOmnibus },
+      { type: "edition", id: loserOmnibus },
+    );
     expect(await shared(t)).toEqual(NOTHING);
     await splitAs(t, { type: "edition", id: loserOmnibus });
     expect(await shared(t)).toEqual(NOTHING);
-    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({ readingVisibility: "private" });
+    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({
+      readingVisibility: "private",
+    });
   });
 
   it("leaves other Users' public tracking of the survivor untouched", async () => {
@@ -659,62 +838,76 @@ describe("merge — re-derived Release Series keep Tracking Visibility", () => {
 
   // An Unmapped Packaging Release under the private Series, and the merge
   // that maps it to the other one: [case, private side, prepare].
-  const remapping: Array<[string, "loser" | "survivor", (t: T, f: Fixture) => Promise<MergeCase>]> = [
+  const remapping: Array<[string, "loser" | "survivor", (t: T, f: Fixture) => Promise<MergeCase>]> =
     [
-      "a loser's, when an Edition merge maps it to another Series",
-      "loser",
-      async (t, f) => {
-        const packaging = await bareEdition(t, 50, f.loser.seriesId);
-        const survivorEdition = await editionOf(t, f.survivor.releaseId);
-        return {
-          merge: () => mergeAs(t, { type: "edition", id: survivorEdition }, { type: "edition", id: packaging.editionId }),
-          split: () => splitAs(t, { type: "edition", id: packaging.editionId }),
-          releaseId: packaging.releaseId,
-        };
-      },
-    ],
-    [
-      "a survivor's, when the loser's coverage maps it to another Series",
-      "survivor",
-      async (t, f) => {
-        const packaging = await bareEdition(t, 51, f.survivor.seriesId);
-        const loserEdition = await editionOf(t, f.loser.releaseId);
-        return {
-          merge: () => mergeAs(t, { type: "edition", id: packaging.editionId }, { type: "edition", id: loserEdition }),
-          split: () => splitAs(t, { type: "edition", id: loserEdition }),
-          releaseId: packaging.releaseId,
-        };
-      },
-    ],
-    ["one whose Edition Line merges across Series", "loser", editionLineMove],
-  ];
+      [
+        "a loser's, when an Edition merge maps it to another Series",
+        "loser",
+        async (t, f) => {
+          const packaging = await bareEdition(t, 50, f.loser.seriesId);
+          const survivorEdition = await editionOf(t, f.survivor.releaseId);
+          return {
+            merge: () =>
+              mergeAs(
+                t,
+                { type: "edition", id: survivorEdition },
+                { type: "edition", id: packaging.editionId },
+              ),
+            split: () => splitAs(t, { type: "edition", id: packaging.editionId }),
+            releaseId: packaging.releaseId,
+          };
+        },
+      ],
+      [
+        "a survivor's, when the loser's coverage maps it to another Series",
+        "survivor",
+        async (t, f) => {
+          const packaging = await bareEdition(t, 51, f.survivor.seriesId);
+          const loserEdition = await editionOf(t, f.loser.releaseId);
+          return {
+            merge: () =>
+              mergeAs(
+                t,
+                { type: "edition", id: packaging.editionId },
+                { type: "edition", id: loserEdition },
+              ),
+            split: () => splitAs(t, { type: "edition", id: loserEdition }),
+            releaseId: packaging.releaseId,
+          };
+        },
+      ],
+      ["one whose Edition Line merges across Series", "loser", editionLineMove],
+    ];
 
-  it.each(remapping)("keeps an Unmapped Packaging Release's ownership private: %s", async (_, side, prepare) => {
-    const t = makeT();
-    const f = await setup(t);
-    const hidden = f[side].seriesId;
-    const mapped = f[side === "loser" ? "survivor" : "loser"].seriesId;
-    const seriesOf = async () => (await t.run((ctx) => ctx.db.get(releaseId)))?.seriesIds;
-    await privateOwnership(t, hidden);
-    const { merge, split, releaseId } = await prepare(t, f);
-    await own(t, releaseId);
-    expect(await shared(t)).toEqual(NOTHING);
+  it.each(remapping)(
+    "keeps an Unmapped Packaging Release's ownership private: %s",
+    async (_, side, prepare) => {
+      const t = makeT();
+      const f = await setup(t);
+      const hidden = f[side].seriesId;
+      const mapped = f[side === "loser" ? "survivor" : "loser"].seriesId;
+      const seriesOf = async () => (await t.run((ctx) => ctx.db.get(releaseId)))?.seriesIds;
+      await privateOwnership(t, hidden);
+      const { merge, split, releaseId } = await prepare(t, f);
+      await own(t, releaseId);
+      expect(await shared(t)).toEqual(NOTHING);
 
-    await merge();
-    expect(await seriesOf()).toEqual([mapped]);
-    expect(await shared(t)).toEqual(NOTHING);
-    await toggleDefaults(t);
-    expect(await shared(t)).toEqual(NOTHING);
+      await merge();
+      expect(await seriesOf()).toEqual([mapped]);
+      expect(await shared(t)).toEqual(NOTHING);
+      await toggleDefaults(t);
+      expect(await shared(t)).toEqual(NOTHING);
 
-    await split();
-    expect(await seriesOf()).toEqual([hidden]);
-    expect(await stateOf(t, f, mapped)).toMatchObject({ ownershipVisibility: "private" });
-    expect(await shared(t)).toEqual(NOTHING);
+      await split();
+      expect(await seriesOf()).toEqual([hidden]);
+      expect(await stateOf(t, f, mapped)).toMatchObject({ ownershipVisibility: "private" });
+      expect(await shared(t)).toEqual(NOTHING);
 
-    await merge();
-    expect(await shared(t)).toEqual(NOTHING);
-    await expectShownWithout(t, mapped);
-  });
+      await merge();
+      expect(await shared(t)).toEqual(NOTHING);
+      await expectShownWithout(t, mapped);
+    },
+  );
 
   it("refuses a Release merge into a survivor with no Series", async () => {
     const t = makeT();
@@ -725,7 +918,11 @@ describe("merge — re-derived Release Series keep Tracking Visibility", () => {
     expect(await shared(t)).toEqual(NOTHING);
 
     await expect(
-      mergeAs(t, { type: "release", id: seriesless.releaseId }, { type: "release", id: f.loser.releaseId }),
+      mergeAs(
+        t,
+        { type: "release", id: seriesless.releaseId },
+        { type: "release", id: f.loser.releaseId },
+      ),
     ).rejects.toThrow(/no Series/);
     expect(await shared(t)).toEqual(NOTHING);
     expect((await t.run((ctx) => ctx.db.get(f.loser.releaseId)))?.status).toBe("active");
@@ -740,10 +937,16 @@ describe("merge — re-derived Release Series keep Tracking Visibility", () => {
     await own(t, packaging.releaseId);
 
     await expect(
-      mergeAs(t, { type: "edition", id: seriesless.editionId }, { type: "edition", id: packaging.editionId }),
+      mergeAs(
+        t,
+        { type: "edition", id: seriesless.editionId },
+        { type: "edition", id: packaging.editionId },
+      ),
     ).rejects.toThrow(/no Series/);
     expect(await shared(t)).toEqual(NOTHING);
-    expect((await t.run((ctx) => ctx.db.get(packaging.releaseId)))?.seriesIds).toEqual([f.loser.seriesId]);
+    expect((await t.run((ctx) => ctx.db.get(packaging.releaseId)))?.seriesIds).toEqual([
+      f.loser.seriesId,
+    ]);
   });
 
   it("refuses to give a tracked Release with no Series one, by Release or Edition merge", async () => {
@@ -755,16 +958,28 @@ describe("merge — re-derived Release Series keep Tracking Visibility", () => {
     const survivorEdition = await editionOf(t, f.survivor.releaseId);
 
     await expect(
-      mergeAs(t, { type: "release", id: f.survivor.releaseId }, { type: "release", id: seriesless.releaseId }),
+      mergeAs(
+        t,
+        { type: "release", id: f.survivor.releaseId },
+        { type: "release", id: seriesless.releaseId },
+      ),
     ).rejects.toThrow(/no Series/);
     await expect(
-      mergeAs(t, { type: "edition", id: survivorEdition }, { type: "edition", id: seriesless.editionId }),
+      mergeAs(
+        t,
+        { type: "edition", id: survivorEdition },
+        { type: "edition", id: seriesless.editionId },
+      ),
     ).rejects.toThrow(/no Series/);
     expect((await t.run((ctx) => ctx.db.get(seriesless.releaseId)))?.status).toBe("active");
 
     // An untracked one merges.
     const untracked = await bareEdition(t, 58, null);
-    await mergeAs(t, { type: "release", id: f.survivor.releaseId }, { type: "release", id: untracked.releaseId });
+    await mergeAs(
+      t,
+      { type: "release", id: f.survivor.releaseId },
+      { type: "release", id: untracked.releaseId },
+    );
   });
 });
 
@@ -776,14 +991,23 @@ describe("split — state rows a merge synthesized", () => {
     await hide(t, f.loser.seriesId, ["reading"]);
     await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
     const releaseMerge = () =>
-      mergeAs(t, { type: "release", id: f.survivor.releaseId }, { type: "release", id: f.loser.releaseId });
+      mergeAs(
+        t,
+        { type: "release", id: f.survivor.releaseId },
+        { type: "release", id: f.loser.releaseId },
+      );
 
     // The merge synthesizes dave's survivor-Series row to keep the pass private.
     await releaseMerge();
-    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({ readingVisibility: "private" });
+    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({
+      readingVisibility: "private",
+    });
     // dave then hides his survivor-Series Ownership on that same row and owns the survivor Release.
     await hide(t, f.survivor.seriesId, ["ownership"]);
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.survivor.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.survivor.releaseId,
+      state: "owned",
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
     await splitAs(t, { type: "release", id: f.loser.releaseId });
@@ -799,7 +1023,8 @@ describe("split — state rows a merge synthesized", () => {
 });
 
 /** Another Series with one Volume, Edition and Release, like setup's. */
-const addSeries = (t: T, publicId: number, title: string) => t.run((ctx) => insertSeriesWithBook(ctx, publicId, title));
+const addSeries = (t: T, publicId: number, title: string) =>
+  t.run((ctx) => insertSeriesWithBook(ctx, publicId, title));
 
 describe("split — never widens Tracking Visibility", () => {
   it("keeps a third Series merged into the same survivor private when an earlier merge is split", async () => {
@@ -808,14 +1033,27 @@ describe("split — never widens Tracking Visibility", () => {
     const gamma = await addSeries(t, 3, "Gamma");
     // Private defaults; only the survivor is shared, explicitly.
     await share(t, f.survivor.seriesId);
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 3 });
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: gamma.volumeId, readCount: 7 });
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: gamma.releaseId, state: "owned" });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 3,
+    });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: gamma.volumeId,
+      readCount: 7,
+    });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: gamma.releaseId,
+      state: "owned",
+    });
     expect(await stateOf(t, f, gamma.seriesId)).toBeNull();
     expect(await shared(t)).toEqual(NOTHING);
 
     await mergeSeries(t, f);
-    await mergeAs(t, { type: "series", id: f.survivor.seriesId }, { type: "series", id: gamma.seriesId });
+    await mergeAs(
+      t,
+      { type: "series", id: f.survivor.seriesId },
+      { type: "series", id: gamma.seriesId },
+    );
     expect(await shared(t)).toEqual(NOTHING);
 
     // Gamma's merge found the survivor already narrowed and wrote nothing;
@@ -830,10 +1068,16 @@ describe("split — never widens Tracking Visibility", () => {
     const t = makeT();
     const f = await setup(t);
     await share(t, f.survivor.seriesId, ["reading"]);
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 3 });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 3,
+    });
     await mergeSeries(t, f);
     // Alpha now follows dave's private default, and he reads it that way.
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.survivor.volumeId, readCount: 2 });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.survivor.volumeId,
+      readCount: 2,
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
     await splitSeries(t, f);
@@ -846,7 +1090,8 @@ describe("split — never widens Tracking Visibility", () => {
     const gamma = await addSeries(t, 3, "Gamma");
     const secondAlpha = await t.run(async (ctx) => {
       const { seriesId, volumeId } = f.survivor;
-      return (await insertBook(ctx, { publisherId: await firstPublisher(ctx), seriesId, volumeId })).releaseId;
+      return (await insertBook(ctx, { publisherId: await firstPublisher(ctx), seriesId, volumeId }))
+        .releaseId;
     });
     await publicDefaults(t);
     for (const seriesId of [f.loser.seriesId, gamma.seriesId]) await hide(t, seriesId, ["reading"]);
@@ -854,15 +1099,29 @@ describe("split — never widens Tracking Visibility", () => {
     await asReader(t).mutation(api.reading.startPass, { releaseId: gamma.releaseId });
     expect(await shared(t)).toEqual(NOTHING);
 
-    await mergeAs(t, { type: "release", id: f.survivor.releaseId }, { type: "release", id: f.loser.releaseId });
+    await mergeAs(
+      t,
+      { type: "release", id: f.survivor.releaseId },
+      { type: "release", id: f.loser.releaseId },
+    );
     // Alpha is already private for Reading: this merge logs no patch of its own.
-    await mergeAs(t, { type: "release", id: secondAlpha }, { type: "release", id: gamma.releaseId });
+    await mergeAs(
+      t,
+      { type: "release", id: secondAlpha },
+      { type: "release", id: gamma.releaseId },
+    );
     expect(await shared(t)).toEqual(NOTHING);
 
     await splitAs(t, { type: "release", id: f.loser.releaseId });
     expect(await shared(t)).toEqual(NOTHING);
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "private" });
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "private",
+    });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "public",
+    });
     expect(await shared(t)).toEqual(NOTHING);
   });
 
@@ -871,7 +1130,10 @@ describe("split — never widens Tracking Visibility", () => {
     const f = await setup(t);
     await publicDefaults(t);
     // The loser's row carries a status only; the survivor has no row.
-    await asReader(t).mutation(api.reading.setSeriesReadingStatus, { seriesId: f.loser.seriesId, status: "reading" });
+    await asReader(t).mutation(api.reading.setSeriesReadingStatus, {
+      seriesId: f.loser.seriesId,
+      status: "reading",
+    });
     await t.run(async (ctx) => {
       await ctx.db.insert("volumeProgress", {
         userId: f.daveId,
@@ -887,7 +1149,10 @@ describe("split — never widens Tracking Visibility", () => {
     expect(await shared(t)).toEqual(NOTHING);
 
     await splitSeries(t, f);
-    expect(await stateOf(t, f, f.loser.seriesId)).toMatchObject({ readingStatus: "reading", readingVisibility: "private" });
+    expect(await stateOf(t, f, f.loser.seriesId)).toMatchObject({
+      readingStatus: "reading",
+      readingVisibility: "private",
+    });
     expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({
       ownershipVisibility: "private",
       readingVisibility: "private",
@@ -901,9 +1166,18 @@ describe("split — never widens Tracking Visibility", () => {
     const t = makeT();
     const f = await setup(t);
     await publicDefaults(t);
-    await asReader(t).mutation(api.reading.setSeriesReadingStatus, { seriesId: f.survivor.seriesId, status: "reading" });
-    await asReader(t).mutation(api.reading.setSeriesReadingStatus, { seriesId: f.loser.seriesId, status: "completed" });
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 4 });
+    await asReader(t).mutation(api.reading.setSeriesReadingStatus, {
+      seriesId: f.survivor.seriesId,
+      status: "reading",
+    });
+    await asReader(t).mutation(api.reading.setSeriesReadingStatus, {
+      seriesId: f.loser.seriesId,
+      status: "completed",
+    });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 4,
+    });
 
     await mergeSeries(t, f);
     await hide(t, f.survivor.seriesId);
@@ -924,7 +1198,11 @@ describe("split — never widens Tracking Visibility", () => {
     const f = await setup(t);
     await publicDefaults(t);
     await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
-    await mergeAs(t, { type: "release", id: f.survivor.releaseId }, { type: "release", id: f.loser.releaseId });
+    await mergeAs(
+      t,
+      { type: "release", id: f.survivor.releaseId },
+      { type: "release", id: f.loser.releaseId },
+    );
     await hide(t, f.survivor.seriesId);
     expect(await shared(t)).toEqual(NOTHING);
 
@@ -943,49 +1221,80 @@ describe("split — shows nothing it did not show just before", () => {
   // Each way to track what a Series merge moves (the fixture's loser Volume
   // and Release, the loser's "Dupe Box", an omnibus of two loser Volumes).
   const movedTracking: Array<[string, (t: T, f: Fixture) => Promise<unknown>]> = [
-    ["a read count on a moved Volume", (t, f) => asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 9 })],
-    ["a pass on a moved Release", (t, f) => asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId })],
+    [
+      "a read count on a moved Volume",
+      (t, f) =>
+        asReader(t).mutation(api.reading.setVolumeReadCount, {
+          volumeId: f.loser.volumeId,
+          readCount: 9,
+        }),
+    ],
+    [
+      "a pass on a moved Release",
+      (t, f) => asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId }),
+    ],
     [
       "an Owned moved Release",
-      (t, f) => asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" }),
+      (t, f) =>
+        asReader(t).mutation(api.collection.setReleaseEntry, {
+          releaseId: f.loser.releaseId,
+          state: "owned",
+        }),
     ],
     [
       "an Owned Bundle holding a moved Release",
       async (t) => {
-        const bundle = await t.run(async (ctx) => (await ctx.db.query("releaseBundles").first())!._id);
-        return asReader(t).mutation(api.collection.setBundleEntry, { bundleId: bundle, state: "owned" });
+        const bundle = await t.run(
+          async (ctx) => (await ctx.db.query("releaseBundles").first())!._id,
+        );
+        return asReader(t).mutation(api.collection.setBundleEntry, {
+          bundleId: bundle,
+          state: "owned",
+        });
       },
     ],
     [
       "a Rating of an omnibus collecting moved Volumes",
       async (t) => {
-        const edition = await t.run(async (ctx) => (await ctx.db.query("editions").withIndex("by_publicId", (q) => q.eq("publicId", 800)).unique())!._id);
-        return asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: edition }, score: 90 });
+        const edition = await t.run(
+          async (ctx) =>
+            (await ctx.db
+              .query("editions")
+              .withIndex("by_publicId", (q) => q.eq("publicId", 800))
+              .unique())!._id,
+        );
+        return asReader(t).mutation(api.ratings.set, {
+          target: { kind: "edition", id: edition },
+          score: 90,
+        });
       },
     ],
   ];
 
   describe.each(["before", "after"] as const)("tracking logged %s the merge", (when) => {
-    it.each(movedTracking)("keeps %s private when the survivor was hidden after a Series merge", async (_, track) => {
-      const t = makeT();
-      const f = await setup(t);
-      await loserBox(t, f);
-      await omnibus(t, 800, [f.loser.volumeId, await secondLoserVolume(t, f)]);
-      await publicDefaults(t);
-      if (when === "before") {
-        await track(t, f);
-        expect(await shared(t)).not.toEqual(NOTHING);
-      }
-      await mergeSeries(t, f);
-      await hide(t, f.survivor.seriesId);
-      if (when === "after") await track(t, f);
-      expect(await shared(t)).toEqual(NOTHING);
+    it.each(movedTracking)(
+      "keeps %s private when the survivor was hidden after a Series merge",
+      async (_, track) => {
+        const t = makeT();
+        const f = await setup(t);
+        await loserBox(t, f);
+        await omnibus(t, 800, [f.loser.volumeId, await secondLoserVolume(t, f)]);
+        await publicDefaults(t);
+        if (when === "before") {
+          await track(t, f);
+          expect(await shared(t)).not.toEqual(NOTHING);
+        }
+        await mergeSeries(t, f);
+        await hide(t, f.survivor.seriesId);
+        if (when === "after") await track(t, f);
+        expect(await shared(t)).toEqual(NOTHING);
 
-      await splitSeries(t, f);
-      expect(await shared(t)).toEqual(NOTHING);
-      await mergeSeries(t, f);
-      expect(await shared(t)).toEqual(NOTHING);
-    });
+        await splitSeries(t, f);
+        expect(await shared(t)).toEqual(NOTHING);
+        await mergeSeries(t, f);
+        expect(await shared(t)).toEqual(NOTHING);
+      },
+    );
   });
 
   // Other merges whose Split re-derives the loser Release's Series: [kind, prepare].
@@ -995,22 +1304,25 @@ describe("split — shows nothing it did not show just before", () => {
     ["Edition Line", editionLineMove],
   ];
 
-  it.each(reDeriving)("keeps a Release owned and read since a %s merge private when the survivor was hidden", async (_, prepare) => {
-    const t = makeT();
-    const f = await setup(t);
-    await publicDefaults(t);
-    const { merge, split, releaseId } = await prepare(t, f);
-    await merge();
-    await hide(t, f.survivor.seriesId);
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId, state: "owned" });
-    await asReader(t).mutation(api.reading.startPass, { releaseId });
-    expect(await shared(t)).toEqual(NOTHING);
+  it.each(reDeriving)(
+    "keeps a Release owned and read since a %s merge private when the survivor was hidden",
+    async (_, prepare) => {
+      const t = makeT();
+      const f = await setup(t);
+      await publicDefaults(t);
+      const { merge, split, releaseId } = await prepare(t, f);
+      await merge();
+      await hide(t, f.survivor.seriesId);
+      await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId, state: "owned" });
+      await asReader(t).mutation(api.reading.startPass, { releaseId });
+      expect(await shared(t)).toEqual(NOTHING);
 
-    await split();
-    expect(await shared(t)).toEqual(NOTHING);
-    await merge();
-    expect(await shared(t)).toEqual(NOTHING);
-  });
+      await split();
+      expect(await shared(t)).toEqual(NOTHING);
+      await merge();
+      expect(await shared(t)).toEqual(NOTHING);
+    },
+  );
 
   it("keeps reads on both sides private when only the survivor's Reading was hidden after the merge", async () => {
     const t = makeT();
@@ -1018,8 +1330,14 @@ describe("split — shows nothing it did not show just before", () => {
     await publicDefaults(t);
     await mergeSeries(t, f);
     await hide(t, f.survivor.seriesId, ["reading"]);
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.survivor.volumeId, readCount: 2 });
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 9 });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.survivor.volumeId,
+      readCount: 2,
+    });
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 9,
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
     await splitSeries(t, f);
@@ -1048,7 +1366,10 @@ describe("split — shows nothing it did not show just before", () => {
     await publicDefaults(t);
     const loser = await box(t, 910, "Loser Box", [f.loser.releaseId]);
     const survivor = await box(t, 911, "Survivor Box", [f.survivor.releaseId]);
-    await asReader(t).mutation(api.collection.setBundleEntry, { bundleId: survivor, state: "owned" });
+    await asReader(t).mutation(api.collection.setBundleEntry, {
+      bundleId: survivor,
+      state: "owned",
+    });
 
     await mergeAs(t, { type: "releaseBundle", id: survivor }, { type: "releaseBundle", id: loser });
     await hide(t, f.loser.seriesId);
@@ -1062,10 +1383,17 @@ describe("split — shows nothing it did not show just before", () => {
     const f = await setup(t);
     await publicDefaults(t);
     await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
     const loserEdition = await editionOf(t, f.loser.releaseId);
 
-    await mergeAs(t, { type: "edition", id: await editionOf(t, f.survivor.releaseId) }, { type: "edition", id: loserEdition });
+    await mergeAs(
+      t,
+      { type: "edition", id: await editionOf(t, f.survivor.releaseId) },
+      { type: "edition", id: loserEdition },
+    );
     await hide(t, f.survivor.seriesId);
     expect(await shared(t)).toEqual(NOTHING);
     await splitAs(t, { type: "edition", id: loserEdition });
@@ -1076,10 +1404,17 @@ describe("split — shows nothing it did not show just before", () => {
     const t = makeT();
     const f = await setup(t);
     await publicDefaults(t);
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.survivor.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.survivor.releaseId,
+      state: "owned",
+    });
     const loserEdition = await editionOf(t, f.loser.releaseId);
 
-    await mergeAs(t, { type: "edition", id: await editionOf(t, f.survivor.releaseId) }, { type: "edition", id: loserEdition });
+    await mergeAs(
+      t,
+      { type: "edition", id: await editionOf(t, f.survivor.releaseId) },
+      { type: "edition", id: loserEdition },
+    );
     await hide(t, f.loser.seriesId);
     expect(await shared(t)).toEqual(NOTHING);
     await splitAs(t, { type: "edition", id: loserEdition });
@@ -1098,7 +1433,10 @@ describe("split — shows nothing it did not show just before", () => {
         seriesIds: [f.survivor.seriesId, f.loser.seriesId],
       }),
     );
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
     await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
 
     await mergeAs(t, { type: "release", id: both }, { type: "release", id: f.loser.releaseId });
@@ -1113,11 +1451,19 @@ describe("split — shows nothing it did not show just before", () => {
     const f = await setup(t);
     await publicDefaults(t);
     const collected = await omnibus(t, 800, [f.loser.volumeId, await secondLoserVolume(t, f)]);
-    const volumeMerge = () => mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    const volumeMerge = () =>
+      mergeAs(
+        t,
+        { type: "volume", id: f.survivor.volumeId },
+        { type: "volume", id: f.loser.volumeId },
+      );
 
     await volumeMerge();
     await hide(t, f.survivor.seriesId);
-    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: collected }, score: 90 });
+    await asReader(t).mutation(api.ratings.set, {
+      target: { kind: "edition", id: collected },
+      score: 90,
+    });
     expect(await shared(t)).toEqual(NOTHING);
     await splitAs(t, { type: "volume", id: f.loser.volumeId });
     expect(await shared(t)).toEqual(NOTHING);
@@ -1131,12 +1477,21 @@ describe("split — shows nothing it did not show just before", () => {
     await publicDefaults(t);
     const seriesless = await bareEdition(t, 60, null);
     // Nobody tracks the Series-less Edition's Release, so it merges and gains Alpha.
-    await mergeAs(t, { type: "edition", id: await editionOf(t, f.survivor.releaseId) }, { type: "edition", id: seriesless.editionId });
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: seriesless.releaseId, state: "owned" });
+    await mergeAs(
+      t,
+      { type: "edition", id: await editionOf(t, f.survivor.releaseId) },
+      { type: "edition", id: seriesless.editionId },
+    );
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: seriesless.releaseId,
+      state: "owned",
+    });
     await hide(t, f.survivor.seriesId);
     expect(await shared(t)).toEqual(NOTHING);
 
-    await expect(splitAs(t, { type: "edition", id: seriesless.editionId })).rejects.toThrow(/no Series/);
+    await expect(splitAs(t, { type: "edition", id: seriesless.editionId })).rejects.toThrow(
+      /no Series/,
+    );
     expect(await shared(t)).toEqual(NOTHING);
     // Once nobody tracks it, the Split goes through.
     await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: seriesless.releaseId });
@@ -1166,13 +1521,22 @@ describe("split — shows nothing it did not show just before", () => {
     // Private defaults; Alpha, then Gamma, are shared for Reading explicitly.
     await share(t, f.survivor.seriesId, ["reading"]);
     await mergeSeries(t, f);
-    await asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId: f.loser.volumeId, readCount: 9 });
-    expect((await shared(t)).reading).toEqual([{ title: "Alpha", status: null, read: [9], passes: 0 }]);
+    await asReader(t).mutation(api.reading.setVolumeReadCount, {
+      volumeId: f.loser.volumeId,
+      readCount: 9,
+    });
+    expect((await shared(t)).reading).toEqual([
+      { title: "Alpha", status: null, read: [9], passes: 0 },
+    ]);
     await splitSeries(t, f);
     expect(await shared(t)).toEqual(NOTHING);
 
     await share(t, gamma.seriesId, ["reading"]);
-    await mergeAs(t, { type: "series", id: gamma.seriesId }, { type: "series", id: f.loser.seriesId });
+    await mergeAs(
+      t,
+      { type: "series", id: gamma.seriesId },
+      { type: "series", id: f.loser.seriesId },
+    );
     expect(await shared(t)).toEqual(NOTHING);
   });
 });
@@ -1187,45 +1551,68 @@ describe("split — tracking filed under a Series merged since", () => {
     ["Edition Line", editionLineMove],
   ];
 
-  it.each(movingOff)("keeps a Release owned and read since a %s merge private through the Splits", async (_, prepare) => {
-    const t = makeT();
-    const f = await setup(t);
-    const gamma = await addSeries(t, 3, "Gamma");
-    await publicDefaults(t);
-    const { merge, split, releaseId } = await prepare(t, f);
-    await merge();
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId, state: "owned" });
-    await asReader(t).mutation(api.reading.startPass, { releaseId });
-    // The Series merge leaves the Release alone: it answers to Alpha now.
-    await mergeAs(t, { type: "series", id: gamma.seriesId }, { type: "series", id: f.loser.seriesId });
-    // Shown before dave hides Gamma: the checks below are not vacuous.
-    expect((await shared(t)).releases).toBe(1);
-    await hide(t, gamma.seriesId);
+  it.each(movingOff)(
+    "keeps a Release owned and read since a %s merge private through the Splits",
+    async (_, prepare) => {
+      const t = makeT();
+      const f = await setup(t);
+      const gamma = await addSeries(t, 3, "Gamma");
+      await publicDefaults(t);
+      const { merge, split, releaseId } = await prepare(t, f);
+      await merge();
+      await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId, state: "owned" });
+      await asReader(t).mutation(api.reading.startPass, { releaseId });
+      // The Series merge leaves the Release alone: it answers to Alpha now.
+      await mergeAs(
+        t,
+        { type: "series", id: gamma.seriesId },
+        { type: "series", id: f.loser.seriesId },
+      );
+      // Shown before dave hides Gamma: the checks below are not vacuous.
+      expect((await shared(t)).releases).toBe(1);
+      await hide(t, gamma.seriesId);
 
-    await split();
-    expect(await shared(t)).toEqual(NOTHING);
-    await splitSeries(t, f);
-    expect(await shared(t)).toEqual(NOTHING);
-    // Back under the Series its coverage or line names, and hidden there.
-    expect((await t.run((ctx) => ctx.db.get(releaseId)))?.seriesIds).toEqual([f.loser.seriesId]);
-    await mergeAs(t, { type: "series", id: gamma.seriesId }, { type: "series", id: f.loser.seriesId });
-    expect(await shared(t)).toEqual(NOTHING);
-  });
+      await split();
+      expect(await shared(t)).toEqual(NOTHING);
+      await splitSeries(t, f);
+      expect(await shared(t)).toEqual(NOTHING);
+      // Back under the Series its coverage or line names, and hidden there.
+      expect((await t.run((ctx) => ctx.db.get(releaseId)))?.seriesIds).toEqual([f.loser.seriesId]);
+      await mergeAs(
+        t,
+        { type: "series", id: gamma.seriesId },
+        { type: "series", id: f.loser.seriesId },
+      );
+      expect(await shared(t)).toEqual(NOTHING);
+    },
+  );
 
   it("keeps a Release private when a Split re-derives it while its Series is merged, through a re-merge and Split", async () => {
     const t = makeT();
     const f = await setup(t);
     const gamma = await addSeries(t, 3, "Gamma");
     await publicDefaults(t);
-    const alphaIntoGamma = () => mergeAs(t, { type: "series", id: gamma.seriesId }, { type: "series", id: f.survivor.seriesId });
+    const alphaIntoGamma = () =>
+      mergeAs(
+        t,
+        { type: "series", id: gamma.seriesId },
+        { type: "series", id: f.survivor.seriesId },
+      );
     const splitAlpha = () => splitAs(t, { type: "series", id: f.survivor.seriesId });
     // The loser Release follows its Volume into Alpha, then Alpha into Gamma.
-    await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    await mergeAs(
+      t,
+      { type: "volume", id: f.survivor.volumeId },
+      { type: "volume", id: f.loser.volumeId },
+    );
     await alphaIntoGamma();
     // Its coverage goes back to the loser Volume while Alpha is merged; then Alpha comes back.
     await splitAs(t, { type: "volume", id: f.loser.volumeId });
     await splitAlpha();
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
     await alphaIntoGamma();
     await hide(t, gamma.seriesId);
     await hide(t, f.loser.seriesId);
@@ -1234,7 +1621,9 @@ describe("split — tracking filed under a Series merged since", () => {
     await splitAlpha();
     expect(await shared(t)).toEqual(NOTHING);
     // It is filed under the Series its coverage names, whatever the order of Splits.
-    expect((await t.run((ctx) => ctx.db.get(f.loser.releaseId)))?.seriesIds).toEqual([f.loser.seriesId]);
+    expect((await t.run((ctx) => ctx.db.get(f.loser.releaseId)))?.seriesIds).toEqual([
+      f.loser.seriesId,
+    ]);
   });
 });
 
@@ -1246,23 +1635,33 @@ describe("merge — Bundles without a Series signal", () => {
     await share(t, f.survivor.seriesId, ["ownership"]);
     const fullBox = await box(t, 901, "Full Box", []);
     const alphaBox = await box(t, 902, "Alpha Box", [f.survivor.releaseId]);
-    await asReader(t).mutation(api.collection.setBundleEntry, { bundleId: fullBox, state: "owned" });
+    await asReader(t).mutation(api.collection.setBundleEntry, {
+      bundleId: fullBox,
+      state: "owned",
+    });
     expect(await shared(t)).toEqual(NOTHING);
 
-    await expect(mergeAs(t, { type: "releaseBundle", id: alphaBox }, { type: "releaseBundle", id: fullBox })).rejects.toThrow(
-      /no Series/,
-    );
-    await expect(mergeAs(t, { type: "releaseBundle", id: fullBox }, { type: "releaseBundle", id: alphaBox })).rejects.toThrow(
-      /no Series/,
-    );
+    await expect(
+      mergeAs(t, { type: "releaseBundle", id: alphaBox }, { type: "releaseBundle", id: fullBox }),
+    ).rejects.toThrow(/no Series/);
+    await expect(
+      mergeAs(t, { type: "releaseBundle", id: fullBox }, { type: "releaseBundle", id: alphaBox }),
+    ).rejects.toThrow(/no Series/);
     expect(await shared(t)).toEqual(NOTHING);
 
     // Nobody tracks an empty duplicate, so it merges.
     const emptyBox = await box(t, 903, "Empty Box", []);
-    await mergeAs(t, { type: "releaseBundle", id: alphaBox }, { type: "releaseBundle", id: emptyBox });
+    await mergeAs(
+      t,
+      { type: "releaseBundle", id: alphaBox },
+      { type: "releaseBundle", id: emptyBox },
+    );
     expect(await shared(t)).toEqual(NOTHING);
     // A public default shows the owned Bundle: the checks above were not vacuous.
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
     expect((await shared(t)).bundles).toEqual(["Full Box"]);
   });
 });
@@ -1318,7 +1717,11 @@ describe("split — deleted Users", () => {
       t.run(async (ctx) => {
         const theirs = async (table: "ratings" | "reviews" | "userSeriesStates") =>
           (await ctx.db.query(table).collect()).filter((row) => row.userId === f.daveId);
-        return { ratings: await theirs("ratings"), reviews: await theirs("reviews"), states: await theirs("userSeriesStates") };
+        return {
+          ratings: await theirs("ratings"),
+          reviews: await theirs("reviews"),
+          states: await theirs("userSeriesStates"),
+        };
       });
     const before = await daves();
     // The merge kept the survivor's rows and logged the loser's for Split.
@@ -1359,7 +1762,9 @@ describe("split — deleted Users", () => {
     // A real merge supplies the Proposal the synthetic manifests hang off.
     await mergeSeries(t, f);
     const aliceId = await t.run(async (ctx) => {
-      const aliceRow = (await ctx.db.query("users").collect()).find((u) => u.username === alice.username)!;
+      const aliceRow = (await ctx.db.query("users").collect()).find(
+        (u) => u.username === alice.username,
+      )!;
       const [merged] = await ctx.db.query("mergeManifests").collect();
       await ctx.db.delete(merged!._id);
       const proposalId = merged!.proposalId;
@@ -1422,9 +1827,16 @@ describe("merge — denormalized references", () => {
       }),
     );
 
-    await mergeAs(t, { type: "release", id: f.survivor.releaseId }, { type: "release", id: f.loser.releaseId });
+    await mergeAs(
+      t,
+      { type: "release", id: f.survivor.releaseId },
+      { type: "release", id: f.loser.releaseId },
+    );
     const merged = await t.run((ctx) => ctx.db.get(passId));
-    expect(merged).toMatchObject({ releaseId: f.survivor.releaseId, seriesId: f.survivor.seriesId });
+    expect(merged).toMatchObject({
+      releaseId: f.survivor.releaseId,
+      seriesId: f.survivor.seriesId,
+    });
 
     await splitAs(t, { type: "release", id: f.loser.releaseId });
     const split = await t.run((ctx) => ctx.db.get(passId));
@@ -1436,7 +1848,10 @@ describe("merge — denormalized references", () => {
 describe("merge — read counts follow their Volume", () => {
   /** dave's /me reading shelf: each Series and how many of its Volumes he read. */
   const shelf = async (t: T) =>
-    (await asReader(t).query(api.reading.myReading, {}))!.series.map((row) => ({ title: row.title, read: row.volumesRead }));
+    (await asReader(t).query(api.reading.myReading, {}))!.series.map((row) => ({
+      title: row.title,
+      read: row.volumesRead,
+    }));
   const read = (t: T, volumeId: Id<"volumes">, readCount = 1) =>
     asReader(t).mutation(api.reading.setVolumeReadCount, { volumeId, readCount });
 
@@ -1457,7 +1872,11 @@ describe("merge — read counts follow their Volume", () => {
     await read(t, f.loser.volumeId);
     await mergeSeries(t, f);
     // Both Volumes sit in Alpha now; the read moves to the surviving one.
-    await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    await mergeAs(
+      t,
+      { type: "volume", id: f.survivor.volumeId },
+      { type: "volume", id: f.loser.volumeId },
+    );
     expect(await shelf(t)).toEqual([{ title: "Alpha", read: 1 }]);
 
     await splitSeries(t, f);
@@ -1472,7 +1891,9 @@ describe("merge — read counts follow their Volume", () => {
     await share(t, f.survivor.seriesId, ["reading"]);
     await read(t, f.survivor.volumeId, 1);
     await read(t, f.loser.volumeId, 2);
-    expect((await shared(t)).reading).toEqual([{ title: "Alpha", status: null, read: [1], passes: 0 }]);
+    expect((await shared(t)).reading).toEqual([
+      { title: "Alpha", status: null, read: [1], passes: 0 },
+    ]);
 
     await mergeSeries(t, f);
     expect(await shared(t)).toEqual(NOTHING);
@@ -1481,7 +1902,9 @@ describe("merge — read counts follow their Volume", () => {
 
     // Shared again, then merged again: the loser read still holds Alpha back.
     await share(t, f.survivor.seriesId, ["reading"]);
-    expect((await shared(t)).reading).toEqual([{ title: "Alpha", status: null, read: [1], passes: 0 }]);
+    expect((await shared(t)).reading).toEqual([
+      { title: "Alpha", status: null, read: [1], passes: 0 },
+    ]);
     await mergeSeries(t, f);
     expect(await shared(t)).toEqual(NOTHING);
     await splitSeries(t, f);
@@ -1496,11 +1919,18 @@ describe("merge — read counts follow their Volume", () => {
     await read(t, second, 3);
     await read(t, f.survivor.volumeId);
     const readCounts = (seriesId: Id<"series">) =>
-      t.run(async (ctx) => (await impactOf(ctx, { type: "series", id: seriesId })).find((row) => row.label === "Volume read counts"));
+      t.run(async (ctx) =>
+        (await impactOf(ctx, { type: "series", id: seriesId })).find(
+          (row) => row.label === "Volume read counts",
+        ),
+      );
 
     expect(await readCounts(f.loser.seriesId)).toEqual({ label: "Volume read counts", count: 2 });
     await mergeSeries(t, f);
-    expect(await readCounts(f.survivor.seriesId)).toEqual({ label: "Volume read counts", count: 3 });
+    expect(await readCounts(f.survivor.seriesId)).toEqual({
+      label: "Volume read counts",
+      count: 3,
+    });
     await splitSeries(t, f);
     expect(await readCounts(f.loser.seriesId)).toEqual({ label: "Volume read counts", count: 2 });
   });
@@ -1508,34 +1938,55 @@ describe("merge — read counts follow their Volume", () => {
   it("splits a manifest that still logs a read count's Series, writing none", async () => {
     const t = makeT();
     const f = await setup(t);
-    const aliceId = await t.run(async (ctx) => (await ctx.db.query("users").collect()).find((u) => u.username === alice.username)!._id);
+    const aliceId = await t.run(
+      async (ctx) =>
+        (await ctx.db.query("users").collect()).find((u) => u.username === alice.username)!._id,
+    );
     // dave read both Volumes, so the merge removes his loser row; alice's moves.
     await read(t, f.survivor.volumeId, 4);
     await read(t, f.loser.volumeId, 2);
     const aliceRow = await t.run((ctx) =>
-      ctx.db.insert("volumeProgress", { userId: aliceId, volumeId: f.loser.volumeId, readCount: 1 }),
+      ctx.db.insert("volumeProgress", {
+        userId: aliceId,
+        volumeId: f.loser.volumeId,
+        readCount: 1,
+      }),
     );
     const loserVolume = { type: "volume", id: f.loser.volumeId } as const;
     await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, loserVolume);
     // The merge moves the row by its Volume alone and stores no Series.
     expect(
       await t.run(async (ctx) => {
-        const manifest = (await ctx.db.query("mergeManifests").collect()).find((m) => m.loserRef.id === f.loser.volumeId)!;
-        return manifest.repointed.filter((entry) => entry.table === "volumeProgress").map((entry) => entry.field);
+        const manifest = (await ctx.db.query("mergeManifests").collect()).find(
+          (m) => m.loserRef.id === f.loser.volumeId,
+        )!;
+        return manifest.repointed
+          .filter((entry) => entry.table === "volumeProgress")
+          .map((entry) => entry.field);
       }),
     ).toEqual(["volumeId"]);
     expect(await t.run((ctx) => ctx.db.get(aliceRow))).not.toHaveProperty("seriesId");
     // As such a merge was logged when each row stored its Series, and alice's
     // row as it was left then.
     await t.run(async (ctx) => {
-      const manifest = (await ctx.db.query("mergeManifests").collect()).find((m) => m.loserRef.id === f.loser.volumeId)!;
+      const manifest = (await ctx.db.query("mergeManifests").collect()).find(
+        (m) => m.loserRef.id === f.loser.volumeId,
+      )!;
       await ctx.db.patch(manifest._id, {
         removed: manifest.removed.map((row) =>
-          row.table === "volumeProgress" ? { ...row, doc: { ...row.doc, seriesId: f.loser.seriesId } } : row,
+          row.table === "volumeProgress"
+            ? { ...row, doc: { ...row.doc, seriesId: f.loser.seriesId } }
+            : row,
         ),
         repointed: [
           ...manifest.repointed,
-          { table: "volumeProgress", docId: aliceRow, field: "seriesId", before: f.loser.seriesId, after: f.survivor.seriesId },
+          {
+            table: "volumeProgress",
+            docId: aliceRow,
+            field: "seriesId",
+            before: f.loser.seriesId,
+            after: f.survivor.seriesId,
+          },
         ],
       });
       await ctx.db.patch(aliceRow, { seriesId: f.survivor.seriesId });
@@ -1543,12 +1994,24 @@ describe("merge — read counts follow their Volume", () => {
 
     await splitAs(t, loserVolume);
     const rows = await t.run((ctx) => ctx.db.query("volumeProgress").collect());
-    expect(rows.map(({ userId, volumeId, readCount, seriesId }) => ({ userId, volumeId, readCount, seriesId }))).toEqual(
+    expect(
+      rows.map(({ userId, volumeId, readCount, seriesId }) => ({
+        userId,
+        volumeId,
+        readCount,
+        seriesId,
+      })),
+    ).toEqual(
       expect.arrayContaining([
         { userId: f.daveId, volumeId: f.survivor.volumeId, readCount: 4, seriesId: undefined },
         { userId: f.daveId, volumeId: f.loser.volumeId, readCount: 2, seriesId: undefined },
         // Moved back by its logged Volume; the Series it still stores is left alone.
-        { userId: aliceId, volumeId: f.loser.volumeId, readCount: 1, seriesId: f.survivor.seriesId },
+        {
+          userId: aliceId,
+          volumeId: f.loser.volumeId,
+          readCount: 1,
+          seriesId: f.survivor.seriesId,
+        },
       ]),
     );
     expect(rows).toHaveLength(3);
@@ -1578,7 +2041,12 @@ describe("merge — Release Variants", () => {
       const elsewhereId = await insertVariant(ctx, { releaseId: f.loser.releaseId });
       const publisherId = await firstPublisher(ctx);
       const pin = (variantId: Id<"releaseVariants">, onRelease = releaseId) =>
-        ctx.db.insert("collectionEntries", { userId: f.daveId, releaseId: onRelease, state: "owned", variantId });
+        ctx.db.insert("collectionEntries", {
+          userId: f.daveId,
+          releaseId: onRelease,
+          state: "owned",
+          variantId,
+        });
       const member = async (variantId: Id<"releaseVariants">, onRelease = releaseId) =>
         await insertBundleMember(ctx, {
           bundleId: await insertBundle(ctx, { publisherId }),
@@ -1631,9 +2099,10 @@ describe("merge — Release Variants", () => {
 
   /** The pin rows of the loser variant's impact preview. */
   const preview = async (t: T, id: Id<"releaseVariants">) =>
-    (await asMod(t).query(api.sensitiveOps.manageForm, { type: "releaseVariant", key: id }))!.impact.filter((row) =>
-      row.label.includes("pinning this variant"),
-    );
+    (await asMod(t).query(api.sensitiveOps.manageForm, {
+      type: "releaseVariant",
+      key: id,
+    }))!.impact.filter((row) => row.label.includes("pinning this variant"));
 
   it("moves the merged variant's pins by index, legacy pins included, and Split puts them back", async () => {
     // A read budget a scan of either table would blow through.
@@ -1731,11 +2200,21 @@ describe("merge — Release Variants", () => {
           ownershipVisibility: "private",
           readingVisibility: "private",
         });
-        await ctx.db.insert("collectionEntries", { userId, releaseId, state: "owned", variantId: v.loserId });
+        await ctx.db.insert("collectionEntries", {
+          userId,
+          releaseId,
+          state: "owned",
+          variantId: v.loserId,
+        });
       }
       for (let n = 0; n < memberships; n++) {
         const bundleId = await insertBundle(ctx, { publisherId });
-        await ctx.db.insert("bundleMemberships", { bundleId, releaseId, order: 1, variantId: v.loserId });
+        await ctx.db.insert("bundleMemberships", {
+          bundleId,
+          releaseId,
+          order: 1,
+          variantId: v.loserId,
+        });
       }
     });
 
@@ -1747,29 +2226,32 @@ describe("merge — Release Variants", () => {
       "both together",
       { owners: (VARIANT_MERGE_PIN_LIMIT - 4) / 2, memberships: (VARIANT_MERGE_PIN_LIMIT - 4) / 2 },
     ],
-  ])("merges as many pins as the limit allows, and Split puts them back: %s", async (_name, pins) => {
-    const t = makeT({ transactionLimits: true });
-    const v = await variants(t);
-    await pinLoser(t, v, pins);
-    /** Rows pinning the loser, in both tables. */
-    const pinning = () =>
-      t.run(async (ctx) => {
-        const entries = await ctx.db
-          .query("collectionEntries")
-          .withIndex("by_variantId", (q) => q.eq("variantId", v.loserId))
-          .collect();
-        const memberships = await ctx.db
-          .query("bundleMemberships")
-          .withIndex("by_variantId", (q) => q.eq("variantId", v.loserId))
-          .collect();
-        return entries.length + memberships.length;
-      });
-    expect(await pinning()).toBe(VARIANT_MERGE_PIN_LIMIT);
-    await mergeVariants(t, v);
-    expect(await pinning()).toBe(0);
-    await splitAs(t, ref(v.loserId));
-    expect(await pinning()).toBe(VARIANT_MERGE_PIN_LIMIT);
-  });
+  ])(
+    "merges as many pins as the limit allows, and Split puts them back: %s",
+    async (_name, pins) => {
+      const t = makeT({ transactionLimits: true });
+      const v = await variants(t);
+      await pinLoser(t, v, pins);
+      /** Rows pinning the loser, in both tables. */
+      const pinning = () =>
+        t.run(async (ctx) => {
+          const entries = await ctx.db
+            .query("collectionEntries")
+            .withIndex("by_variantId", (q) => q.eq("variantId", v.loserId))
+            .collect();
+          const memberships = await ctx.db
+            .query("bundleMemberships")
+            .withIndex("by_variantId", (q) => q.eq("variantId", v.loserId))
+            .collect();
+          return entries.length + memberships.length;
+        });
+      expect(await pinning()).toBe(VARIANT_MERGE_PIN_LIMIT);
+      await mergeVariants(t, v);
+      expect(await pinning()).toBe(0);
+      await splitAs(t, ref(v.loserId));
+      expect(await pinning()).toBe(VARIANT_MERGE_PIN_LIMIT);
+    },
+  );
 
   it("refuses more pins than a Split could put back, and the preview says it stopped counting", async () => {
     const t = makeT();
@@ -1785,7 +2267,10 @@ describe("merge — Release Variants", () => {
       }
     });
     await expect(mergeVariants(t, v)).rejects.toMatchObject({
-      data: { code: "badMerge", message: expect.stringContaining(`More than ${VARIANT_MERGE_PIN_LIMIT}`) },
+      data: {
+        code: "badMerge",
+        message: expect.stringContaining(`More than ${VARIANT_MERGE_PIN_LIMIT}`),
+      },
     });
     expect(await t.run((ctx) => ctx.db.get(v.loserId))).toMatchObject({ status: "active" });
     expect(await preview(t, v.loserId)).toEqual([
@@ -1804,7 +2289,10 @@ describe("merge — publisher imprints", () => {
     return await t.run(async (ctx) => {
       const survivorId = await insertPublisher(ctx, { name: "Kodansha" });
       const loserId = await insertPublisher(ctx, { name: "Kodansha Comics" });
-      const imprintId = await insertPublisher(ctx, { name: "Vertical", parentPublisherId: loserId });
+      const imprintId = await insertPublisher(ctx, {
+        name: "Vertical",
+        parentPublisherId: loserId,
+      });
       return { survivorId, loserId, imprintId };
     });
   }
@@ -1847,14 +2335,24 @@ describe("merge — publisher imprints", () => {
     await setup(t);
     const p = await companies(t);
     const imprintsOf = async () => {
-      const form = await asMod(t).query(api.sensitiveOps.manageForm, { type: "publisher", key: "kodansha-comics" });
+      const form = await asMod(t).query(api.sensitiveOps.manageForm, {
+        type: "publisher",
+        key: "kodansha-comics",
+      });
       return form!.impact.find((row) => row.label.startsWith("Imprints"));
     };
-    expect(await imprintsOf()).toEqual({ label: "Imprints (follow the survivor on a merge)", count: 1 });
+    expect(await imprintsOf()).toEqual({
+      label: "Imprints (follow the survivor on a merge)",
+      count: 1,
+    });
 
     await t.run(async (ctx) => {
       for (let i = 0; i < IMPRINT_PREVIEW_CAP; i++) {
-        await insertPublisher(ctx, { status: i === 0 ? "merged" : "active", name: `Imprint ${i}`, parentPublisherId: p.loserId });
+        await insertPublisher(ctx, {
+          status: i === 0 ? "merged" : "active",
+          name: `Imprint ${i}`,
+          parentPublisherId: p.loserId,
+        });
       }
     });
     const capped = await imprintsOf();
@@ -1887,7 +2385,11 @@ describe("split — chunked repair merges", () => {
       const survivorId = await insertPublisher(ctx, { name: "Kodansha" });
       const loserId = await insertPublisher(ctx, { name: "Kodansha Comics" });
       const editionId = await insertEdition(ctx, { publisherId: loserId });
-      const releaseId = await insertRelease(ctx, { editionId, publisherId: loserId, seriesIds: [] });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId: loserId,
+        seriesIds: [],
+      });
       return { survivorId, loserId, editionId, releaseId };
     });
     const entry = {
@@ -1900,7 +2402,8 @@ describe("split — chunked repair merges", () => {
     };
     // The first call repoints the Edition as a chunk; the second finishes
     // with the stock merge. Each call is its own repair Proposal.
-    const run = () => t.mutation(internal.repair.runBatch, { entries: [entry], dryRun: false, actor: "alice" });
+    const run = () =>
+      t.mutation(internal.repair.runBatch, { entries: [entry], dryRun: false, actor: "alice" });
     expect((await run())[0]?.status).toBe("partial");
     expect((await run())[0]?.status).toBe("applied");
 
@@ -1909,7 +2412,9 @@ describe("split — chunked repair merges", () => {
       loser: await ctx.db.get(p.loserId),
       edition: await ctx.db.get(p.editionId),
       release: await ctx.db.get(p.releaseId),
-      open: (await ctx.db.query("mergeManifests").collect()).filter((m) => m.reversedAt === undefined),
+      open: (await ctx.db.query("mergeManifests").collect()).filter(
+        (m) => m.reversedAt === undefined,
+      ),
     }));
     expect(after.loser?.status).toBe("active");
     expect(after.edition?.publisherId).toBe(p.loserId);
@@ -1926,43 +2431,58 @@ describe("split — a catalog dependency alone narrows nothing", () => {
    */
   async function mixedBox(t: T, f: Fixture, kinds: Surface[], ownBox: boolean) {
     await publicDefaults(t);
-    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId]) await share(t, seriesId, ["ownership"]);
+    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId])
+      await share(t, seriesId, ["ownership"]);
     const gamma = await addSeries(t, 3, "Gamma");
     await hide(t, gamma.seriesId, kinds);
     const bundleId = await box(t, 901, "Mixed Box", [f.loser.releaseId, gamma.releaseId]);
-    if (ownBox) await asReader(t).mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
+    if (ownBox)
+      await asReader(t).mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
     return gamma;
   }
 
   const volumeMerge = (t: T, f: Fixture) =>
-    mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    mergeAs(
+      t,
+      { type: "volume", id: f.survivor.volumeId },
+      { type: "volume", id: f.loser.volumeId },
+    );
   const volumeSplit = (t: T, f: Fixture) => splitAs(t, { type: "volume", id: f.loser.volumeId });
 
   it.each([
     ["Volume", volumeMerge, volumeSplit],
     ["Series", mergeSeries, splitSeries],
-  ] as const)("keeps a directly owned Release public through a %s Split when an unowned Bundle holds a private Series", async (_, merge, split) => {
-    const t = makeT();
-    const f = await setup(t);
-    await mixedBox(t, f, ["ownership"], false);
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
-    expect((await shared(t)).releases).toBe(1);
+  ] as const)(
+    "keeps a directly owned Release public through a %s Split when an unowned Bundle holds a private Series",
+    async (_, merge, split) => {
+      const t = makeT();
+      const f = await setup(t);
+      await mixedBox(t, f, ["ownership"], false);
+      await asReader(t).mutation(api.collection.setReleaseEntry, {
+        releaseId: f.loser.releaseId,
+        state: "owned",
+      });
+      expect((await shared(t)).releases).toBe(1);
 
-    await merge(t, f);
-    expect((await shared(t)).releases).toBe(1);
-    await split(t, f);
-    expect((await shared(t)).releases).toBe(1);
-    // Gamma's override reached neither side: the Bundle is nothing dave tracks.
-    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId]) {
-      expect(await stateOf(t, f, seriesId)).toMatchObject({ ownershipVisibility: "public" });
-    }
-  });
+      await merge(t, f);
+      expect((await shared(t)).releases).toBe(1);
+      await split(t, f);
+      expect((await shared(t)).releases).toBe(1);
+      // Gamma's override reached neither side: the Bundle is nothing dave tracks.
+      for (const seriesId of [f.loser.seriesId, f.survivor.seriesId]) {
+        expect(await stateOf(t, f, seriesId)).toMatchObject({ ownershipVisibility: "public" });
+      }
+    },
+  );
 
   it("keeps an owned Release public and its owned Bundle private through a Split", async () => {
     const t = makeT();
     const f = await setup(t);
     await mixedBox(t, f, ["ownership"], true);
-    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: f.loser.releaseId,
+      state: "owned",
+    });
     const owned = { releases: 1, bundles: [] };
     expect(await shared(t)).toMatchObject(owned);
 
@@ -1976,7 +2496,8 @@ describe("split — a catalog dependency alone narrows nothing", () => {
     const t = makeT();
     const f = await setup(t);
     await mixedBox(t, f, ["ownership", "reading"], true);
-    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId]) await share(t, seriesId, ["reading"]);
+    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId])
+      await share(t, seriesId, ["reading"]);
     await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
     const passes = async () => (await shared(t)).reading.reduce((sum, row) => sum + row.passes, 0);
     expect(await passes()).toBe(1);
@@ -1996,7 +2517,10 @@ describe("merge — omnibus Ratings of hidden records keep Tracking Visibility",
 
   /** Public Reading default with one Series explicitly private for Reading. */
   async function privateReading(t: T, seriesId: Id<"series">) {
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "public",
+    });
     await hide(t, seriesId, ["reading"]);
   }
 
@@ -2005,7 +2529,10 @@ describe("merge — omnibus Ratings of hidden records keep Tracking Visibility",
     const loserSecond = await secondLoserVolume(t, f);
     return {
       loserOmnibus: await omnibus(t, 700, [f.loser.volumeId, loserSecond]),
-      survivorOmnibus: await omnibus(t, 701, [f.survivor.volumeId, await secondSurvivorVolume(t, f)]),
+      survivorOmnibus: await omnibus(t, 701, [
+        f.survivor.volumeId,
+        await secondSurvivorVolume(t, f),
+      ]),
       loserSecond,
     };
   }
@@ -2014,25 +2541,38 @@ describe("merge — omnibus Ratings of hidden records keep Tracking Visibility",
 
   it.each([
     ["its Series", (f: Fixture): RecordRef[] => [{ type: "series", id: f.loser.seriesId }]],
-    ["its covered Volumes", (f: Fixture, loserSecond: Id<"volumes">): RecordRef[] => [
-      { type: "volume", id: f.loser.volumeId },
-      { type: "volume", id: loserSecond },
-    ]],
-  ] as const)("keeps a loser omnibus Rating private through an Edition merge and Split when its covered records are hidden (%s)", async (_, hidden) => {
-    const t = makeT();
-    const f = await setup(t);
-    const { loserOmnibus, survivorOmnibus, loserSecond } = await omnibuses(t, f);
-    await privateReading(t, f.loser.seriesId);
-    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: loserOmnibus }, score: 37 });
-    expect(await ratings(t)).toEqual([]);
-    for (const ref of hidden(f, loserSecond)) await hideRecord(t, ref);
-    expect(await ratings(t)).toEqual([]);
+    [
+      "its covered Volumes",
+      (f: Fixture, loserSecond: Id<"volumes">): RecordRef[] => [
+        { type: "volume", id: f.loser.volumeId },
+        { type: "volume", id: loserSecond },
+      ],
+    ],
+  ] as const)(
+    "keeps a loser omnibus Rating private through an Edition merge and Split when its covered records are hidden (%s)",
+    async (_, hidden) => {
+      const t = makeT();
+      const f = await setup(t);
+      const { loserOmnibus, survivorOmnibus, loserSecond } = await omnibuses(t, f);
+      await privateReading(t, f.loser.seriesId);
+      await asReader(t).mutation(api.ratings.set, {
+        target: { kind: "edition", id: loserOmnibus },
+        score: 37,
+      });
+      expect(await ratings(t)).toEqual([]);
+      for (const ref of hidden(f, loserSecond)) await hideRecord(t, ref);
+      expect(await ratings(t)).toEqual([]);
 
-    await mergeAs(t, { type: "edition", id: survivorOmnibus }, { type: "edition", id: loserOmnibus });
-    expect(await ratings(t)).toEqual([]);
-    await splitAs(t, { type: "edition", id: loserOmnibus });
-    expect(await ratings(t)).toEqual([]);
-  });
+      await mergeAs(
+        t,
+        { type: "edition", id: survivorOmnibus },
+        { type: "edition", id: loserOmnibus },
+      );
+      expect(await ratings(t)).toEqual([]);
+      await splitAs(t, { type: "edition", id: loserOmnibus });
+      expect(await ratings(t)).toEqual([]);
+    },
+  );
 
   it("keeps a survivor omnibus Rating private through an Edition merge when the survivor Series is hidden", async () => {
     const t = makeT();
@@ -2040,11 +2580,18 @@ describe("merge — omnibus Ratings of hidden records keep Tracking Visibility",
     const { loserOmnibus, survivorOmnibus } = await omnibuses(t, f);
     await privateReading(t, f.survivor.seriesId);
     await share(t, f.loser.seriesId, ["reading"]);
-    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: survivorOmnibus }, score: 37 });
+    await asReader(t).mutation(api.ratings.set, {
+      target: { kind: "edition", id: survivorOmnibus },
+      score: 37,
+    });
     await hideRecord(t, { type: "series", id: f.survivor.seriesId });
     expect(await ratings(t)).toEqual([]);
 
-    await mergeAs(t, { type: "edition", id: survivorOmnibus }, { type: "edition", id: loserOmnibus });
+    await mergeAs(
+      t,
+      { type: "edition", id: survivorOmnibus },
+      { type: "edition", id: loserOmnibus },
+    );
     expect(await ratings(t)).toEqual([]);
     await splitAs(t, { type: "edition", id: loserOmnibus });
     expect(await ratings(t)).toEqual([]);
@@ -2054,15 +2601,25 @@ describe("merge — omnibus Ratings of hidden records keep Tracking Visibility",
     const t = makeT();
     const f = await setup(t);
     const { loserOmnibus } = await omnibuses(t, f);
-    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
-    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: loserOmnibus }, score: 37 });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, {
+      kind: "reading",
+      visibility: "public",
+    });
+    await asReader(t).mutation(api.ratings.set, {
+      target: { kind: "edition", id: loserOmnibus },
+      score: 37,
+    });
     // Shown under the public default: the checks below are not vacuous.
     expect(await ratings(t)).toHaveLength(1);
     await hide(t, f.loser.seriesId, ["reading"]);
     await hideRecord(t, { type: "series", id: f.loser.seriesId });
     expect(await ratings(t)).toEqual([]);
 
-    await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    await mergeAs(
+      t,
+      { type: "volume", id: f.survivor.volumeId },
+      { type: "volume", id: f.loser.volumeId },
+    );
     expect(await ratings(t)).toEqual([]);
     await splitAs(t, { type: "volume", id: f.loser.volumeId });
     expect(await ratings(t)).toEqual([]);
