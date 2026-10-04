@@ -898,10 +898,13 @@ describe("storedHoldKind", () => {
       // sevenSeas.ts
       ['Box set "Alpha Box Set" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.', "packaging"],
       ['"Alpha Deluxe Edition 1" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.', "packaging"],
-      // kodansha.ts
+      // kodansha.ts, before and since its note quotes stated coverage
       ['"Alpha Omnibus 1" is Omnibus of "Alpha" with no stated coverage — an Editor maps it.', "packaging"],
+      ['"Alpha Omnibus 1" is Omnibus of "Alpha", stating Volumes 1-3 in its title. The Kodansha importer does not place packaging — an Editor maps it.', "packaging"],
       // lib/pipeline.ts removedSeriesFor, for every importer
       ['"Alpha" is Series 3 ("Alpha"), which an Editor hid — not recreated by an import.', "series"],
+      // lib/unmatched.ts, a locked Series (Seven Seas, Kodansha, PRH, Yen Press)
+      ["Series 3 is locked.", "series"],
     ];
     expect(reasons.map(([reason]) => [reason, storedHoldKind(reason)])).toEqual(reasons);
   });

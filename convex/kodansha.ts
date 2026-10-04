@@ -54,6 +54,8 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
+import type { CoverRange, Packaging } from "./lib/bookTitle";
+import { coverageFromLine } from "./lib/coverage";
 import { coverKey, coverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
@@ -657,6 +659,24 @@ async function withPageFacts(
 }
 
 /**
+ * The note an unmatched packaging volume is held with. This importer never
+ * places packaging (it passes the tail no labels for it), so the note says
+ * so, and quotes the coverage the snapshot states, if any: the title's own
+ * range, else the size its line's name declares (lib/coverage.ts).
+ */
+function packagingHold(snapshot: KodanshaSnapshot, packaging: Packaging): string {
+  const fromLine = coverageFromLine(packaging.lineName, packaging.linePosition);
+  const stated = packaging.coverRange
+    ? { range: packaging.coverRange, by: "in its title" }
+    : fromLine && !packaging.coverageGapped
+      ? { range: fromLine, by: "by its line's size" }
+      : null;
+  const volumes = (range: CoverRange) =>
+    range.from === range.to ? `Volume ${range.from}` : `Volumes ${range.from}-${range.to}`;
+  return `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}"${stated ? `, stating ${volumes(stated.range)} ${stated.by}` : ""}. The Kodansha importer does not place packaging — an Editor maps it.`;
+}
+
+/**
  * Reconcile one normalized (volume, format) snapshot into the canonical
  * catalog — one atomic mutation per record (spec §6). Mirrors
  * sevenSeas.applyBook and shares its unmatched tail (lib/unmatched.ts); a
@@ -875,10 +895,7 @@ export const applyVolume = internalMutation({
         seriesKey: snapshot.seriesSlug,
         seriesUrl: snapshot.seriesUrl,
         seriesSynopsis: snapshot.seriesSynopsis,
-        packaging: packaging && {
-          ...packaging,
-          hold: `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
-        },
+        packaging: packaging && { ...packaging, hold: packagingHold(snapshot, packaging) },
         labels,
         publisher: publisherRef,
         publisherId: publisher?._id ?? null,
@@ -888,8 +905,6 @@ export const applyVolume = internalMutation({
       {
         unmappedPackaging: false,
         ambiguityQuotesBook: false,
-        ensurePublisherToQueue: false,
-        hiddenWorkBeforeQueued: false,
       },
     );
     // A created Release's art is the action's to store.

@@ -155,28 +155,32 @@ as a Held Book (below).
 (`applyVolume`), and PRH and Yen Press (`applyCatalogTitle` in
 `convex/lib/catalogTitle.ts`) hand a book that matched no Release to one
 function, `placeUnmatched` in `convex/lib/unmatched.ts`. In order, it holds
-packaging with no usable coverage, queues a ladder flag for review, records
-a book with no publisher, queues a title that names several Series, queues
-what a steady-state gate stops (but holds a book whose new Series would
-recreate a hidden work), and otherwise creates the records. Each adapter
-keeps its parsing, its own series links, the reconcile of an already linked
-record, covers and blurbs, publisher resolution and box sets, and passes the
-note it holds packaging with. Four differences are options of the function:
+packaging with no usable coverage, holds a book whose Series is locked
+(`series`, in Bootstrap Mode too, with nothing created or queued), queues a
+ladder flag for review, records a book with no publisher, queues a title
+that names several Series, queues what a steady-state gate stops (but holds
+a book whose new Series would recreate a hidden work, even when its
+Proposal is already in review), and otherwise creates the records. Queuing
+first creates the publisher row if it is missing, or takes a merged row's
+survivor, so approval finds it; a hidden row stays hidden, and approval
+finds the Proposal stale. Each adapter keeps its parsing, its own series
+links, the reconcile of an already linked record, covers and blurbs,
+publisher resolution and box sets, and passes the note it holds packaging
+with. Two differences are options of the function:
 
 - Seven Seas, PRH and Yen Press create Unmapped Packaging in Bootstrap Mode.
-  Kodansha's adapter reads no coverage: it passes no labels for packaging,
-  so every such book is held.
+  Kodansha's adapter does not place packaging: it passes no labels for it,
+  so every such book is held, with a note that says so and quotes the
+  coverage the title or the line's size states.
 - A queued ambiguity quotes the book's title with the reason "ambiguous
   series" (PRH, Yen Press), or the Series title with the count (Seven Seas,
   Kodansha).
-- PRH and Yen Press create the imprint's publisher row before queuing a
-  Proposal. Seven Seas and Kodansha queue under the publisher slug the
-  adapter resolved, without ensuring its row exists (Seven Seas' is fixed;
-  Kodansha's can be Vertical).
-- Outside Bootstrap Mode, PRH and Yen Press look for a hidden work before
-  checking for an open Proposal, so a book whose Proposal is still in review
-  gets the hidden work's note. Seven Seas and Kodansha answer
-  `alreadyQueued` first.
+
+A book already linked to a Release under a locked Series does not reach
+this function. Its adapter reconciles the Release's fields as for any
+linked book, unless the Release itself is locked. Seven Seas and Kodansha,
+which keep series links, leave a locked Series' own title and blurb alone
+(`reconcileLinkedSeries` in `convex/lib/pipeline.ts`).
 
 `convex/unmatched.test.ts` runs the same book through all four sources for
 each case.

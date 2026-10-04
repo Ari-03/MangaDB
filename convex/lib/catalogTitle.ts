@@ -465,8 +465,6 @@ export async function applyCatalogTitle(
     {
       unmappedPackaging: true,
       ambiguityQuotesBook: true,
-      ensurePublisherToQueue: true,
-      hiddenWorkBeforeQueued: true,
     },
   );
 }

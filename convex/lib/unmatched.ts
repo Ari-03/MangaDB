@@ -7,15 +7,19 @@
 //
 // 1. packaging whose coverage nothing states is held for an Editor, unless
 //    Bootstrap Mode may create it as Unmapped Packaging under its line
-// 2. a ladder flag (rung ②–④) queues the pre-filled creation guess for review
-// 3. with no publisher to file it under, the book is only recorded
-// 4. a title naming several Series queues the guess for review
-// 5. outside Bootstrap Mode, a creation gate queues the guess, unless a
-//    brand-new Series would recreate a work an Editor hid (held instead)
-// 6. otherwise it is created (lib/pipeline.ts createCanonicalRecords)
+// 2. a book under a locked Series is held, in either mode: a lock is an
+//    Editor's, and an import writes nothing under it
+// 3. a ladder flag (rung ②–④) queues the pre-filled creation guess for review
+// 4. with no publisher to file it under, the book is only recorded
+// 5. a title naming several Series queues the guess for review
+// 6. outside Bootstrap Mode, a creation gate queues the guess, unless a
+//    brand-new Series would recreate a work an Editor hid (held instead,
+//    whether or not a Proposal is already open)
+// 7. otherwise it is created (lib/pipeline.ts createCanonicalRecords)
 //
-// Queueing is deduplicated per observation (lib/pipeline.ts alreadyHandled).
-// Bootstrap Mode is read only at a step that uses it (1 and 5), unless the
+// Queueing is deduplicated per observation (lib/pipeline.ts alreadyHandled)
+// and first ensures the publisher row, so approval finds it.
+// Bootstrap Mode is read only at a step that uses it (1 and 6), unless the
 // adapter already read it, so a book held or queued before those steps
 // leaves app config out of its transaction's reads.
 // The adapters keep everything source-shaped: parsing, source-slug series
@@ -112,21 +116,6 @@ export type UnmatchedOptions = {
    * Seven Seas and Kodansha quote the Series title and give the count.
    */
   ambiguityQuotesBook: boolean;
-  /**
-   * Queueing first ensures the publisher row exists and takes its slug, so
-   * the guess stays appliable (PRH, Yen Press: an imprint may have no row
-   * yet). Seven Seas and Kodansha queue under the publisher slug the
-   * adapter resolved, without ensuring its row exists (Seven Seas' is
-   * fixed; Kodansha's can be Vertical).
-   */
-  ensurePublisherToQueue: boolean;
-  /**
-   * Outside Bootstrap Mode, a brand-new Series' hidden work is looked for
-   * before the open-Proposal check, so a book whose Proposal is still in
-   * review gets the hidden work's note (PRH, Yen Press). Seven Seas and
-   * Kodansha answer "alreadyQueued" first.
-   */
-  hiddenWorkBeforeQueued: boolean;
 };
 
 /**
@@ -183,9 +172,9 @@ export async function placeUnmatched(
     }
     // No publisher on the record: nothing reviewable to pre-fill.
     if (publisher === undefined) return { status: "needsReview", changed: false, reason };
-    const publisherSlug = options.ensurePublisherToQueue
-      ? (await ensurePublisher(ctx, publisher)).slug
-      : publisher.slug;
+    // The row a slug means today: created when missing, a merged one's
+    // survivor. A hidden row stays hidden, and approval finds the guess stale.
+    const publisherSlug = (await ensurePublisher(ctx, publisher)).slug;
     await queueCreationProposal(ctx, {
       sourceKey,
       observation,
@@ -200,6 +189,20 @@ export async function placeUnmatched(
     });
     return { status: reason ? "needsReview" : "queued", changed: true, reason };
   };
+
+  // A locked Series takes no new books from an import, in Bootstrap Mode or
+  // out of it, and nothing is queued for it (Open Library and ANN hold the
+  // same way). The hold names the Series, for whoever lifts the lock.
+  const series = seriesId !== null ? await ctx.db.get(seriesId) : null;
+  if (series?.locked) {
+    await recordUnplaced(
+      ctx,
+      observation,
+      { kind: "series", reason: `Series ${series.publicId} is locked.`, seriesId: series._id },
+      now,
+    );
+    return { status: "recordOnly", changed: false, reason: "locked series" };
+  }
 
   // Ambiguity always queues flagged (spec §6), in Bootstrap Mode or out of
   // it: the importer never merges.
@@ -234,13 +237,12 @@ export async function placeUnmatched(
     editionLineHint: editionLine !== undefined,
   });
   if (gates.length > 0 && !bootstrapping) {
-    if (!options.hiddenWorkBeforeQueued && (await isHandled())) {
-      return { status: "alreadyQueued", changed: false };
-    }
     if (seriesId === null) {
       // A brand-new Series for a work an Editor hid would undo the repair:
-      // the book stays on its observation instead of the queue. (The
-      // creation path makes the same check itself.)
+      // the book stays on its observation instead of the queue. It is looked
+      // for before the open-Proposal check, so a book queued before the
+      // Editor hid the work gets the note too (the open Proposal stays as
+      // it is). The creation path makes the same check itself.
       const removed = await removedSeriesFor(ctx, {
         sourceKey,
         observation,

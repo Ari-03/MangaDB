@@ -734,8 +734,6 @@ export const applyBook = internalMutation({
       {
         unmappedPackaging: true,
         ambiguityQuotesBook: false,
-        ensurePublisherToQueue: false,
-        hiddenWorkBeforeQueued: false,
       },
     );
     // A created Release's art is the action's to store.
