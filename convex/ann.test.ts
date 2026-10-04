@@ -316,12 +316,17 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       expect(runs).toHaveLength(1);
       expect(runs[0]!.status).toBe("running");
     });
-    // The scheduled continuation link finishes the mirror.
+    // The scheduled continuation link finishes the mirror, paging on by
+    // the report's raw row count (anime rows included), not its manga.
     await drain(t);
+    expect(reportRequests.map((url) => new URL(url).searchParams.get("nskip"))).toEqual(["0", "500"]);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 53 });
       expect(await ctx.db.query("series").collect()).toHaveLength(53);
+      // The continuation kept the run's start: what the first link saw is
+      // not withdrawn as unseen.
+      expect((await ctx.db.query("sourceObservations").collect()).filter((o) => o.withdrawn)).toEqual([]);
     });
 
     // Now drop one entry from ANN and mirror again: it withdraws.
@@ -1445,21 +1450,20 @@ describe("ann.syncReleasePages — Volume lists (C5)", () => {
     return await syncPages(t);
   }
 
-  it("holds a gapped list on a 3-in-1 line, creating no Volume, Edition, Release or Proposal for it", async () => {
-    const t = makeT();
-    await seedRegistry(t, true);
-    await seedPublisher(t, "VIZ Media", "viz-media");
-    await mirrorAndPlace(t);
+  /** The held line is noted and listed as packaging, and nothing was made for it. */
+  async function expectHeldUnplaced(t: TestT, designator: string) {
     const held = (await obsFor(t, 9401))!;
     expect(held.snapshot).toMatchObject({ multi: true, coverageGapped: true });
     expect(held.snapshot.label).toBeUndefined();
+    expect(held.snapshot.coverRange).toBeUndefined();
     expect(held.recordRef).toBeUndefined();
     expect(held.conflicts?.find((c) => c.field === "placement")?.reason).toBe(
-      '"Kappa [3-in-1 Edition]" (GN 1, 3) is packaging whose Volume list no range holds — an Editor maps it.',
+      `"Kappa [3-in-1 Edition]" (${designator}) is packaging whose Volume list no range holds — an Editor maps it.`,
     );
     const series = await t.run(async (ctx) => (await ctx.db.query("series").collect())[0]!);
     expect(await holdFor(t, held._id)).toMatchObject({ kind: "packaging", sourceKey: "ann", seriesId: series._id });
     await t.run(async (ctx) => {
+      // Only the plain lines' Volumes: none from the held list.
       expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual(["1", "2", "3", "4", "5", "6"]);
       expect((await ctx.db.query("releases").collect()).map((r) => r.isbn13)).not.toContain(GAPPED_ISBN);
       // The one 3-in-1 member is the contiguous list's.
@@ -1469,6 +1473,52 @@ describe("ann.syncReleasePages — Volume lists (C5)", () => {
         version.evidence.flatMap((e) => (e.kind === "observation" ? [e.observationId] : [])),
       );
       expect(cited).not.toContain(held._id);
+    });
+  }
+
+  it("holds a gapped list on a 3-in-1 line, creating no Volume, Edition, Release or Proposal for it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    // Volumes no plain line supplies, so a Volume made for the list would show.
+    await mirrorAndPlace(t, "GN 7, 9");
+    await expectHeldUnplaced(t, "GN 7, 9");
+  });
+
+  // Each reads as a shorter list or a single Volume if only its first
+  // numbers are taken: "1, 2" (Volumes 1–2), "1" (sized 1–3 by "3-in-1").
+  it.each(["GN 1, 2, and 4", "GN 1, and 3", "GN 1-2 + 3"])(
+    "holds %s whole: no prefix of the list is placed",
+    async (designator) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      await seedPublisher(t, "VIZ Media", "viz-media");
+      await mirrorAndPlace(t, designator);
+      await expectHeldUnplaced(t, designator);
+    },
+  );
+
+  it("never reads a number before the format marker as a Volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const lambda: FixtureManga = {
+      id: 1901,
+      title: "Lambda",
+      releases: [
+        { annId: 9501, date: "2010-01-05", designator: "GN 1" },
+        { annId: 9503, date: "2010-03-05", designator: "GN 3" },
+        { annId: 9510, date: "2012-03-06", designator: "2nd Edition GN 1-3" },
+      ],
+    };
+    stubAnn([lambda], {
+      9510: releasePage({ title: "Lambda", volume: "2nd Edition GN 1-3", distributor: "Viz Media", date: "2012-03-06", isbn13: GAPPED_ISBN, mangaId: 1901 }),
+    });
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    expect((await obsFor(t, 9510))!.snapshot).toMatchObject({ multi: true, coverRange: { from: "1", to: "3" } });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual(["1", "3"]);
     });
   });
 

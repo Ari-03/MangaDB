@@ -23,7 +23,7 @@
 // `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
-import { coverRangeValidator, parseVolumeList } from "./bookTitle";
+import { coverRangeValidator, statedList, WHOLE_VOLUME_LIST } from "./bookTitle";
 import { datePartsValidator, type DateParts } from "./dates";
 import { toIsbn13 } from "./isbn";
 import {
@@ -65,7 +65,8 @@ const annReleaseValidator = v.object({
   coverRange: v.optional(coverRangeValidator),
   /**
    * The designator lists Volumes no range holds: a gap ("GN 1, 3", "GN 1-3,
-   * 5"), a backwards range or a dash chain. Multi-volume with no label and no
+   * 5"), a numbered extra ("GN 1-2 + 3"), a backwards range, a dash chain, or
+   * text the list grammar does not read. Multi-volume with no label and no
    * range, and never sized from the line's name: the page pass holds it.
    * The same flag as a title's (lib/bookTitle.ts packagingValidator).
    */
@@ -179,28 +180,56 @@ const DESIGNATOR_PACKAGING = /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s
 const TITLE_PACKAGING =
   /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1|complete (?:manga )?collection)\b/i;
 
+// The format markers: GN/OGN and "graphic novel" are print, eBook digital.
+// A designator's coverage follows its first marker; anything before it ("2nd
+// Edition", "3-in-1 Edition", "Omnibus") is never coverage.
+const EBOOK_MARKER = /\be-?book\b/i;
+const PRINT_MARKERS = [/\bO?GN\b/, /graphic novels?/i];
+/** A qualifier between the marker and its number: "GN box 2", "eBook ex 3". */
+const QUALIFIER = /^\s*(?:box(?:ed)?(?:\s+set)?|ex)\b/i;
+/** The release page's "of N" total after the coverage: "GN 4 / 8". */
+const TOTAL = /\s*\/\s*\d+\s*$/;
+/** One Volume, with a letter it may carry: "GN 1A" is Volume 1. */
+const SINGLE = /^(\d+(?:\.\d+)?)[a-z]?$/i;
+
 /**
- * The designator's numbers: the first run of numbers joined as a list or
- * range ("4", "97-99", "1, 3", "1-3, 5"). Text after it is not read: the
- * total in "GN 4 / 8" or the part in "GN 3 Part 1".
+ * What a designator says after its marker, qualifier and total are taken
+ * off. No number ("GN", "GN A") is an unnumbered book; one number a label.
+ * Anything else is a list, read whole by the shared grammar
+ * (lib/bookTitle.ts statedList): a range or contiguous list ("97-99", "1, 2,
+ * 3", "1 & 2") is multi-volume with that range. One no range holds is
+ * multi-volume with `coverageGapped` and neither label nor range: a gap
+ * ("1, 3", "1, 2, and 4"), a numbered extra ("1-2 + 3"), a dash chain, a
+ * number smaller than the one before it ("3-1", "1-5, 6-2"), or text the
+ * grammar does not read ("3 Part 1-2", "1 and Vol. 3"). Its first numbers
+ * are never read as a shorter list or a label.
  */
-const DESIGNATOR_LIST = /\d+(?:\.\d+)?(?:\s*(?:[-–&,]|\band\b)\s*\d+(?:\.\d+)?)*/i;
-/** "1-3-5": a dash chain names no range. */
-const DASH_CHAIN = /[-–]\s*\d+(?:\.\d+)?\s*[-–]/;
+function readCoverage(
+  afterMarker: string,
+): Pick<AnnRelease, "label" | "multi" | "coverRange" | "coverageGapped"> {
+  const text = afterMarker.replace(QUALIFIER, "").replace(TOTAL, "").trim();
+  if (!/\d/.test(text)) return { label: undefined, multi: false };
+  const single = SINGLE.exec(text)?.[1];
+  if (single !== undefined) return { label: single, multi: false };
+  const range = WHOLE_VOLUME_LIST.test(text) ? statedList(text) : null;
+  const numbers = (text.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
+  const ordered = numbers.every((n, i) => i === 0 || n >= numbers[i - 1]!);
+  return range && ordered
+    ? { label: undefined, multi: true, coverRange: range }
+    : { label: undefined, multi: true, coverageGapped: true };
+}
 
 /**
  * Split one release line's text: "Frieren: Beyond Journey's End (GN 14)" →
- * title + label + format. GN/OGN designators are print, eBook digital;
- * omnibus/box-set designators flag Edition Line packaging. A list of
- * Volumes is read by the shared grammar (lib/bookTitle.ts parseVolumeList):
- * a range or contiguous list ("1-3", "1, 2, 3", "1 & 2") is multi-volume
- * with that range; one no range holds ("1, 3", "1-3, 5", "3-1") is
- * multi-volume with `coverageGapped` and neither label nor range. Returns
- * null for lines that are not book releases (DVDs and other designators ANN
- * mixes into other media types) and for single chapters ("eBook ch 17") —
- * chapters are never Volumes. `entryName` (the manga's own title) lets
- * packaging words in the line title count only when they are not part of
- * the series name.
+ * title + label + format. The designator is the line's last parenthesised
+ * group, so a year or edition in the title's own parentheses is never read.
+ * GN/OGN designators are print, eBook digital; omnibus/box-set designators
+ * flag Edition Line packaging. What follows the first format marker is the
+ * coverage (`readCoverage`). Returns null for lines that are not book
+ * releases (DVDs and other designators ANN mixes into other media types)
+ * and for single chapters ("eBook ch 17") — chapters are never Volumes.
+ * `entryName` (the manga's own title) lets packaging words in the line
+ * title count only when they are not part of the series name.
  */
 export function splitReleaseTitle(
   text: string,
@@ -211,27 +240,24 @@ export function splitReleaseTitle(
   const title = m[1]!.trim();
   const designator = m[2]!.trim();
   if (title === "") return null;
-  const isEbook = /\be-?book\b/i.test(designator);
-  const isPrint = /\bO?GN\b/.test(designator) || /graphic novel/i.test(designator);
-  if (!isEbook && !isPrint) return null;
+  const marker = [EBOOK_MARKER, ...PRINT_MARKERS]
+    .map((re) => re.exec(designator))
+    .filter((match) => match !== null)
+    .sort((a, b) => a.index - b.index)[0];
+  if (marker === undefined) return null;
   if (/\bch(?:apter)?\.?\s*\d/i.test(designator)) return null;
   const titleWord = TITLE_PACKAGING.exec(title)?.[1];
   const editionLineHint =
     DESIGNATOR_PACKAGING.test(designator) ||
     (titleWord !== undefined && !entryName.toLowerCase().includes(titleWord.toLowerCase()));
-  const numbers = DESIGNATOR_LIST.exec(designator)?.[0];
-  const list = numbers !== undefined ? parseVolumeList(numbers) : null;
-  const range = list?.coverRange;
-  const gapped =
-    list !== null &&
-    (range == null || DASH_CHAIN.test(numbers!) || Number(range.from) > Number(range.to));
+  const { label, multi, ...stated } = readCoverage(designator.slice(marker.index + marker[0].length));
   return {
     title,
-    label: list === null ? numbers : undefined,
-    multi: list !== null,
-    format: isEbook ? "digital" : "physical",
+    label,
+    multi,
+    format: EBOOK_MARKER.test(designator) ? "digital" : "physical",
     editionLineHint,
-    ...(gapped ? { coverageGapped: true } : range ? { coverRange: range } : {}),
+    ...stated,
   };
 }
 

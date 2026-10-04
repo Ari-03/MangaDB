@@ -373,13 +373,17 @@ const GROUP_LIST = new RegExp(`^(.*?)\\s*(?:vols?\\.?|volumes?|#)\\s*(${RANGE})$
 /** A dash chain ("2 - 4-6", "4-6-8"), which `parseVolumeList` spans first to last. */
 const DASH_CHAIN = new RegExp(`${NUM}\\s*[-–—]\\s*(?:${VOLS})?#?${NUM}\\s*[-–—]`, "i");
 
+/** Text that is one Volume list and nothing else: "1-3", "1, 2, and 4", "1-2 + 3". */
+export const WHOLE_VOLUME_LIST = new RegExp(`^${RANGE}$`, "i");
+
 /**
  * A Volume list read where the title's designation grammar reads none: a
  * bracket's list ("(Vol. 4-6)", "(Omnibus Vol. 1-3)"), a subtitle, a carried
- * subtitle beside the book's designation. A dash chain there names no range, so it is a
- * statement no range holds, never the span from its first number to its last.
+ * subtitle beside the book's designation, an ANN designator's list
+ * (lib/ann.ts). A dash chain there names no range, so it is a statement no
+ * range holds, never the span from its first number to its last.
  */
-function statedList(list: string): Stated {
+export function statedList(list: string): Stated {
   return DASH_CHAIN.test(list) ? null : parseVolumeList(list)?.coverRange;
 }
 

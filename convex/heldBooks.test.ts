@@ -877,6 +877,7 @@ describe("storedHoldKind", () => {
       ["ANN lists no ISBN for this release.", null],
       ["ISBN 9781974728374 is on a Release an Editor hid — not recreated.", "isbn"],
       ["ISBN 9781974728374 is already on a Release of another Series — a duplicate-Series question for an Editor.", "isbn"],
+      ['"Kappa [3-in-1 Edition]" (GN 1, 3) is packaging whose Volume list no range holds — an Editor maps it.', "packaging"],
       ["Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.", "packaging"],
       ["A store-exclusive or variant cover: never a Release of its own.", null],
       ["The manga entry has no linked active Series.", "series"],

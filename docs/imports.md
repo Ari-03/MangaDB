@@ -337,19 +337,28 @@ A completed mirror chains the release-page pass (`ann:syncReleasePages`).
 Each unlinked line's page (distributor, ISBN, date, price, description) is
 fetched once and stored. The line then links by ISBN, or becomes a leaf
 Release under an existing Volume when the distributor matches a publisher
-row. It never creates a Series, Volume, publisher, packaging, variant
-cover, prose imprint, or a second same-format Release of a Volume from one
-publisher. Lines it cannot place are Held Books, except lines no one can
-place or that are out of scope (no ISBN, a variant cover, a prose imprint,
-a foreign-language distributor), which keep only their note. Scope is
+row. It never creates a Series, Volume, publisher, variant cover, prose
+imprint, or a second same-format Release of a Volume from one publisher.
+Packaging (an Edition Line member placed by its stated range, else its
+line's size, else as Unmapped Packaging) is created only in Bootstrap Mode
+and held in steady state; box sets only link by ISBN. Lines it cannot
+place are Held Books, except lines no one can place or that are out of
+scope (no ISBN, a variant cover, a prose imprint, a foreign-language
+distributor), which keep only their note. Scope is
 checked right after the ISBN link, before any other hold, so an
 out-of-scope line is never held for its packaging, its Series or its ISBN.
 
-A line's designator is read with the shared list grammar
-(`parseVolumeList` in `convex/lib/bookTitle.ts`). A range ("(GN 97-99)")
-or a contiguous list ("(GN 1, 2, 3)", "(GN 1 & 2)") covers the Volumes it
-spans. A list no range holds (a gap such as "(GN 1, 3)" or "(GN 1-3, 5)",
-a backwards range, a dash chain) marks the line `coverageGapped`: it is
+A line's coverage is what its designator says after the format marker
+(GN, OGN, graphic novel, eBook) and a "box" or "ex" qualifier, up to an
+"/ N" total; a number before the marker ("(2nd Edition GN 1-3)", "(3-in-1
+Edition GN 1)") is never coverage. One number is the line's Volume. More
+is read whole with the shared list grammar (`statedList` in
+`convex/lib/bookTitle.ts`): a range ("(GN 97-99)") or a contiguous list
+("(GN 1, 2, 3)", "(GN 1 & 2)") covers the Volumes it spans. A list no
+range holds (a gap such as "(GN 1, 3)" or "(GN 1, 2, and 4)", a numbered
+extra such as "(GN 1-2 + 3)", a number smaller than the one before it, a
+dash chain, or text the grammar does not read) marks the line
+`coverageGapped`, never a shorter list or a single Volume: it is
 multi-volume with no label, adds no Volume to the backbone, and the page
 pass holds it as `packaging`, quoting the page's designator, instead of
 sizing it from its line name ("3-in-1") or placing it on a Volume. It

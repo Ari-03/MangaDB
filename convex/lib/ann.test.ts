@@ -171,12 +171,38 @@ describe("splitReleaseTitle", () => {
     expect(coverage("Alpha (GN 1 and 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
     expect(coverage("Alpha (GN 1-3, 4-6)")).toEqual([undefined, true, range("1", "6"), undefined]);
     expect(coverage("Alpha (GN 10.5-11)")).toEqual([undefined, true, range("10.5", "11"), undefined]);
+    // The shared grammar's em dash is a range too.
+    expect(coverage("Alpha (GN 1—3)")).toEqual([undefined, true, range("1", "3"), undefined]);
     // The release page's "of N" total, if a line ever carries it, is not a Volume.
     expect(coverage("Alpha (GN 1-4 / 34)")).toEqual([undefined, true, range("1", "4"), undefined]);
+    expect(coverage("Alpha (eBook 1-2 / 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
+  });
+
+  it("reads coverage only after the format marker: a number before it is never coverage", () => {
+    expect(coverage("Alpha (2nd Edition GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
+    expect(coverage("Alpha (3-in-1 Edition GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
+    expect(coverage("Alpha (2020 Edition GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
+    expect(coverage("Alpha (2nd Edition GN 1)")).toEqual(["1", false, undefined, undefined]);
+    expect(coverage("Alpha (3-in-1 Edition GN 1)")).toEqual(["1", false, undefined, undefined]);
+    expect(coverage("Alpha (Vol. 1 GN 2)")).toEqual(["2", false, undefined, undefined]);
+    expect(coverage("Alpha (2nd Edition GN 1, 3)")).toEqual([undefined, true, undefined, true]);
+    // A number in the title's own parentheses is not the designator.
+    expect(coverage("Alpha (2020) (GN 1, 3)")).toEqual([undefined, true, undefined, true]);
+    expect(splitReleaseTitle("Alpha (2nd Edition) (GN 1-3)")).toMatchObject({ title: "Alpha (2nd Edition)", coverRange: range("1", "3") });
+    expect(coverage("Alpha (3-in-1 Edition) (GN 1)")).toEqual(["1", false, undefined, undefined]);
   });
 
   it("rejects a list no range holds: multi-volume with neither label nor range", () => {
     for (const designator of ["GN 1, 3", "GN 1-3, 5", "GN 1-2 & 4", "GN 3-1", "GN 1-3-5", "eBook 2, 4"]) {
+      expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
+    }
+    // The whole list is read, never its first numbers: a trailing item, a
+    // numbered extra, words or a dangling separator leave it unread.
+    for (const designator of ["GN 1, 2, and 4", "GN 1, 2, & 4", "GN 1, and 3", "GN 1-2 + 3", "GN 1 and Vol. 3", "GN 3 Part 1-2", "GN 1 and"]) {
+      expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
+    }
+    // Any number smaller than the one before it, not only the last.
+    for (const designator of ["GN 1-5, 6-2", "GN 1-3, 4-2, 3-5"]) {
       expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
     }
     // On a 3-in-1 line too: the line's size never stands in for the list.
