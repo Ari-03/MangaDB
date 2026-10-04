@@ -66,7 +66,7 @@ export const Route = createFileRoute("/releases/$month")({
       // The ItemList describes the canonical month page, so it is built
       // only from the unfiltered window.
       jsonLd:
-        !filtered && data && data.releases.length > 0
+        !filtered && data.releases.length > 0
           ? [
               itemListJsonLd(
                 data.releases.map((release) => ({

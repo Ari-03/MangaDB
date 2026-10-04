@@ -1,8 +1,8 @@
 # Configuration
 
-Every environment variable, the Clerk setup, and analytics. Without any of
-them the app still runs locally, signed out, with the public catalog
-working.
+Every environment variable, the Clerk setup, and analytics. Only
+`VITE_CONVEX_URL` is required; without any of the others the app still runs
+locally, signed out, with the public catalog working.
 
 ## Clerk
 
@@ -47,7 +47,7 @@ One-time setup:
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `VITE_CONVEX_URL` | `.env.local` (written by `npx convex dev`); `vars` in `wrangler.jsonc` for deploys | The Convex deployment URL. Public. |
+| `VITE_CONVEX_URL` | `.env.local` (written by `npx convex dev`); `vars` in `wrangler.jsonc` for deploys | The Convex deployment URL. Public. Required: without it the app throws on load (`src/lib/convexUrl.ts`). |
 | `VITE_CLERK_PUBLISHABLE_KEY` | `.env.local`; the build environment and `vars` in `wrangler.jsonc` for deploys | Clerk publishable key (`pk_…`), inlined into the client bundle. Unset turns the auth UI off. |
 | `CLERK_SECRET_KEY` | `.dev.vars` locally (workerd reads Worker secrets there, not from `.env.local`); `npx wrangler secret put CLERK_SECRET_KEY` for deploys | Enables `clerkMiddleware()` and SSR auth. Unset treats everyone as signed out. |
 | `VITE_PUBLIC_POSTHOG_KEY` | the build environment only, never committed | PostHog project token (`phc_…`). Unset means no analytics script and no requests. |

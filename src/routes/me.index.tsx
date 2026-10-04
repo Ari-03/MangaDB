@@ -15,7 +15,7 @@ import { LibraryReading } from "~/lib/reading";
 import { MatureSettings } from "~/lib/mature";
 import { ScoreFormatSettings } from "~/lib/ratings";
 import { SharingSettings } from "~/lib/sharing";
-import { clerkEnabled, convexClient } from "~/providers";
+import { clerkEnabled } from "~/providers";
 
 const TABS = [
   { key: "collection", label: "Collection" },
@@ -100,8 +100,8 @@ function MePage() {
     return (
       <main>
         <p className="notice">
-          Accounts are not configured. Set the Clerk and Convex environment
-          variables (see the README) to enable sign-in and personal tracking.
+          Accounts are not configured. Set the Clerk environment variables (see
+          the README) to enable sign-in and personal tracking.
         </p>
       </main>
     );
@@ -223,7 +223,7 @@ function MePage() {
  * the two share one subscription.
  */
 function TabCount({ tab, todaySort }: { tab: Tab; todaySort: number }) {
-  if (!convexClient || tab === "settings") return null;
+  if (tab === "settings") return null;
   return <TabCountInner tab={tab} todaySort={todaySort} />;
 }
 
@@ -250,11 +250,6 @@ function TabCountInner({ tab, todaySort }: { tab: Tab; todaySort: number }) {
 }
 
 function ShelfCount({ shelf }: { shelf: EntryState }) {
-  if (!convexClient) return null;
-  return <ShelfCountInner shelf={shelf} />;
-}
-
-function ShelfCountInner({ shelf }: { shelf: EntryState }) {
   const library = useQuery(api.collection.myLibrary, {});
   if (!library) return null;
   return <span className="lib-tab-count">{countLibrary(library)[shelf]}</span>;
@@ -268,11 +263,6 @@ function ShelfCountInner({ shelf }: { shelf: EntryState }) {
  * harmless.
  */
 function DeleteAccount() {
-  if (!convexClient) return null;
-  return <DeleteAccountInner />;
-}
-
-function DeleteAccountInner() {
   const deleteAccount = useMutation(api.users.deleteAccount);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);

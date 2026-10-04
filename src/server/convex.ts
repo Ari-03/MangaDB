@@ -7,17 +7,9 @@ import { convexUrl } from "~/lib/convexUrl";
  * the Convex HTTP client). Pass the viewer's Clerk "convex"-template token —
  * from `ssrAuth()` in ./auth — to authenticate personal reads; omit it for
  * public catalog reads.
- *
- * Returns null when no deployment is configured — the scaffold builds and
- * runs before any Convex credentials exist, and pages render a setup notice
- * instead of crashing.
  */
-export function convexServerClient(
-  authToken?: string | null,
-): ConvexHttpClient | null {
-  const url = convexUrl();
-  if (!url) return null;
-  const client = new ConvexHttpClient(url);
+export function convexServerClient(authToken?: string | null) {
+  const client = new ConvexHttpClient(convexUrl());
   if (authToken) client.setAuth(authToken);
   return client;
 }

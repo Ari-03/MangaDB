@@ -4,7 +4,6 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { CommentsQueueLink, ModGate, ProposalStateChip } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * The viewer's own proposals: drafts to return to, In-Review
@@ -16,15 +15,6 @@ export const Route = createFileRoute("/mod/proposals")({
 });
 
 function MyProposalsPage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Proposals need a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"

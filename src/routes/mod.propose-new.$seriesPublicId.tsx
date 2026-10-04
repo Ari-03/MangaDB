@@ -6,7 +6,6 @@ import { api } from "../../convex/_generated/api";
 import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
 import { ModGate } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * The atomic multi-record proposal (spec §5): one Proposal that
@@ -21,15 +20,6 @@ export const Route = createFileRoute("/mod/propose-new/$seriesPublicId")({
 
 function ProposeNewPage() {
   const { seriesPublicId } = Route.useParams();
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Proposals need a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   const publicId = Number(seriesPublicId);
   if (!Number.isInteger(publicId)) {
     return (

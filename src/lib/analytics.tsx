@@ -27,7 +27,6 @@ import { api } from "../../convex/_generated/api";
 import type { CollectionState } from "~/lib/cover";
 import type { ReadingStatus } from "~/lib/reading";
 import { useReadyViewer, type ReadyViewer } from "~/lib/viewer";
-import { convexClient } from "~/providers";
 
 const posthogKey = import.meta.env.VITE_PUBLIC_POSTHOG_KEY as string | undefined;
 
@@ -177,11 +176,6 @@ export function ViewerAnalytics() {
  * the browser client and every server event under the viewer's id.
  */
 export function AnalyticsSettings() {
-  if (!convexClient) return null;
-  return <AnalyticsSettingsInner />;
-}
-
-function AnalyticsSettingsInner() {
   const viewer = useReadyViewer();
   const setOptOut = useMutation(api.users.setAnalyticsOptOut);
   if (!viewer) return null;

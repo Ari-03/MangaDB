@@ -28,7 +28,6 @@ import {
   type Smiley,
 } from "../../convex/lib/scoreFormat";
 import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
-import { convexClient } from "~/providers";
 import { useReadyViewer } from "~/lib/viewer";
 
 /** A rating target as pages know it: `{ kind: "series" | "volume" | "edition", publicId }`. */
@@ -76,7 +75,7 @@ const AVERAGE_TITLES: Record<ScoreFormat, string> = {
 };
 
 /**
- * The target's aggregate as a chip, live when Convex is configured and the
+ * The target's aggregate as a chip, live once the query answers and the
  * loader's copy until then. Renders nothing while the target is unrated.
  */
 export function RatingAggregate({
@@ -86,11 +85,6 @@ export function RatingAggregate({
   target: RatingTarget;
   initial: RatingSummary | null;
 }) {
-  if (!convexClient) return <AggregateChip summary={initial} format={null} />;
-  return <LiveAggregate target={target} initial={initial} />;
-}
-
-function LiveAggregate({ target, initial }: { target: RatingTarget; initial: RatingSummary | null }) {
   const live = useQuery(api.ratings.summary, { target });
   const format = useViewerFormat();
   return <AggregateChip summary={live === undefined ? initial : live} format={format} />;
@@ -120,17 +114,6 @@ export function RatingLine({
   summary: { average: number | null; count: number };
   fallback?: ReactNode;
 }) {
-  if (!convexClient) return <>{ratingLine(summary, null) ?? fallback}</>;
-  return <LiveRatingLine summary={summary} fallback={fallback} />;
-}
-
-function LiveRatingLine({
-  summary,
-  fallback,
-}: {
-  summary: { average: number | null; count: number };
-  fallback: ReactNode;
-}) {
   return <>{ratingLine(summary, useViewerFormat()) ?? fallback}</>;
 }
 
@@ -141,11 +124,6 @@ function LiveRatingLine({
  * point10 for signed-out viewers: "8/10", "4 ★", "84/100", or a smiley.
  */
 export function ScoreText({ score }: { score: number }) {
-  if (!convexClient) return <ScoreParts score={score} format="point10" />;
-  return <LiveScoreText score={score} />;
-}
-
-function LiveScoreText({ score }: { score: number }) {
   return <ScoreParts score={score} format={useViewerFormat() ?? "point10"} />;
 }
 
@@ -228,11 +206,6 @@ function SmileyGlyph({ smiley }: { smiley: Smiley }) {
  * Nothing at all signed out, so the container can hide itself.
  */
 export function RatingControl({ target }: { target: RatingTarget }) {
-  if (!convexClient) return null;
-  return <RatingControlInner target={target} />;
-}
-
-function RatingControlInner({ target }: { target: RatingTarget }) {
   const mine = useQuery(api.ratings.mine, { target });
   const format = useViewerFormat();
   const setScore = useMutation(api.ratings.set);
@@ -396,11 +369,6 @@ const FORMAT_OPTIONS: ReadonlyArray<{ value: ScoreFormat; label: string }> = [
  * Stored ratings never change; only the display does.
  */
 export function ScoreFormatSettings() {
-  if (!convexClient) return null;
-  return <ScoreFormatSettingsInner />;
-}
-
-function ScoreFormatSettingsInner() {
   const format = useViewerFormat();
   const setFormat = useMutation(api.users.setScoreFormat);
   if (!format) return null;

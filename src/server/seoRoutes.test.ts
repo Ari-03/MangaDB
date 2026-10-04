@@ -154,11 +154,6 @@ describe("seoResponse", () => {
     expect(await res!.text()).toContain(`Sitemap: ${ORIGIN}/sitemap.xml`);
   });
 
-  it("serves valid empty sitemaps when Convex is not configured", async () => {
-    const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), null);
-    expect(await res!.text()).toContain("<urlset");
-  });
-
   it("passes every other request through to the app", async () => {
     expect(await seoResponse(new Request(`${ORIGIN}/series/1/berserk`), fakeData())).toBeNull();
     expect(await seoResponse(new Request(`${ORIGIN}/sitemaps/nope.xml`), fakeData())).toBeNull();

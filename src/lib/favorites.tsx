@@ -16,7 +16,6 @@ import { Cover } from "~/lib/cover";
 import { ConcealArt } from "~/lib/mature";
 import type { RatingTarget } from "~/lib/ratings";
 import { slugParams } from "~/lib/slug";
-import { convexClient } from "~/providers";
 
 function HeartGlyph({ filled }: { filled: boolean }) {
   return (
@@ -35,11 +34,6 @@ function HeartGlyph({ filled }: { filled: boolean }) {
 
 /** The "Favorite" / "Favorited" toggle for a Series, Volume or omnibus Edition; nothing signed out. */
 export function FavoriteButton({ target }: { target: RatingTarget }) {
-  if (!convexClient) return null;
-  return <FavoriteButtonInner target={target} />;
-}
-
-function FavoriteButtonInner({ target }: { target: RatingTarget }) {
   const data = useQuery(api.favorites.isFavorite, { target });
   const toggle = useMutation(api.favorites.toggle);
   // A toggle is not idempotent: one write at a time.
@@ -75,11 +69,6 @@ type FavoriteItem = NonNullable<FunctionReturnType<typeof api.favorites.mine>>["
  * title's cover is concealed unless the viewer opted in.
  */
 export function LibraryFavorites() {
-  if (!convexClient) return null;
-  return <LibraryFavoritesInner />;
-}
-
-function LibraryFavoritesInner() {
   const mine = useQuery(api.favorites.mine, {});
   if (mine === undefined) return <p className="placeholder">Loading…</p>;
   if (mine === null) return null;

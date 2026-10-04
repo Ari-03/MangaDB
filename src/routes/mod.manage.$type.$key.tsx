@@ -10,7 +10,6 @@ import { isRecordType } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
 import { ModGate } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * The sensitive-operations panel (spec §5): Hide, Restore,
@@ -28,15 +27,6 @@ export const Route = createFileRoute("/mod/manage/$type/$key")({
 function ModManagePage() {
   const { type, key } = Route.useParams();
 
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Moderation needs a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   if (!isRecordType(type)) {
     return (
       <main className="mod-page">

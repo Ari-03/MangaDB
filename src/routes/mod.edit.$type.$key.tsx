@@ -21,7 +21,6 @@ import { CLEAR_OVERRIDE_HINT, renderFieldValue, writtenByLabel } from "~/lib/mod
 import { slugParams } from "~/lib/slug";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { useIsModerator } from "~/lib/viewer";
-import { convexClient } from "~/providers";
 
 /**
  * The Administrator/Moderator direct-edit form (spec §5): the
@@ -50,15 +49,6 @@ export const Route = createFileRoute("/mod/edit/$type/$key")({
 function ModEditPage() {
   const { type, key } = Route.useParams();
 
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Moderation needs a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   if (!isRecordType(type)) {
     return (
       <main className="mod-page">

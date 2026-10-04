@@ -1,6 +1,4 @@
 // The signed-in viewer as components read it (convex/users.ts `viewer`).
-// Hooks here only work under the Convex provider; callers render nothing
-// in the unconfigured mode before reaching them.
 
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";

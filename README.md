@@ -57,6 +57,8 @@ npm run dev      # terminal 2: the app, with SSR inside workerd
 On first run `npx convex dev` asks you to log in or create a project and
 writes `CONVEX_DEPLOYMENT` and `VITE_CONVEX_URL` to `.env.local`. Without an
 account, `CONVEX_AGENT_MODE=anonymous npx convex dev` runs a local backend.
+The app needs `VITE_CONVEX_URL`: without it every page fails with an error
+naming the variable.
 A push fails until the deployment has `POSTHOG_PROJECT_TOKEN`; set it
 empty to keep analytics off, then load a small fake catalog:
 

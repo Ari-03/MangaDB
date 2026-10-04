@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsConsent } from "./analytics";
 
-vi.mock("~/providers", () => ({ convexClient: null }));
 vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => ({ isLoaded: false }) }));
 
 type Sent = { event: string; properties: Record<string, unknown>; raw: string };

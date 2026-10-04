@@ -15,7 +15,6 @@ import {
 } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
-import { convexClient } from "~/providers";
 
 /**
  * The proposal review page (spec §5). A Moderator reviews the
@@ -32,15 +31,6 @@ export const Route = createFileRoute("/mod/proposal/$id")({
 
 function ProposalPage() {
   const { id } = Route.useParams();
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Proposals need a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"

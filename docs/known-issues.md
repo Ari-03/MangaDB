@@ -107,10 +107,6 @@ is fixed.
   `openLibrary:replayDescriptions`, the repair entry kinds used only by
   the sandbox plan, and the dev seed (`convex/seed.ts`) can go once the
   owner confirms they are no longer needed.
-- **The "Convex not configured" mode.** About 38 components guard against
-  a missing `VITE_CONVEX_URL`, although every environment sets it and
-  `/mod/packaging` already crashes without it. Failing at boot would
-  remove the guards.
 - **No formatter or linter.** Line width runs from 80 to 200 columns.
 - **Reads on Volumes of a hidden Series.** Ratings refuse a Volume whose
   Series is hidden (`activeVolume` in `convex/lib/ratings.ts`). Reading

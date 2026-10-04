@@ -20,7 +20,6 @@ import { track } from "~/lib/analytics";
 import { Cover } from "~/lib/cover";
 import { mutationErrorMessage } from "~/lib/errors";
 import { useRunLock } from "~/lib/quickActions";
-import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
 const STATUS_LABELS = {
@@ -105,15 +104,6 @@ export function SeriesReadingControls({
 }: {
   seriesPublicId: number;
 }) {
-  if (!convexClient) return null;
-  return <SeriesReadingControlsInner seriesPublicId={seriesPublicId} />;
-}
-
-function SeriesReadingControlsInner({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
   const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   if (!tracking) return null;
@@ -165,7 +155,7 @@ export function SeriesReadingProgress({
   seriesPublicId: number;
   volumeCount: number;
 }) {
-  if (!convexClient || volumeCount === 0) return null;
+  if (volumeCount === 0) return null;
   return (
     <SeriesReadingProgressInner
       seriesPublicId={seriesPublicId}
@@ -216,22 +206,6 @@ function SeriesReadingProgressInner({
  * Renders nothing signed out.
  */
 export function VolumeReadCount({
-  seriesPublicId,
-  volumePublicId,
-}: {
-  seriesPublicId: number;
-  volumePublicId: number;
-}) {
-  if (!convexClient) return null;
-  return (
-    <VolumeReadCountInner
-      seriesPublicId={seriesPublicId}
-      volumePublicId={volumePublicId}
-    />
-  );
-}
-
-function VolumeReadCountInner({
   seriesPublicId,
   volumePublicId,
 }: {
@@ -293,11 +267,6 @@ function VolumeReadCountInner({
  * undone Volume.
  */
 export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }) {
-  if (!convexClient) return null;
-  return <ReleasePassControlsInner releaseId={releaseId} />;
-}
-
-function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
   const data = useQuery(api.reading.passForRelease, { releaseId });
   const startPass = useMutation(api.reading.startPass);
   const setPercent = useMutation(api.reading.setPassPercent);
@@ -501,11 +470,6 @@ type ReadingFilter = "all" | ReadingStatus;
  * through its books. Filter chips narrow to one status.
  */
 export function LibraryReading() {
-  if (!convexClient) return null;
-  return <LibraryReadingInner />;
-}
-
-function LibraryReadingInner() {
   const overview = useQuery(api.reading.myReading, {});
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   const [filter, setFilter] = useState<ReadingFilter>("all");

@@ -56,7 +56,7 @@ export const Route = createFileRoute("/")({
     // The "today" boundary travels with the loader data so SSR and hydration
     // group the shelves identically.
     const todaySort = todaySortKey();
-    const pools = homePools(releases?.releases ?? [], nextReleases?.releases ?? [], todaySort);
+    const pools = homePools(releases.releases, nextReleases.releases, todaySort);
     const { primary, secondary, undated } = pools.days;
     // Which candidates have a jacket on file. A failed check is "unknown"
     // (null): the shelves then seat any book with art to try, as before.
@@ -65,7 +65,7 @@ export const Route = createFileRoute("/")({
         coverShelf(pools.hero, HERO_ROWS * HERO_COLS),
         coverShelf(primary ? primary.releases : undated, SHELF_LIMIT),
         coverShelf(secondary?.releases ?? [], NEXT_SHELF_LIMIT),
-        coverShelf(series ?? [], SERIES_SHELF_LIMIT),
+        coverShelf(series, SERIES_SHELF_LIMIT),
       ],
     }).catch(() => null);
     return { stats, series, month, todaySort, releases, nextReleases, jackets };
@@ -124,12 +124,12 @@ function Home() {
   const { stats, series, month, todaySort, releases, nextReleases, jackets } =
     Route.useLoaderData();
   const onFile = useMemo(() => (jackets ? new Set(jackets) : null), [jackets]);
-  const pools = homePools(releases?.releases ?? [], nextReleases?.releases ?? [], todaySort);
+  const pools = homePools(releases.releases, nextReleases.releases, todaySort);
   const heroCovers = heroBooks(pools.hero, onFile, HERO_ROWS * HERO_COLS);
   // The shelf seats jacketed Series; too few of them and the newest Series
   // are listed by name instead.
-  const newest = (series ?? []).slice(0, SERIES_SHELF_LIMIT);
-  const shelfSeries = jacketed(series ?? [], onFile, SERIES_SHELF_LIMIT);
+  const newest = series.slice(0, SERIES_SHELF_LIMIT);
+  const shelfSeries = jacketed(series, onFile, SERIES_SHELF_LIMIT);
 
   return (
     <main className="home">
@@ -149,21 +149,14 @@ function Home() {
               Find a series
             </Link>
           </div>
-          {stats ? (
-            <div className="stat-row">
-              {LABELS.map(([key, label]) => (
-                <div className="stat" key={key}>
-                  <div className="stat-num">{roundedCount(stats[key].count)}</div>
-                  <div className="stat-label">{label}</div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="notice hero-notice">
-              Convex is not configured. Set <code>VITE_CONVEX_URL</code> (see the
-              README) and restart to server-render live catalog counts here.
-            </p>
-          )}
+          <div className="stat-row">
+            {LABELS.map(([key, label]) => (
+              <div className="stat" key={key}>
+                <div className="stat-num">{roundedCount(stats[key].count)}</div>
+                <div className="stat-label">{label}</div>
+              </div>
+            ))}
+          </div>
         </div>
         {heroCovers.length > 0 ? (
           <HeroShelf releases={heroCovers} />

@@ -16,7 +16,6 @@ import { useMutation, useQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { convexClient } from "~/providers";
 import { useReadyViewer } from "~/lib/viewer";
 
 type Kind = "ownership" | "reading";
@@ -79,11 +78,6 @@ const PUBLIC_PRIVATE: Array<{ value: Choice; label: string }> = [
 
 /** The Sharing section of /me: both visibility defaults + the profile link. */
 export function SharingSettings() {
-  if (!convexClient) return null;
-  return <SharingSettingsInner />;
-}
-
-function SharingSettingsInner() {
   const viewer = useReadyViewer();
   const setDefault = useMutation(api.sharing.setDefaultVisibility);
   if (!viewer) return null;
@@ -135,6 +129,11 @@ function SharingSettingsInner() {
 
 // ---------- per-Series overrides ----------
 
+const VISIBILITY_WORDS: Record<Visibility, string> = {
+  public: "Public",
+  private: "Private",
+};
+
 /**
  * The per-Series visibility overrides on the Series page (spec §3), behind
  * one "Sharing" button in the tracking bar. The panel floats over the page
@@ -142,20 +141,6 @@ function SharingSettingsInner() {
  * click or Escape. Renders nothing signed out.
  */
 export function SeriesVisibilityControls({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  if (!convexClient) return null;
-  return <SeriesVisibilityControlsInner seriesPublicId={seriesPublicId} />;
-}
-
-const VISIBILITY_WORDS: Record<Visibility, string> = {
-  public: "Public",
-  private: "Private",
-};
-
-function SeriesVisibilityControlsInner({
   seriesPublicId,
 }: {
   seriesPublicId: number;

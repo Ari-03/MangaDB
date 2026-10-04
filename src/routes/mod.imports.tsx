@@ -7,7 +7,6 @@ import { api } from "../../convex/_generated/api";
 import { ModGate, ModTools, timestamp } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { slugParams } from "~/lib/slug";
-import { convexClient } from "~/providers";
 
 /**
  * The Data Team imports dashboard (spec §6): every Approved
@@ -23,16 +22,6 @@ export const Route = createFileRoute("/mod/imports")({
 });
 
 function ImportsPage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          The imports dashboard needs a configured Convex deployment (see the
-          README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"

@@ -3,8 +3,8 @@
    .notice, .cover + .cover-ph, .cover-link, .star. */
 
 .releases-page { padding-bottom: 8px; }
-/* Empty window, sign-in prompt, unconfigured Convex: the notice replaces the
-   agenda/grid, so it keeps their gap under the toolbar. */
+/* Empty window or sign-in prompt: the notice replaces the agenda/grid, so it
+   keeps their gap under the toolbar. */
 .releases-page > .notice { margin-top: 24px; }
 
 /* --- Masthead ------------------------------------------------------------ */

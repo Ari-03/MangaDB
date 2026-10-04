@@ -96,10 +96,10 @@ export const Route = createFileRoute("/publisher/$slug")({
       ...page,
       month,
       todaySort,
-      topSeries: top?.items ?? [],
-      activeSeries: top?.total ?? null,
+      topSeries: top.items,
+      activeSeries: top.total,
       seriesCount:
-        facets?.publishers.find((p) => p.slug === params.slug)?.count ?? null,
+        facets.publishers.find((p) => p.slug === params.slug)?.count ?? null,
     };
   },
   // Title/description formulas, canonical link, and BreadcrumbList +

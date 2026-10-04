@@ -30,7 +30,6 @@ vi.mock("convex/react", () => ({
   useMutation: () => fakes.submit,
 }));
 vi.mock("~/lib/viewer", () => ({ useIsModerator: () => true }));
-vi.mock("~/providers", () => ({ convexClient: {} }));
 
 const { Route } = await import("../routes/mod.edit.$type.$key");
 const { FieldInput } = await import("./editForm");

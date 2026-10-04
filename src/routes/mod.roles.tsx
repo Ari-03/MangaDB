@@ -6,7 +6,6 @@ import { api } from "../../convex/_generated/api";
 import { mutationErrorMessage } from "~/lib/errors";
 import { ModGate, ModTools } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * Role governance (spec §4/§5): the data-team roster, the
@@ -21,15 +20,6 @@ export const Route = createFileRoute("/mod/roles")({
 });
 
 function ModRolesPage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Moderation needs a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="moderator"

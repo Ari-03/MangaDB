@@ -22,7 +22,6 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { FEATURES } from "../../convex/lib/features";
 import { useIsModerator } from "~/lib/viewer";
 import { RatingControl, ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
-import { convexClient } from "~/providers";
 
 // Mirrors REVIEW_MIN_LENGTH / REVIEW_MAX_LENGTH / REVIEW_PAGE in convex/reviews.ts.
 const MIN_LENGTH = 20;
@@ -42,8 +41,8 @@ const dateFormat = new Intl.DateTimeFormat("en-US", {
 
 /**
  * The Reviews section. `noun` names the target in prompts ("series",
- * "volume"); `initial` is the loader's first page (null when Convex is not
- * configured or the target is gone).
+ * "volume"); `initial` is the loader's first page (null when the target is
+ * gone).
  */
 export function ReviewsSection({
   target,
@@ -60,11 +59,7 @@ export function ReviewsSection({
         <h2 className="section-title">Reviews</h2>
         <p className="section-note">Newest first · written by readers, in their own words</p>
       </div>
-      {convexClient ? (
-        <LiveReviews target={target} initial={initial} noun={noun} />
-      ) : (
-        <ReviewList items={initial?.items ?? []} noun={noun} />
-      )}
+      <LiveReviews target={target} initial={initial} noun={noun} />
     </section>
   );
 }
@@ -234,11 +229,6 @@ function ReviewPrompt({ noun }: { noun: string }) {
  * the panel can hide itself.
  */
 function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
-  if (!convexClient) return null;
-  return <OwnReviewInner target={target} noun={noun} />;
-}
-
-function OwnReviewInner({ target, noun }: { target: RatingTarget; noun: string }) {
   const mine = useQuery(api.reviews.mine, { target });
   const [editing, setEditing] = useState(false);
   if (!mine) return null; // loading, signed out, or username pending

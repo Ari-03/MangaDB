@@ -53,8 +53,8 @@ function AuthorsList({
   first: Awaited<ReturnType<typeof authorsPage>>;
   mature: boolean;
 }) {
-  const [authors, setAuthors] = useState<AuthorCard[]>(first?.page ?? []);
-  const [cursor, setCursor] = useState(first && !first.isDone ? first.continueCursor : null);
+  const [authors, setAuthors] = useState<AuthorCard[]>(first.page);
+  const [cursor, setCursor] = useState(first.isDone ? null : first.continueCursor);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
 
   const loadMore = async () => {
@@ -62,7 +62,6 @@ function AuthorsList({
     setState("loading");
     try {
       const next = await authorsPage(cursor, mature);
-      if (!next) throw new Error("Convex is not configured");
       setAuthors((prev) => [...prev, ...next.page]);
       setCursor(next.isDone ? null : next.continueCursor);
       setState("idle");
@@ -87,9 +86,7 @@ function AuthorsList({
         , and from publishers' own catalogs for series it doesn't cover.
       </p>
 
-      {first === null ? (
-        <p className="notice">Convex is not configured, so there are no authors to show.</p>
-      ) : authors.length === 0 ? (
+      {authors.length === 0 ? (
         <p className="notice">No author credits yet: they arrive with the next credits rebuild.</p>
       ) : (
         <div className="shelf">

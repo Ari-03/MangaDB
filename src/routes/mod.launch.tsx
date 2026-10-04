@@ -9,7 +9,6 @@ import { mutationErrorMessage } from "~/lib/errors";
 import { CommentsQueueLink, ModGate, timestamp } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { useIsModerator } from "~/lib/viewer";
-import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
 /**
@@ -25,16 +24,6 @@ export const Route = createFileRoute("/mod/launch")({
 });
 
 function LaunchPage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          The launch dashboard needs a configured Convex deployment (see the
-          README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"

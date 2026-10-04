@@ -36,7 +36,6 @@ import {
 } from "./test.react";
 
 vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
-vi.mock("~/providers", () => ({ convexClient: {} }));
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
 vi.mock("~/lib/mature", () => ({ useArtConcealed: () => false }));
 

@@ -28,7 +28,6 @@ vi.mock("convex/react", () => ({
   useMutation: () => fakes.saveDraft,
 }));
 vi.mock("~/lib/viewer", () => ({ useIsDataTeam: () => true, useIsModerator: () => false }));
-vi.mock("~/providers", () => ({ convexClient: {} }));
 
 const { Route } = await import("../routes/mod.propose.$type.$key");
 const page = Route.options.component as () => ReactNode;

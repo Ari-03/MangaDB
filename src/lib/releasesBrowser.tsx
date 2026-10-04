@@ -24,7 +24,6 @@ import {
   type BrowseRelease,
   type MonthReleasesData,
 } from "~/lib/catalogData";
-import { convexClient } from "~/providers";
 import { Cover } from "~/lib/cover";
 import { plural } from "~/lib/format";
 import {
@@ -87,10 +86,10 @@ export function isFiltered(filters: BrowseFilters): boolean {
  */
 export async function followPublisherSlug(
   location: { pathname: string; search: BrowseFilters & Record<string, unknown> },
-  data: MonthReleasesData | null,
+  data: MonthReleasesData,
 ): Promise<void> {
   const slug = location.search.publisher;
-  if (!slug || !data || data.publishers.some((p) => p.slug === slug)) return;
+  if (!slug || data.publishers.some((p) => p.slug === slug)) return;
   const current = await catalogQuery(api.releases.canonicalPublisherSlug, { slug });
   // Already current (a Publisher past the month's publisher list): no loop.
   if (current === slug) return;
@@ -104,9 +103,8 @@ export async function followPublisherSlug(
 
 /**
  * The signed-in viewer's followed Series as a publicId set, for the marker
- * and the followed filter. Null when Convex is unconfigured, signed out,
- * username pending, or still loading — the browser then renders exactly the
- * public view.
+ * and the followed filter. Null when signed out, username pending, or
+ * still loading — the browser then renders exactly the public view.
  */
 type FollowedSeriesSet = ReadonlySet<number> | null;
 
@@ -122,18 +120,11 @@ type BrowserProps = {
   /** True on `/releases/{yyyy-mm}`; false on `/releases` (the Agenda home). */
   atMonthUrl: boolean;
   filters: BrowseFilters;
-  data: MonthReleasesData | null;
+  data: MonthReleasesData;
   onFiltersChange: (filters: BrowseFilters) => void;
 };
 
 export function ReleasesBrowser(props: BrowserProps) {
-  // The follow overlay needs the reactive client; without it the browser is
-  // exactly the public view (hooks can't be conditional, hence the split).
-  if (!convexClient) return <BrowserView {...props} followedSeries={null} />;
-  return <BrowserWithFollows {...props} />;
-}
-
-function BrowserWithFollows(props: BrowserProps) {
   const followed = useQuery(api.follows.followedSeries, {});
   return (
     <BrowserView
@@ -158,14 +149,14 @@ function BrowserView({
   // marker set doubles as the followed filter's predicate.
   const releases = useMemo(
     () =>
-      data?.releases.filter(
+      data.releases.filter(
         (release) =>
           (!filters.format || release.format === filters.format) &&
           (!filters.publisher || release.publisher?.slug === filters.publisher) &&
           (!filters.followed ||
             (followedSeries !== null &&
               release.series.some((series) => followedSeries.has(series.publicId)))),
-      ) ?? null,
+      ),
     [data, filters.format, filters.publisher, filters.followed, followedSeries],
   );
   const filtered = isFiltered(filters);
@@ -182,34 +173,27 @@ function BrowserView({
 
       <div className="toolbar">
         <ViewToggle view={view} anchor={anchor} today={today} filters={filters} />
-        {data ? (
-          <FilterBar
-            action={atMonthUrl ? `/releases/${monthParam(anchor)}` : "/releases"}
-            keepViewParam={atMonthUrl && view === "agenda"}
-            filters={filters}
-            publishers={data.publishers}
-            // The followed checkbox needs a followed set to filter against;
-            // it also renders when the filter is already on, so a signed-out
-            // viewer of a shared ?followed URL can switch it off.
-            showFollowed={followedSeries !== null || filters.followed === true}
-            onChange={onFiltersChange}
-          />
-        ) : null}
-        {releases ? <ResultCount releases={releases} /> : null}
+        <FilterBar
+          action={atMonthUrl ? `/releases/${monthParam(anchor)}` : "/releases"}
+          keepViewParam={atMonthUrl && view === "agenda"}
+          filters={filters}
+          publishers={data.publishers}
+          // The followed checkbox needs a followed set to filter against;
+          // it also renders when the filter is already on, so a signed-out
+          // viewer of a shared ?followed URL can switch it off.
+          showFollowed={followedSeries !== null || filters.followed === true}
+          onChange={onFiltersChange}
+        />
+        <ResultCount releases={releases} />
       </div>
-      {data?.capped ? (
+      {data.capped ? (
         <p className="note">
           This month holds more releases than the browser loads at once; some may be
           missing here.
         </p>
       ) : null}
 
-      {data === null || releases === null ? (
-        <p className="notice">
-          Convex is not configured. Set <code>VITE_CONVEX_URL</code> (see the
-          README) and restart to browse the release calendar.
-        </p>
-      ) : filters.followed && followedSeries === null ? (
+      {filters.followed && followedSeries === null ? (
         <p className="notice">
           {/* Clerk owns /sign-in; a plain anchor leaves the router out of it. */}
           <a href="/sign-in">Sign in</a> to see only releases from series you

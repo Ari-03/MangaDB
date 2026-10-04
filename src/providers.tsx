@@ -1,10 +1,11 @@
 import { ClerkProvider, UserButton, useAuth } from "@clerk/tanstack-react-start";
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
 import { AnalyticsProvider } from "~/lib/analytics";
+import { convexUrl } from "~/lib/convexUrl";
 import { MatureProvider } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
 import { useIsDataTeam, useReadyViewer } from "~/lib/viewer";
@@ -12,16 +13,17 @@ import { useIsDataTeam, useReadyViewer } from "~/lib/viewer";
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
 // ConvexProviderWithClerk feeds its "convex"-template JWT to the reactive
 // Convex client so every mutation/query authorizes via
-// ctx.auth.getUserIdentity(). Both are optional at runtime: without the
-// publishable key or a Convex URL the public catalog still renders.
+// ctx.auth.getUserIdentity(). Clerk is optional at runtime: without the
+// publishable key the public catalog renders signed out. Convex is not:
+// without its URL the first render throws (lib/convexUrl.ts).
 // PostHog (lib/analytics.tsx) sits innermost, so its consent gate can read
 // both the Clerk session and the Convex viewer; it loads nothing when
 // VITE_PUBLIC_POSTHOG_KEY is unset.
 
-const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
-export const convexClient: ConvexReactClient | null = convexUrl
-  ? new ConvexReactClient(convexUrl)
-  : null;
+// One client for the page, made on the first render rather than at import:
+// a missing URL then throws inside the router's error boundary, which shows
+// the message on the page instead of only in the browser console.
+let convexClient: ConvexReactClient | undefined;
 
 // ClerkProvider resolves the key from VITE_CLERK_PUBLISHABLE_KEY itself; this
 // flag only decides whether the Clerk tree is mounted at all.
@@ -30,25 +32,21 @@ export const clerkEnabled = Boolean(
 );
 
 export function AppProviders({ children }: { children: ReactNode }) {
+  const client = (convexClient ??= new ConvexReactClient(convexUrl()));
   // The viewer's mature-titles choice (lib/mature.tsx) wraps everything.
   const inner = <MatureProvider>{children}</MatureProvider>;
-  const anonymous = <AnalyticsProvider>{inner}</AnalyticsProvider>;
   if (!clerkEnabled) {
-    return convexClient ? (
-      <ConvexProvider client={convexClient}>{anonymous}</ConvexProvider>
-    ) : (
-      anonymous
+    return (
+      <ConvexProvider client={client}>
+        <AnalyticsProvider>{inner}</AnalyticsProvider>
+      </ConvexProvider>
     );
   }
   return (
     <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
-      {convexClient ? (
-        <ConvexProviderWithClerk client={convexClient} useAuth={useAuth}>
-          <AnalyticsProvider identify>{inner}</AnalyticsProvider>
-        </ConvexProviderWithClerk>
-      ) : (
-        anonymous
-      )}
+      <ConvexProviderWithClerk client={client} useAuth={useAuth}>
+        <AnalyticsProvider identify>{inner}</AnalyticsProvider>
+      </ConvexProviderWithClerk>
     </ClerkProvider>
   );
 }
@@ -118,7 +116,7 @@ export function SiteHeader() {
             Publishers
           </Link>
         </nav>
-        <HeaderSearch />
+        <SearchCombobox />
         <div className="header-actions">
           <ThemeToggle />
           <button
@@ -138,7 +136,7 @@ export function SiteHeader() {
       </div>
       <div className={open ? "mobile-nav is-open" : "mobile-nav"} id="mobile-nav">
         <div className="container mobile-nav-inner">
-          <HeaderSearch mobile onNavigate={() => setOpen(false)} />
+          <SearchCombobox mobile onNavigate={() => setOpen(false)} />
           <Link to="/" className="nav-link" onClick={() => setOpen(false)}>
             Home
           </Link>
@@ -192,54 +190,6 @@ function ThemeToggle() {
   );
 }
 
-// Site-wide entry into /search. A real GET form so it works
-// before hydration; with JS the submit becomes a client-side navigation.
-// With the reactive Convex client it is a combobox offering live
-// suggestions and typo help as you type (lib/searchSuggest.tsx); without
-// one, the plain form below. `onNavigate` lets the mobile drawer close.
-function HeaderSearch(props: { mobile?: boolean; onNavigate?: () => void }) {
-  return convexClient ? <SearchCombobox {...props} /> : <PlainHeaderSearch {...props} />;
-}
-
-function PlainHeaderSearch({
-  mobile = false,
-  onNavigate,
-}: {
-  mobile?: boolean;
-  onNavigate?: () => void;
-}) {
-  const navigate = useNavigate();
-  return (
-    <form
-      className={mobile ? "search search--mobile" : "search"}
-      role="search"
-      action="/search"
-      method="get"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const value = new FormData(event.currentTarget).get("q");
-        void navigate({
-          to: "/search",
-          search: { q: typeof value === "string" ? value : "" },
-        });
-        onNavigate?.();
-      }}
-    >
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-        <circle cx="7.2" cy="7.2" r="4.4" />
-        <path d="m10.6 10.6 3 3" />
-      </svg>
-      <input
-        className="search-input"
-        type="search"
-        name="q"
-        placeholder="Search series, authors, ISBN"
-        aria-label="Search series, authors, publishers, or an ISBN"
-      />
-    </form>
-  );
-}
-
 function AuthNav({ mobile = false }: { mobile?: boolean }) {
   // Inside <ClerkProvider> whenever clerkEnabled; SSR state comes from
   // clerkMiddleware via the provider.
@@ -258,7 +208,7 @@ function AuthNav({ mobile = false }: { mobile?: boolean }) {
       </>
     );
   }
-  return convexClient ? <SignedInNav mobile={mobile} /> : <UserButton />;
+  return <SignedInNav mobile={mobile} />;
 }
 
 // The viewer query runs only when signed in: it drives the avatar initial,

@@ -10,7 +10,6 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
-import { convexClient } from "~/providers";
 
 export function SeriesReportAffordance({
   seriesPublicId,
@@ -21,13 +20,7 @@ export function SeriesReportAffordance({
   return (
     <section className="series-report">
       {open ? (
-        convexClient ? (
-          <ReportForm seriesPublicId={seriesPublicId} onDone={() => setOpen(false)} />
-        ) : (
-          <p className="notice">
-            Reporting needs a configured Convex deployment (see the README).
-          </p>
-        )
+        <ReportForm seriesPublicId={seriesPublicId} onDone={() => setOpen(false)} />
       ) : (
         <>
           <p className="report-lede">

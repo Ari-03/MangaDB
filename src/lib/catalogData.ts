@@ -20,24 +20,18 @@ import { addMonths, timingNeedsToday, todaySortKey, type YearMonth } from "~/lib
 // Stateless without auth, so one client serves every read. Made on first
 // use: the Worker's `process.env` is read at request time, like
 // server/convex.ts does.
-let client: ConvexHttpClient | null | undefined;
+let client: ConvexHttpClient | undefined;
 
-/**
- * Run a public Convex query. Null when no deployment is configured, so pages
- * render a setup notice instead of crashing.
- */
+/** Run a public Convex query. */
 export async function catalogQuery<Query extends FunctionReference<"query">>(
   query: Query,
   args: FunctionArgs<Query>,
-): Promise<FunctionReturnType<Query> | null> {
-  if (client === undefined) {
-    const url = convexUrl();
-    client = url ? new ConvexHttpClient(url) : null;
-  }
-  return client ? await client.query(query, args) : null;
+): Promise<FunctionReturnType<Query>> {
+  client ??= new ConvexHttpClient(convexUrl());
+  return await client.query(query, args);
 }
 
-/** A query's result with the "unconfigured" and "not found" nulls taken out. */
+/** A query's result with its "not found" null taken out. */
 type Found<Query extends FunctionReference<"query">> = NonNullable<
   FunctionReturnType<Query>
 >;

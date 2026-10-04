@@ -24,7 +24,6 @@ import {
   useSeriesOverlay,
 } from "~/lib/quickActions";
 import { slugParams } from "~/lib/slug";
-import { convexClient } from "~/providers";
 
 /** The Series page query's result; the SSR loader returns the same shape. */
 type SeriesPage = NonNullable<FunctionReturnType<typeof api.catalog.seriesPage>>;
@@ -143,19 +142,11 @@ type PathShelfProps = {
 
 /**
  * A reading path on a shelf, with the signed-in overlay when there is a
- * Convex client: the whole-run buttons above (Want / Order / Own / Read all),
+ * viewer: the whole-run buttons above (Want / Order / Own / Read all),
  * the quick actions on every cover, and the prompt area collecting what
  * they raise — a first-entry follow suggestion, a fully-read Series.
  */
 export function PathShelf(props: PathShelfProps) {
-  return convexClient ? (
-    <PathShelfLive {...props} />
-  ) : (
-    <PathShelfView {...props} overlay={null} />
-  );
-}
-
-function PathShelfLive(props: PathShelfProps) {
   const overlay = useSeriesOverlay(props.seriesPublicId);
   return <PathShelfView {...props} overlay={overlay} />;
 }

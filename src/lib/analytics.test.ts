@@ -18,7 +18,6 @@ const auth = vi.hoisted(() => ({
 }));
 
 vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
-vi.mock("~/providers", () => ({ convexClient: {} }));
 vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => auth }));
 
 const { AnalyticsSettings, ViewerAnalytics } = await import("./analytics");

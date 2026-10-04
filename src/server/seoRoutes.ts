@@ -70,11 +70,9 @@ export type SitemapData = {
   monthRange: () => Promise<{ from: YearMonth; to: YearMonth } | null>;
 };
 
-/** SitemapData backed by the Convex deployment; null when unconfigured. */
-export function convexSitemapData(): SitemapData | null {
-  const url = convexUrl();
-  if (!url) return null;
-  const convex = new ConvexHttpClient(url);
+/** SitemapData backed by the Convex deployment. */
+export function convexSitemapData(): SitemapData {
+  const convex = new ConvexHttpClient(convexUrl());
   return {
     sitemapPage: (entity, cursor) =>
       convex.query(api.seo.sitemapPage, {
@@ -186,12 +184,8 @@ export function robotsTxt(origin: string): string {
 async function childSitemapXml(
   child: SitemapChild,
   origin: string,
-  data: SitemapData | null,
+  data: SitemapData,
 ): Promise<string> {
-  // No Convex deployment configured: valid, empty sitemaps keep local and
-  // preview builds serving 200s.
-  if (!data) return urlsetXml([]);
-
   if (child === "months") {
     const paths = monthPaths(await data.monthRange());
     return urlsetXml(paths.map((path) => ({ loc: `${origin}${path}` })));
@@ -222,7 +216,7 @@ async function childSitemapXml(
  */
 export async function seoResponse(
   request: Request,
-  data: SitemapData | null = convexSitemapData(),
+  data: SitemapData = convexSitemapData(),
 ): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") return null;
   const { pathname } = new URL(request.url);
@@ -262,7 +256,7 @@ async function cachedChildSitemap(
   request: Request,
   child: SitemapChild,
   origin: string,
-  data: SitemapData | null,
+  data: SitemapData,
 ): Promise<Response> {
   const url = new URL(request.url);
   const cache = caches.default;

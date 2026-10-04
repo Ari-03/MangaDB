@@ -21,7 +21,6 @@ import { COMMENT_POLICY } from "../../convex/comments";
 import { track } from "~/lib/analytics";
 import { useIsModerator, useReadyViewer } from "~/lib/viewer";
 import { writeErrorMessage } from "~/lib/ratings";
-import { convexClient } from "~/providers";
 
 /** A Comments page as pages know it: a Series or a Volume, never an Edition. */
 type CommentTarget = FunctionArgs<typeof api.comments.list>["target"];
@@ -75,8 +74,8 @@ function When({ at }: { at: number }) {
 
 /**
  * The Comments section. `noun` names the target in prompts ("series",
- * "volume"); `initial` is the loader's first page (null when Convex is not
- * configured or the target is gone).
+ * "volume"); `initial` is the loader's first page (null when the target is
+ * gone).
  */
 export function CommentsSection({
   target,
@@ -93,11 +92,7 @@ export function CommentsSection({
         <h2 className="section-title">Comments</h2>
         <p className="section-note">Newest first · be kind, and mark spoilers</p>
       </div>
-      {convexClient ? (
-        <LiveComments target={target} initial={initial} noun={noun} />
-      ) : (
-        <ThreadList items={initial?.items ?? []} noun={noun} />
-      )}
+      <LiveComments target={target} initial={initial} noun={noun} />
     </section>
   );
 }

@@ -1,8 +1,7 @@
 // Search as you type: the header search box as a
 // combobox that offers live suggestions from `api.catalog.suggest` — Series
 // with their jackets, "Did you mean" near misses for typos, Publishers, and
-// a last row into the full /search page. Needs the reactive Convex client;
-// providers.tsx falls back to the plain GET form without one.
+// a last row into the full /search page.
 
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";

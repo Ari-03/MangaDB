@@ -13,7 +13,6 @@ import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate, plural } from "~/lib/format";
 import { sortKeyMonth } from "~/lib/month";
-import { convexClient } from "~/providers";
 import { useReadyViewer } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
@@ -33,15 +32,6 @@ export type FollowSuggestion = FunctionReturnType<
  * signed-out viewers).
  */
 export function SeriesFollowControls({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
-  if (!convexClient) return null;
-  return <SeriesFollowControlsInner seriesPublicId={seriesPublicId} />;
-}
-
-function SeriesFollowControlsInner({
   seriesPublicId,
 }: {
   seriesPublicId: number;
@@ -181,11 +171,6 @@ function sortDate(sort: number, day: number | null): string | null {
  * `todaySort` comes from the page, so its tab count shares this query.
  */
 export function LibraryUpcoming({ todaySort }: { todaySort: number }) {
-  if (!convexClient) return null;
-  return <LibraryUpcomingInner todaySort={todaySort} />;
-}
-
-function LibraryUpcomingInner({ todaySort }: { todaySort: number }) {
   const upcoming = useQuery(api.follows.myUpcoming, { todaySort });
   const following = useQuery(api.follows.myFollowing, {});
   const viewer = useReadyViewer();

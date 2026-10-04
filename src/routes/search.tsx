@@ -80,7 +80,7 @@ function SearchPage() {
   // Keyed on the query alone, so a reload of the same query (a mature-titles
   // change) is not a second search. Never the query text itself.
   useEffect(() => {
-    if (q === "" || results === null) return; // null: the catalog was unreachable
+    if (q === "") return;
     track("search_performed", {
       queryLength: q.length,
       resultCount: results.series.length + results.publishers.length + results.authors.length,
@@ -149,12 +149,7 @@ function SearchPage() {
         </p>
       </div>
 
-      {results === null ? (
-        <p className="notice">
-          Convex is not configured. Set <code>VITE_CONVEX_URL</code> (see the
-          README) and restart to search the catalog.
-        </p>
-      ) : q === "" ? null : (
+      {q === "" ? null : (
         <SearchResultsView q={q} results={results} />
       )}
     </main>

@@ -23,7 +23,6 @@ const fetchViewerState = createServerFn({ method: "GET" }).handler(
     const { userId, convexToken } = await ssrAuth();
     if (!userId || !convexToken) return { status: "signedOut" };
     const convex = convexServerClient(convexToken);
-    if (!convex) return { status: "unconfigured" };
     const viewer = await convex.query(api.users.viewer, {});
     if (!viewer) {
       // users.viewer reads an account being deleted as signed out; this

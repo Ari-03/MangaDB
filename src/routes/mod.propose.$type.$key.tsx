@@ -16,7 +16,6 @@ import {
 import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
 import { CLEAR_OVERRIDE_HINT, ModGate, writtenByLabel } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * The Editor update-proposal form (spec §5): edits become a
@@ -38,15 +37,6 @@ export const Route = createFileRoute("/mod/propose/$type/$key")({
 
 function ModProposePage() {
   const { type, key } = Route.useParams();
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          Proposals need a configured Convex deployment (see the README).
-        </p>
-      </main>
-    );
-  }
   if (!isRecordType(type)) {
     return (
       <main className="mod-page">

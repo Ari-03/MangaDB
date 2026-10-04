@@ -6,7 +6,6 @@ import { api } from "../../convex/_generated/api";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import { CommentsQueueLink, ModGate } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
-import { convexClient } from "~/providers";
 
 /**
  * The shared review queue (spec §5): every In-Review Proposal,
@@ -32,16 +31,6 @@ const RECORD_TYPES = [
 ] as const;
 
 function QueuePage() {
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">
-          The review queue needs a configured Convex deployment (see the
-          README).
-        </p>
-      </main>
-    );
-  }
   return (
     <ModGate
       role="dataTeam"

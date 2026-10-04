@@ -31,7 +31,6 @@ vi.mock("convex/react", () => ({
     getFunctionName(ref) === "moderation:submitDirectClear" ? fakes.clear : fakes.edit,
 }));
 vi.mock("~/lib/viewer", () => ({ useIsModerator: () => true }));
-vi.mock("~/providers", () => ({ convexClient: {} }));
 
 const { Route } = await import("../routes/mod.edit.$type.$key");
 const page = Route.options.component as () => ReactNode;

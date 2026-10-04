@@ -10,7 +10,7 @@ import { useState, type FormEvent } from "react";
 import { api } from "../../convex/_generated/api";
 import { mutationErrorMessage } from "~/lib/errors";
 import { useReadyViewer } from "~/lib/viewer";
-import { clerkEnabled, convexClient } from "~/providers";
+import { clerkEnabled } from "~/providers";
 import { ssrAuth } from "~/server/auth";
 
 // Runs on the server for SSR and as an RPC on client navigations, so the
@@ -40,12 +40,12 @@ export const Route = createFileRoute("/claim-username")({
 });
 
 function ClaimUsernamePage() {
-  if (!clerkEnabled || !convexClient) {
+  if (!clerkEnabled) {
     return (
       <main>
         <p className="notice">
-          Accounts are not configured. Set the Clerk and Convex environment
-          variables (see the README) to enable sign-in.
+          Accounts are not configured. Set the Clerk environment variables
+          (see the README) to enable sign-in.
         </p>
       </main>
     );

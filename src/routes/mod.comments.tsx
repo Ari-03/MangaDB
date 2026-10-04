@@ -11,7 +11,6 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { useIsModerator } from "~/lib/viewer";
 import { writeErrorMessage } from "~/lib/ratings";
 import { slugParams } from "~/lib/slug";
-import { convexClient } from "~/providers";
 
 /**
  * The Comments queue (CONTEXT.md: Comment, Comment Report, Shadowed User):
@@ -79,13 +78,6 @@ function CommentsQueuePage() {
           Comments are switched off. Nobody can post, and pages show none. The switch is{" "}
           <code>FEATURES.comments</code> in <code>convex/lib/features.ts</code>.
         </p>
-      </main>
-    );
-  }
-  if (!convexClient) {
-    return (
-      <main className="mod-page">
-        <p className="notice">The Comments queue needs a configured Convex deployment (see the README).</p>
       </main>
     );
   }

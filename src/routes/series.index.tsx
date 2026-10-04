@@ -271,12 +271,7 @@ function SeriesLibraryPage() {
           <ActiveFilters search={search} facets={facets} />
           <LetterStrip search={search} />
 
-          {page === null ? (
-            <p className="notice">
-              Convex is not configured. Set <code>VITE_CONVEX_URL</code> (see
-              the README) and restart to browse the library.
-            </p>
-          ) : page.items.length === 0 ? (
+          {page.items.length === 0 ? (
             <p className="notice">
               No series match these filters.{" "}
               <Link to="/series" search={{ sort: search.sort, order: search.order }}>
@@ -343,15 +338,14 @@ function ResultCount({
   page,
   facets,
 }: {
-  page: SeriesBrowsePage | null;
-  facets: SeriesFacets | null;
+  page: SeriesBrowsePage;
+  facets: SeriesFacets;
 }) {
-  const count = page?.total ?? facets?.total;
-  if (count === undefined) return <p className="results-count" />;
+  const count = page.total ?? facets.total;
   const n = count.toLocaleString("en-US");
   return (
     <p className="results-count" aria-live="polite">
-      {page?.total === null || page?.total === undefined ? (
+      {page.total === null ? (
         <>
           <strong>{n}</strong> series in the catalog
         </>
@@ -377,11 +371,11 @@ function FilterPanel({
 }: {
   draft: LibrarySearch;
   update: UpdateDraft;
-  facets: SeriesFacets | null;
+  facets: SeriesFacets;
 }) {
   const [open, setOpen] = useState(false);
   const statusCounts = new Map<string, number>(
-    facets?.statuses.map((entry) => [entry.status, entry.count]) ?? [],
+    facets.statuses.map((entry) => [entry.status, entry.count]),
   );
   const publishers = draft.publisher?.split(",") ?? [];
   const activeCount =
@@ -433,13 +427,11 @@ function FilterPanel({
         </button>
 
         <div id="library-filter-groups" className="filter-groups" data-open={open}>
-          {facets ? (
-            <PublisherPicker
-              publishers={facets.publishers}
-              selected={publishers}
-              onChange={(slugs) => update({ publisher: slugs.join(",") || undefined })}
-            />
-          ) : null}
+          <PublisherPicker
+            publishers={facets.publishers}
+            selected={publishers}
+            onChange={(slugs) => update({ publisher: slugs.join(",") || undefined })}
+          />
           <ChoiceGroup
             legend="Volumes"
             name="volumes"
@@ -609,9 +601,9 @@ function ActiveFilters({
   facets,
 }: {
   search: LibrarySearch;
-  facets: SeriesFacets | null;
+  facets: SeriesFacets;
 }) {
-  const names = new Map(facets?.publishers.map((p) => [p.slug, p.name]));
+  const names = new Map(facets.publishers.map((p) => [p.slug, p.name]));
   const publishers = search.publisher?.split(",") ?? [];
   const chips: Array<{ key: string; label: string; next: LibrarySearch }> = [
     ...publishers.map((slug) => ({
@@ -754,7 +746,6 @@ function LibraryShelf({
     setState("loading");
     try {
       const next = await fetchSeriesBrowse(browseArgs(search, cursor));
-      if (!next) throw new Error("Convex is not configured");
       const merged = [...items, ...next.items];
       loadedViews.set(viewId, { items: merged, cursor: next.nextCursor });
       setItems(merged);

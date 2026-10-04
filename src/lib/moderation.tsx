@@ -12,7 +12,6 @@ import type { ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import type { WrittenBy } from "../../convex/moderation";
-import { convexClient } from "~/providers";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 
@@ -111,15 +110,7 @@ export function ProposalStateChip({ state }: { state: string }) {
  * has data (history is reactive, not SSR'd) and nothing at all when the
  * record has no history yet.
  */
-export function RecordHistory(props: {
-  type: HistoryTargetType;
-  publicId: number;
-}) {
-  if (!convexClient) return null;
-  return <RecordHistoryInner {...props} />;
-}
-
-function RecordHistoryInner({
+export function RecordHistory({
   type,
   publicId,
 }: {
@@ -219,9 +210,8 @@ export const timestamp = (ms: number) =>
  * The access gate in front of a mod page: "Checking your access…" while the
  * viewer loads, then the page for a viewer holding `role`, else a refusal
  * that says who the page is for (`refusal`) and links sign-in when signed
- * out. `children` only mounts once the viewer is let in. Only under the
- * Convex provider: each page answers the unconfigured mode itself first.
- * The Convex functions re-check the role on every call.
+ * out. `children` only mounts once the viewer is let in. The Convex
+ * functions re-check the role on every call.
  */
 export function ModGate({
   role,
@@ -309,12 +299,7 @@ function CommentsQueueLinkInner() {
  * Administrators get the direct edit (`/mod/edit`); Editors get the update
  * proposal (`/mod/propose`) whose submission lands In Review.
  */
-export function ModEditLink(props: { type: string; editKey: string }) {
-  if (!convexClient) return null;
-  return <ModEditLinkInner {...props} />;
-}
-
-function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) {
+export function ModEditLink({ type, editKey }: { type: string; editKey: string }) {
   const isModerator = useIsModerator();
   const isDataTeam = useIsDataTeam();
   if (isModerator) {
@@ -348,12 +333,7 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
  * data-team member can propose a new Volume + Edition + Release in one
  * temp-ID Proposal.
  */
-export function ProposeNewRecordsLink(props: { seriesPublicId: number }) {
-  if (!convexClient) return null;
-  return <ProposeNewRecordsLinkInner {...props} />;
-}
-
-function ProposeNewRecordsLinkInner({
+export function ProposeNewRecordsLink({
   seriesPublicId,
 }: {
   seriesPublicId: number;
@@ -377,14 +357,7 @@ function ProposeNewRecordsLinkInner({
  * of their own (spec §11), so their edit entry point lives on the Edition
  * page, one link per row keyed by the row's anchor.
  */
-export function ModReleaseEditLinks(props: {
-  releases: Array<{ id: string; anchor: string }>;
-}) {
-  if (!convexClient) return null;
-  return <ModReleaseEditLinksInner {...props} />;
-}
-
-function ModReleaseEditLinksInner({
+export function ModReleaseEditLinks({
   releases,
 }: {
   releases: Array<{ id: string; anchor: string }>;

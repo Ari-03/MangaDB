@@ -132,8 +132,7 @@ function MonthStrip({ anchor, today }: { anchor: YearMonth; today: YearMonth }) 
 
 /**
  * The whole page for one month. `anchor` is the month shown, `today` the
- * current month (UTC, from the loader so SSR and hydration agree); `data` is
- * null when Convex is not configured.
+ * current month (UTC, from the loader so SSR and hydration agree).
  */
 export function PublishersBoard({
   anchor,
@@ -142,9 +141,9 @@ export function PublishersBoard({
 }: {
   anchor: YearMonth;
   today: YearMonth;
-  data: PublishersBoardData | null;
+  data: PublishersBoardData;
 }) {
-  const board = data?.board ?? [];
+  const board = data.board;
   const totalReleases = board.reduce((n, card) => n + card.releases, 0);
   const totalNew = board.reduce((n, card) => n + card.newSeries, 0);
 
@@ -168,12 +167,7 @@ export function PublishersBoard({
         ) : null}
       </div>
 
-      {data === null ? (
-        <p className="notice">
-          Convex is not configured. Set <code>VITE_CONVEX_URL</code> (see the
-          README) and restart to see what publishers are releasing.
-        </p>
-      ) : board.length === 0 ? (
+      {board.length === 0 ? (
         <p className="notice">
           No publisher has releases on file for {monthTitle(anchor)}.
           {sameMonth(anchor, today) ? null : (
@@ -199,7 +193,7 @@ export function PublishersBoard({
         </section>
       )}
 
-      {data ? <Directory directory={data.directory} anchor={anchor} /> : null}
+      <Directory directory={data.directory} anchor={anchor} />
     </main>
   );
 }
