@@ -137,17 +137,18 @@ is fixed.
   older parser read it (`noteListing` in `convex/sevenSeas.ts`), and Yen
   Press and Kodansha's
   back catalog when the book is next due for a fetch.
-- **A lock hold stays listed after the unlock until the importer applies
+- **A lock hold stays listed after the unlock until the importer places
   the book again.** Seven Seas, Kodansha, PRH and Yen Press drop a lock
   hold (`Series N is locked.`) at the first apply that finds the Series
-  unlocked (`holdUnderLock` in `convex/lib/unmatched.ts`), and nothing
-  else drops it: lifting the lock writes no hold, "Prepare placement"
-  refuses a `series` hold, and `imports:backfillHolds` keeps an existing
-  row. Until then the book is listed as held by a lock that no longer
-  exists. PRH applies a title again at its next run that lists it (every
-  title at the Sunday full sweep), and the Kodansha calendar applies each
-  volume in its window daily. Yen Press re-reads a backlist page only when
-  it is due, 180 days after the last read (`BACKLIST_REFRESH_MS` in
+  unlocked and reaches the placement tail or a box set's branch
+  (`holdUnderLock` in `convex/lib/unmatched.ts`), and nothing else drops
+  it: lifting the lock writes no hold, "Prepare placement" refuses a
+  `series` hold, and `imports:backfillHolds` keeps an existing row. Until
+  then the book is listed as held by a lock that no longer exists. PRH
+  applies a title again at its next run that lists it (every title at the
+  Sunday full sweep), and the Kodansha calendar applies each volume in its
+  window daily. Yen Press re-reads a backlist page only when it is due,
+  180 days after the last read (`BACKLIST_REFRESH_MS` in
   `convex/yenPress.ts`), and the Kodansha back catalog re-crawls a series
   whole after 180 days (`FULL_REFRESH_MS` in `convex/lib/kodansha.ts`) or
   when its listing stamp changes; both re-read weekly a book that is
@@ -155,9 +156,24 @@ is fixed.
   unlinked book again only when its page changes, an older parser read
   it, a forced run reads it, or `staleVerdict` matches its note
   (`noteListing` in `convex/sevenSeas.ts`), which a lock's note never
-  does, so a Seven Seas book can stay listed as locked indefinitely. A fix is for lifting the
-  lock to drop the lock holds that name the Series (their rows carry its
-  `seriesId`), leaving each book to its importer's next apply.
+  does, so a Seven Seas book can stay listed as locked indefinitely. A
+  book that is out of scope when next read keeps its lock hold and note
+  at least until a read finds it in scope again, whichever source lists
+  it.
+  Kodansha and Yen Press apply it, but the apply returns at its scope gate
+  (an `outOfScope` such as `"novel"`: `applyVolume` in
+  `convex/kodansha.ts`, `applyTitle` in `convex/yenPress.ts`) before
+  anything that drops the hold. PRH and Seven Seas never apply it:
+  `parseTitleList` (`convex/lib/prh.ts`) drops the entry, which
+  `prh.notePresent` only marks seen, and the Seven Seas sync skips a book
+  `isMangaBook` rejects. A fix is for lifting the lock to drop the lock
+  holds that name the Series, leaving each book to its importer's next
+  apply, and for an out-of-scope read to clear an obsolete placement
+  hold: at the Kodansha and Yen Press scope gates, in `prh.notePresent`,
+  and where the Seven Seas sync skips the book. Lifting the lock should
+  match a row's `seriesId` and also the note (`LOCK_NOTE` in
+  `convex/lib/unmatched.ts`, which names the Series' public id): a row
+  `imports:backfillHolds` rebuilt from a note carries no `seriesId`.
 - **An import's Proposal queued before its Series was locked can still be
   approved.** An import queues a guess under an open Series (an omnibus
   outside Bootstrap Mode, a ladder flag), an Editor locks the Series, and
@@ -266,6 +282,26 @@ is fixed.
   overridden bundle. This matches a linked Release, which only its own
   lock stops ([imports](imports.md#creating-records)); if a Series lock is
   to stop it too, `addLateBundleMembers` should check the Series.
+- **PRH and Yen Press made empty Release Bundles of box sets with no
+  stated coverage.** Until such a box set was held, PRH and Yen Press in
+  Bootstrap Mode made a box set whose title, blurbs and line's size give
+  no range of Volumes ("… Box Set", or a title whose statements disagree)
+  a Release Bundle with no members, and linked the box's observation to
+  it. No later run fills it or holds the box: a linked box adds only the
+  members its record covers (`reconcileCatalogBox` in
+  `convex/lib/catalogTitle.ts`), here none. Such a bundle is marked
+  Bootstrap-Unreviewed (the `by_bootstrap` index on `releaseBundles`), has
+  no `bundleMemberships` row, and is linked from a `prh` or `yenpress`
+  observation. No Proposal or edit form changes a bundle's members, so an
+  Editor can only report it. A Moderator can merge it into a bundle that
+  has its members, or hide it, from its Manage page
+  ([moderation](moderation.md#hide-restore-merge-split-and-locks)); a
+  hidden bundle keeps the box's observation linked, so the box is not
+  held either. The operator's one-time repair can fill one
+  (`repair:runBatch`, a `releaseBundle` entry naming the bundle and its
+  members' ISBNs). A fix is a repair that unlinks the box's observation
+  from each such bundle and hides the bundle, so the next apply holds the
+  box.
 - **Due covers are asked about again every hour during an outage.** While
   Open Library or another upstream does not answer, every viewed cover
   that is due for its 90-day check is asked about again roughly once an

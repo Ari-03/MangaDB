@@ -187,8 +187,7 @@ links to.
 2. After deploying, before any sync: enable again exactly the sources
    step 1 disabled, one command per key it wrote down:
    `npx convex run importSources:setEnabledInternal '{"key":"…","enabled":true}'`.
-   A source that was disabled before step 1 stays disabled (production's
-   publisher sources have been disabled since 2026-09-28). A sync of a
+   A source that was disabled before step 1 stays disabled. A sync of a
    disabled source returns `{"skipped": "disabled"}` and does nothing, so
    without this step steps 4 and 8 do nothing. Skip it if step 1 let the
    runs finish instead.
@@ -224,8 +223,9 @@ links to.
    All three are safe to rerun, and the six-hourly jobs run them anyway.
 6. Fill the Held Books list: `npx convex run imports:backfillHolds '{}'`.
    It continues itself page by page; the command prints only the first
-   page (`"done": false`), and the backfill has finished when the log
-   shows `[imports.backfillHolds] done: …`. Safe to rerun; a failed page
+   page's result, with `"done": false` when a continuation is needed, and
+   the backfill has finished when the log shows
+   `[imports.backfillHolds] done: …`. Safe to rerun; a failed page
    ends the chain, and a rerun starts from the top
    ([Held books](imports.md#held-books)).
 7. Clear the stored Series on read counts:
