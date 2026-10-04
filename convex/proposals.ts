@@ -57,7 +57,6 @@ import {
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
 import { placementView } from "./placement";
-import { applyMatureEvidence } from "./seriesBrowse";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
 
@@ -850,11 +849,8 @@ export const approveProposal = mutation({
         // A joined existing record was not created: no creation Revision.
         if (record.existing) continue;
         if (plan.table === "releases" && plan.placement !== undefined && record.ref.type === "release") {
-          const { observationId } = plan.placement;
-          await linkObservation(ctx, observationId, record.ref);
-          if ((await ctx.db.get(observationId))?.snapshot?.mature === true) {
-            await applyMatureEvidence(ctx, record.ref.id);
-          }
+          // Linking clears the hold and applies the book's 18+ evidence.
+          await linkObservation(ctx, plan.placement.observationId, record.ref);
         }
         const changes = Object.entries(record.revisionFields)
           .filter(([, value]) => value !== undefined)
