@@ -160,9 +160,12 @@ screen and unmounts the client. Once posthog-js has loaded, however soon
 the error comes after, `before_send` drops everything (the initial
 pageview too, if it was not yet sent) until the next navigation remounts
 the client and the session's consent is applied again; an error before
-that leaves posthog-js uninitialised until the remount. posthog-js
-captures the remounting navigation's pageview before React remounts, so
-it is dropped for every viewer and counts as a dropped pageview above.
+that leaves posthog-js uninitialised until the remount. When
+posthog-js was initialised before the error, it captures the recovery
+navigation's pageview before React remounts, so that pageview is dropped
+for every viewer and counts as a dropped pageview above. When the error
+came before initialisation, `init` at the remount sends that page's
+pageview as the initial one, under the usual first-load consent rules.
 Remote config is off only because `advanced_disable_flags` is set. A
 browser sending Do Not Track or Global Privacy Control sets the opt-out
 once on an account that has never chosen, so server events stop too; a

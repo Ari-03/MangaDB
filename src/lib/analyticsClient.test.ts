@@ -655,6 +655,14 @@ describe("analyticsClient against posthog-js", () => {
     ]);
   });
 
+  it("leaves the consent of a first mount with Off to `loaded`, storing no token-less opt-out", async () => {
+    const page = await mountPage("/series/1");
+    await page.render(OFF);
+    expect(requests).toEqual([]);
+    // An opt-out on posthog-js before init stores it under no token.
+    expect(Object.keys(localStorage)).not.toContain("__ph_opt_in_out_");
+  });
+
   it("sends nothing while loading and then Off after the consent gate remounts over a loaded client", async () => {
     const page = await mountPage("/series/1");
     session.viewer = viewerB(false);
