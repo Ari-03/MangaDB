@@ -115,6 +115,43 @@ describe("clearing a Human Override directly", () => {
     );
   });
 
+  it("names an import's waiting Proposal only when one would go stale, and hedges when unknown", () => {
+    const preview = () =>
+      text(
+        mount(page).find(
+          (host) => host.props.className === "section-hint" && text(host.props.children).startsWith("Clearing"),
+        )?.props.children,
+      );
+    press(mount(page), "Clear").click();
+    expect(preview()).toMatch(/to this record's history\.$/);
+    fakes.form = { ...liveForm("Original", "r1"), importReviewPending: true };
+    expect(preview()).toMatch(
+      /history; an import's Proposal still in review on this record goes stale, so approve it first if you want its value\.$/,
+    );
+    fakes.form = { ...liveForm("Original", "r1"), importReviewPending: null };
+    expect(preview()).toMatch(
+      /history; an import's Proposal in review on this record may go stale, so approve it first if you want its value\.$/,
+    );
+  });
+
+  it("refuses to confirm, and says why, when the record is locked meanwhile", () => {
+    press(mount(page), "Clear").click();
+    writeReason("The publisher's page is right again.");
+    // Locking writes no Revision, so the base is unchanged.
+    fakes.form = { ...liveForm("Original", "r1"), locked: true };
+    const locked = mount(page);
+    expect(press(locked, "Clear override").disabled).toBe(true);
+    expect(
+      locked.some(
+        (host) =>
+          host.props.role === "alert" &&
+          text(host.props.children) === "This record is now locked; its override cannot be cleared.",
+      ),
+    ).toBe(true);
+    confirmClear();
+    expect(fakes.clear).not.toHaveBeenCalled();
+  });
+
   it("says the last override was cleared after the panel disappears", async () => {
     press(mount(page), "Clear").click();
     writeReason("The publisher's page is right again.");

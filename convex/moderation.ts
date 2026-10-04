@@ -24,7 +24,7 @@ import { liveUser } from "./lib/auth";
 import { latestTouch } from "./lib/authority";
 import { fail } from "./lib/errors";
 import { ratedByDataTeam } from "./lib/mature";
-import { proposalInReview } from "./lib/observations";
+import { anchoredOn, currentOps } from "./lib/observations";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
@@ -593,20 +593,23 @@ export const editForm = query({
 const BLURB_OBSERVATION_CAP = 50;
 
 /**
- * Whether an observation linked to the record has queued a Proposal that is
- * still in review (a field conflict, a cancellation review). A source's
- * Proposal cannot be rebased, so any Revision on the record leaves it stale
- * until the source record next changes. Past the observation cap it answers
- * yes rather than read on.
+ * Whether an observation linked to the record has queued a Proposal, still
+ * in review, that changes this record against its base Revision (an import's
+ * field conflict; anchoredOn). A source's Proposal cannot be rebased, so any
+ * Revision on the record leaves it stale until the source record next
+ * changes. A cancellation review (a `hide`) is not stranded and does not
+ * count. Past the observation cap it answers null: not known.
  */
-async function importReviewPending(ctx: QueryCtx, ref: RecordRef): Promise<boolean> {
+async function importReviewPending(ctx: QueryCtx, ref: RecordRef): Promise<boolean | null> {
   const observations = await ctx.db
     .query("sourceObservations")
     .withIndex("by_record", (q) => q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id))
     .take(BLURB_OBSERVATION_CAP + 1);
-  if (observations.length > BLURB_OBSERVATION_CAP) return true;
-  for (const observation of observations) {
-    if (await proposalInReview(ctx, observation)) return true;
+  if (observations.length > BLURB_OBSERVATION_CAP) return null;
+  for (const { queuedProposalId } of observations) {
+    const proposal = queuedProposalId ? await ctx.db.get(queuedProposalId) : null;
+    if (proposal?.state !== "inReview") continue;
+    if ((await currentOps(ctx, proposal)).some((op) => anchoredOn(op, ref))) return true;
   }
   return false;
 }

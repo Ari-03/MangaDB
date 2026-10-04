@@ -24,7 +24,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
-import { retireLapsedCancellation } from "./observations";
+import { anchoredOn, currentOps, retireLapsedCancellation } from "./observations";
 import {
   authorityRank,
   decideField,
@@ -356,17 +356,11 @@ export async function reconcileFields(
       open.author.kind === "source" &&
       open.author.sourceKey === args.sourceKey
     ) {
-      const version = await ctx.db
-        .query("proposalVersions")
-        .withIndex("by_proposal", (q) =>
-          q.eq("proposalId", open._id).eq("versionNo", open.currentVersionNo),
-        )
-        .unique();
-      const op = version?.ops.length === 1 ? version.ops[0] : undefined;
+      const ops = await currentOps(ctx, open);
       // Only retire this record's field correction, or a cancellation review
       // the relisted observation no longer supports. Creation proposals may
       // share the observation and have their own review rules.
-      if (op?.kind === "update" && op.ref.type === ref.type && op.ref.id === ref.id) {
+      if (ops.length === 1 && anchoredOn(ops[0], ref)) {
         await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
         result.changed = true;
       } else if (await retireLapsedCancellation(ctx, observation, now)) {

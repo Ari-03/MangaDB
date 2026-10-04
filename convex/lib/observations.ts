@@ -75,13 +75,8 @@ export async function retireLapsedCancellation(
   ) {
     return false;
   }
-  const version = await ctx.db
-    .query("proposalVersions")
-    .withIndex("by_proposal", (q) =>
-      q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
-    )
-    .unique();
-  const op = version?.ops.length === 1 ? version.ops[0] : undefined;
+  const ops = await currentOps(ctx, proposal);
+  const op = ops.length === 1 ? ops[0] : undefined;
   if (op?.kind !== "hide" || op.ref.type !== "release" || op.ref.id !== linked.id) return false;
   await ctx.db.patch(proposal._id, { state: "withdrawn", decidedAt: now });
   return true;
@@ -171,6 +166,37 @@ export async function proposalInReview(
 ): Promise<boolean> {
   if (observation.queuedProposalId === undefined) return false;
   return (await ctx.db.get(observation.queuedProposalId))?.state === "inReview";
+}
+
+/** The ops of the Proposal's current version. */
+export async function currentOps(
+  ctx: QueryCtx | MutationCtx,
+  proposal: Doc<"proposals">,
+): Promise<Doc<"proposalVersions">["ops"]> {
+  const version = await ctx.db
+    .query("proposalVersions")
+    .withIndex("by_proposal", (q) =>
+      q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+    )
+    .unique();
+  return version?.ops ?? [];
+}
+
+/**
+ * Whether the op changes `ref` against its base Revision: an `update` (an
+ * import's field conflict) or a `clearOverride`. Any Revision on the record
+ * leaves such an op stale (proposals.ts staleRecordsOf); a `hide`, such as a
+ * cancellation review, is not.
+ */
+export function anchoredOn(
+  op: Doc<"proposalVersions">["ops"][number] | undefined,
+  ref: { type: string; id: string },
+): boolean {
+  return (
+    (op?.kind === "update" || op?.kind === "clearOverride") &&
+    op.ref.type === ref.type &&
+    op.ref.id === ref.id
+  );
 }
 
 /** The observation's Held Book row, if it is listed. */

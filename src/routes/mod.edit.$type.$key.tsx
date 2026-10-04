@@ -280,7 +280,8 @@ type ClearSnapshot = EditForm["overrides"][number] & {
  * the clear applies at once (moderation.submitDirectClear) against the base
  * Revision captured when Clear opened. If the record changes before the
  * clear is confirmed, confirmation waits until the Moderator reviews the
- * current state, which captures it afresh.
+ * current state, which captures it afresh. If it is hidden or locked
+ * meanwhile, confirmation is refused and the dialog says why.
  */
 function HumanOverrides({
   form,
@@ -375,10 +376,15 @@ function HumanOverrides({
           className="mod-edit-form"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!changed) void clear(clearing);
+            if (editable && !changed) void clear(clearing);
           }}
         >
-          {changed ? (
+          {!editable ? (
+            <p className="notice" role="alert">
+              This record is now {form.locked ? "locked" : form.status}; its override cannot be
+              cleared.
+            </p>
+          ) : changed ? (
             <div className="notice" role="alert">
               <p>
                 This record was changed by someone else after you opened Clear. Review its
@@ -398,9 +404,11 @@ function HumanOverrides({
             Clearing the override on {clearing.label} keeps its value,{" "}
             <code>{renderFieldValue(clearing.value)}</code> ({writtenByLabel(clearing.writtenBy)}),
             and adds a public revision to this record's history
-            {form.importReviewPending
-              ? "; an import's Proposal still in review on this record goes stale, so approve it first if you want its value."
-              : "."}
+            {form.importReviewPending === null
+              ? "; an import's Proposal in review on this record may go stale, so approve it first if you want its value."
+              : form.importReviewPending
+                ? "; an import's Proposal still in review on this record goes stale, so approve it first if you want its value."
+                : "."}
           </p>
           <label>
             Reason (required)
@@ -419,7 +427,7 @@ function HumanOverrides({
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={busy || changed || reason.trim() === ""}
+              disabled={busy || changed || !editable || reason.trim() === ""}
             >
               {busy ? "Clearing…" : "Clear override"}
             </button>

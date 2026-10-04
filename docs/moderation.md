@@ -67,9 +67,12 @@ Revisions that wrote it are unchanged. Imports then follow the usual Field
 Authority rules: replacing a value a person wrote (or that nothing records
 who wrote) still needs review, and a value a source wrote may update
 automatically. Not every differing offer reaches review, though. A less
-precise date that agrees with the current one, an offer a reviewer already
-rejected, and an offer from a source with no authority over the field are
-skipped or only recorded on the observation. An empty field that no one
+precise date that agrees with the current one and an offer from a source
+with no authority over the field are skipped or only recorded on the
+observation, and an offer a reviewer already rejected is not queued again.
+That rejection only keeps the offer out of review: where the source may
+update the field automatically, as when it wrote the current value, a
+value once rejected can still apply. An empty field that no one
 wrote can be filled by an import. Clearing replays no stored observation:
 an import changes the field only when its source offers a value again.
 
