@@ -594,6 +594,10 @@ export default defineSchema({
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
     .index("by_date", ["pubDate.sort"])
+    // The month window of the Releases browser (releases.monthBrowse) and
+    // the Publishers board (publisher.ts visibleMonth): active rows only, so
+    // hidden and merged ones neither cost reads nor crowd the cap.
+    .index("by_status_date", ["status", "pubDate.sort"])
     .index("by_publisher_date", ["publisherId", "pubDate.sort"])
     .index("by_bootstrap", ["bootstrapUnreviewed"])
     // Who shows a stored cover, so replacing one never strands a sharer.

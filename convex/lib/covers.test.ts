@@ -20,7 +20,7 @@ import {
   type SeriesCoverCandidate,
 } from "./covers";
 
-const NOW = new Date(Date.UTC(2026, 8, 25));
+const TODAY = 20260925;
 const release = (
   isbn13: string | undefined,
   over: Partial<SeriesCoverCandidate> = {},
@@ -35,8 +35,8 @@ const release = (
 
 describe("seriesCoverIsbns", () => {
   test("no ISBN anywhere is no pick", () => {
-    expect(seriesCoverIsbns([], NOW)).toEqual([]);
-    expect(seriesCoverIsbns([release(undefined)], NOW)).toEqual([]);
+    expect(seriesCoverIsbns([], TODAY)).toEqual([]);
+    expect(seriesCoverIsbns([release(undefined)], TODAY)).toEqual([]);
   });
 
   test("the standard run's Volume 1 in print leads", () => {
@@ -48,7 +48,7 @@ describe("seriesCoverIsbns", () => {
         release("9780000000004", { position: 2 }), // vol 2 print
         release("9780000000003"), // vol 1 print
       ],
-      NOW,
+      TODAY,
     );
     // Best first, capped at three: the ebook ranks last of all.
     expect(picked).toEqual(["9780000000003", "9780000000001", "9780000000004"]);
@@ -61,7 +61,7 @@ describe("seriesCoverIsbns", () => {
         release("9780000000010", { position: 10 }),
         release("9780000000005", { inLine: true, position: 5 }),
       ],
-      NOW,
+      TODAY,
     );
     expect(picked[0]).toBe("9780000000005");
   });
@@ -73,20 +73,29 @@ describe("seriesCoverIsbns", () => {
         release("9780000000002", { pubDate: undefined }),
         release("9780000000003", { position: 3 }),
       ],
-      NOW,
+      TODAY,
     );
     expect(picked[0]).toBe("9780000000003");
   });
 
+  test("a book counts as published from its release day, by the day passed in", () => {
+    const candidates = [
+      release("9780000000001", { pubDate: { year: 2026, sort: 20261010 } }),
+      release("9780000000003", { position: 3 }),
+    ];
+    expect(seriesCoverIsbns(candidates, 20261009)[0]).toBe("9780000000003");
+    expect(seriesCoverIsbns(candidates, 20261010)[0]).toBe("9780000000001");
+  });
+
   test("digital and Edition Lines still stand in when nothing better exists", () => {
     expect(
-      seriesCoverIsbns([release("9780000000001", { format: "digital", inLine: true })], NOW),
+      seriesCoverIsbns([release("9780000000001", { format: "digital", inLine: true })], TODAY),
     ).toEqual(["9780000000001"]);
   });
 
   test("an ISBN on file twice is offered once", () => {
     expect(
-      seriesCoverIsbns([release("9780000000001"), release("9780000000001", { position: 2 })], NOW),
+      seriesCoverIsbns([release("9780000000001"), release("9780000000001", { position: 2 })], TODAY),
     ).toEqual(["9780000000001"]);
   });
 });

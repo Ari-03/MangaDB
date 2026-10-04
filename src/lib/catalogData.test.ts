@@ -2,7 +2,7 @@
 // client replaced by one that records each query and its arguments.
 
 import { getFunctionName, type FunctionReference } from "convex/server";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const fakes = vi.hoisted(() => ({
   mature: false,
@@ -25,6 +25,9 @@ const { fetchHomeCatalog } = await import("./catalogData");
 beforeEach(() => {
   fakes.calls = [];
 });
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("fetchHomeCatalog", () => {
   test.each([
@@ -35,9 +38,17 @@ describe("fetchHomeCatalog", () => {
     await fetchHomeCatalog({ year: 2026, month: 12 }, 28);
     expect(fakes.calls).toEqual([
       { name: "catalog:stats", args: {} },
-      { name: "catalog:recentSeries", args: { limit: 28, showMature: false } },
+      { name: "catalog:recentSeries", args: { limit: 28, todaySort: expect.any(Number), showMature: false } },
       { name: "releases:monthBrowse", args: { year: 2026, month: 12, showMature: false } },
       { name: "releases:monthBrowse", args: { year: 2027, month: 1, showMature: false } },
     ]);
+  });
+
+  // The Convex query must not read a clock (its cached result would expire
+  // within seconds), so the day comes from here, in UTC.
+  test("sends the newest Series' cover pick today's UTC date", async () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 9, 4, 23, 30) });
+    await fetchHomeCatalog({ year: 2026, month: 10 }, 28);
+    expect(fakes.calls.find((call) => call.name === "catalog:recentSeries")?.args.todaySort).toBe(20261004);
   });
 });

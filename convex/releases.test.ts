@@ -1,14 +1,17 @@
+import type { FunctionReturnType } from "convex/server";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
-import { joinBrowseRows } from "./releases";
+import { joinBrowseRows, WINDOW_CAP } from "./releases";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { MIN_COVER_BYTES } from "./lib/covers";
-import { pubDate } from "./test.catalog";
+import { READ_CONCURRENCY } from "./lib/boundedReads";
+import { pubDate, roundTrips, syscallLoad } from "./test.catalog";
 import {
   insertCoverage,
   insertEdition,
+  insertEditionLine,
   insertPublisher,
   insertRelease,
   insertSeries,
@@ -315,5 +318,190 @@ describe("joinBrowseRows cover fallback", () => {
     // Thirteen by-Edition Coverage reads, plus one by-Volume scan shared by
     // all twelve borrowers (one each would make 25).
     expect(counts.volumeCoverages ?? 0).toBeLessThanOrEqual(14);
+  });
+});
+
+// A month that mixes everything the join decides on, inserted out of date
+// order: print and digital of one Edition on one day, an omnibus in an
+// Edition Line (month precision) covering a hidden Volume, a crossover
+// whose first Series is hidden, a Mature Series, and rows that drop out (a
+// merged Edition, a hidden Series alone). Two Series share 15 August, so
+// the day sorts by title, then Volume label.
+async function mixedMonth() {
+  const t = makeT();
+  await t.run(async (ctx) => {
+    const kodansha = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+    const yen = await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
+    const zeta = await insertSeries(ctx, { title: "Zeta Blade" });
+    const adult = await insertSeries(ctx, { title: "After Dark", mature: true });
+    const gone = await insertSeries(ctx, { status: "hidden", title: "Gone" });
+    const z1 = await insertVolume(ctx, { seriesId: zeta, position: 1 });
+    const z2 = await insertVolume(ctx, { seriesId: zeta, position: 2 });
+    const z3 = await insertVolume(ctx, { seriesId: zeta, position: 3, status: "hidden" });
+    const a1 = await insertVolume(ctx, { seriesId: adult, position: 1 });
+    const g1 = await insertVolume(ctx, { seriesId: gone, position: 1 });
+    const edition = async (publisherId: Id<"publishers">, volumeIds: Array<Id<"volumes">>, fields = {}) => {
+      const editionId = await insertEdition(ctx, { publisherId, ...fields });
+      for (const [index, volumeId] of volumeIds.entries()) {
+        await insertCoverage(ctx, { editionId, volumeId, order: index + 1 });
+      }
+      return editionId;
+    };
+    const line = await insertEditionLine(ctx, { seriesId: zeta, publisherId: kodansha, name: "Omnibus" });
+    const zetaVol1 = await edition(kodansha, [z1]);
+    const zetaVol2 = await edition(kodansha, [z2]);
+    const omnibus = await edition(kodansha, [z1, z2, z3], { editionLineId: line, linePosition: "1" });
+    const merged = await edition(kodansha, [z2], { status: "merged" });
+    const afterDark = await edition(yen, [a1]);
+    const goneEd = await edition(yen, [g1]);
+    const zetaRow = { publisherId: kodansha, seriesIds: [zeta] };
+    const yenRow = { publisherId: yen };
+    const release = (fields: Parameters<typeof insertRelease>[1], sort: number) =>
+      insertRelease(ctx, { ...fields, pubDate: pubDate(sort) });
+    await release({ ...zetaRow, editionId: zetaVol2, isbn13: "9780000000020" }, 20260815);
+    await release({ ...yenRow, editionId: afterDark, seriesIds: [adult], isbn13: "9780000000090" }, 20260815);
+    await release({ ...zetaRow, editionId: zetaVol1, format: "digital", isbn13: "9780000000011" }, 20260815);
+    await release({ ...zetaRow, editionId: omnibus, isbn13: "9780000000100" }, 20260800);
+    await release({ ...zetaRow, editionId: merged, isbn13: "9780000000030" }, 20260810);
+    await release({ ...yenRow, editionId: goneEd, seriesIds: [gone] }, 20260812);
+    await release({ ...zetaRow, editionId: zetaVol1, isbn13: "9780000000010" }, 20260815);
+    await release({ ...yenRow, editionId: zetaVol2, seriesIds: [gone, zeta], format: "digital" }, 20260803);
+  });
+  return t;
+}
+
+describe("releases.monthBrowse joins every Release at once", () => {
+  // What one-Release-at-a-time joining returned for this month (checked
+  // against that implementation): the same rows, in the same order.
+  const rows = [
+    [0, "Zeta Blade", "Vol. 1–2", "physical", ["9780000000100"], false],
+    [3, "Zeta Blade", "Vol. 2", "digital", ["9780000000020"], false],
+    [15, "After Dark", "Vol. 1", "physical", ["9780000000090"], true],
+    [15, "Zeta Blade", "Vol. 1", "digital", ["9780000000010", "9780000000011"], false],
+    [15, "Zeta Blade", "Vol. 1", "physical", ["9780000000010", "9780000000011"], false],
+    [15, "Zeta Blade", "Vol. 2", "physical", ["9780000000020"], false],
+  ];
+  const shape = (result: FunctionReturnType<typeof api.releases.monthBrowse>) =>
+    result.releases.map((r) => [
+      r.day ?? 0,
+      r.series.map((s) => s.title).join(" × "),
+      r.volumeLabel,
+      r.format,
+      r.coverIsbns,
+      r.mature,
+    ]);
+
+  it("keeps the rows, their order and the Mature filter exactly", async () => {
+    const t = await mixedMonth();
+    expect(shape(await t.query(api.releases.monthBrowse, { ...august, showMature: true }))).toEqual(rows);
+    expect(shape(await t.query(api.releases.monthBrowse, { ...august, showMature: false }))).toEqual(
+      rows.filter((row) => row[5] === false),
+    );
+    const omnibus = (await t.query(api.releases.monthBrowse, august)).releases[0];
+    expect([omnibus?.lineName, omnibus?.linePosition, omnibus?.edition.title]).toEqual([
+      "Omnibus",
+      "1",
+      "Zeta Blade Omnibus 1",
+    ]);
+  });
+
+  it("reads each document once, however many rows share it", async () => {
+    const t = await mixedMonth();
+    const gets = await t.run(async (ctx) => {
+      const counting = roundTrips(ctx);
+      await joinBrowseRows(counting.ctx, await ctx.db.query("releases").collect());
+      return [...counting.gets.values()];
+    });
+    expect(gets.length).toBeGreaterThan(0);
+    expect(gets.every((n) => n === 1)).toBe(true);
+  });
+
+  it("waits on as many round trips for forty Releases as for four", async () => {
+    const roundsFor = async (count: number) => {
+      const t = makeT();
+      return await t.run(async (ctx) => {
+        const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+        for (let n = 1; n <= count; n++) {
+          await seedCatalog(ctx, {
+            publisher: publisherId,
+            series: { title: `Series ${n}` },
+            release: { isbn13: String(9780000000000 + n), pubDate: pubDate(20260801 + (n % 28)) },
+          });
+        }
+        const counting = roundTrips(ctx);
+        const rows = await joinBrowseRows(counting.ctx, await ctx.db.query("releases").collect());
+        return { rows: rows.length, rounds: counting.rounds() };
+      });
+    };
+    const few = await roundsFor(4);
+    const many = await roundsFor(40);
+    expect([few.rows, many.rows]).toEqual([4, 40]);
+    // Edition, then Series, then Coverage, Publisher and the jacket's
+    // Releases, then the covered Volumes; one at a time was ~6 per Release.
+    // Every round here fits under READ_CONCURRENCY; a wider one is split.
+    expect(many.rounds).toBe(few.rounds);
+    expect(many.rounds).toBeLessThanOrEqual(4);
+  });
+
+  it("keeps a busy month's reads in flight under Convex's limit", async () => {
+    const t = makeT();
+    const joined = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const art = await ctx.storage.store(new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }));
+      // 300 Releases, each its own Series, line and stored cover: joined all
+      // at once, more than 1,200 reads would be in flight.
+      for (let n = 0; n < 300; n++) {
+        const seriesId = await insertSeries(ctx, { title: `Series ${n}` });
+        const volumeId = await insertVolume(ctx, { seriesId });
+        const editionLineId = await insertEditionLine(ctx, { seriesId, publisherId });
+        const editionId = await insertEdition(ctx, { publisherId, editionLineId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, {
+          editionId,
+          publisherId,
+          seriesIds: [seriesId],
+          isbn13: String(9780000000000 + n),
+          pubDate: pubDate(20260818),
+          coverImage: { storageId: art },
+        });
+      }
+      const counting = roundTrips(ctx);
+      await joinBrowseRows(counting.ctx, await ctx.db.query("releases").collect());
+      return { rounds: counting.rounds(), peak: counting.peak() };
+    });
+    let rows = 0;
+    const load = await syscallLoad(async () => {
+      rows = (await t.query(api.releases.monthBrowse, august)).releases.length;
+    });
+    expect(rows).toBe(300);
+    // The queue is full at its widest, and never past it.
+    expect(load.peak).toBe(READ_CONCURRENCY);
+    // The wide rounds split in the queue: ten round trips, where every read
+    // at once was four and one Release at a time ~2,100.
+    expect(joined.peak).toBe(READ_CONCURRENCY);
+    expect(joined.rounds).toBeLessThanOrEqual(12);
+  });
+
+  it("reads only active Releases, so hidden ones never crowd out the month", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const { publisherId, seriesId, editionId } = await seedCatalog(ctx, {
+        series: { title: "Survivor" },
+        release: { pubDate: pubDate(20260830) },
+      });
+      // A full cap of hidden Releases dated before the one active Release.
+      for (let n = 0; n < WINDOW_CAP; n++) {
+        await insertRelease(ctx, {
+          status: "hidden",
+          editionId,
+          publisherId,
+          seriesIds: [seriesId],
+          pubDate: pubDate(20260801),
+        });
+      }
+    });
+    const result = await t.query(api.releases.monthBrowse, august);
+    expect(result.releases.map((r) => r.series[0]?.title)).toEqual(["Survivor"]);
+    expect(result.capped).toBe(false);
   });
 });

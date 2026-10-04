@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { boardWindow, LANE_CAP, nearMonths } from "./publisher";
+import { WINDOW_CAP } from "./releases";
 import { pubDate } from "./test.catalog";
 import {
   insertCoverage,
@@ -504,6 +505,30 @@ describe("publisher.monthBoard", () => {
     expect(await tokyopopCard()).toMatchObject({ releases: 1, newSeries: 1 });
     await t.action(internal.seriesBrowse.rebuild, {});
     expect(await tokyopopCard()).toMatchObject({ releases: 1, series: 1, newSeries: 0 });
+  });
+
+  it("reads only active Releases, so hidden ones never crowd out the month", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const { publisherId, seriesId, editionId } = await seedCatalog(ctx, {
+        publisher: { name: "Tokyopop", slug: "tokyopop" },
+        series: { title: "Survivor" },
+        release: { pubDate: pubDate(20260930) },
+      });
+      // A full cap of hidden Releases dated before the one active Release.
+      for (let n = 0; n < WINDOW_CAP; n++) {
+        await insertRelease(ctx, {
+          status: "hidden",
+          editionId,
+          publisherId,
+          seriesIds: [seriesId],
+          pubDate: pubDate(20260901),
+        });
+      }
+    });
+    const { board, directory } = await t.query(api.publisher.monthBoard, { year: 2026, month: 9 });
+    expect(board.map((card) => [card.publisher.slug, card.releases])).toEqual([["tokyopop", 1]]);
+    expect(directory).toMatchObject([{ slug: "tokyopop", releases: 1 }]);
   });
 
   it("reads a malformed month as an empty board, directory intact", async () => {

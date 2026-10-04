@@ -9,6 +9,8 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { publisherLink } from "./catalogPages";
+import { boundedReads } from "./lib/boundedReads";
+import { todaySortKey } from "./lib/dates";
 import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
@@ -114,21 +116,37 @@ export async function recountCatalog(ctx: ActionCtx): Promise<Record<CountedTabl
  * see (`listed`), each with a jacket for the home page's "recently added"
  * shelf. Small and bounded: the shelf
  * is a taste of the catalog, search and the browser are the way in.
+ *
+ * `todaySort` is today's yyyymmdd (UTC) for the cover pick (lib/covers.ts
+ * `seriesCoverIsbns`): Convex caches a query's result until something it read
+ * changes, and a clock read expires it within seconds, so the app sends the
+ * day (src/lib/catalogData.ts). Optional only for clients from before the
+ * argument: a Worker mid-deploy, or a browser tab still on the old bundle
+ * (the home loader also runs in the browser). Those get the clock's day, as
+ * they always did, so their covers rank as before; the current app always
+ * sends it, so its results never read the clock. Make it required once old
+ * clients have aged out.
  */
 export const RECENT_SERIES_MAX = 28;
 export const recentSeries = query({
-  args: { limit: v.number(), ...showMatureArg },
-  handler: async (ctx, { limit, showMature }) => {
+  args: { limit: v.number(), todaySort: v.optional(v.number()), ...showMatureArg },
+  handler: async (ctx, { limit, todaySort, showMature }) => {
     const take = Math.max(1, Math.min(RECENT_SERIES_MAX, Math.floor(limit)));
+    // Old clients only: the clock, and the cache expiry that comes with it.
+    const today = todaySort ?? todaySortKey(new Date());
     // Look a little past the limit and seat the Series that have a jacket
     // first: a shelf of the newest announcements is mostly books whose art
     // no one has published yet, and a wall of cloth is not a taste of the
-    // catalog. Cloth fills whatever is left, newest first.
-    const docs = await ctx.db
-      .query("series")
-      .withIndex("by_publicId")
-      .order("desc")
-      .take(take * 3);
+    // catalog. Cloth fills whatever is left, newest first. Bookless Series
+    // (no books yet) are not a taste of the catalog, and Mature Series only
+    // for a viewer who opted in.
+    const docs = (
+      await ctx.db
+        .query("series")
+        .withIndex("by_publicId")
+        .order("desc")
+        .take(take * 3)
+    ).filter((doc) => listed(doc, showMature));
     type Shelved = {
       publicId: number;
       title: string;
@@ -137,13 +155,24 @@ export const recentSeries = query({
     };
     const jacketed: Array<Shelved> = [];
     const cloth: Array<Shelved> = [];
-    for (const doc of docs) {
-      // Bookless Series (no books yet) are not a taste of the catalog, and
-      // Mature Series only for a viewer who opted in.
-      if (!listed(doc, showMature)) continue;
-      const entry = { publicId: doc.publicId, title: doc.title, ...(await seriesCover(ctx, doc._id)) };
-      (entry.coverUrl || entry.coverIsbns.length > 0 ? jacketed : cloth).push(entry);
-      if (jacketed.length === take) break;
+    // Covers resolve a batch at a time, newest first, each batch only as
+    // large as the jackets still wanted: it can fill the shelf only on its
+    // last Series, so the Series read are exactly those a one-at-a-time walk
+    // stopping at the `take`-th jacket reads, in far fewer round trips.
+    let next = 0;
+    while (next < docs.length && jacketed.length < take) {
+      const batch = docs.slice(next, next + take - jacketed.length);
+      next += batch.length;
+      const entries = await Promise.all(
+        batch.map(async (doc) => ({
+          publicId: doc.publicId,
+          title: doc.title,
+          ...(await seriesCover(ctx, doc._id, today)),
+        })),
+      );
+      for (const entry of entries) {
+        (entry.coverUrl || entry.coverIsbns.length > 0 ? jacketed : cloth).push(entry);
+      }
     }
     return [...jacketed, ...cloth]
       .slice(0, take)
@@ -478,39 +507,56 @@ export async function activeVolumes(ctx: QueryCtx, seriesId: Id<"series">) {
  * omnibus of unknown extent still belongs to its line's reading path).
  * Shared by the Series page and the Series library rebuild (seriesBrowse.ts),
  * so both count the same books.
+ *
+ * The reads run concurrently, a round of each kind (every Volume's Coverage
+ * and the Series' lines, then the Editions and line members), at most
+ * READ_CONCURRENCY at a time (lib/boundedReads.ts, the caller's queue when
+ * `ctx` is already bounded), and the results are walked in Volume and row
+ * order afterwards, so the order and the first Positions are those of a
+ * walk one Volume at a time.
  */
 export async function seriesEditions(
-  ctx: QueryCtx,
+  unbounded: QueryCtx,
   seriesId: Id<"series">,
   volumes: Array<Doc<"volumes">>,
 ) {
+  const ctx = boundedReads(unbounded);
+  const [covering, lines] = await Promise.all([
+    Promise.all(volumes.map((volume) => coveringOf(ctx, volume._id))),
+    ctx.db
+      .query("editionLines")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .collect(),
+  ]);
+  // Each Edition once, at the first Volume that meets it.
+  const firstMet = new Map<Id<"editions">, number>();
+  volumes.forEach((volume, i) => {
+    for (const row of covering[i]!) {
+      if (!firstMet.has(row.editionId)) firstMet.set(row.editionId, volume.position);
+    }
+  });
+  const [covered, members] = await Promise.all([
+    Promise.all([...firstMet.keys()].map((id) => ctx.db.get(id))),
+    Promise.all(
+      lines
+        .filter((line) => line.status === "active")
+        .map((line) =>
+          ctx.db
+            .query("editions")
+            .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+            .collect(),
+        ),
+    ),
+  ]);
   const editions = new Map<Id<"editions">, Doc<"editions">>();
   const firstPosition = new Map<Id<"editions">, number>();
-  const seen = new Set<Id<"editions">>();
-  for (const volume of volumes) {
-    const rows = await coveringOf(ctx, volume._id);
-    for (const row of rows) {
-      if (seen.has(row.editionId)) continue;
-      seen.add(row.editionId);
-      const edition = await ctx.db.get(row.editionId);
-      if (!edition || edition.status !== "active") continue;
-      editions.set(edition._id, edition);
-      firstPosition.set(edition._id, volume.position);
-    }
+  for (const edition of covered) {
+    if (!edition || edition.status !== "active") continue;
+    editions.set(edition._id, edition);
+    firstPosition.set(edition._id, firstMet.get(edition._id)!);
   }
-  const lines = await ctx.db
-    .query("editionLines")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .collect();
-  for (const line of lines) {
-    if (line.status !== "active") continue;
-    const members = await ctx.db
-      .query("editions")
-      .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
-      .collect();
-    for (const member of members) {
-      if (member.status === "active" && !editions.has(member._id)) editions.set(member._id, member);
-    }
+  for (const member of members.flat()) {
+    if (member.status === "active" && !editions.has(member._id)) editions.set(member._id, member);
   }
   return { editions, firstPosition };
 }
@@ -534,16 +580,18 @@ async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
   const memberById = new Map(members.map((m) => [m._id, m]));
   // Edges are stored once as "from is a {type} of to" (spec §2); the page
   // renders the sentence whichever end this Series is.
-  const edges = [
-    ...(await ctx.db
-      .query("seriesRelationships")
-      .withIndex("by_from", (q) => q.eq("fromSeriesId", series._id))
-      .collect()),
-    ...(await ctx.db
-      .query("seriesRelationships")
-      .withIndex("by_to", (q) => q.eq("toSeriesId", series._id))
-      .collect()),
-  ];
+  const edges = (
+    await Promise.all([
+      ctx.db
+        .query("seriesRelationships")
+        .withIndex("by_from", (q) => q.eq("fromSeriesId", series._id))
+        .collect(),
+      ctx.db
+        .query("seriesRelationships")
+        .withIndex("by_to", (q) => q.eq("toSeriesId", series._id))
+        .collect(),
+    ])
+  ).flat();
   const relationships = [];
   for (const edge of edges) {
     const from = memberById.get(edge.fromSeriesId);
@@ -578,70 +626,83 @@ async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
  */
 export const seriesPage = query({
   args: { publicId: v.number() },
-  handler: async (ctx, { publicId }) => {
+  handler: async (unbounded, { publicId }) => {
+    // Every read below shares one queue (lib/boundedReads.ts): a long Series
+    // with several runs hydrates more Editions at once than Convex lets one
+    // function have reads in flight.
+    const ctx = boundedReads(unbounded);
     const series = await resolveActiveSeries(ctx, publicId);
     if (!series) return null;
 
-    const family = await seriesFamily(ctx, series);
-
-    // The canonical Volume sequence, in reading order.
-    const volumeDocs = await activeVolumes(ctx, series._id);
+    // The family, the credits and the books share nothing, so they read
+    // concurrently.
+    const [family, credits, volumeDocs] = await Promise.all([
+      seriesFamily(ctx, series),
+      // Its authors, from ANN's staff credits or publishers' creator names (people.ts).
+      creditsFor(ctx, series._id),
+      // The canonical Volume sequence, in reading order.
+      activeVolumes(ctx, series._id),
+    ]);
     const volumeById = new Map(volumeDocs.map((doc) => [doc._id, doc]));
 
-    const editions = [];
-    for (const edition of (await seriesEditions(ctx, series._id, volumeDocs)).editions.values()) {
-      const publisher = await ctx.db.get(edition.publisherId);
-      const line = edition.editionLineId
-        ? await ctx.db.get(edition.editionLineId)
-        : null;
+    // Every Edition hydrates at once, the queue starting at most
+    // READ_CONCURRENCY reads at a time; Promise.all keeps them in the order
+    // seriesEditions met them, which the reading paths are built from.
+    const { editions: editionDocs } = await seriesEditions(ctx, series._id, volumeDocs);
+    const editions = await Promise.all(
+      [...editionDocs.values()].map(async (edition) => {
+        const [publisher, line, coverageRows, releaseDocs] = await Promise.all([
+          ctx.db.get(edition.publisherId),
+          edition.editionLineId ? ctx.db.get(edition.editionLineId) : null,
+          // The Edition's ordered Coverage within this Series.
+          coverageOf(ctx, edition._id),
+          releasesOf(ctx, edition._id).then((docs) => docs.filter((doc) => doc.status === "active")),
+        ]);
 
-      // The Edition's ordered Coverage within this Series.
-      const coverageRows = await coverageOf(ctx, edition._id);
-      const coverage = [];
-      for (const cov of coverageRows) {
-        const covered = volumeById.get(cov.volumeId);
-        if (!covered) continue;
-        coverage.push({
-          volumePublicId: covered.publicId,
-          position: covered.position,
-          label: covered.label ?? null,
-          extent: cov.extent,
-        });
-      }
-
-      const releaseDocs = (await releasesOf(ctx, edition._id)).filter((doc) => doc.status === "active");
-      // A book's jacket: the first stored cover among its Releases; the page
-      // falls back to ISBN-derived art (lib/cover.tsx) when there is none.
-      let editionCover: string | null = null;
-      const releases = [];
-      for (const release of releaseDocs) {
-        if (editionCover === null && release.coverImage) {
-          editionCover = await coverUrl(ctx, release.coverImage.storageId);
+        const coverage = [];
+        for (const cov of coverageRows) {
+          const covered = volumeById.get(cov.volumeId);
+          if (!covered) continue;
+          coverage.push({
+            volumePublicId: covered.publicId,
+            position: covered.position,
+            label: covered.label ?? null,
+            extent: cov.extent,
+          });
         }
-        releases.push({
+
+        // A book's jacket: the first stored cover among its Releases; the page
+        // falls back to ISBN-derived art (lib/cover.tsx) when there is none.
+        // Checked one Release at a time, so it reads no further than the first.
+        let editionCover: string | null = null;
+        for (const release of releaseDocs) {
+          if (!release.coverImage) continue;
+          editionCover = await coverUrl(ctx, release.coverImage.storageId);
+          if (editionCover !== null) break;
+        }
+        const releases = releaseDocs.map((release) => ({
           // The document id is what the signed-in overlay (collection and
           // reading quick actions on the shelf) addresses a Release by.
           id: release._id,
           format: release.format,
           isbn13: release.isbn13 ?? null,
           pubDate: release.pubDate ?? null,
-        });
-      }
-      releases.sort(
-        (a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity),
-      );
+        }));
+        releases.sort(
+          (a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity),
+        );
 
-      editions.push({
-        publicId: edition.publicId,
-        publisher:
-          publisherLink(publisher),
-        lineName: line && line.status === "active" ? line.name : null,
-        linePosition: edition.linePosition ?? null,
-        coverage,
-        coverUrl: editionCover,
-        releases,
-      });
-    }
+        return {
+          publicId: edition.publicId,
+          publisher: publisherLink(publisher),
+          lineName: line && line.status === "active" ? line.name : null,
+          linePosition: edition.linePosition ?? null,
+          coverage,
+          coverUrl: editionCover,
+          releases,
+        };
+      }),
+    );
 
     // The reading paths the page offers; the first path's first book fronts
     // the Series (its cover and social card).
@@ -666,8 +727,7 @@ export const seriesPage = query({
         mature: series.mature === true,
       },
       family,
-      // Its authors, from ANN's staff credits or publishers' creator names (people.ts).
-      credits: await creditsFor(ctx, series._id),
+      credits,
       volumes,
       editionGroups,
       coverUrl: editionGroups[0]?.books[0]?.coverUrl ?? null,

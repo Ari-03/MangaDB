@@ -120,11 +120,18 @@ export function fetchSeriesBrowse(args: SeriesBrowseArgs) {
  * page's shelves never show a Mature Series or its books, whatever the
  * viewer chose (lib/mature.tsx), so every read asks for the non-mature pool.
  * The header search is not one of these reads; it follows the choice.
+ * The newest Series' cover pick tells published books from forthcoming
+ * ones, so it gets today's date (UTC): the Convex query must not read a
+ * clock, which would expire its cached result within seconds.
  */
 export function fetchHomeCatalog(month: YearMonth, seriesPool: number) {
   return Promise.all([
     catalogQuery(api.catalog.stats, {}),
-    catalogQuery(api.catalog.recentSeries, { limit: seriesPool, showMature: false }),
+    catalogQuery(api.catalog.recentSeries, {
+      limit: seriesPool,
+      todaySort: todaySortKey(),
+      showMature: false,
+    }),
     catalogQuery(api.releases.monthBrowse, { ...month, showMature: false }),
     catalogQuery(api.releases.monthBrowse, { ...addMonths(month, 1), showMature: false }),
   ]);
