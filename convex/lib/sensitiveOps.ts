@@ -24,7 +24,7 @@ import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { primaryVolumeSeries } from "../catalogPages";
 import { liveUser } from "./auth";
-import { followMerges } from "./merges";
+import { followMerges, mergeSurvivor } from "./merges";
 import {
   displayInfo,
   getCanonical,
@@ -1551,14 +1551,14 @@ async function transferReferences(
     case "releaseVariant": {
       const loserId = loserDoc._id as Id<"releaseVariants">;
       const survivorId = survivorDoc._id as Id<"releaseVariants">;
-      // Variant pins have no index of their own; variant merges are rare
-      // enough that a scan of the two referencing tables is acceptable.
-      for (const entry of await ctx.db.query("collectionEntries").collect()) {
-        if (entry.variantId !== loserId) continue;
+      // Found by the pin itself, not the row's Release: a pin's Release has
+      // not always matched its variant's. applyMerge refused more than
+      // VARIANT_MERGE_PIN_LIMIT of them.
+      const pins = variantPins(ctx, loserId);
+      for (const entry of await pins.entries.collect()) {
         await repoint(ctx, log, "collectionEntries", entry, { variantId: survivorId });
       }
-      for (const membership of await ctx.db.query("bundleMemberships").collect()) {
-        if (membership.variantId !== loserId) continue;
+      for (const membership of await pins.memberships.collect()) {
         await repoint(ctx, log, "bundleMemberships", membership, {
           variantId: survivorId,
         });
@@ -1618,6 +1618,69 @@ async function transferReferences(
   }
 }
 
+// ---------- Release Variant merges ----------
+
+/**
+ * Pins one Release Variant merge may move. Each adds an entry of about 160
+ * bytes to the merge manifest, one document of at most 1 MiB that Split
+ * replays, so 4,000 leaves it under 700 KB with room for the rest; the
+ * reads and writes are far inside a transaction's limits.
+ */
+export const VARIANT_MERGE_PIN_LIMIT = 4000;
+
+/** The Collection Entries and Bundle Memberships pinning a Release Variant. */
+function variantPins(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
+  return {
+    entries: ctx.db
+      .query("collectionEntries")
+      .withIndex("by_variantId", (q) => q.eq("variantId", variantId)),
+    memberships: ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_variantId", (q) => q.eq("variantId", variantId)),
+  };
+}
+
+/** How many rows pin a variant, each count stopping one past the merge limit. */
+async function variantPinCounts(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
+  const pins = variantPins(ctx, variantId);
+  return {
+    entries: (await pins.entries.take(VARIANT_MERGE_PIN_LIMIT + 1)).length,
+    memberships: (await pins.memberships.take(VARIANT_MERGE_PIN_LIMIT + 1)).length,
+  };
+}
+
+/**
+ * Why merging Release Variant `loserId` into `survivorId` is refused, or
+ * null. Variants merge only within one Release, each resolved through any
+ * Release merge, so a moved pin stays on its row's Release; and only as
+ * many pins as one merge can move and record for Split. applyMerge refuses
+ * with this before writing anything; the merge form shows it instead of
+ * the merge.
+ */
+export async function variantMergeRefusal(
+  ctx: QueryCtx,
+  survivorId: Id<"releaseVariants">,
+  loserId: Id<"releaseVariants">,
+): Promise<string | null> {
+  const releaseOf = async (variantId: Id<"releaseVariants">) => {
+    const variant = await ctx.db.get(variantId);
+    if (!variant) return null;
+    return (await mergeSurvivor(ctx, "releases", await ctx.db.get(variant.releaseId)))?._id ?? null;
+  };
+  const survivorRelease = await releaseOf(survivorId);
+  if (!survivorRelease || survivorRelease !== (await releaseOf(loserId))) {
+    return "These variants belong to different Releases. Merge the Releases first, then merge the variants.";
+  }
+  const { entries, memberships } = await variantPinCounts(ctx, loserId);
+  if (entries + memberships > VARIANT_MERGE_PIN_LIMIT) {
+    return (
+      `More than ${VARIANT_MERGE_PIN_LIMIT} collection entries and bundle memberships pin the ` +
+      "variant being merged, more than one merge can move and record for Split."
+    );
+  }
+  return null;
+}
+
 // ---------- merge & split ----------
 
 /**
@@ -1649,6 +1712,10 @@ export async function applyMerge(
     if (doc.locked) {
       fail("locked", `The merge ${role} is temporarily locked — unlock it first.`);
     }
+  }
+  if (survivor.type === "releaseVariant" && loser.type === "releaseVariant") {
+    const refusal = await variantMergeRefusal(ctx, survivor.id, loser.id);
+    if (refusal) fail("badMerge", refusal);
   }
 
   const loserTitle = (await displayInfo(ctx, loser.type, loserDoc)).title;
@@ -2296,19 +2363,16 @@ export async function impactOf(
       break;
     }
     case "releaseVariant": {
-      const id = ref.id;
-      add(
-        "Collection entries pinning this variant",
-        (await ctx.db.query("collectionEntries").collect()).filter(
-          (e) => e.variantId === id,
-        ).length,
-      );
-      add(
-        "Bundle memberships pinning this variant",
-        (await ctx.db.query("bundleMemberships").collect()).filter(
-          (m) => m.variantId === id,
-        ).length,
-      );
+      // The rows a merge of this variant repoints, counted only as far as
+      // a merge may move them.
+      const pins = await variantPinCounts(ctx, ref.id);
+      const limit = VARIANT_MERGE_PIN_LIMIT;
+      const pinRow = (label: string, count: number) =>
+        count > limit
+          ? add(`${label} — more than ${limit}, first ${limit} counted`, limit)
+          : add(label, count);
+      pinRow("Collection entries pinning this variant", pins.entries);
+      pinRow("Bundle memberships pinning this variant", pins.memberships);
       break;
     }
     case "releaseBundle": {

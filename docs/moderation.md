@@ -109,6 +109,11 @@ approved Proposal, so the reason lands in public history.
   relationships, child records, user tracking (the survivor's row wins
   where a user tracked both), ratings, reviews, favorites and comments.
   The loser keeps its ID and points at the survivor, so its URLs 301.
+  Release Variants merge only within one Release, so merge the Releases
+  first. A variant merge moves at most 4,000 pins (Collection Entries and
+  Bundle Memberships naming the variant), because Split replays them from
+  one manifest document. The merge form shows either refusal before you
+  confirm.
 - **Split** is the only way back from a merge. Every merge stores a
   `mergeManifests` row with each moved reference and removed row. Split
   replays it backwards, skipping references changed since, and reactivates

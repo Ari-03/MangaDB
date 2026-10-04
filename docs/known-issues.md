@@ -58,10 +58,6 @@ is fixed.
   restarts each continuation from byte zero and skips lines it already
   processed. Byte-offset continuation with HTTP Range, or a dump split into
   separate files, would avoid it.
-- **Variant merges scan whole tables.** Merging a Release Variant, and its
-  impact preview, collect all of `collectionEntries` and
-  `bundleMemberships` (`convex/lib/sensitiveOps.ts`), because variant pins
-  have no index.
 - **Three copies of the apply ladder.** `applyBook` in
   `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
   `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same

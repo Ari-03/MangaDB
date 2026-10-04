@@ -167,7 +167,7 @@ function MergeSection({
   const [survivorKey, setSurvivorKey] = useState<string | null>(null);
   const survivor = useQuery(
     api.sensitiveOps.manageForm,
-    survivorKey !== null ? { type, key: survivorKey } : "skip",
+    survivorKey !== null ? { type, key: survivorKey, mergeFrom: form.ref as never } : "skip",
   );
   const mergeRecords = useMutation(api.sensitiveOps.mergeRecords);
 
@@ -221,6 +221,8 @@ function MergeSection({
           The survivor must be active and unlocked; "{survivor.title}" is{" "}
           {survivor.locked ? "locked" : survivor.status}.
         </p>
+      ) : survivor.mergeRefusal ? (
+        <p className="form-error">{survivor.mergeRefusal}</p>
       ) : (
         <>
           <ImpactPreview impact={survivor.impact} title={`survivor "${survivor.title}"`} />

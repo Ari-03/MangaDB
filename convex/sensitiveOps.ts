@@ -22,6 +22,7 @@ import {
   impactOf,
   reversibleManifestOf,
   SINGLE_RECORD_OPS,
+  variantMergeRefusal,
   type OpMeta,
   type SingleRecordOp,
 } from "./lib/sensitiveOps";
@@ -36,11 +37,13 @@ import { recordRef, recordType } from "./schema";
  * record's title, status, and lock state, the impact preview the operations
  * must show before confirmation, and — for merged records — the survivor
  * pointer and whether an un-reversed manifest makes a Split possible. The
- * merge form reuses this same query to preview its survivor target.
+ * merge form reuses this same query to preview its survivor target, passing
+ * the record to merge as `mergeFrom` to learn whether the engine would
+ * refuse that pair (`mergeRefusal`).
  */
 export const manageForm = query({
-  args: { type: recordType, key: v.string() },
-  handler: async (ctx, { type, key }) => {
+  args: { type: recordType, key: v.string(), mergeFrom: v.optional(recordRef) },
+  handler: async (ctx, { type, key, mergeFrom }) => {
     await requireModerator(ctx);
     const doc = await resolveEditTarget(ctx, type, key);
     if (!doc) return null;
@@ -61,6 +64,11 @@ export const manageForm = query({
       }
     }
 
+    const mergeRefusal =
+      ref.type === "releaseVariant" && mergeFrom?.type === "releaseVariant"
+        ? await variantMergeRefusal(ctx, ref.id, mergeFrom.id)
+        : null;
+
     return {
       ref: { type, id: doc._id as string },
       title,
@@ -70,6 +78,7 @@ export const manageForm = query({
       mergedInto,
       splitAvailable:
         doc.status === "merged" && (await reversibleManifestOf(ctx, ref)) !== null,
+      mergeRefusal,
       backLink,
     };
   },

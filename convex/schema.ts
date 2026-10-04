@@ -632,7 +632,9 @@ export default defineSchema({
     order: v.number(),
   })
     .index("by_bundle", ["bundleId", "order"])
-    .index("by_release", ["releaseId"]),
+    .index("by_release", ["releaseId"])
+    // Variant merges and their previews find pins by the variant alone.
+    .index("by_variantId", ["variantId"]),
 
   // ---------- provenance & moderation ----------
 
@@ -1040,7 +1042,8 @@ export default defineSchema({
     .index("by_user_bundle", ["userId", "bundleId"])
     // Reverse lookups for merge transfer + impact previews.
     .index("by_release", ["releaseId"])
-    .index("by_bundle", ["bundleId"]),
+    .index("by_bundle", ["bundleId"])
+    .index("by_variantId", ["variantId"]),
 
   // One row per (user, series) combining every per-series fact; a row exists
   // once the user touches the series in any way.

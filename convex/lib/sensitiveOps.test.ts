@@ -12,8 +12,9 @@
 // Releases and Bundles; Split must never resurrect personal rows of a User whose account
 // was deleted; merges carry the denormalized references that follow the
 // moved rows (Unmapped Packaging Series, a pass's Series, imprint parents);
-// and Split reverses every chunk of the data repair's chunked publisher
-// merge.
+// Release Variant merges move every pin by index, refuse variants of
+// different Releases and more pins than one merge can move; and Split
+// reverses every chunk of the data repair's chunked publisher merge.
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -30,12 +31,13 @@ import {
   insertPublisher,
   insertRelease,
   insertSeries,
+  insertVariant,
   insertVolume,
 } from "../test.factories";
 import { alice, bob, dave, makeT, purgeAccount, seedTeam, signedIn, type TestT as T } from "../test.helpers";
 import { hideRecord, insertBook, mergeAs, splitAs } from "../test.moderation";
 import { recountRatings } from "./ratings";
-import { IMPRINT_PREVIEW_CAP, stricterVisibility } from "./sensitiveOps";
+import { IMPRINT_PREVIEW_CAP, stricterVisibility, VARIANT_MERGE_PIN_LIMIT } from "./sensitiveOps";
 
 const asMod = (t: T) => signedIn(t, bob);
 const asReader = (t: T) => signedIn(t, dave);
@@ -1429,6 +1431,184 @@ describe("merge — denormalized references", () => {
     await splitAs(t, { type: "release", id: f.loser.releaseId });
     const split = await t.run((ctx) => ctx.db.get(passId));
     expect(split).toMatchObject({ releaseId: f.loser.releaseId, seriesId: f.loser.seriesId });
+  });
+});
+
+describe("merge — Release Variants", () => {
+  /**
+   * Two duplicate variants of the survivor Release and a third of it, one
+   * variant of the loser Release, and pins in both referencing tables: on
+   * the duplicate, on the third, and on the duplicate from rows of the
+   * loser Release (a pin whose Release disagrees with its variant's, which
+   * older merges and Splits could leave). `unrelated` Collection Entries
+   * pin nothing.
+   */
+  async function variants(t: T, unrelated = 0) {
+    const f = await setup(t);
+    const rows = await t.run(async (ctx) => {
+      const releaseId = f.survivor.releaseId;
+      const survivorId = await insertVariant(ctx, { releaseId, name: "Standard" });
+      const loserId = await insertVariant(ctx, { releaseId, name: "Standard (dupe)" });
+      const otherId = await insertVariant(ctx, { releaseId, name: "Bookstore exclusive" });
+      const elsewhereId = await insertVariant(ctx, { releaseId: f.loser.releaseId });
+      const publisherId = await firstPublisher(ctx);
+      const pin = (variantId: Id<"releaseVariants">, onRelease = releaseId) =>
+        ctx.db.insert("collectionEntries", { userId: f.daveId, releaseId: onRelease, state: "owned", variantId });
+      const member = async (variantId: Id<"releaseVariants">, onRelease = releaseId) =>
+        await insertBundleMember(ctx, {
+          bundleId: await insertBundle(ctx, { publisherId }),
+          releaseId: onRelease,
+          variantId,
+        });
+      const ids = {
+        survivorId,
+        loserId,
+        otherId,
+        elsewhereId,
+        entry: await pin(loserId),
+        legacyEntry: await pin(loserId, f.loser.releaseId),
+        otherEntry: await pin(otherId),
+        membership: await member(loserId),
+        legacyMembership: await member(loserId, f.loser.releaseId),
+        otherMembership: await member(otherId),
+      };
+      for (let n = 0; n < unrelated; n++) {
+        await ctx.db.insert("collectionEntries", { userId: f.daveId, releaseId, state: "wanted" });
+      }
+      return ids;
+    });
+    return { f, ...rows };
+  }
+  type Variants = Awaited<ReturnType<typeof variants>>;
+
+  const ref = (id: Id<"releaseVariants">) => ({ type: "releaseVariant" as const, id });
+  const mergeVariants = (t: T, v: Variants, survivorId = v.survivorId) =>
+    mergeAs(t, ref(survivorId), ref(v.loserId));
+
+  /** The variant each fixture pin names, and the Release of each pinning row. */
+  const pins = (t: T, v: Variants) =>
+    t.run(async (ctx) => {
+      const variantOf = async (id: Id<"collectionEntries"> | Id<"bundleMemberships">) => {
+        const row = await ctx.db.get(id);
+        return [row?.variantId, row?.releaseId];
+      };
+      return {
+        entry: await variantOf(v.entry),
+        legacyEntry: await variantOf(v.legacyEntry),
+        otherEntry: await variantOf(v.otherEntry),
+        membership: await variantOf(v.membership),
+        legacyMembership: await variantOf(v.legacyMembership),
+        otherMembership: await variantOf(v.otherMembership),
+      };
+    });
+
+  /** The pin rows of the loser variant's impact preview. */
+  const preview = async (t: T, id: Id<"releaseVariants">) =>
+    (await asMod(t).query(api.sensitiveOps.manageForm, { type: "releaseVariant", key: id }))!.impact.filter((row) =>
+      row.label.includes("pinning this variant"),
+    );
+
+  it("moves the merged variant's pins by index, legacy pins included, and Split puts them back", async () => {
+    // A read budget a scan of every Collection Entry would blow through.
+    const t = makeT({ transactionLimits: { documentsRead: 1_000 } });
+    const v = await variants(t, 2_000);
+    const before = await pins(t, v);
+    expect(await preview(t, v.loserId)).toEqual([
+      { label: "Collection entries pinning this variant", count: 2 },
+      { label: "Bundle memberships pinning this variant", count: 2 },
+    ]);
+
+    await mergeVariants(t, v);
+    const release = v.f.survivor.releaseId;
+    const loserRelease = v.f.loser.releaseId;
+    expect(await pins(t, v)).toEqual({
+      entry: [v.survivorId, release],
+      // The pin moves; its row keeps the Release it had.
+      legacyEntry: [v.survivorId, loserRelease],
+      otherEntry: [v.otherId, release],
+      membership: [v.survivorId, release],
+      legacyMembership: [v.survivorId, loserRelease],
+      otherMembership: [v.otherId, release],
+    });
+    // What the preview counted is what the merge moved, and nothing else.
+    const [manifest] = await t.run((ctx) => ctx.db.query("mergeManifests").collect());
+    expect(manifest!.repointed.map((row) => [row.table, row.field])).toEqual([
+      ["collectionEntries", "variantId"],
+      ["collectionEntries", "variantId"],
+      ["bundleMemberships", "variantId"],
+      ["bundleMemberships", "variantId"],
+    ]);
+
+    await splitAs(t, ref(v.loserId));
+    expect(await pins(t, v)).toEqual(before);
+    expect((await t.run((ctx) => ctx.db.get(v.loserId)))?.status).toBe("active");
+  });
+
+  it("refuses variants of different Releases, writing nothing, and the merge form says so", async () => {
+    const t = makeT();
+    const v = await variants(t);
+    const before = await pins(t, v);
+    await expect(mergeVariants(t, v, v.elsewhereId)).rejects.toMatchObject({
+      data: { code: "badMerge", message: expect.stringContaining("Merge the Releases first") },
+    });
+    expect(await pins(t, v)).toEqual(before);
+    expect(await t.run((ctx) => ctx.db.get(v.loserId))).toMatchObject({ status: "active" });
+    expect(await t.run((ctx) => ctx.db.query("mergeManifests").collect())).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toEqual([]);
+
+    const form = (survivorId: Id<"releaseVariants">) =>
+      asMod(t).query(api.sensitiveOps.manageForm, {
+        type: "releaseVariant",
+        key: survivorId,
+        mergeFrom: ref(v.loserId),
+      });
+    expect((await form(v.elsewhereId))?.mergeRefusal).toContain("Merge the Releases first");
+    expect((await form(v.survivorId))?.mergeRefusal).toBeNull();
+  });
+
+  it("reads a variant's Release through a Release merge", async () => {
+    const t = makeT();
+    const v = await variants(t);
+    // A variant still filed under a Release merged into the survivor's.
+    const strayId = await t.run(async (ctx) => {
+      const survivorRelease = (await ctx.db.get(v.f.survivor.releaseId))!;
+      const mergedId = await insertRelease(ctx, {
+        editionId: survivorRelease.editionId,
+        publisherId: survivorRelease.publisherId,
+        seriesIds: survivorRelease.seriesIds,
+        status: "merged",
+        mergedIntoId: v.f.survivor.releaseId,
+      });
+      return await insertVariant(ctx, { releaseId: mergedId });
+    });
+    await mergeAs(t, ref(strayId), ref(v.loserId));
+    expect((await pins(t, v)).entry[0]).toBe(strayId);
+  });
+
+  it("refuses more pins than one merge can move, and the preview says it stopped counting", async () => {
+    const t = makeT();
+    const v = await variants(t);
+    await t.run(async (ctx) => {
+      for (let n = 0; n < VARIANT_MERGE_PIN_LIMIT; n++) {
+        await ctx.db.insert("collectionEntries", {
+          userId: v.f.daveId,
+          releaseId: v.f.survivor.releaseId,
+          state: "wanted",
+          variantId: v.loserId,
+        });
+      }
+    });
+    await expect(mergeVariants(t, v)).rejects.toMatchObject({
+      data: { code: "badMerge", message: expect.stringContaining(`More than ${VARIANT_MERGE_PIN_LIMIT}`) },
+    });
+    expect(await t.run((ctx) => ctx.db.get(v.loserId))).toMatchObject({ status: "active" });
+    expect(await preview(t, v.loserId)).toEqual([
+      {
+        label: `Collection entries pinning this variant — more than ${VARIANT_MERGE_PIN_LIMIT}, first ${VARIANT_MERGE_PIN_LIMIT} counted`,
+        count: VARIANT_MERGE_PIN_LIMIT,
+      },
+      { label: "Bundle memberships pinning this variant", count: 2 },
+    ]);
   });
 });
 
