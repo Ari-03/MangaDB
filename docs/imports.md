@@ -243,7 +243,11 @@ observation to a record (`linkObservation` in
 `convex/lib/observations.ts`, which every importer and repair uses) removes
 the hold and its note, and so does withdrawal; a withdrawn book that
 returns is held again at its next placement. A linked box set whose
-Release Bundle names another Series keeps its note but is not held.
+Release Bundle names another Series keeps its note but is not held. A
+lock hold goes at the importer's next apply of the book after the
+unlock, not at the unlock itself, and until then the book stays listed
+under a lock that no longer exists; for Seven Seas that can be
+indefinitely ([known issues](known-issues.md#catalog-and-imports)).
 
 `/mod/imports` lists Held Books newest first (`imports.heldBooks`, Data
 Team), filtered by kind and source, with the source's title, link and

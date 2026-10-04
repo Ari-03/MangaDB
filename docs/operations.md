@@ -103,8 +103,9 @@ a change now, or where nothing scheduled will.
 | Any importer | Before deploying, not after: let running imports finish, or disable the sources and wait until no run is `running`. Required ([imports](imports.md#steady-state), "Deploying import code"). |
 | `FEATURES` in `convex/lib/features.ts` | Deploy both Convex and the Worker; both read the constant. |
 
-`seriesBrowse:rebuild`, `publisher:rebuildBoards` and `people:rebuild`
-return after their first action and finish in scheduled continuations.
+`seriesBrowse:rebuild` and `people:rebuild` return after their first
+action and finish in scheduled continuations; `publisher:rebuildBoards`
+runs in one action.
 
 ### Mature evidence after a deploy
 
@@ -179,41 +180,75 @@ links to.
 1. Before deploying: let running imports finish, or disable the sources
    and wait until no run is `running`. The round changes import code
    (the "Any importer" row in [After deploying a change](#after-deploying-a-change)).
-2. Mark the adult-only Publisher rows (Steamship):
+   Before disabling any, write down which sources are enabled:
+   `npx convex run imports:enabledSources '{}'` lists their keys. Disable
+   each with
+   `npx convex run importSources:setEnabledInternal '{"key":"…","enabled":false}'`.
+2. After deploying, before any sync: enable again exactly the sources
+   step 1 disabled, one command per key it wrote down:
+   `npx convex run importSources:setEnabledInternal '{"key":"…","enabled":true}'`.
+   A source that was disabled before step 1 stays disabled (production's
+   publisher sources have been disabled since 2026-09-28). A sync of a
+   disabled source returns `{"skipped": "disabled"}` and does nothing, so
+   without this step steps 4 and 8 do nothing. Skip it if step 1 let the
+   runs finish instead.
+3. Mark the adult-only Publisher rows (Steamship):
    `npx convex run launch:seedPublishers '{}'`. Safe to rerun; a rerun
    reports nothing new. Step 1 of
    [Mature evidence after a deploy](#mature-evidence-after-a-deploy).
-3. Only where Seven Seas observations exist (not production): let the
+4. Only where Seven Seas observations exist (not production): let the
    syncs re-read book pages stored under an older parser, or repeat
    `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'` until done.
-   Safe to rerun. Step 2 of the same section says how to tell it is done.
-4. Rebuild the library: `npx convex run seriesBrowse:rebuild`. It sets
+   Each call runs in one action and has finished when it returns. Safe to
+   rerun. Step 2 of the same section says how to tell the re-read is done.
+5. Rebuild the library: `npx convex run seriesBrowse:rebuild`. It sets
    the mature flags from the evidence (step 3 of the same section) and
    writes each Series card's list of jacket ISBNs (`coverIsbns`); a row
-   not yet rebuilt shows its one stored jacket. Then
-   `npx convex run publisher:rebuildBoards` and
-   `npx convex run people:rebuild`. All three are safe to rerun, and the
-   six-hourly jobs run them anyway.
-5. Fill the Held Books list: `npx convex run imports:backfillHolds '{}'`.
-   Safe to rerun; a failed page ends the chain, and a rerun starts from the
-   top ([Held books](imports.md#held-books)).
-6. Clear the stored Series on read counts:
+   not yet rebuilt shows its one stored jacket. The command returns after
+   its first action, about three minutes, and prints only that action's
+   result. A result with `continuedAfter` means rows remain and a
+   continuation is scheduled; the rebuild has finished only when an action
+   returns `swept`, `blocks` and `counts` instead, after it has also
+   swept stale cards and rewritten the packs. Wait until the Convex
+   dashboard's scheduled functions (under Schedules) show no
+   `seriesBrowse:rebuild` pending or in progress, and its logs show no
+   failed one; a failure ends the chain, and running the command again
+   starts over. Only then run `npx convex run publisher:rebuildBoards`
+   and `npx convex run people:rebuild`. Both read the Series cards the
+   library rebuild writes, so either run before it has finished keeps the
+   old card facts until its next six-hourly run. `publisher:rebuildBoards`
+   runs in one action and has finished when it returns. `people:rebuild`
+   continues like the library rebuild: its result says
+   `"continued": true` while phases remain, and the last action returns
+   `"continued": false`; wait for its scheduled functions the same way.
+   All three are safe to rerun, and the six-hourly jobs run them anyway.
+6. Fill the Held Books list: `npx convex run imports:backfillHolds '{}'`.
+   It continues itself page by page; the command prints only the first
+   page (`"done": false`), and the backfill has finished when the log
+   shows `[imports.backfillHolds] done: …`. Safe to rerun; a failed page
+   ends the chain, and a rerun starts from the top
+   ([Held books](imports.md#held-books)).
+7. Clear the stored Series on read counts:
    `npx convex run reading:unsetProgressSeries '{}'`. Safe to rerun, and
    done when the log shows `[reading.unsetProgressSeries] done: N rows
    cleared` or a rerun logs 0. The deploy before it is one-way (the
    "Volume Progress without a stored Series" row in
    [After deploying a change](#after-deploying-a-change), and
    [known issues](known-issues.md#personal-data-and-tracking)).
-7. Open Library needs no step of its own. Every sync parses each dump line
+8. Open Library needs no step of its own. Every sync parses each dump line
    with the current title parser and places an unlinked edition afresh,
    so an edition stored under an older parse (a "Vagabond Definitive
    Edition" read before that line was recognised) is placed or held under
    today's reading on the next sync: the monthly run, or
-   `npx convex run openLibrary:sync '{}'`. A linked edition is reconciled
-   again only when today's parse changes its snapshot. Safe to rerun; each
-   run downloads the dump ([Open Library](imports.md#open-library)). The
-   backfill in step 5 reads stored snapshots, so it classifies such an
-   edition by its older parse until that sync.
+   `npx convex run openLibrary:sync '{}'`, which continues itself under
+   one Import Run and has finished when that run is no longer `running`
+   (`/mod/imports`). A linked edition is reconciled again only when
+   today's parse changes its snapshot. Safe to rerun; each run downloads
+   the dump ([Open Library](imports.md#open-library)). The backfill in
+   step 6 reads stored snapshots, so it classifies such an edition by its
+   older parse until that sync. A sync never revisits an edition today's
+   parser drops or one no longer in the hosted dump, so a hold on such an
+   edition stays ([known issues](known-issues.md#catalog-and-imports)).
 
 ## Account deletion
 

@@ -137,6 +137,51 @@ is fixed.
   older parser read it (`noteListing` in `convex/sevenSeas.ts`), and Yen
   Press and Kodansha's
   back catalog when the book is next due for a fetch.
+- **A lock hold stays listed after the unlock until the importer applies
+  the book again.** Seven Seas, Kodansha, PRH and Yen Press drop a lock
+  hold (`Series N is locked.`) at the first apply that finds the Series
+  unlocked (`holdUnderLock` in `convex/lib/unmatched.ts`), and nothing
+  else drops it: lifting the lock writes no hold, "Prepare placement"
+  refuses a `series` hold, and `imports:backfillHolds` keeps an existing
+  row. Until then the book is listed as held by a lock that no longer
+  exists. PRH applies a title again at its next run that lists it (every
+  title at the Sunday full sweep), and the Kodansha calendar applies each
+  volume in its window daily. Yen Press re-reads a backlist page only when
+  it is due, 180 days after the last read (`BACKLIST_REFRESH_MS` in
+  `convex/yenPress.ts`), and the Kodansha back catalog re-crawls a series
+  whole after 180 days (`FULL_REFRESH_MS` in `convex/lib/kodansha.ts`) or
+  when its listing stamp changes; both re-read weekly a book that is
+  undated or dated within the last 60 days or later. Seven Seas applies an
+  unlinked book again only when its page changes, an older parser read
+  it, a forced run reads it, or `staleVerdict` matches its note
+  (`noteListing` in `convex/sevenSeas.ts`), which a lock's note never
+  does, so a Seven Seas book can stay listed as locked indefinitely. A fix is for lifting the
+  lock to drop the lock holds that name the Series (their rows carry its
+  `seriesId`), leaving each book to its importer's next apply.
+- **An import's Proposal queued before its Series was locked can still be
+  approved.** An import queues a guess under an open Series (an omnibus
+  outside Bootstrap Mode, a ladder flag), an Editor locks the Series, and
+  the next run notes the lock on the observation, which is not listed
+  while the Proposal is in review. Approval still creates the Volumes,
+  Edition and Release under the locked Series: reproduced for Seven Seas,
+  PRH and Yen Press. Kodansha queues under an existing Series only for a
+  ladder flag, whose approval takes the same check. `unavailableCreateRefs`
+  (`convex/lib/proposalCreates.ts`) treats a locked Series as stale only
+  for a member's placement Proposal; for any other create op it checks
+  only that a record the op names is active. The fix is to treat a create
+  under a locked Series as stale, as `staleRecordsOf` (`convex/proposals.ts`)
+  treats an edit to a locked record.
+- **Approving an import's Proposal queued before an Editor hid the work
+  creates the Series again.** An import queues a book whose Series is new
+  (steady state), then an Editor hides a Series of that work. The next run
+  of any of the four publisher sources notes the hidden work on the
+  observation (`removedSeriesFor` in `convex/lib/pipeline.ts`), but the
+  note is not listed while the Proposal is in review, and nothing on the
+  Proposal says so. Approval creates a second active Series of that title
+  beside the hidden one. The fix is for approval to check an import's
+  new-Series guess against the hidden-work rule (`removedSeriesFor`), or
+  for the placement tail to withdraw its own Proposal when it finds the
+  hidden work.
 - **A conflict or cancellation review hides an unlinked book.**
   `proposalInReview` (`convex/lib/observations.ts`) counts any import's
   Proposal in review that `queuedProposalId` points at, not only a
@@ -174,12 +219,14 @@ is fixed.
   and an author whose every Series is now mature is still listed there and
   in search.
 - **`prh.notePresent` has no read bound for a relisted page.** It marks
-  each listed ISBN seen, and a book that was withdrawn and is listed again
-  applies its 18+ evidence (`markSeen`, `applyMatureEvidence` in
-  `convex/lib/mature.ts`), reading every Series on its Release. A page of
-  200 such books, each on a Release spanning about 20 Series, would pass
-  the 4,096 index ranges a transaction may read. Real Releases span 1 to
-  4 Series.
+  seen the listed ISBNs whose entry produced no snapshot (the entries
+  `parseTitleList` in `convex/lib/prh.ts` drops as malformed or out of
+  scope); a parsed entry is marked by its own apply. A dropped book that
+  was withdrawn and is listed again applies its 18+ evidence (`markSeen`,
+  `applyMatureEvidence` in `convex/lib/mature.ts`), reading every Series
+  on its Release. A page of 200 such entries, each on a Release spanning
+  about 20 Series, would pass the 4,096 index ranges a transaction may
+  read. Real Releases span 1 to 4 Series.
 - **A Seven Seas book page that cannot be read is read again every run.**
   A listed book whose stored snapshot predates the current parser, or
   that was never read, is fetched on every run until a read succeeds. A
@@ -196,6 +243,29 @@ is fixed.
   why those fixtures come from the Internet Archive. The source has
   imported nothing in production and is disabled. No fix is proposed
   here.
+- **Some Open Library holds are never revisited by a sync.** A sync
+  applies only the dump lines today's parser reads (`parseDumpLine` and
+  `parseEditionJson` in `convex/lib/openLibrary.ts`). A line it now drops
+  (out of scope by title, not English, an audiobook) never reaches
+  `applyEdition`, so a hold written from an older parse of that edition
+  stays. An edition no longer in the hosted dump is never applied again,
+  and the sync withdraws nothing, since the dump is a filtered slice.
+  `imports:backfillHolds` classifies the stored snapshot, the older parse,
+  with `placeEdition`: it keeps the row while that snapshot would still be
+  held or would now match or be created, and drops it only for a skip or
+  a review. `openLibrary:replayDescriptions` reaches only described
+  editions whose ISBN an active Release holds. A fix is for the sync to
+  drop the hold of an edition today's parser rejects, and for the backfill
+  to drop an Open Library hold `placeEdition` would no longer write.
+- **An existing Release Bundle takes members under a locked Series.** A
+  box set already linked to a Release Bundle adds the member Releases that
+  arrive later, with an importer Revision of the bundle's members, while
+  its Series is locked: Seven Seas (`reconcileBoxMembers`), PRH and Yen
+  Press (`reconcileCatalogBox`) through `addLateBundleMembers` in
+  `convex/lib/pipeline.ts`, which stops only for a locked, inactive or
+  overridden bundle. This matches a linked Release, which only its own
+  lock stops ([imports](imports.md#creating-records)); if a Series lock is
+  to stop it too, `addLateBundleMembers` should check the Series.
 - **Due covers are asked about again every hour during an outage.** While
   Open Library or another upstream does not answer, every viewed cover
   that is due for its 90-day check is asked about again roughly once an
