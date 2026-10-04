@@ -58,10 +58,11 @@ Series, which a merge undoes. The case it gets wrong is a work reissued
 under new ISBNs, or a Series a publisher feed built from later Volumes than
 ANN lists.
 
-So every use is visible. When the rule drops the only Series of the
-entry's title and ANN creates a new one, the pair goes on the duplicate
-list on `/mod/launch`; in steady state the creation Proposal names the
-dropped Series.
+One use is made visible: when the rule drops the only Series of the
+entry's title and ANN creates a second Series beside it, the pair goes on
+the duplicate list on `/mod/launch`; in steady state the creation Proposal
+names the dropped Series. A candidate dropped among several Series of the
+title, or one reached through an alternative title, leaves no record.
 
 Ruled out: holding such an entry for review instead, which in Bootstrap
 Mode would leave its books out of the catalog until a person looked; and

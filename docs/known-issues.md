@@ -56,15 +56,19 @@ is fixed.
 
 ## Catalog and imports
 
-- **Sequel books ANN filed under the first work stay there.** Before ANN
-  lines of another work were told apart (`sequelWork` in
-  `convex/lib/ann.ts`), such a line became a Volume of its entry's Series,
-  and Yen Press and Open Library then linked to that Release by ISBN. A
-  linked line keeps its link, so these Releases stay under the wrong
-  Series until a Data Team member moves each to the right Series' Volume.
-  `npx convex run ann:listMisplacedSequelLines '{}'` lists them; on staging
-  they include ISBNs 9781975393489 and 9781975396923 on Series 1229's
-  Volumes 1 and 2 ([imports](imports.md#anime-news-network)).
+- **Releases ANN put on a same-titled Series stay there.** Before ANN
+  told same-titled entries apart (`workMatch` in `convex/lib/matching.ts`,
+  commit aa9a0d6), an entry could link by title to another work's Series,
+  and its lines became Releases on that Series' Volumes. An import keeps
+  an existing source link, so they stay until a Data Team member moves
+  them. The known case is ANN entry 30340, the Alchemist sequel ("… II:
+  Cycle of the Elixir"): ISBNs 9781975393489 and 9781975396923 sit on the
+  first Alchemist Series (publicId 1229) on staging; production's were
+  repaired by hand on 2026-09-28. `workMatch` still links such an entry
+  when the Series of its title holds no ISBN in a format the entry also
+  lists (no book yet, or only a digital one beside the entry's print
+  books): a shared original creator decides nothing, so the title does
+  ([imports](imports.md#matching-ladder)).
 - **ANN's title splitter has no rejected state.** `convex/lib/ann.ts` reads
   "(GN 97-99)" ranges but cannot mark a statement as unreadable, so a
   gapped list such as "(GN 1, 3)" on a 3-in-1 line is placed by the line's

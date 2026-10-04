@@ -44,7 +44,7 @@ type FixtureManga = {
   plot?: string;
   releases: FixtureRelease[];
   /** Staff rows; defaults to one "Story & Art" person. */
-  staff?: Array<{ id: number; name: string }>;
+  staff?: Array<{ id: number; name: string; task?: string }>;
 };
 
 function reportXml(manga: FixtureManga[], nskip: number, nlist: number) {
@@ -81,7 +81,7 @@ ${alts}
 ${plot}
 ${releases}
 ${(m.staff ?? [{ id: 1, name: "Some One" }])
-  .map((p) => `<staff gid="3"><task>Story &amp; Art</task><person id="${p.id}">${p.name}</person></staff>`)
+  .map((p) => `<staff gid="3"><task>${p.task ?? "Story &amp; Art"}</task><person id="${p.id}">${p.name}</person></staff>`)
   .join("\n")}</manga>`;
     })
     .join("\n");
@@ -1541,6 +1541,159 @@ describe("ann.sync — a title match that is another work", () => {
     await sync(t, { releasePages: false });
     expect(await linkOf(t, 15835)).toEqual({ type: "series", id: series });
   });
+
+  describe("two entries of one title by one creator (the Alchemist)", () => {
+    // ANN's two entries as they stand: the first manga and its sequel,
+    // which has an entry of its own under the same main title. Both credit
+    // Usata Nonohara as the original creator, so only their books tell them
+    // apart. Line ids, dates and person ids are stand-ins.
+    const TITLE = "The Alchemist Who Survived Now Dreams of a Quiet City Life";
+    const SEQUEL_LINE = `${TITLE} II: Cycle of the Elixir`;
+    const FIRST: FixtureManga = {
+      id: 22380,
+      title: TITLE,
+      altTitles: [
+        { lang: "JA", text: "Ikinokori Renkinjutsushi wa Machi de Shizuka ni Karashitai" },
+        { lang: "EN", text: "The Survived Alchemist With a Dream of Quiet Town Life" },
+        { lang: "JA", text: "生き残り錬金術師は街で静かに暮らしたい" },
+      ],
+      staff: [
+        { id: 5001, name: "Usata Nonohara", task: "Original creator" },
+        { id: 5002, name: "Guru Mizoguchi", task: "Art" },
+      ],
+      releases: [
+        { annId: 60001, date: "2021-01-19", designator: "eBook 1", ean: "9781975331306" },
+        { annId: 60002, date: "2021-03-23", designator: "GN 1", ean: "9781975384272" },
+        { annId: 60003, date: "2021-09-21", designator: "GN 2", ean: "9781975308537" },
+      ],
+    };
+    const SEQUEL: FixtureManga = {
+      id: 30340,
+      title: TITLE,
+      altTitles: [
+        { lang: "JA", text: "Ikinokori Renkinjutsushi wa Machi de Shizuka ni Kurashitai: Rinkan no Mahōyaku" },
+        { lang: "JA", text: "生き残り錬金術師は街で静かに暮らしたい ～輪環の魔法薬～" },
+      ],
+      staff: [
+        { id: 5001, name: "Usata Nonohara", task: "Original creator" },
+        { id: 5003, name: "Aya Obara", task: "Art" },
+      ],
+      releases: [
+        { annId: 60011, date: "2024-03-26", designator: "GN 1", ean: "9781975393489", title: SEQUEL_LINE },
+        { annId: 60012, date: "2024-12-10", designator: "GN 2", ean: "9781975396923", title: SEQUEL_LINE },
+        { annId: 60013, date: "2025-08-19", designator: "GN 3", ean: "9798855416176", title: SEQUEL_LINE },
+      ],
+    };
+    const FIRST_ISBNS = FIRST.releases.map((r) => r.ean!);
+    const SEQUEL_ISBNS = SEQUEL.releases.map((r) => r.ean!);
+    const PAGES = Object.fromEntries(
+      [FIRST, SEQUEL].flatMap((entry) =>
+        entry.releases.map((r) => [
+          r.annId,
+          releasePage({
+            title: r.title ?? entry.title,
+            volume: r.designator,
+            distributor: "Yen Press",
+            date: r.date,
+            isbn13: r.ean!,
+            mangaId: entry.id,
+          }),
+        ]),
+      ),
+    );
+
+    /** Import `entries` (the ones already imported stay listed), then its page pass and credits. */
+    async function importEntries(t: TestT, entries: FixtureManga[], pages = true) {
+      stubAnn(entries, PAGES);
+      await sync(t, { releasePages: false });
+      if (pages) await syncPages(t);
+      await t.action(internal.people.rebuild, {});
+    }
+
+    /** Each entry's Series, and the ISBNs on the Volumes of that Series. */
+    const placement = (t: TestT) =>
+      t.run(async (ctx) => {
+        const seriesOf = async (entry: FixtureManga) => {
+          const ref = (await ctx.db.query("sourceObservations").collect()).find(
+            (o) => o.sourceRecordId === `manga:${entry.id}`,
+          )?.recordRef;
+          return ref?.type === "series" ? ref.id : null;
+        };
+        const isbnsOn = async (seriesId: Id<"series"> | null) => {
+          const isbns: string[] = [];
+          for (const release of await ctx.db.query("releases").collect()) {
+            const coverage = await ctx.db
+              .query("volumeCoverages")
+              .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
+              .collect();
+            for (const row of coverage) {
+              const volume = await ctx.db.get(row.volumeId);
+              if (volume?.seriesId === seriesId && release.isbn13) isbns.push(release.isbn13);
+            }
+          }
+          return isbns.sort();
+        };
+        const first = await seriesOf(FIRST);
+        const sequel = await seriesOf(SEQUEL);
+        return {
+          series: (await ctx.db.query("series").collect()).length,
+          first,
+          sequel,
+          onFirst: await isbnsOn(first),
+          onSequel: await isbnsOn(sequel),
+        };
+      });
+
+    it.each([
+      ["the first work, then the sequel", [FIRST, SEQUEL]],
+      ["the sequel, then the first work", [SEQUEL, FIRST]],
+    ] as const)("keeps them apart when %s arrives with its books placed", async (_, [earlier, later]) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      await seedPublisher(t, "Yen Press", "yen-press");
+      await importEntries(t, [earlier]);
+      await importEntries(t, [earlier, later]);
+
+      // workMatch: one creator in common decides nothing, and the two
+      // entries' print ISBNs share none, so the later one is another work.
+      const placed = await placement(t);
+      expect(placed.series).toBe(2);
+      expect(placed.sequel).not.toBe(placed.first);
+      expect(placed.onFirst).toEqual([...FIRST_ISBNS].sort());
+      expect(placed.onSequel).toEqual([...SEQUEL_ISBNS].sort());
+      // The pair is on the Data Team's duplicate list.
+      expect(await t.run((ctx) => ctx.db.query("duplicateCandidates").collect())).toHaveLength(1);
+    });
+
+    // The limit (docs/known-issues.md): with no ISBN in a format the later
+    // entry also lists on the earlier one's Series, nothing tells the works
+    // apart and the title links them. The sequel's GN 3 becomes Volume 3 of
+    // the first work; its GN 1 and 2 are held only because the first work's
+    // own print books took those slots first.
+    it.each([
+      ["holds no book yet", false],
+      ["holds only its digital book", true],
+    ] as const)("links the sequel to the first work's Series when that Series %s", async (_, digital) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      const publisherId = await seedPublisher(t, "Yen Press", "yen-press");
+      await importEntries(t, [FIRST], false);
+      if (digital) {
+        await t.run((ctx) => insertBook(ctx, publisherId, ["1"], { release: { format: "digital", isbn13: FIRST_ISBNS[0] } }));
+      }
+      await importEntries(t, [FIRST, SEQUEL]);
+
+      const placed = await placement(t);
+      expect(placed.series).toBe(1);
+      expect(placed.sequel).toBe(placed.first);
+      expect(placed.onFirst).toEqual([...FIRST_ISBNS, SEQUEL_ISBNS[2]].sort());
+      for (const [i, line] of SEQUEL.releases.slice(0, 2).entries()) {
+        expect((await obsFor(t, line.annId))?.conflicts?.[0]?.reason).toBe(
+          `Volume ${i + 1} already has a physical Yen Press Release (ISBN ${FIRST_ISBNS[i + 1]}): a reprint or variant, not created.`,
+        );
+      }
+    });
+  });
 });
 
 describe("ann — a single-volume line never lands on packaging or a split part (B07)", () => {
@@ -2377,184 +2530,6 @@ describe("ann — release-page descriptions", () => {
       expect(await descriptionOf(t, ids["1"]!)).toBeNull();
       expect(await descriptionOf(t, ids["2"]!)).toBe("Dark Schneider’s foe.");
     });
-  });
-});
-
-describe("ann — a sequel's lines under its first work's entry", () => {
-  const FIRST = "The Alchemist Who Survived Now Dreams of a Quiet City Life";
-  const SEQUEL = `${FIRST} II`;
-  const SEQUEL_ISBNS = { 54971: "9781975393489", 54972: "9781975396923" } as const;
-  // ANN's entry for the first work, as staging stored it: its own eBook
-  // lines, and the sequel's two books under the sequel's title.
-  const ENTRY: FixtureManga = {
-    id: 30340,
-    title: FIRST,
-    releases: [
-      { annId: 30341, date: "2019-12-17", designator: "eBook 1", ean: "9781975331306" },
-      { annId: 30342, date: "2020-08-18", designator: "eBook 2", ean: "9781975308544" },
-      { annId: 54971, date: "2024-03-26", designator: "GN 1", ean: SEQUEL_ISBNS[54971], title: `${SEQUEL}: Cycle of the Elixir` },
-      { annId: 54972, date: "2024-12-10", designator: "GN 2", ean: SEQUEL_ISBNS[54972], title: `${SEQUEL}: Cycle of the Elixir` },
-    ],
-  };
-  const PAGES = {
-    54971: releasePage({ title: `${SEQUEL}: Cycle of the Elixir`, volume: "GN 1", distributor: "Yen Press", date: "2024-03-26", isbn13: SEQUEL_ISBNS[54971], mangaId: 30340 }),
-    54972: releasePage({ title: `${SEQUEL}: Cycle of the Elixir`, volume: "GN 2", distributor: "Yen Press", date: "2024-12-10", isbn13: SEQUEL_ISBNS[54972], mangaId: 30340 }),
-  };
-
-  /**
-   * Yen Press, the first work's Series (publicId 1229) with Volumes 1 and 2
-   * and their digital Releases, and the sequel's Series (5358) with its two
-   * Volumes when `sequel` asks for it.
-   */
-  async function seed(t: TestT, sequel: "absent" | "active" | "hidden") {
-    await seedRegistry(t, true);
-    return await t.run(async (ctx) => {
-      const publisherId = await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
-      const firstId = await insertSeries(ctx, { publicId: 1229, title: FIRST });
-      for (const [position, isbn13] of [[1, "9781975331306"], [2, "9781975308544"]] as const) {
-        const volumeId = await insertVolume(ctx, { seriesId: firstId, position });
-        const editionId = await insertEdition(ctx, { publisherId });
-        await insertCoverage(ctx, { editionId, volumeId });
-        await insertRelease(ctx, { editionId, publisherId, seriesIds: [firstId], format: "digital", isbn13 });
-      }
-      if (sequel === "absent") return { firstId, sequelId: null };
-      const sequelId = await insertSeries(ctx, { publicId: 5358, title: SEQUEL, status: sequel });
-      for (const position of [1, 2]) await insertVolume(ctx, { seriesId: sequelId, position });
-      return { firstId, sequelId };
-    });
-  }
-
-  /** Each Release's Series and ISBN, by the Series' publicId. */
-  const releasesBySeries = (t: TestT) =>
-    t.run(async (ctx) => {
-      const rows: Array<[number | undefined, string | undefined]> = [];
-      for (const release of await ctx.db.query("releases").collect()) {
-        rows.push([(await ctx.db.get(release.seriesIds[0]!))?.publicId, release.isbn13]);
-      }
-      return rows.sort((a, b) => String(a[1]).localeCompare(String(b[1])));
-    });
-
-  const holdFor = (t: TestT, annId: number) =>
-    t.run(async (ctx) => {
-      const obs = await ctx.db
-        .query("sourceObservations")
-        .withIndex("by_source_record", (q) => q.eq("sourceKey", "ann").eq("sourceRecordId", `release:${annId}`))
-        .unique();
-      const hold = await ctx.db
-        .query("placementHolds")
-        .withIndex("by_observation", (q) => q.eq("observationId", obs!._id))
-        .unique();
-      return {
-        linked: obs!.recordRef !== undefined,
-        kind: hold?.kind ?? null,
-        reason: obs!.conflicts?.find((c) => c.field === "placement")?.reason ?? null,
-      };
-    });
-
-  it.each(["absent", "hidden"] as const)(
-    "holds the sequel's lines when its Series is %s, never filing them under the first work",
-    async (state) => {
-      const t = makeT();
-      await seed(t, state);
-      stubAnn([ENTRY], PAGES);
-      await sync(t);
-      await syncPages(t);
-
-      // Nothing new under Series 1229: its Volumes keep their own books only.
-      expect(await releasesBySeries(t)).toEqual([
-        [1229, "9781975308544"],
-        [1229, "9781975331306"],
-      ]);
-      for (const annId of [54971, 54972]) {
-        expect(await holdFor(t, annId)).toEqual({
-          linked: false,
-          kind: "series",
-          reason: `The line names "${SEQUEL}", another work than the entry's "${FIRST}", and no active Series has that title.`,
-        });
-      }
-      // The entry's own lines link by ISBN, as any line does.
-      expect((await holdFor(t, 30341)).linked).toBe(true);
-      expect((await holdFor(t, 30342)).linked).toBe(true);
-    },
-  );
-
-  it("places the sequel's lines under the sequel's Series by their labels", async () => {
-    const t = makeT();
-    const { sequelId } = await seed(t, "active");
-    stubAnn([ENTRY], PAGES);
-    await sync(t);
-    await syncPages(t);
-
-    expect(await releasesBySeries(t)).toEqual([
-      [1229, "9781975308544"],
-      [1229, "9781975331306"],
-      [5358, SEQUEL_ISBNS[54971]],
-      [5358, SEQUEL_ISBNS[54972]],
-    ]);
-    await t.run(async (ctx) => {
-      for (const [label, isbn13] of [["1", SEQUEL_ISBNS[54971]], ["2", SEQUEL_ISBNS[54972]]] as const) {
-        const release = (await ctx.db.query("releases").collect()).find((r) => r.isbn13 === isbn13)!;
-        const [coverage] = await ctx.db
-          .query("volumeCoverages")
-          .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
-          .collect();
-        const volume = (await ctx.db.get(coverage!.volumeId))!;
-        expect([volume.seriesId, volume.label]).toEqual([sequelId, label]);
-      }
-      // The mirror built no Volume of the first work from the sequel's labels.
-      const volumes = await ctx.db.query("volumes").collect();
-      expect(volumes).toHaveLength(4);
-    });
-  });
-
-  it("reports a sequel line an earlier import linked to a Release of the first work", async () => {
-    const t = makeT();
-    const { firstId } = await seed(t, "active");
-    stubAnn([ENTRY], PAGES);
-    await sync(t, { releasePages: false });
-    // What the old placement left: the sequel's book as a physical Release
-    // of the first work's Volume 1, its line linked there.
-    const misplaced = await t.run(async (ctx) => {
-      const publisherId = (await ctx.db.query("publishers").first())!._id;
-      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.seriesId === firstId && v.label === "1")!;
-      const editionId = await insertEdition(ctx, { publisherId });
-      await insertCoverage(ctx, { editionId, volumeId: volume._id });
-      const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [firstId], isbn13: SEQUEL_ISBNS[54971] });
-      const obs = await ctx.db
-        .query("sourceObservations")
-        .withIndex("by_source_record", (q) => q.eq("sourceKey", "ann").eq("sourceRecordId", "release:54971"))
-        .unique();
-      await ctx.db.patch(obs!._id, { recordRef: { type: "release", id: releaseId } });
-      return { releaseId, volume };
-    });
-
-    const listed = await t.action(internal.ann.listMisplacedSequelLines, {});
-    expect(listed).toEqual([
-      {
-        annId: "54971",
-        title: `${SEQUEL}: Cycle of the Elixir`,
-        label: "1",
-        isbn13: SEQUEL_ISBNS[54971],
-        release: { id: misplaced.releaseId, isbn13: SEQUEL_ISBNS[54971] },
-        volumes: [{ publicId: misplaced.volume.publicId, label: "1" }],
-        series: { publicId: 1229, title: FIRST },
-        work: SEQUEL,
-        workSeries: { publicId: 5358, title: SEQUEL },
-      },
-    ]);
-    // A page of one line at a time reaches the same line.
-    let cursor: string | null = null;
-    const paged: string[] = [];
-    for (;;) {
-      const page: { lines: Array<{ annId: string }>; continueCursor: string; isDone: boolean } = await t.query(
-        internal.ann.misplacedSequelLines,
-        { paginationOpts: { numItems: 1, cursor } },
-      );
-      paged.push(...page.lines.map((line) => line.annId));
-      if (page.isDone) break;
-      cursor = page.continueCursor;
-    }
-    expect(paged).toEqual(["54971"]);
   });
 });
 

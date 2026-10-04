@@ -72,7 +72,11 @@ Hearts II" is held rather than filed under a parent listing that name. A
 title ending in a roman numeral ("BARBARITIES II") is read as the whole
 name first, and as the base Series' Volume only when an active base Series
 exists and no Series has the whole name; when a hidden Series has it, the
-book is held (`resolveBaseSeries` in `convex/lib/catalogTitle.ts`).
+book is held (`resolveBaseSeries` in `convex/lib/catalogTitle.ts`). So
+merge a duplicate Series into the one you keep rather than hiding it: a
+merged Series' title leads new books to its survivor, while a hidden one's
+title holds them, even when an active Series carries that title as an
+alternative.
 
 Before ANN links an entry to a Series by title, `workMatch` checks that it
 is the same work. A candidate is dropped when both sides know their
@@ -81,7 +85,7 @@ format and share none. A shared creator never proves a match, since a
 spinoff shares its author. When disjoint ISBNs drop the only Series of the
 entry's title and ANN creates the entry's Series (Bootstrap Mode), it
 records the two as a duplicate candidate, listed with the duplicate
-sweep's pairs on `/mod/launch` (`launch.duplicateQueue`), once per pair. In
+sweep's pairs on `/mod/launch` (`launch.duplicateQueue`). In
 steady state the queued creation Proposal names the dropped Series in its
 comment. The reasons are in [decisions.md](decisions.md#disjoint-isbns-mean-another-work).
 
@@ -308,32 +312,6 @@ Volumes. Each line links to the Release with its ISBN, else to the one
 same-label, same-format Release under the linked Series. The plot summary
 fills a blank Series synopsis.
 
-ANN sometimes files a sequel's books under the first work's entry: entry
-30340, "The Alchemist Who Survived Now Dreams of a Quiet City Life", lists
-"The Alchemist Who Survived Now Dreams of a Quiet City Life II: Cycle of
-the Elixir (GN 1)" and "(GN 2)". A line names another work when, with
-bracketed tags such as "[3-in-1 Edition]" set aside, its title is the
-entry's title or an alternative title, then a roman numeral from II to
-XXXIX or a number other than the line's own Volume, then optionally a
-colon and a subtitle (`sequelWork` in `convex/lib/ann.ts`). Such a line is
-no Volume of the entry's Series and adds nothing to its backbone. It goes
-under the one active Series titled with the work it names ("… Quiet City
-Life II"), or failing that its full title, by its label, through the same
-linking and page-pass rules as any line; with no such Series, or several,
-the page pass holds it as `series` with a reason naming the work. Edition
-lines, subtitles ("One Piece - Romance Dawn") and a number that repeats the
-line's Volume ("Tower Dungeon 7" at GN 7) are the entry's own lines.
-
-A line linked before this rule keeps its link, since the stored link is
-the strongest rung. `ann:listMisplacedSequelLines` lists every linked line
-of another work whose Release sits under its entry's Series: the line, its
-ISBN, the Release, the Volumes it covers, that Series, and the active
-Series its work names, if any. It is read-only and pages through ANN's
-release lines a hundred at a time (`ann:misplacedSequelLines`). Moving a
-listed Release to the right Series' Volume is a Data Team action. The
-known case is ISBNs 9781975393489 and 9781975396923, filed on staging under
-Series 1229's Volumes 1 and 2.
-
 A completed mirror chains the release-page pass (`ann:syncReleasePages`).
 Each unlinked line's page (distributor, ISBN, date, price, description) is
 fetched once and stored. The line then links by ISBN, or becomes a leaf
@@ -352,7 +330,6 @@ Encyclopedia, as ANN's license requires.
 ```sh
 npx convex run ann:sync '{}'
 npx convex run ann:sync '{"releasePages": false}'          # skip the chained page pass
-npx convex run ann:listMisplacedSequelLines '{}'           # sequel lines linked under the first work
 npx convex run ann:backfillDescriptions '{"limit": 300}'   # fill existing Releases now
 npx convex run ann:backfillDescriptions '{"annIds": ["10948", "23227"]}'
 npx convex run ann:repairDescriptions '{}'                  # re-clean stored text, no fetches

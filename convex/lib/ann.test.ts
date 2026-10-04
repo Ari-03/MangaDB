@@ -8,7 +8,6 @@ import {
   parseApiResponse,
   parseReleasePage,
   parseReport,
-  sequelWork,
   splitReleaseTitle,
 } from "./ann";
 
@@ -273,45 +272,6 @@ describe("release lines — ISBNs, chapters, packaging in the title", () => {
       label: "2",
       editionLineHint: false,
     });
-  });
-});
-
-describe("sequelWork", () => {
-  const ALCHEMIST = "The Alchemist Who Survived Now Dreams of a Quiet City Life";
-  const work = (title: string, entry: string, label?: string, altTitles: string[] = []) =>
-    sequelWork({ title, ...(label !== undefined ? { label } : {}) }, { title: entry, altTitles });
-
-  it("names the sequel ANN files under its first work's entry", () => {
-    expect(work(`${ALCHEMIST} II: Cycle of the Elixir`, ALCHEMIST, "1")).toBe(`${ALCHEMIST} II`);
-    expect(work("Kingdom Hearts II", "Kingdom Hearts", "2")).toBe("Kingdom Hearts II");
-    expect(work("Battle Royale 2: Blitz Royale", "Battle Royale", "1")).toBe("Battle Royale 2");
-    // Bracketed tags are set aside, and an alternative title counts.
-    expect(work("Kingdom Hearts II [Omnibus]", "Kingdom Hearts", "1")).toBe("Kingdom Hearts II");
-    expect(work("KH III", "Kingdom Hearts", "1", ["KH"])).toBe("KH III");
-  });
-
-  it("leaves the entry's own lines, edition lines and subtitles alone", () => {
-    const own: Array<[string, string, string?]> = [
-      ["Frieren", "Frieren", "14"],
-      ["Naruto [3-in-1 Edition]", "Naruto", "1"],
-      ["One Piece - [Omnibus] 33 - Wano", "One Piece"],
-      ["One Piece - [Walmart Exclusive Cover]", "One Piece", "30"],
-      ["One Piece - Romance Dawn", "One Piece", "1"],
-      ["Berserk Deluxe Edition", "Berserk", "1"],
-      ["Vagabond - Definitive Edition [Hardcover]", "Vagabond", "4"],
-      ["Vagabond [VIZBIG Edition]", "Vagabond", "2"],
-      ["Summer Ghost: The Complete Manga Collection", "Summer Ghost"],
-      ["orange: The Complete Collection 2", "Orange", "2"],
-      ["The Omnibus Club", "The Omnibus Club", "2"],
-      ["Some Manga (Kana)", "Some Manga", "1"],
-      // A number that repeats the line's Volume, and "I", are no sequel.
-      ["Tower Dungeon 7", "Tower Dungeon", "7"],
-      ["Kingdom Hearts I", "Kingdom Hearts", "1"],
-    ];
-    for (const [title, entry, label] of own) expect(work(title, entry, label)).toBeNull();
-    // The sequel's own entry, which lists the first work as an alternative title.
-    expect(work("Kingdom Hearts II", "Kingdom Hearts II", "1", ["Kingdom Hearts"])).toBeNull();
-    expect(work("Kingdom Hearts II: Chain", "Kingdom Hearts II", "1", ["Kingdom Hearts"])).toBeNull();
   });
 });
 
