@@ -367,6 +367,54 @@ is fixed.
   hour per Cloudflare location (`src/server/covers.ts`), with no backoff.
   When many covers fall due together this can pass Open Library's limit
   of about 100 lookups per 5 minutes.
+- **A Yen Press link has no time bound.** `yenPress:sync` hands off after
+  300 page fetches (`DEFAULT_MAX_FETCHES` in `convex/yenPress.ts`), never
+  by time. Each fetch waits 1.1 s first, so a link takes at least five and
+  a half minutes before its applies, the sitemap and its planning
+  queries. At about 6 s per fetch on average (a slow site, or rate
+  limiting, under which one fetch can retry for up to four minutes) a
+  link reaches Convex's 30-minute limit. The action is then ended before
+  it hands off and the run stays `running` until the hourly tick closes
+  it as stranded, as an Open Library link did on staging on 2026-10-04
+  before its links got a ten-minute budget
+  ([imports](imports.md#open-library)). A time budget beside the count is
+  the fix.
+- **A Kodansha back-catalog link has no time bound.**
+  `kodansha:backlistSync` hands off after 200 fetches
+  (`DEFAULT_MAX_FETCHES` in `convex/kodansha.ts`), checked only before
+  each series, so the last series' volume pages and covers come on top,
+  and each link reads the series listing again (12 pages for 1,170
+  series). Each fetch waits 1.1 s first. At about 8 s per fetch on
+  average a link reaches the 30-minute limit, with the outcome the Yen
+  Press entry above describes.
+- **An ANN mirror link has no time bound.** `ann:sync` hands off after
+  40 detail batches (`maxBatches`), checked before each report page of
+  10 batches: up to 44 fetches and up to 2,000 `applyManga` mutations,
+  one per entry with an English release. At about 0.85 s per apply a link
+  reaches the 30-minute limit. How long an apply takes on today's
+  catalog under load is not measured.
+- **ANN's page pass checks its time only before a fetch.**
+  `ann:syncReleasePages` hands off after 300 fetches or five minutes,
+  but reads the clock only before a line whose page needs fetching, and
+  only once the link has fetched one (`convex/ann.ts`). A line whose page
+  is stored is placed again with no check and counts toward neither
+  bound. A pass in which few lines are due a fetch walks every ANN
+  release line, 25 per query, and places every unlinked one again in a
+  single link, which passes the 30-minute limit once there are enough of
+  them. How many unlinked lines staging or production holds is not
+  established.
+- **A Seven Seas run is one action with no time bound.**
+  `sevenSeas:sync` reads every listing page (100 books each, 6,000+
+  books), runs `noteListing` for each listed book, then fetches up to
+  `maxDetailFetches` book pages (default 200) with their covers and up to
+  50 cover retries, waiting 0.35 s before each request, and never hands
+  off. If a `noteListing` call took as long as an Open Library line did
+  on staging on 2026-10-04 (about 0.17 s), the listing alone would take
+  about 17 minutes. Step 4 of
+  [After deploying the 2026-10 known-issues round](operations.md#after-deploying-the-2026-10-known-issues-round)
+  runs it with `maxDetailFetches` at 1,000. An action ended at 30
+  minutes leaves its run `running` until the hourly tick closes it as
+  stranded.
 
 ## Review queue
 

@@ -104,8 +104,19 @@ from byte zero and skips the lines earlier links processed (decided
 offset and no host that answers range requests, so any static URL can
 serve the dump. Continuing from a byte offset with HTTP Range, or
 splitting the dump into separate files, would save the repeated download.
-That changes if the dump grows past what one action can read, or if Open
-Library offers range requests.
+
+A link lasts at most ten minutes ([imports](imports.md#open-library)), so
+a run makes one download per ten minutes it runs. For today's dump of
+57,766 editions that is about 12 or 13 downloads at the pace of the
+runs of 2026-09-26 and 27 (111 and 126 minutes) and about 26 at the pace
+of 2026-10-04 (6,295 editions in 28 minutes, about four and a half hours
+for the whole dump), where 20,000-line links made four or five. Each
+download stops where its link stops, so together they read about half as
+many whole dumps.
+
+That changes if the dump grows until reading it up to a late link's
+first line takes much of that link's ten minutes, or if Open Library
+offers range requests.
 
 ## Staging
 

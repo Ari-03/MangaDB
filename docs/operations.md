@@ -256,9 +256,13 @@ links to.
    one Import Run and has finished when that run is no longer `running`
    (`/mod/imports`). The command itself prints an error after about five
    minutes while the run goes on (see
-   [After deploying a change](#after-deploying-a-change)); on staging the
-   run read about 225 dump lines a minute, which makes about four hours
-   if the dump holds the 58,000 editions staging has stored. A linked edition is reconciled again only when
+   [After deploying a change](#after-deploying-a-change)). How long it
+   takes is known only roughly: on staging, 57,766 editions in about two
+   hours on 2026-09-27, and about 1,000 dump lines every 2.8 minutes on
+   2026-10-04 with the Held Books backfill and a Yen Press sync running
+   beside it. The run is a chain of links of at most ten minutes each
+   ([Open Library](imports.md#open-library)). No run with ten-minute
+   links has yet been seen to finish on staging. A linked edition is reconciled again only when
    today's parse changes its snapshot. Safe to rerun; each run downloads
    the dump ([Open Library](imports.md#open-library)). The backfill in
    step 6 reads stored snapshots, so it classifies such an edition by its

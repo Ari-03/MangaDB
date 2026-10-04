@@ -638,13 +638,27 @@ npx convex run openLibrary:sync '{}'   # streams + self-continues to the end
 
 Without `OPENLIBRARY_DUMP_URL`, runs skip as "unconfigured".
 
-Each continuation of a run downloads the dump again from its first byte
-and skips the lines earlier links processed, a cost accepted
+A run is a chain of links under one Import Run. A link hands off to the
+next after ten minutes from its start or after 20,000 dump lines,
+whichever comes first (`LINK_BUDGET_MS` and `DEFAULT_MAX_LINES` in
+`convex/openLibrary.ts`), and applies at least one line first. Time is
+checked before each line, so a link runs past ten minutes by at most one
+line's apply and a gate check, well inside Convex's 30-minute limit. A
+line bound alone was not enough: on staging on 2026-10-04 a link read
+about 1,000 dump lines every 2.8 minutes beside the Held Books backfill
+and a Yen Press sync, so 20,000 lines would have needed about 56
+minutes. The link stamped its last gate 28 minutes in and never handed
+off, and its run stayed `running`.
+
+Each continuation downloads the dump again from its first byte and skips
+the lines earlier links processed, and that download counts toward its
+ten minutes. The cost is accepted
 ([decisions](decisions.md#open-library-continuations-read-the-dump-from-the-start)).
 
-`maxLines` caps the lines one link processes. With `noContinue: true` the
-sync closes its run after that one link instead of scheduling the next, and
-its result's `nextLine` says where it stopped: a one-link probe of a new
+`maxLines` lowers the line bound for every link of the run. With
+`noContinue: true` the sync closes its run after one link, ended by
+`maxLines` or its ten minutes, instead of scheduling the next, and its
+result's `nextLine` says where it stopped: a one-link probe of a new
 dump is `npx convex run openLibrary:sync '{"maxLines": 200, "noContinue":
 true}'`. `startLine` (0-based) starts at a given line, to reprocess from the
 line a run's error names (`dump line N`).
