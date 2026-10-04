@@ -74,7 +74,7 @@ import { applyMatureEvidence } from "./seriesBrowse";
 
 export const SOURCE_KEY = "sevenseas";
 const BASE_URL = "https://sevenseasentertainment.com";
-const PUBLISHER = { name: "Seven Seas Entertainment", slug: "seven-seas" };
+export const PUBLISHER = { name: "Seven Seas Entertainment", slug: "seven-seas" };
 const IMPORT_COMMENT = "Imported from Seven Seas Entertainment.";
 
 // ---------- the sync action ----------

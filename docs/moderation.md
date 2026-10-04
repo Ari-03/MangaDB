@@ -118,8 +118,8 @@ to clear, reviews and resubmits. There is no silent rebase.
 One Proposal can create several records at once. Create ops may refer to
 earlier create ops by temp-ID, so a Volume, Edition, coverage and Release
 arrive together. The `/mod/propose-new/{seriesPublicId}` wizard builds
-such a proposal. Imports use the same machinery for the creations they
-queue.
+such a proposal, and so does "Prepare placement" on a held book (below).
+Imports use the same machinery for the creations they queue.
 
 Pages:
 
@@ -187,5 +187,33 @@ Series and label it proposes, the matched Series, and the reason. A book
 leaves the list when an importer links its observation, queues a creation
 Proposal for it (it is then in the review queue), or its source stops
 listing it. Books no one can place or that are out of scope are not
-listed. The rows have no actions yet; see [imports](imports.md#held-books)
-for the kinds.
+listed. See [imports](imports.md#held-books) for the kinds.
+
+"Prepare placement" on a row (`convex/placement.ts`) drafts a creation
+Proposal for the book under its Series, authored by you and citing the
+source's record, and opens it on `/mod/proposal/{id}`. That page shows what
+the source says (title, label, line, publisher, ISBN, date, link) beside
+what approval creates (the Volumes it covers, those it creates marked new,
+the Edition and its line, the Release). An ordinary single book arrives
+with its one Volume. A book on a line or covering several Volumes arrives
+with no coverage: state the canonical Volumes it collects, first to last,
+or mark it Unmapped Packaging under its line, and save. A line's book
+number is not a Volume number, and the line's name never tells its size.
+Until the coverage is stated the Draft cannot be submitted. Then submit
+it like any Proposal: an Editor's waits for a Moderator, and a Moderator
+may approve their own, as with any Proposal. Readers cannot prepare.
+
+It does nothing for a book whose hold needs another decision first, and
+says why: no single active, unlocked Series (link, unlock or merge it), an
+ISBN or slot another Release holds (correct or merge that Release), a
+publisher with no Publisher row, a box set, or a book its source's checks
+put out of scope (prose, a rebinder's copy). It never creates a Series or
+a Publisher.
+
+While the Proposal is open the row stays, marked "Placement Draft" or
+"Placement awaiting review" with a link, and any member's click opens the
+same Proposal. Approval creates the records and links the source's record
+to the new Release, which takes the book off the list. If an import placed
+the same book meanwhile, approval reuses its Volume and its matching
+Edition, and refuses rather than duplicate a Release with the same ISBN.
+After a rejection the book is held again and can be prepared anew.

@@ -113,6 +113,13 @@ is fixed.
   memberships of one-Release Bundles. Release, Bundle and Series merges
   log every moved row into one manifest document with no bound at all.
   The fix is a Split, and a merge manifest, that work in batches.
+- **Two kinds of Held Book have no Data Team route.** "Prepare placement"
+  (`convex/placement.ts`) refuses a box set, which is a Release Bundle no
+  Proposal can create, and a book whose publisher has no Publisher row,
+  which only code creates (an importer's `ensurePublisher`, or the
+  canonical list in `convex/lib/publishers.ts`). Outside Bootstrap Mode
+  such a book stays held until an operator repair (`convex/lib/repair`)
+  creates the Bundle or a deploy adds the Publisher.
 - **Due covers are asked about again every hour during an outage.** While
   Open Library or another upstream does not answer, every viewed cover
   that is due for its 90-day check is asked about again roughly once an

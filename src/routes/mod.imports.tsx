@@ -1,9 +1,10 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { usePaginatedQuery, useQuery } from "convex/react";
-import type { FunctionArgs } from "convex/server";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { mutationErrorMessage } from "~/lib/errors";
 import { ModGate, ModTools, timestamp } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { slugParams } from "~/lib/slug";
@@ -13,8 +14,8 @@ import { slugParams } from "~/lib/slug";
  * Source with its cadence and health flag — an unhealthy source (three
  * consecutive failed runs) is flagged loudly — plus inspectable Import Run
  * history: source, timing, records seen/changed, and errors, and the Held
- * Books imports could not place (convex/imports.ts heldBooks). Never
- * indexed.
+ * Books imports could not place (convex/imports.ts heldBooks), each with
+ * "Prepare placement" (convex/placement.ts). Never indexed.
  */
 export const Route = createFileRoute("/mod/imports")({
   head: () => ({ meta: [{ title: "Imports — MangaDB" }] }),
@@ -196,10 +197,59 @@ function isHoldKind(value: string): value is HoldKind {
 
 const HELD_PAGE = 25;
 
+type HeldBook = FunctionReturnType<typeof api.imports.heldBooks>["page"][number];
+
+/**
+ * A held book's placement: a link to its open placement Proposal, marked
+ * Draft or awaiting review, else "Prepare placement", which opens the Draft
+ * it writes (or the one another member already wrote) or says why the book
+ * cannot be prepared.
+ */
+function Placement({ book }: { book: HeldBook }) {
+  const prepare = useMutation(api.placement.preparePlacement);
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  if (book.proposal !== null) {
+    return (
+      <div className="mod-actions">
+        <span className="chip mod-chip mod-chip--info">
+          {book.proposal.state === "draft" ? "Placement Draft" : "Placement awaiting review"}
+        </span>
+        <Link to="/mod/proposal/$id" params={{ id: book.proposal.id }}>
+          Open the Proposal
+        </Link>
+      </div>
+    );
+  }
+  const onPrepare = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      const result = await prepare({ observationId: book.observationId });
+      if (result.status === "unavailable") setRefusal(result.reason);
+      else await navigate({ to: "/mod/proposal/$id", params: { id: result.proposalId } });
+    } catch (err) {
+      setRefusal(mutationErrorMessage(err, "Preparing the placement failed."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mod-actions">
+      <button className="btn btn-sm" type="button" disabled={busy} onClick={() => void onPrepare()}>
+        {busy ? "Preparing…" : "Prepare placement"}
+      </button>
+      {refusal !== null ? <p className="form-error">Cannot prepare: {refusal}</p> : null}
+    </div>
+  );
+}
+
 /**
  * Held Books (CONTEXT.md), most recently held first: what an import
- * observed but could not place, with the source's own facts and the reason.
- * Filters by kind and source; pages through the list on demand.
+ * observed but could not place, with the source's own facts, the reason,
+ * and its placement (Placement). Filters by kind and source; pages through
+ * the list on demand.
  */
 function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> }) {
   const [kind, setKind] = useState<HoldKind | "">("");
@@ -220,8 +270,10 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
       <p className="section-hint">
         Books a source lists that its import could not place: the Volume they name is missing,
         their packaging cannot be mapped, no single Series fits, or their ISBN or slot is taken.
-        A book leaves this list once it is linked, a creation Proposal is queued for it, or its
-        source stops listing it.
+        A book leaves this list once it is linked, an import queues a creation Proposal for it, or
+        its source stops listing it. Prepare placement drafts a Proposal of your own that creates
+        what a missing-Volume or packaging book needs under its Series; the book stays here,
+        marked, until that Proposal is approved.
       </p>
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>
         <label>
@@ -285,6 +337,7 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
                 ) : null}
               </div>
               {row.reason !== null ? <p className="import-hold-reason">{row.reason}</p> : null}
+              <Placement book={row} />
             </li>
           ))}
         </ol>

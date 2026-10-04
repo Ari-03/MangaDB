@@ -45,6 +45,7 @@ import {
 } from "./lib/proposalCreates";
 import { fail } from "./lib/errors";
 import { fieldDescriptor } from "./lib/moderationFields";
+import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
@@ -55,6 +56,8 @@ import {
 } from "./lib/sensitiveOps";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
+import { placementView } from "./placement";
+import { applyMatureEvidence } from "./seriesBrowse";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
 
@@ -794,7 +797,9 @@ export const rejectProposal = mutation({
  * edits — producing one public Revision per update or clear. Stale-base
  * detection blocks approval: instead of applying, the proposal is flagged
  * stale and the caller is told which records moved; the author must
- * explicitly rebase and resubmit.
+ * explicitly rebase and resubmit. A new Release that places a held book
+ * (placement.ts) gets that book's observation linked to it here, which
+ * takes it off the Held Books list and applies its 18+ evidence.
  */
 export const approveProposal = mutation({
   args: { proposalId: v.id("proposals") },
@@ -844,6 +849,13 @@ export const approveProposal = mutation({
         const record = await applyCreatePlan(ctx, plan, temp);
         // A joined existing record was not created: no creation Revision.
         if (record.existing) continue;
+        if (plan.table === "releases" && plan.placement !== undefined && record.ref.type === "release") {
+          const { observationId } = plan.placement;
+          await linkObservation(ctx, observationId, record.ref);
+          if ((await ctx.db.get(observationId))?.snapshot?.mature === true) {
+            await applyMatureEvidence(ctx, record.ref.id);
+          }
+        }
         const changes = Object.entries(record.revisionFields)
           .filter(([, value]) => value !== undefined)
           .map(([field, after]) => ({ field, after }));
@@ -997,6 +1009,12 @@ async function describeCreate(
         ? fields.volumeCoverage.length
         : 0;
       tempLabels.set(op.tempId, "the new edition");
+      if (fields.coverageUnmapped === true) {
+        return `Create an edition at ${publisher} as Unmapped Packaging of its line`;
+      }
+      if (coverage === 0) {
+        return `Create an edition at ${publisher} whose coverage is not stated yet`;
+      }
       return `Create an edition at ${publisher} covering ${coverage} volume${coverage === 1 ? "" : "s"}`;
     }
     case "releases": {
@@ -1009,7 +1027,8 @@ async function describeCreate(
       if (fields.binding) bits.push(String(fields.binding));
       if (fields.isbn13) bits.push(`ISBN ${String(fields.isbn13)}`);
       tempLabels.set(op.tempId, "the new release");
-      return `Create a ${bits.join(", ")} release of ${edition}`;
+      const placed = fields.placement === undefined ? "" : ", linked to the held book it places";
+      return `Create a ${bits.join(", ")} release of ${edition}${placed}`;
     }
     default:
       return `Create a ${op.table} record`;
@@ -1301,6 +1320,8 @@ export const proposalDetail = query({
           }
         : null,
       notes: renderedNotes,
+      // A held book's placement (placement.ts): the Draft's, else the current version's.
+      placement: await placementView(ctx, proposal.draft?.ops ?? current?.ops ?? []),
       viewer: {
         isAuthor:
           proposal.author.kind === "user" &&

@@ -671,9 +671,10 @@ export const markWithdrawn = internalMutation({
 
 /**
  * Held Books, most recently held first, optionally of one kind and from one
- * source. Data Team. Each row carries what the source says about the book
- * and why it is held. A book whose Proposal is in review is never held:
- * the review queue has it.
+ * source. Data Team. Each row carries what the source says about the book,
+ * why it is held, and the member's placement Proposal still open for it, if
+ * any (placement.ts: a Draft, or awaiting review). A book whose import
+ * Proposal is in review is never held: the review queue has it.
  */
 export const heldBooks = query({
   args: {
@@ -714,6 +715,7 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">) {
     | undefined;
   const text = (value: unknown) => (typeof value === "string" ? value : null);
   const series = hold.seriesId !== undefined ? await ctx.db.get(hold.seriesId) : null;
+  const queued = observation?.queuedProposalId !== undefined ? await ctx.db.get(observation.queuedProposalId) : null;
   return {
     holdId: hold._id,
     sourceKey: hold.sourceKey,
@@ -728,6 +730,9 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">) {
     seriesTitle: text(book?.seriesTitle),
     volumeLabel: text(book?.volumeLabel) ?? text(book?.label),
     series: series ? { publicId: series.publicId, title: series.title } : null,
+    observationId: hold.observationId,
+    proposal:
+      queued?.state === "draft" || queued?.state === "inReview" ? { id: queued._id, state: queued.state } : null,
   };
 }
 
@@ -769,8 +774,9 @@ const BACKFILL_PAGE = 10;
  *
  * - a linked observation's `placement` note is dropped as stale, except on
  *   a Release Bundle, where it is a box set's live Series conflict;
- * - an observation whose Proposal is in review is the review queue's: its
- *   hold and note go (proposalInReview; a decided Proposal does not count);
+ * - an observation whose import Proposal is in review is the review queue's:
+ *   its hold and note go (proposalInReview; a decided Proposal, or a
+ *   member's placement Proposal, does not count);
  * - an unlinked Open Library edition is classified as applyEdition would
  *   (placeEdition): held if unheld and placeEdition holds it, its hold and
  *   note dropped if placeEdition skips it or leaves it to the ladder's flag

@@ -211,6 +211,59 @@ describe("queueCreationProposal", () => {
       ]);
     });
   });
+
+  it("queues no placement marks: an import's Volume and Edition never join records created meanwhile", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Noragami", ["1"]);
+      const volume1 = (await ctx.db.query("volumes").collect())[0]!._id;
+      const proposalId = await queueCreationProposal(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, "omnibus"),
+        seriesId,
+        seriesTitle: "Noragami",
+        labels: ["1", "2"],
+        editionLine: { name: "Omnibus", position: "1" },
+        release: { format: "physical", publisherSlug: "kodansha", isbn13: "9781646510001" },
+        comment: "Review omnibus coverage",
+        now: 1,
+      });
+      const version = (await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique())!;
+      expect(version.ops).toEqual([
+        { kind: "create", table: "volumes", tempId: "volume-2", fields: { seriesId, label: "2" } },
+        {
+          kind: "create",
+          table: "editionLines",
+          tempId: "edition-line",
+          fields: { seriesId, publisherSlug: "kodansha", name: "Omnibus", joinExisting: true },
+        },
+        {
+          kind: "create",
+          table: "editions",
+          tempId: "edition",
+          fields: {
+            publisherSlug: "kodansha",
+            editionLineId: "edition-line",
+            linePosition: "1",
+            volumeCoverage: [
+              { volume: volume1, order: 1, extent: "complete" },
+              { volume: "volume-2", order: 2, extent: "complete" },
+            ],
+          },
+        },
+        {
+          kind: "create",
+          table: "releases",
+          tempId: "release",
+          fields: { editionId: "edition", format: "physical", language: "en", isbn13: "9781646510001" },
+        },
+      ]);
+    });
+  });
 });
 
 describe("publisher resolution", () => {

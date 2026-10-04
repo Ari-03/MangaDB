@@ -75,6 +75,7 @@ import type * as moderation from "../moderation.js";
 import type * as openLibrary from "../openLibrary.js";
 import type * as packaging from "../packaging.js";
 import type * as people from "../people.js";
+import type * as placement from "../placement.js";
 import type * as prh from "../prh.js";
 import type * as proposals from "../proposals.js";
 import type * as publisher from "../publisher.js";
@@ -168,6 +169,7 @@ declare const fullApi: ApiFromModules<{
   openLibrary: typeof openLibrary;
   packaging: typeof packaging;
   people: typeof people;
+  placement: typeof placement;
   prh: typeof prh;
   proposals: typeof proposals;
   publisher: typeof publisher;

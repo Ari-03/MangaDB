@@ -165,7 +165,8 @@ lists the current set.
 A book an import observed but could not place, and that a person could,
 is a Held Book. The importer records why as a `placement` note on its
 observation, and lists the book in `placementHolds` with a kind while the
-observation is unlinked, not withdrawn, and has no Proposal in review:
+observation is unlinked, not withdrawn, and has no import's Proposal in
+review:
 
 | Kind | Meaning | Recorded by |
 |---|---|---|
@@ -180,12 +181,15 @@ record but is not listed: an ANN line with no ISBN, a variant cover, a
 prose imprint or a foreign-language distributor, and the Open Library
 editions described under "Open Library" below.
 
-While a Proposal of a book is in review, the book is the review queue's:
-queuing a creation Proposal removes the hold and its note, and a hold
-recorded meanwhile is a note only. The observation's `queuedProposalId`
-stays after the Proposal is decided (and conflict and cancellation
-reviews set it too), so only the Proposal's state counts: once it is
-approved, rejected or withdrawn, the next hold lists the book again.
+While an import's Proposal of a book is in review, the book is the review
+queue's: queuing a creation Proposal removes the hold and its note, and a
+hold recorded meanwhile is a note only. The observation's
+`queuedProposalId` stays after the Proposal is decided (and conflict and
+cancellation reviews set it too), so only the Proposal's state counts:
+once it is approved, rejected or withdrawn, the next hold lists the book
+again. A Data Team member's placement Proposal (below) works differently:
+the book stays listed, marked by that Proposal's state, so a rejection
+leaves it held at once.
 
 A hold keeps the time it was first held while the importer sees the same
 kind again, and moves to the top when its kind changes. Linking the
@@ -200,6 +204,42 @@ Team), filtered by kind and source, with the source's title, link and
 ISBN, the Series and label the source proposes, the matched Series, the
 reason, and when it was first held and last listed.
 
+**Prepare placement.** Each row has a "Prepare placement" button
+(`placement.preparePlacement`) that writes a Draft creation Proposal
+authored by the member, citing the observation, and opens it. The ops come
+from the importers' own builder (`creationOps` in
+`convex/lib/pipeline.ts`): any Volume the book needs that the Series lacks,
+the Edition (in the line the source names, created if the Series has no
+such line from that publisher) and the Release with the source's ISBN,
+format, binding, date, price and blurb. It applies to a `volumeMissing` or
+`packaging` hold whose Series is active and unlocked, whose publisher
+resolves to a Publisher row, whose ISBN no active Release holds, and that
+its adapter keeps in scope (not prose, a rebinder's copy, a variant cover
+or a box set). Anything else is refused with the reason and keeps its hold:
+`series` holds need a Series chosen, unlocked or merged first, `isbn` holds
+a correction or merge of the Release that has the ISBN or slot, and
+`other` holds a Publisher row. It never creates a Series or a Publisher.
+
+Only an ordinary single book (no line, no multi-volume or line word, by
+the adapter's own parsing) with a plain numeric label is prefilled with
+that one Volume. Any other book's coverage is left for the member to
+state on the Proposal page (`placement.setPlacement`): a range of
+canonical Volumes, or Unmapped Packaging under its line. Until then the
+Draft cannot be submitted. A book number on a line is a position in the
+line, so "Vagabond Definitive Edition, Vol. 4" never becomes Volume 4, and
+the line's name never sizes the range.
+
+The observation's `queuedProposalId` points at the Draft, so a second
+click by anyone opens it instead of writing another. Approval creates the
+records and links the observation to the new Release in the same
+transaction (`linkObservation`), which removes the hold and applies the
+book's 18+ evidence. If an import created the same records while the
+Proposal waited, approval reuses a Volume of the same label and an Edition
+with the same publisher, line, position and coverage. It refuses when the
+ISBN was taken or the observation was linked meanwhile, and marks the
+Proposal stale when the Series was hidden, merged or locked. Rejecting or
+withdrawing the Proposal leaves the book held, ready to prepare again.
+
 Holds recorded before the list existed, and Open Library editions skipped
 without a note, reach it through a backfill. It pages over every
 observation, ten at a time, continues itself, fetches nothing and writes
@@ -209,7 +249,7 @@ the backfill holds unlinked notes under the kind their reason names and
 leaves the unlisted ones as notes, classifies unlinked Open Library
 editions as the next run would, and drops `placement` notes left on
 linked observations (not on a Release Bundle). It removes only holds that
-are no longer held: a book whose Proposal is in review, an ANN line no one
+are no longer held: a book whose import's Proposal is in review, an ANN line no one
 can place or that its stored title or page puts out of scope (a variant
 cover, a prose imprint, a foreign-language distributor), or an Open Library
 edition the next run would skip or leave to the ladder's flag. The book in

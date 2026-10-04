@@ -123,7 +123,7 @@ export const SOURCE_KEY = "kodansha";
 /** The backlist crawl's registry row: its runs, cadence, health, and crawl state. */
 export const BACKLIST_KEY = "kodansha-backlist";
 const BASE_URL = "https://kodansha.us";
-const PUBLISHER: CanonicalPublisher = { name: "Kodansha", slug: "kodansha" };
+export const PUBLISHER: CanonicalPublisher = { name: "Kodansha", slug: "kodansha" };
 const VERTICAL: CanonicalPublisher = {
   name: "Vertical",
   slug: "vertical",

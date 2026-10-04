@@ -980,7 +980,7 @@ export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
  * range). Both yield the line name and position; a bare "(GN 1-3)" range
  * with no tag is an Omnibus. Box sets are bundles, never lines: null.
  */
-function packagingOf(line: {
+export function packagingOf(line: {
   title: string;
   label?: string;
   multi: boolean;
@@ -1310,7 +1310,7 @@ function descriptionOffer(
  * through `cleanAnnDescription`, so a page stored before the cleaner last
  * changed never writes stale text (credit tails, chrome, mojibake).
  */
-function pageDescriptionText(page: PageState | undefined): string | undefined {
+export function pageDescriptionText(page: PageState | undefined): string | undefined {
   return page?.description !== undefined ? cleanAnnDescription(page.description) : undefined;
 }
 

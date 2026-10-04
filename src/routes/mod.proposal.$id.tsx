@@ -15,14 +15,17 @@ import {
 } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
+import { slugParams } from "~/lib/slug";
 
 /**
  * The proposal review page (spec §5). A Moderator reviews the
  * exact immutable version — grouped before/after per record, evidence beside
  * the changes, base Revisions, structural impacts of creates — and approves,
  * rejects, or requests changes. The author submits, withdraws, or rebases.
- * Data-Team-only; internal discussion stays here, never public. Never
- * indexed.
+ * A Proposal that places a held book (convex/placement.ts) also shows what
+ * its source says beside what approval creates, and its author states its
+ * coverage and line here while it is a Draft. Data-Team-only; internal
+ * discussion stays here, never public. Never indexed.
  */
 export const Route = createFileRoute("/mod/proposal/$id")({
   head: () => ({ meta: [{ title: "Proposal — MangaDB" }] }),
@@ -46,6 +49,197 @@ type Detail = NonNullable<
 >;
 type RenderedOps = Detail["versions"][number]["ops"];
 type RenderedEvidence = Detail["versions"][number]["evidence"];
+type Placement = NonNullable<Detail["placement"]>;
+
+/** "2026-10-13", "2026-10" or "2026": a source date at the precision it gives. */
+function partialDate(date: { year: number; month?: number; day?: number }): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return [String(date.year), ...(date.month !== undefined ? [pad(date.month)] : []), ...(date.day !== undefined ? [pad(date.day)] : [])].join("-");
+}
+
+/** How the placed Edition's coverage reads. */
+function coverageText(coverage: Placement["coverage"]): string {
+  if (coverage.kind === "pending") return "not stated yet";
+  if (coverage.kind === "unmapped") return "Unmapped Packaging: a Moderator maps its Volumes later";
+  return coverage.volumes
+    .map((volume) => `Volume ${volume.label ?? "(unlabeled)"}${volume.created ? " (new)" : ""}`)
+    .join(", ");
+}
+
+/**
+ * A held book's placement: what its source says beside what approval
+ * creates under the Series, and, for its author while it is a Draft, the
+ * form that states its coverage (a range of canonical Volumes, or Unmapped
+ * Packaging under its line), its line, and the change comment. Saving
+ * rebuilds the Draft's ops (placement.setPlacement).
+ */
+function PlacementPanel({
+  placement,
+  proposalId,
+  editable,
+  comment,
+}: {
+  placement: Placement;
+  proposalId: Id<"proposals">;
+  editable: boolean;
+  comment: string;
+}) {
+  const setPlacement = useMutation(api.placement.setPlacement);
+  const { book, coverage } = placement;
+  const covered = coverage.kind === "volumes" ? coverage.volumes : [];
+  const [from, setFrom] = useState(covered[0]?.label ?? "");
+  const [to, setTo] = useState(covered[covered.length - 1]?.label ?? "");
+  const [unmapped, setUnmapped] = useState(coverage.kind === "unmapped");
+  const [lineName, setLineName] = useState(placement.line?.name ?? book?.line?.name ?? "");
+  const [linePosition, setLinePosition] = useState(placement.line?.position ?? book?.line?.position ?? "");
+  const [changeComment, setChangeComment] = useState(comment);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const onSave = async () => {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await setPlacement({
+        proposalId,
+        coverage: unmapped ? "unmapped" : { from, to: to.trim() === "" ? from : to },
+        line: lineName.trim() === "" ? null : { name: lineName, position: linePosition.trim() || null },
+        comment: changeComment,
+      });
+      setSaved(true);
+    } catch (err) {
+      setError(mutationErrorMessage(err, "Saving the placement failed."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="proposal-version">
+      <h2>Placement of a held book</h2>
+      <h3>What the source says</h3>
+      {book === null ? (
+        <p className="section-hint">The source's record can no longer be read.</p>
+      ) : (
+        <ul className="revision-changes">
+          <li>Title: {book.title}</li>
+          <li>Volume label: {book.label ?? "none (a book number on a line is not a Volume)"}</li>
+          <li>
+            Edition Line:{" "}
+            {book.line ? `${book.line.name}${book.line.position ? ` ${book.line.position}` : ""}` : "none"}
+          </li>
+          {book.statedRange ? (
+            <li>
+              Says it collects Volumes {book.statedRange.from}–{book.statedRange.to}
+            </li>
+          ) : null}
+          <li>Publisher: {book.publisher ?? "none given"}</li>
+          <li>ISBN-13: {book.isbn13 ?? "none"}</li>
+          <li>Format: {book.format}</li>
+          <li>Date: {book.pubDate ? partialDate(book.pubDate) : "none"}</li>
+          <li>
+            Source: {placement.sourceKey}
+            {book.url ? (
+              <>
+                {" "}
+                (
+                <a href={book.url} rel="nofollow noreferrer">
+                  record page
+                </a>
+                )
+              </>
+            ) : null}
+          </li>
+        </ul>
+      )}
+      <h3>What approval creates</h3>
+      <ul className="revision-changes">
+        <li>
+          Series:{" "}
+          {placement.series ? (
+            <Link to="/series/$publicId/$slug" params={slugParams(placement.series.publicId, placement.series.title)}>
+              {placement.series.title}
+            </Link>
+          ) : (
+            "(missing)"
+          )}{" "}
+          (existing; never created here)
+        </li>
+        <li>Edition at {placement.publisherSlug ?? "(unknown publisher)"} covering: {coverageText(coverage)}</li>
+        <li>
+          Edition Line:{" "}
+          {placement.line
+            ? `${placement.line.name}${placement.line.position ? ` ${placement.line.position}` : ""}${placement.line.created ? " (new line)" : ""}`
+            : "none"}
+        </li>
+        <li>
+          Release: {placement.release.format ?? "?"}
+          {placement.release.binding ? `, ${placement.release.binding}` : ""}
+          {placement.release.isbn13 ? `, ISBN ${placement.release.isbn13}` : ""}; approval links the source's
+          record to it
+        </li>
+      </ul>
+      {coverage.kind === "pending" ? (
+        <p className="notice">
+          This book is not an ordinary single Volume, so its coverage is yours to state: the canonical
+          Volumes it collects, or Unmapped Packaging under its line. A book number is a position in its
+          line, not a Volume number. The Draft cannot be submitted until you state it.
+        </p>
+      ) : null}
+      {editable ? (
+        <form
+          className="mod-edit-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSave();
+          }}
+        >
+          <fieldset className="date-fieldset">
+            <legend>Covered Volumes</legend>
+            <label>
+              First
+              <input value={from} disabled={unmapped} onChange={(event) => setFrom(event.target.value)} />
+            </label>
+            <label>
+              Last
+              <input value={to} disabled={unmapped} onChange={(event) => setTo(event.target.value)} />
+            </label>
+          </fieldset>
+          <label>
+            <input type="checkbox" checked={unmapped} onChange={(event) => setUnmapped(event.target.checked)} />{" "}
+            Unmapped Packaging (no source states which Volumes it collects)
+          </label>
+          <span className="field-help">
+            Volumes of the range the Series lacks are created on approval; never size the range from the
+            line's name.
+          </span>
+          <label>
+            Edition Line
+            <input value={lineName} onChange={(event) => setLineName(event.target.value)} />
+            <span className="field-help">Leave empty for an ordinary book outside any line.</span>
+          </label>
+          <label>
+            Line position
+            <input value={linePosition} onChange={(event) => setLinePosition(event.target.value)} />
+          </label>
+          <label>
+            Change comment (required)
+            <textarea value={changeComment} onChange={(event) => setChangeComment(event.target.value)} rows={2} />
+          </label>
+          <div className="mod-actions">
+            <button type="submit" className="btn btn-sm" disabled={busy}>
+              {busy ? "Saving…" : "Save placement"}
+            </button>
+          </div>
+          {error ? <p className="form-error">{error}</p> : null}
+          {saved ? <p className="notice">Placement saved to the Draft.</p> : null}
+        </form>
+      ) : null}
+    </section>
+  );
+}
 
 function OpsList({ ops }: { ops: RenderedOps }) {
   return (
@@ -254,6 +448,8 @@ function ProposalDetail({ id }: { id: string }) {
     });
 
   const currentVersion = detail.versions.find((version) => version.current);
+  // A placement whose coverage is unstated is refused at submission; say so first.
+  const coveragePending = detail.placement?.coverage.kind === "pending";
 
   return (
     <main className="mod-page mod-proposal-page">
@@ -293,7 +489,7 @@ function ProposalDetail({ id }: { id: string }) {
           {detail.state === "draft" ? (
             <button
               className="btn btn-sm btn-primary"
-              disabled={busy}
+              disabled={busy || coveragePending}
               onClick={() => void onSubmitDraft()}
             >
               Submit for review
@@ -420,6 +616,15 @@ function ProposalDetail({ id }: { id: string }) {
 
       {error ? <p className="form-error">{error}</p> : null}
       {info ? <p className="notice">{info}</p> : null}
+
+      {detail.placement ? (
+        <PlacementPanel
+          placement={detail.placement}
+          proposalId={proposalId}
+          editable={detail.viewer.isAuthor && detail.state === "draft"}
+          comment={detail.draft?.comment ?? ""}
+        />
+      ) : null}
 
       {/* ---- draft working copy ---- */}
       {detail.draft ? (

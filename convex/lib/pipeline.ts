@@ -1050,9 +1050,10 @@ async function ensureVolumes(
  * sibling edition a same-packaging Release in another Format/Binding
  * belongs to (spec §2: an Edition is realized by Releases differing only
  * there); an omnibus never joins a single volume's Edition, or vice versa.
+ * A placement Proposal's Edition joins it too (lib/proposalCreates.ts).
  */
-async function findSiblingEdition(
-  ctx: MutationCtx,
+export async function findSiblingEdition(
+  ctx: QueryCtx,
   publisherId: Id<"publishers">,
   volumeIds: Id<"volumes">[],
   line: { id: Id<"editionLines">; position: string | null } | null,
@@ -1079,10 +1080,11 @@ async function findSiblingEdition(
  * The sibling of an Unmapped Packaging Release: the line member at the same
  * position from the same publisher that is itself still unmapped (print and
  * digital of "Deluxe 14" share one Edition). Coverage cannot tell them
- * apart yet, so the position does.
+ * apart yet, so the position does. A placement Proposal's unmapped Edition
+ * joins it too (lib/proposalCreates.ts).
  */
-async function findUnmappedSibling(
-  ctx: MutationCtx,
+export async function findUnmappedSibling(
+  ctx: QueryCtx,
   publisherId: Id<"publishers">,
   line: { id: Id<"editionLines">; position: string | null },
 ): Promise<Id<"editions"> | null> {
@@ -1696,32 +1698,52 @@ export async function reconcileLinkedBundle(
 
 // ---------- the steady-state review queue path ----------
 
-export type QueueArgs = {
-  sourceKey: string;
-  observation: Doc<"sourceObservations">;
+/** One temp-ID create op of a Proposal (lib/proposalCreates.ts reads them). */
+export type CreateOp = { kind: "create"; table: string; tempId: string; fields: unknown };
+
+/** What the creation ops describe: the records a book needs, in temp-ID form. */
+export type CreationOpsArgs = {
   seriesId: Id<"series"> | null;
   seriesTitle: string;
   seriesAltTitles?: string[];
-  /** Covered labels; [] = one unlabeled Volume, unless `seriesOnly`. */
+  /** Covered labels; [] = one unlabeled Volume, unless `seriesOnly` or `placement` says otherwise. */
   labels: string[];
   seriesOnly?: boolean;
   /**
-   * The Edition Line a packaged guess belongs to. The queued ops reference
-   * the base Series' existing line of that name, or create it, so approval
-   * files the Edition under it. Its position wins over `linePosition`.
+   * The Edition Line a packaged guess belongs to. The ops reference the base
+   * Series' existing line of that name, or create it, so approval files the
+   * Edition under it. Its position wins over `linePosition`.
    */
   editionLine?: { name: string; position: string | null };
   /** Edition Line Position of a packaged guess queued without `editionLine`. */
   linePosition?: string;
   /** The Release guess with the publisher's slug; absent = backbone only. */
   release?: ReleasePayload & { publisherSlug: string };
+  /**
+   * A Data Team member's placement of a held book (placement.ts), under its
+   * existing Series. Its coverage is `labels`, or Unmapped Packaging under
+   * the line, or not stated yet (`pending`: the Edition covers nothing and
+   * the Draft cannot be submitted). Its Volume and Edition ops join a record
+   * created meanwhile instead of duplicating it (`joinExisting`), and the
+   * Release op names the observation approval links to it.
+   */
+  placement?: {
+    observationId: Id<"sourceObservations">;
+    seriesId: Id<"series">;
+    coverage: "labels" | "unmapped" | "pending";
+  };
+};
+
+export type QueueArgs = Omit<CreationOpsArgs, "placement"> & {
+  sourceKey: string;
+  observation: Doc<"sourceObservations">;
   comment: string;
   now: number;
 };
 
 /**
- * The Edition Line reference for a queued packaging guess: the base Series'
- * active line of that name from this publisher when one exists (the
+ * The Edition Line reference for a queued packaging guess: the base
+ * Series' active line of that name from this publisher when one exists (the
  * importer's ensureEditionLine rule), else a create op for it appended to
  * `ops`, whose temp-ID is returned. The op is `joinExisting`: two members of
  * one new line queued before either is approved both carry it, and the one
@@ -1733,7 +1755,7 @@ async function queueEditionLine(
     seriesId: Id<"series"> | null;
     publisherSlug: string;
     name: string;
-    ops: Array<{ kind: "create"; table: string; tempId: string; fields: unknown }>;
+    ops: CreateOp[];
   },
 ): Promise<string> {
   const publisher = await ctx.db
@@ -1763,27 +1785,16 @@ async function queueEditionLine(
 }
 
 /**
- * Queue an In-Review Proposal pre-filled with the parsed guess (spec §5/§6):
- * temp-ID create ops for whatever does not exist yet (Series, Volumes,
- * Edition Line, Edition, Release), evidence citing the observation, the gate
- * or matching-ladder flag in the change comment.
- * These land in the shared review queue (proposals.ts); a Moderator's
- * approval applies the ops via the creation registry. The observation
- * remembers the proposal (queuedProposalId) so an unchanged snapshot never
- * re-queues — not while one is open, and not after a rejection. While the
- * Proposal is in review the book is the review queue's, never a Held Book
- * (clearHold); once it is decided, a later hold lists the book again.
+ * The temp-ID create ops for whatever does not exist yet (Series, Volumes,
+ * Edition Line, Edition, Release): existing active Volumes of a label (or a
+ * merged one's survivor) are referenced by ID, the rest created. Shared by
+ * an import's queued Proposal (queueCreationProposal) and a member's
+ * placement of a held book (placement.ts), which alone sets `placement`.
  */
-export async function queueCreationProposal(
-  ctx: MutationCtx,
-  args: QueueArgs,
-): Promise<Id<"proposals">> {
-  const ops: Array<{
-    kind: "create";
-    table: string;
-    tempId: string;
-    fields: unknown;
-  }> = [];
+export async function creationOps(ctx: MutationCtx, args: CreationOpsArgs): Promise<CreateOp[]> {
+  const ops: CreateOp[] = [];
+  const placement = args.placement;
+  const join = placement !== undefined ? { joinExisting: true } : {};
   if (args.seriesId === null) {
     ops.push({
       kind: "create",
@@ -1804,7 +1815,13 @@ export async function queueCreationProposal(
           .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId!))
           .collect();
   const volumeLabels: Array<string | undefined> =
-    args.labels.length > 0 ? args.labels.map(canonicalLabel) : args.seriesOnly ? [] : [undefined];
+    placement !== undefined && placement.coverage !== "labels"
+      ? []
+      : args.labels.length > 0
+        ? args.labels.map(canonicalLabel)
+        : args.seriesOnly
+          ? []
+          : [undefined];
   for (const [i, label] of volumeLabels.entries()) {
     const sameLabel = existingVolumes.filter((volume) => labelsEqual(volume.label, label ?? null));
     let existing = sameLabel.find((volume) => volume.status === "active");
@@ -1830,7 +1847,7 @@ export async function queueCreationProposal(
       kind: "create",
       table: "volumes",
       tempId,
-      fields: { seriesId: args.seriesId ?? "series", label },
+      fields: { seriesId: args.seriesId ?? "series", label, ...join },
     });
   }
   if (args.release !== undefined) {
@@ -1857,6 +1874,8 @@ export async function queueCreationProposal(
           order: i + 1,
           extent: "complete",
         })),
+        ...(placement?.coverage === "unmapped" ? { coverageUnmapped: true } : {}),
+        ...join,
       },
     });
     ops.push({
@@ -1873,19 +1892,41 @@ export async function queueCreationProposal(
         pubDate: args.release.pubDate,
         price: args.release.price,
         description: args.release.description,
+        ...(placement !== undefined
+          ? { placement: { observationId: placement.observationId, seriesId: placement.seriesId } }
+          : {}),
       },
     });
   }
+  return ops;
+}
 
+/**
+ * Queue an In-Review Proposal pre-filled with the parsed guess (spec §5/§6):
+ * temp-ID create ops for whatever does not exist yet (creationOps),
+ * evidence citing the observation, the gate or matching-ladder flag in the
+ * change comment.
+ * These land in the shared review queue (proposals.ts); a Moderator's
+ * approval applies the ops via the creation registry. The observation
+ * remembers the proposal (queuedProposalId) so an unchanged snapshot never
+ * re-queues — not while one is open, and not after a rejection. While the
+ * Proposal is in review the book is the review queue's, never a Held Book
+ * (clearHold); once it is decided, a later hold lists the book again.
+ */
+export async function queueCreationProposal(
+  ctx: MutationCtx,
+  args: QueueArgs,
+): Promise<Id<"proposals">> {
+  const { sourceKey, observation, comment, now, ...described } = args;
   const { proposalId } = await insertSourceProposal(ctx, {
-    sourceKey: args.sourceKey,
+    sourceKey,
     state: "inReview",
-    ops,
-    evidence: [args.observation._id],
-    comment: args.comment,
-    now: args.now,
+    ops: await creationOps(ctx, described),
+    evidence: [observation._id],
+    comment,
+    now,
   });
-  await ctx.db.patch(args.observation._id, { queuedProposalId: proposalId });
-  await clearHold(ctx, args.observation._id);
+  await ctx.db.patch(observation._id, { queuedProposalId: proposalId });
+  await clearHold(ctx, observation._id);
   return proposalId;
 }

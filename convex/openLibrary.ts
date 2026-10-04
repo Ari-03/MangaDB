@@ -44,6 +44,7 @@ import {
   internalMutation,
   internalQuery,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
@@ -280,7 +281,7 @@ export const sync = internalAction({
 
 // Library rebinders (Turtleback, Perfection Learning, …) re-issue a
 // publisher's book under their own ISBN.
-const REBINDER =
+export const REBINDER =
   /^(?:turtleback|perfection learning|selbite|paw prints|demco|topeka bindery|san val|bound to stay bound|findaway|library binding)\b/i;
 
 /** An active Release of this format under the Volume from this publisher. */
@@ -312,7 +313,7 @@ type ApplyResult = {
  * book out of scope, or null. PRH drops such titles before observing them,
  * and Kodansha keys by slug, so Yen Press is the one to ask.
  */
-async function outOfScopeElsewhere(ctx: MutationCtx, isbn13: string): Promise<string | null> {
+export async function outOfScopeElsewhere(ctx: QueryCtx, isbn13: string): Promise<string | null> {
   const yen = await getObservation(ctx, "yenpress", isbn13);
   const reason = (yen?.snapshot as { outOfScope?: string } | undefined)?.outOfScope;
   return reason !== undefined ? `Yen Press (${reason})` : null;
