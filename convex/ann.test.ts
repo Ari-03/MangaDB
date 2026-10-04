@@ -1699,6 +1699,55 @@ describe("ann.sync — a title match that is another work", () => {
     expect(await linkOf(t, 15835)).toEqual({ type: "series", id: series });
   });
 
+  /** An ANN entry with one GN 1 line. */
+  const entry = (id: number, title: string, ean?: string, altTitles: string[] = []): FixtureManga => ({
+    id,
+    title,
+    altTitles: altTitles.map((text) => ({ lang: "EN", text })),
+    releases: [{ annId: id + 1, date: "2016-01-12", designator: "GN 1", ...(ean ? { ean } : {}) }],
+  });
+
+  it("links a second ANN entry of the title when one of its ISBNs is already a book of the Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const series = await seedSeriesWithBook(t, "Citrus", [], "9781626922617");
+    stubAnn([entry(15835, "Citrus", "9781626922617"), entry(15837, "Citrus", "9781626922617")]);
+    await sync(t, { releasePages: false });
+    expect(await linkOf(t, 15835)).toEqual({ type: "series", id: series });
+    expect(await linkOf(t, 15837)).toEqual({ type: "series", id: series });
+  });
+
+  it("links by title a Series whose other ANN entry is withdrawn", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([entry(15835, "Citrus")]);
+    await sync(t, { releasePages: false });
+    const held = await linkOf(t, 15835);
+    // ANN drops the entry; a complete mirror withdraws it.
+    stubAnn([BETA]);
+    await sync(t, { releasePages: false });
+    stubAnn([BETA, entry(15837, "Citrus")]);
+    await sync(t, { releasePages: false });
+    expect(await linkOf(t, 15837)).toEqual(held);
+  });
+
+  it("never links through an alt title a Series another live ANN entry holds", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([entry(20001, "Citrus Plus")]);
+    await sync(t, { releasePages: false });
+    const held = await linkOf(t, 20001);
+    stubAnn([entry(20001, "Citrus Plus"), entry(15835, "Citrus", undefined, ["Citrus Plus"])]);
+    await sync(t, { releasePages: false });
+    const link = await linkOf(t, 15835);
+    expect(link?.id).not.toBe(held?.id);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(link!.id as Id<"series">))?.title).toBe("Citrus");
+      // The title names no Series, so nothing is flagged.
+      expect(await ctx.db.query("duplicateCandidates").collect()).toEqual([]);
+    });
+  });
+
   describe("two entries of one title by one creator (the Alchemist)", () => {
     // ANN's two entries as they stand: the first manga and its sequel,
     // which has an entry of its own under the same main title. Both credit
@@ -1760,10 +1809,10 @@ describe("ann.sync — a title match that is another work", () => {
     );
 
     /** Import `entries` (the ones already imported stay listed), then its page pass and credits. */
-    async function importEntries(t: TestT, entries: FixtureManga[], pages = true) {
+    async function importEntries(t: TestT, entries: FixtureManga[]) {
       stubAnn(entries, PAGES);
       await sync(t, { releasePages: false });
-      if (pages) await syncPages(t);
+      await syncPages(t);
       await t.action(internal.people.rebuild, {});
     }
 
@@ -1822,33 +1871,34 @@ describe("ann.sync — a title match that is another work", () => {
       expect(await t.run((ctx) => ctx.db.query("duplicateCandidates").collect())).toHaveLength(1);
     });
 
-    // The limit (docs/known-issues.md): with no ISBN in a format the later
-    // entry also lists on the earlier one's Series, nothing tells the works
-    // apart and the title links them. The sequel's GN 3 becomes Volume 3 of
-    // the first work; its GN 1 and 2 are held only because the first work's
-    // own print books took those slots first.
+    // A fresh seed: ANN's Series has no book until the page pass after the
+    // mirror, so the later entry finds the earlier one's Series by title
+    // with nothing on it. Only the ANN entry already holding that Series
+    // keeps them apart.
     it.each([
-      ["holds no book yet", false],
-      ["holds only its digital book", true],
-    ] as const)("links the sequel to the first work's Series when that Series %s", async (_, digital) => {
+      ["the first work, then the sequel", [FIRST, SEQUEL]],
+      ["the sequel, then the first work", [SEQUEL, FIRST]],
+    ] as const)("keeps them apart on an empty catalog when one mirror lists %s", async (_, [earlier, later]) => {
       const t = makeT();
       await seedRegistry(t, true);
-      const publisherId = await seedPublisher(t, "Yen Press", "yen-press");
-      await importEntries(t, [FIRST], false);
-      if (digital) {
-        await t.run((ctx) => insertBook(ctx, publisherId, ["1"], { release: { format: "digital", isbn13: FIRST_ISBNS[0] } }));
-      }
-      await importEntries(t, [FIRST, SEQUEL]);
+      await seedPublisher(t, "Yen Press", "yen-press");
+      await importEntries(t, [earlier, later]);
 
       const placed = await placement(t);
-      expect(placed.series).toBe(1);
-      expect(placed.sequel).toBe(placed.first);
-      expect(placed.onFirst).toEqual([...FIRST_ISBNS, SEQUEL_ISBNS[2]].sort());
-      for (const [i, line] of SEQUEL.releases.slice(0, 2).entries()) {
-        expect((await obsFor(t, line.annId))?.conflicts?.[0]?.reason).toBe(
-          `Volume ${i + 1} already has a physical Yen Press Release (ISBN ${FIRST_ISBNS[i + 1]}): a reprint or variant, not created.`,
-        );
-      }
+      expect(placed.series).toBe(2);
+      expect(placed.sequel).not.toBe(placed.first);
+      expect(placed.onFirst).toEqual([...FIRST_ISBNS].sort());
+      expect(placed.onSequel).toEqual([...SEQUEL_ISBNS].sort());
+      const held = earlier === FIRST ? placed.first : placed.sequel;
+      await t.run(async (ctx) => {
+        const { publicId } = (await ctx.db.get(held!))!;
+        expect(await ctx.db.query("duplicateCandidates").collect()).toEqual([
+          expect.objectContaining({
+            aId: held,
+            reason: `ANN entry ${later.id} has this title, but ANN entry ${earlier.id} already holds Series ${publicId}, so the import created a Series of its own. Merge them if ANN lists one work twice.`,
+          }),
+        ]);
+      });
     });
   });
 });

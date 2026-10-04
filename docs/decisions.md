@@ -58,11 +58,22 @@ Series, which a merge undoes. The case it gets wrong is a work reissued
 under new ISBNs, or a Series a publisher feed built from later Volumes than
 ANN lists.
 
-One use is made visible: when the rule drops the only Series of the
-entry's title and ANN creates a second Series beside it, the pair goes on
-the duplicate list on `/mod/launch`; in steady state the creation Proposal
-names the dropped Series. A candidate dropped among several Series of the
-title, or one reached through an alternative title, leaves no record.
+When nothing tells them apart, a Series another live ANN entry already
+holds is another work as well (decided 2026-10-04). A Series ANN creates
+has no book until the page pass after the mirror, so on a fresh seed the
+title alone put the Alchemist sequel (ANN 30340) on the first work's
+Series. In the production export of 2026-10-02, nine groups of ANN entries
+share a title and each entry has its own Series. A shared ISBN still
+links. Its cost is an entry whose id ANN replaced, which arrives while the
+old entry still holds the Series and gets a duplicate Series beside it.
+
+Both drops are made visible: when either rule drops the only Series of
+the entry's title and ANN creates a second Series beside it, the pair goes
+on the duplicate list on `/mod/launch` with the reason (no shared ISBN, or
+the ANN entry that holds the Series); in steady state the creation
+Proposal names the dropped Series and the reason. A candidate dropped
+among several Series of the title, or one reached through an alternative
+title, leaves no record.
 
 Ruled out: holding such an entry for review instead, which in Bootstrap
 Mode would leave its books out of the catalog until a person looked; and

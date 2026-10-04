@@ -64,10 +64,9 @@ is fixed.
   them. The known case is ANN entry 30340, the Alchemist sequel ("… II:
   Cycle of the Elixir"): ISBNs 9781975393489 and 9781975396923 sit on the
   first Alchemist Series (publicId 1229) on staging; production's were
-  repaired by hand on 2026-09-28. `workMatch` still links such an entry
-  when the Series of its title holds no ISBN in a format the entry also
-  lists (no book yet, or only a digital one beside the entry's print
-  books): a shared original creator decides nothing, so the title does
+  repaired by hand on 2026-09-28. A new import no longer links such an
+  entry to a Series another live ANN entry holds unless they share an
+  ISBN; entries already linked keep their link
   ([imports](imports.md#matching-ladder)).
 - **Open Library continuations re-download the dump.** `openLibrary:sync`
   restarts each continuation from byte zero and skips lines it already

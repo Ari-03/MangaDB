@@ -82,12 +82,21 @@ Before ANN links an entry to a Series by title, `workMatch` checks that it
 is the same work. A candidate is dropped when both sides know their
 creators (ANN person ids) and share none, or both hold ISBNs in a shared
 format and share none. A shared creator never proves a match, since a
-spinoff shares its author. When disjoint ISBNs drop the only Series of the
-entry's title and ANN creates the entry's Series (Bootstrap Mode), it
-records the two as a duplicate candidate, listed with the duplicate
-sweep's pairs on `/mod/launch` (`launch.duplicateQueue`). In
-steady state the queued creation Proposal names the dropped Series in its
-comment. The reasons are in [decisions.md](decisions.md#disjoint-isbns-mean-another-work).
+spinoff shares its author. When neither tells, a candidate that another
+live ANN entry is already linked to is dropped too, whether a title or an
+alternative title named it: a Series ANN creates has no book until the
+page pass, and in production no two ANN entries of one title share a
+Series. A shared ISBN still links. When either rule drops the only Series
+of the entry's title and ANN creates the entry's Series (Bootstrap Mode),
+it records the two as a duplicate candidate with the reason, listed with
+the duplicate sweep's pairs on `/mod/launch` (`launch.duplicateQueue`). In
+steady state the queued creation Proposal names the dropped Series and the
+reason in its comment. The cost is an entry whose id ANN replaced: the old
+entry is withdrawn only when a complete mirror ends, so the new id arrives
+while the old one still holds the Series, and unless that Series has one
+of its ISBNs it gets a Series of its own and a duplicate candidate. A
+stored link is never revisited, so entries already on one Series stay
+there. The reasons are in [decisions.md](decisions.md#disjoint-isbns-mean-another-work).
 
 ## Authority rules
 

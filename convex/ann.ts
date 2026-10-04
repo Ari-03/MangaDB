@@ -487,24 +487,60 @@ function printingsOf(snapshot: AnnMangaSnapshot, line: AnnLine): number {
 }
 
 /**
+ * A title-matched Series the entry was not linked to: its books and the
+ * entry's share no ISBN (`heldBy` null), or another live ANN entry, id
+ * `heldBy`, already holds it and nothing tells the two works apart.
+ */
+type SetAside = { series: Doc<"series">; heldBy: string | null };
+
+// Bound on the observations annEntryHolding reads for one Series. A Series
+// carries one link per ANN entry and per publisher series feed naming it
+// (at most five in production on 2026-10-02); an ANN link past the bound
+// is not seen, and the title links as it did before the rule.
+const SERIES_LINK_SCAN = 20;
+
+/** The id of another live ANN entry linked to the Series, or null. */
+async function annEntryHolding(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+  annId: string,
+): Promise<string | null> {
+  const links = await ctx.db
+    .query("sourceObservations")
+    .withIndex("by_record", (q) => q.eq("recordRef.type", "series").eq("recordRef.id", seriesId))
+    .take(SERIES_LINK_SCAN);
+  const holder = links.find(
+    (link) =>
+      link.sourceKey === SOURCE_KEY &&
+      !link.withdrawn &&
+      link.sourceRecordId.startsWith("manga:") &&
+      link.sourceRecordId !== `manga:${annId}`,
+  );
+  return holder?.sourceRecordId.slice("manga:".length) ?? null;
+}
+
+/**
  * Flag the Series ANN created for an entry beside the one Series of the
- * entry's title, which workMatch set aside only because their books share
- * no ISBN: a duplicate candidate for the Data Team (/mod/launch). The
- * created Series is new, so the pair is too.
+ * entry's title that it set aside: a duplicate candidate for the Data Team
+ * (/mod/launch), whose reason says why. The created Series is new, so the
+ * pair is too.
  */
 async function flagDisjointTwin(
   ctx: MutationCtx,
   createdId: Id<"series">,
-  setAside: Doc<"series">,
+  { series, heldBy }: SetAside,
   snapshot: AnnMangaSnapshot,
 ) {
   await ctx.db.insert("duplicateCandidates", {
-    pairKey: pairKeyOf(setAside._id, createdId),
-    aId: setAside._id,
+    pairKey: pairKeyOf(series._id, createdId),
+    aId: series._id,
     bId: createdId,
-    aTitle: setAside.title,
+    aTitle: series.title,
     bTitle: snapshot.title,
-    reason: `ANN entry ${snapshot.id} has this title, but its books share no ISBN with Series ${setAside.publicId}'s, so the import created a Series of its own. Merge them if they are one work under other ISBNs.`,
+    reason:
+      heldBy === null
+        ? `ANN entry ${snapshot.id} has this title, but its books share no ISBN with Series ${series.publicId}'s, so the import created a Series of its own. Merge them if they are one work under other ISBNs.`
+        : `ANN entry ${snapshot.id} has this title, but ANN entry ${heldBy} already holds Series ${series.publicId}, so the import created a Series of its own. Merge them if ANN lists one work twice.`,
     status: "open",
   });
 }
@@ -637,10 +673,9 @@ export const applyManga = internalMutation({
 
     // ----- the Series: rung ① stored link, else resolve/create -----
     let seriesId: Id<"series"> | null = null;
-    // The one Series of the entry's title, set aside only because its books
-    // and the entry's share no ISBN: flagged beside whatever Series the
-    // entry gets created or queued.
-    let setAside: Doc<"series"> | null = null;
+    // The one Series of the entry's title, when it was set aside: flagged
+    // beside whatever Series the entry gets created or queued.
+    let setAside: SetAside | null = null;
     if (observation.recordRef?.type === "series") {
       // Repairs stand: a merged Series is followed to its survivor (and the
       // link repointed); a hidden one keeps its lines on record only.
@@ -677,6 +712,11 @@ export const applyManga = internalMutation({
     } else {
       // A title names candidates; the entry's staff and ISBNs rule out the
       // ones that are another work (Doubt vs Doubt!!, Citrus vs Citrus+).
+      // With nothing to tell them apart, a Series another live ANN entry
+      // already holds is another work too: in production no two ANN entries
+      // of one title share a Series, and a Series ANN created has no book
+      // until the page pass, so the title alone put the Alchemist's sequel
+      // on the first work's Series. A shared ISBN still links.
       const evidence: WorkEvidence = {
         books: snapshot.releases.flatMap((r) =>
           r.isbn13 ? [{ isbn13: r.isbn13, format: r.format }] : [],
@@ -685,11 +725,15 @@ export const applyManga = internalMutation({
       };
       const sameWork = async (found: Doc<"series">[]) => {
         const kept: Doc<"series">[] = [];
-        const disjoint: Doc<"series">[] = [];
+        const disjoint: SetAside[] = [];
         for (const series of found) {
           const verdict = await workMatch(ctx, series._id, evidence);
-          if (verdict === "disjointBooks") disjoint.push(series);
-          else if (verdict !== "different") kept.push(series);
+          if (verdict === "disjointBooks") disjoint.push({ series, heldBy: null });
+          else if (verdict === "unknown") {
+            const heldBy = await annEntryHolding(ctx, series._id, snapshot.id);
+            if (heldBy === null) kept.push(series);
+            else disjoint.push({ series, heldBy });
+          } else if (verdict === "same") kept.push(series);
         }
         return { kept, disjoint };
       };
@@ -753,9 +797,11 @@ export const applyManga = internalMutation({
           seriesOnly: packagingOnly(snapshot),
           now,
           comment: `"${snapshot.title}" observed at ${sourceName} needs a brand-new Series — steady-state creation gate. Series + Volume backbone only; ANN carries no publisher, so Releases arrive from other sources.${
-            setAside !== null
-              ? ` Series ${setAside.publicId} ("${setAside.title}") has this title, but its books share no ISBN with this entry's, so the import did not link it: it may be the same work under other ISBNs.`
-              : ""
+            setAside === null
+              ? ""
+              : setAside.heldBy === null
+                ? ` Series ${setAside.series.publicId} ("${setAside.series.title}") has this title, but its books share no ISBN with this entry's, so the import did not link it: it may be the same work under other ISBNs.`
+                : ` Series ${setAside.series.publicId} ("${setAside.series.title}") has this title, but ANN entry ${setAside.heldBy} already holds it, so the import did not link it: it may be one work ANN lists twice.`
           }`,
         });
         return { status: "queued", changed: true, releasesLinked: 0 };
