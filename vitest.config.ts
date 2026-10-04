@@ -16,7 +16,9 @@ export default defineConfig({
     testTimeout: 15_000,
     // The rate-limiter package is inlined so its component test helper's
     // import.meta.glob (of the component's TS sources) gets transformed.
-    server: { deps: { inline: ["convex-test", "@convex-dev/rate-limiter", "@posthog/convex"] } },
+    // posthog-js is inlined so vi.resetModules() gives a fresh instance, the
+    // page load in src/lib/analyticsClient.test.ts.
+    server: { deps: { inline: ["convex-test", "@convex-dev/rate-limiter", "@posthog/convex", "posthog-js"] } },
     include: ["src/**/*.test.ts", "convex/**/*.test.ts"],
   },
 });

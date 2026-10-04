@@ -111,28 +111,46 @@ from `.env.local` or the shell.
 (`users.setAnalyticsOptOut`, absent until chosen). For a signed-in user
 who opted out, the browser never loads posthog-js, and `capture` in
 `convex/lib/posthog.ts` sends none of their events, moderation included.
-The client's `before_send` is its only gate: it drops every event while a
-signed-in user's choice is still loading or is Off, so a client already
-running when the user switches Off captures nothing more, and one that is
-waiting identifies no one. It gates only what goes through `capture()`:
-posthog-js's logs and metrics check `is_capturing()` and send without it,
-and remote config is off only because `advanced_disable_flags` is set.
-Convex having no viewer yet for a new session counts as still loading. A browser sending Do Not Track or Global
+A client already running when the user switches Off, or while a signed-in
+user's choice is still loading, calls posthog-js's `opt_out_capturing()`:
+`capture()` then returns before posthog-js records anything (its session
+and entry URL, the previous page), and its logs and metrics, which check
+`is_capturing()`, stop too. posthog-js stores the denial in localStorage,
+keeping the distinct id it holds. The client's `before_send` drops events
+in the same states, as a backstop. Convex having no viewer yet for a new
+session counts as still loading. Remote config is off only because
+`advanced_disable_flags` is set. A browser sending Do Not Track or Global
 Privacy Control sets the opt-out once on an account that has never chosen,
 so server events stop too; a browser without it never clears one.
-Signed-out visitors have no toggle: `respect_dnt` covers them. posthog-js
-updates its session and pageview state (`$session_entry_url`,
-`$prev_pageview_pathname`) before `before_send` drops an event, so when
-sending resumes after Off, by switching On or by signing out, the client
-calls `reset()` before anything is identified or sent. Otherwise it calls
-`reset()` only when posthog-js holds an identified id other than the one
-now signed in: on sign-out, or when a different user signs in. A sign-in
-from a signed-out visit does not reset, so that browsing stays with the
-account. posthog-js sends captured events in batches, keeps a batch that
+Signed-out visitors have no toggle: `respect_dnt` covers them.
+
+Sending resumes (switching On, signing out, a sign-in's choice answering)
+in a fixed order. First `reset()`, when posthog-js holds an identified id
+other than the one now signed in: on sign-out, or when a different user
+signs in. It clears the stored denial too. Then, if a denial is still
+stored, `opt_in_capturing({ captureEventName: false })`, which sends no
+`$opt_in` event. Then `identify()`. The client does the same when it
+loads, so a denial stored on an earlier page load, by an account since
+signed out or before a reload, does not outlive the choice. Opting in
+sends the page's initial `$pageview` only if this page load has not sent
+it (the client loaded while Off or loading), under the id posthog-js
+holds at that moment: the account's, or an anonymous id that `identify()`
+then links to it. A sign-in from a signed-out visit does not reset, so
+that browsing stays with the account. `reset()` does not clear posthog-js's
+record of the last page it captured, so the first pageview after a reset
+on the same page carries the previous identity's last page path as
+`$prev_pageview_pathname`: an account's last page on the first signed-out
+pageview after its sign-out, or one account's on the next account's first
+pageview. posthog-js sends captured events in batches, keeps a batch that
 fails to send and retries it with backoff, and nothing public clears one,
 so events captured before a switch to Off or a sign-out may still be
 delivered later, including after a lost connection is restored. Opting out
 stops new events; it deletes nothing PostHog already holds.
+
+`src/lib/analyticsClient.test.ts` pins this behaviour against the real
+posthog-js: it runs the client in happy-dom with the network stubbed and
+checks the events posthog-js would send, so an SDK upgrade that changes
+the opt-out, the opt-in or `reset()` fails the suite.
 
 **Proxy.** `src/server/posthogProxy.ts` forwards `/_s/*` from the site's
 own origin so ad blockers do not drop events. `/_s/static/*` and

@@ -72,8 +72,8 @@ export function track<E extends AnalyticsEvent>(event: E, properties: AnalyticsE
  *   username whose browser sends Do Not Track.
  * - `anonymous`: signed out; captured without a person (Do Not Track applies).
  * - `identified`: a signed-in viewer who has not opted out, captured as them.
- * Nothing is sent while `pending` or `off`, and sending after `off` starts
- * from posthog-js's reset().
+ * Nothing is sent while `pending` or `off`: the client opts posthog-js out
+ * of capturing, and opts back in when sending resumes.
  */
 export type AnalyticsConsent =
   | { status: "pending" | "off" | "anonymous" }

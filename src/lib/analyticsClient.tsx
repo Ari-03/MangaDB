@@ -1,6 +1,6 @@
 // The browser-only half of lib/analytics.tsx, loaded lazily after
 // hydration: PostHogProvider inits posthog-js, and ConsentSync applies the
-// session's AnalyticsConsent to it (whether events go out, identify, reset).
+// session's AnalyticsConsent to it (opt-out, opt-in, reset, identify).
 // Never imported statically, so neither posthog-js nor @posthog/react ends
 // up in the Worker bundle.
 
@@ -25,18 +25,29 @@ const baseOptions: Partial<PostHogConfig> = {
   // No feature flags in use: skip the /flags request entirely. This is also
   // what keeps remote config off.
   advanced_disable_flags: true,
-  // Nothing leaves while the consent last applied withholds it. This gates
-  // only what goes through capture(): posthog-js's logs and metrics check
-  // is_capturing() and send with the distinct id without it, so keep them off.
+  // Nothing leaves while the consent last applied withholds it: a backstop
+  // to the opt-out. It runs last in capture(), after posthog-js has
+  // updated its session and pageview state.
   before_send: (event) => (sending ? event : null),
 };
 
 // Whether the consent last applied (applyConsent) lets events out.
 let sending = false;
-// Whether `off` has been applied since events last went out. posthog-js
-// updates its session and pageview state before before_send drops an
-// event, so what it gathered while off would ride on the next event.
-let offSinceSending = false;
+
+/**
+ * posthog.init's options: `loaded` hands the instance to track() and applies
+ * the consent `current()` returns at that moment, then calls `onLoaded`.
+ */
+export function clientOptions(current: () => AnalyticsConsent, onLoaded: () => void): Partial<PostHogConfig> {
+  return {
+    ...baseOptions,
+    loaded: (instance) => {
+      attachAnalyticsClient(instance);
+      applyConsent(current());
+      onLoaded();
+    },
+  };
+}
 
 export default function PostHogAnalytics({
   apiKey,
@@ -52,17 +63,7 @@ export default function PostHogAnalytics({
   const [loaded, setLoaded] = useState(false);
   const latest = useRef(consent);
   latest.current = consent;
-  const options = useMemo<Partial<PostHogConfig>>(
-    () => ({
-      ...baseOptions,
-      loaded: (instance) => {
-        attachAnalyticsClient(instance);
-        applyConsent(latest.current);
-        setLoaded(true);
-      },
-    }),
-    [],
-  );
+  const options = useMemo(() => clientOptions(() => latest.current, () => setLoaded(true)), []);
   return (
     <PostHogProvider apiKey={apiKey} options={options}>
       {loaded ? <ConsentSync consent={consent} /> : null}
@@ -71,27 +72,31 @@ export default function PostHogAnalytics({
 }
 
 /**
- * Apply a consent to posthog-js. `before_send` is the only gate: `pending`
- * and `off` drop every event and change nothing else. `anonymous` and
- * `identified` let events out, first calling reset() when `off` was applied
- * since events last went out, so nothing gathered while off survives, or
- * when posthog-js holds an identified user other than this one, so two
- * accounts are never merged into one person and no event carries the other
- * account's id (reset() keeps posthog-js's `$device_id`, which both share).
- * Then `identified` identifies with username and role (never email).
- * Applying the same consent twice changes nothing.
+ * Apply a consent to posthog-js. `pending` and `off` opt out of capturing,
+ * so posthog-js drops every event before it records anything (its session,
+ * the page it was on); the denial is stored, under the distinct id it
+ * holds. `anonymous` and `identified` resume in this order: reset() when
+ * posthog-js holds an identified user other than this one, so two accounts
+ * are never merged and no event carries the other's id (reset() clears the
+ * stored denial and keeps `$device_id`); then opt back in if a denial is
+ * stored, with no `$opt_in` event, which also covers a denial left by an
+ * earlier page load; then `identified` identifies with username and role
+ * (never email). Opting in sends the initial `$pageview` only if this page
+ * load has not sent it, under the id of that moment. Applying the same
+ * consent twice changes nothing.
  */
-function applyConsent(consent: AnalyticsConsent) {
+export function applyConsent(consent: AnalyticsConsent) {
   sending = consent.status === "anonymous" || consent.status === "identified";
-  if (consent.status === "off") offSinceSending = true;
-  if (!sending) return;
+  if (!sending) {
+    posthog.opt_out_capturing();
+    return;
+  }
   const userId = consent.status === "identified" ? consent.userId : null;
-  // posthog-js keeps an identified id across reloads. `_isIdentified` is
-  // internal to posthog-js, with no public equivalent; it may change on upgrade.
-  if (offSinceSending || (posthog._isIdentified() && posthog.get_distinct_id() !== userId)) {
+  // identify() records itself in posthog-js's persisted `$user_state`.
+  if (posthog.get_property("$user_state") === "identified" && posthog.get_distinct_id() !== userId) {
     posthog.reset();
   }
-  offSinceSending = false;
+  if (posthog.has_opted_out_capturing()) posthog.opt_in_capturing({ captureEventName: false });
   if (consent.status === "identified") {
     const { username, role } = consent;
     // The second argument is the $set payload.
