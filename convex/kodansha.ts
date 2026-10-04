@@ -662,14 +662,17 @@ async function withPageFacts(
  * The note an unmatched packaging volume is held with. This importer never
  * places packaging (it passes the tail no labels for it), so the note says
  * so, and quotes the coverage the book states, if any: the range its own
- * title states, read with the shared title parser, else, when the title
- * states no range at all, the size its line's name declares
- * (lib/coverage.ts). The snapshot's `packaging` comes from the series name,
- * which every member of the line shares, so its range is never quoted. The
- * calendar titles each book "{series name} Volume N", so a title range
- * equal to the series name's is taken for the series name's, also on a
- * volume page whose own title repeats it: the note then quotes no
- * coverage, not even the line's size, which could contradict that range.
+ * title states, read with the shared title parser, else, when neither the
+ * title nor the series name states any Volumes (no range, no gapped list),
+ * the size its line's name declares (lib/coverage.ts). The snapshot's
+ * `packaging` comes from the series name, which every member of the line
+ * shares, so its range is never quoted. The calendar titles each book
+ * "{series name} Volume N", so a title range equal to the series name's is
+ * taken for the series name's, also on a volume page whose own title
+ * repeats it, and the note then quotes no coverage. The line's size is not
+ * quoted under a series name that states Volumes either: some spellings of
+ * the series name's range do not survive into the composed title's parse,
+ * and the size could contradict the range the quoted title shows.
  */
 function packagingHold(snapshot: KodanshaSnapshot, packaging: Packaging): string {
   const own = parseBookTitle(snapshot.title).packaging;
@@ -679,7 +682,7 @@ function packagingHold(snapshot: KodanshaSnapshot, packaging: Packaging): string
     ? own.coverRange.from === named?.from && own.coverRange.to === named?.to
       ? null
       : { range: own.coverRange, by: "in its title" }
-    : fromLine && !own?.coverageGapped
+    : fromLine && !own?.coverageGapped && !named && !packaging.coverageGapped
       ? { range: fromLine, by: "by its line's size" }
       : null;
   const volumes = (range: CoverRange) =>

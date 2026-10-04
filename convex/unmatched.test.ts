@@ -1210,6 +1210,26 @@ describe("Kodansha's packaging note, through the calendar", () => {
       `"Gamma Quest 3-in-1 Edition (Vol. 1-3) Volume 2" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
     );
   });
+
+  // The series name states a range the composed title's parse does not read, so the title
+  // shows Volumes 1-3 and the line's size would contradict it.
+  it("quotes no line size under a series name stating a bare range", async () => {
+    expect(await calendarNote("Gamma Quest 3-in-1 Edition Vol. 1-3")).toBe(
+      `"Gamma Quest 3-in-1 Edition Vol. 1-3 Volume 2" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
+
+  it("quotes no line size under a series name listing its Volumes", async () => {
+    expect(await calendarNote("Gamma Quest 3-in-1 Edition Vol. 1, 2 & 3")).toBe(
+      `"Gamma Quest 3-in-1 Edition Vol. 1, 2 & 3 Volume 2" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
+
+  it("quotes no line size under a series name listing Volumes with a gap", async () => {
+    expect(await calendarNote("Gamma Quest 3-in-1 Edition Vol. 1 & 3")).toBe(
+      `"Gamma Quest 3-in-1 Edition Vol. 1 & 3 Volume 2" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
 });
 
 describe("Kodansha's packaging note, through a volume page", () => {
