@@ -124,8 +124,9 @@ export const recordRef = v.union(
 export const holdKind = v.union(
   // The Volume it names does not exist under a known Series and Publisher.
   v.literal("volumeMissing"),
-  // Packaging whose covered Volumes no source states, or a line member or
-  // box set that steady state leaves to an Editor.
+  // Packaging whose covered Volumes no source states, or states as a list
+  // no range holds, or a line member or box set that steady state leaves
+  // to an Editor.
   v.literal("packaging"),
   // No unique active Series to place it under: hidden, ambiguous, locked, or
   // not linked.

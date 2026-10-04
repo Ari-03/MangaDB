@@ -159,7 +159,7 @@ observation is unlinked, not withdrawn, and has no Proposal in review:
 | Kind | Meaning | Recorded by |
 |---|---|---|
 | `volumeMissing` | The Volume it names does not exist under a known Series and Publisher | ANN's page pass, Open Library |
-| `packaging` | Packaging with no stated coverage, or a line member or box set steady state leaves to an Editor | Seven Seas, Kodansha, PRH and Yen Press, ANN's page pass, Open Library |
+| `packaging` | Packaging with no stated coverage or a Volume list no range holds, or a line member or box set steady state leaves to an Editor | Seven Seas, Kodansha, PRH and Yen Press, ANN's page pass, Open Library |
 | `series` | No single active Series: hidden, ambiguous, locked or not linked | every importer |
 | `isbn` | Its ISBN is on a hidden Release or another Series' Release, or its Volume already has the publisher's Release in that format | ANN's page pass, Open Library |
 | `other` | ANN names no distributor, or one that resolves to no publisher row | ANN's page pass |
@@ -322,7 +322,25 @@ publisher. Lines it cannot place are Held Books, except lines no one can
 place or that are out of scope (no ISBN, a variant cover, a prose imprint,
 a foreign-language distributor), which keep only their note. Scope is
 checked right after the ISBN link, before any other hold, so an
-out-of-scope line is never held for its packaging, its Series or its ISBN. The page's description fills
+out-of-scope line is never held for its packaging, its Series or its ISBN.
+
+A line's designator is read with the shared list grammar
+(`parseVolumeList` in `convex/lib/bookTitle.ts`). A range ("(GN 97-99)")
+or a contiguous list ("(GN 1, 2, 3)", "(GN 1 & 2)") covers the Volumes it
+spans. A list no range holds (a gap such as "(GN 1, 3)" or "(GN 1-3, 5)",
+a backwards range, a dash chain) marks the line `coverageGapped`: it is
+multi-volume with no label, adds no Volume to the backbone, and the page
+pass holds it as `packaging`, quoting the page's designator, instead of
+sizing it from its line name ("3-in-1") or placing it on a Volume. It
+still links by ISBN to a Release of its Series. A line with no number
+("(GN)") is an unnumbered book, as before. The hold goes when a later
+mirror reads the line as a range and the page pass places it, or when
+someone links it. A line already linked keeps its link, since an import
+never moves one. Lines the line-size rule placed before this check are
+not reported; after one mirror their `release:` observations carry
+`coverageGapped: true` beside a `recordRef`, which is how to find them.
+
+The page's description fills
 a blank Release Description at weak authority, and the pass refetches up
 to 2,000 linked pages a run to read descriptions. Citations link the
 Encyclopedia, as ANN's license requires.

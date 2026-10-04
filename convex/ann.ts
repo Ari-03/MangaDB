@@ -1366,6 +1366,17 @@ export const applyReleasePage = internalMutation({
       );
     }
 
+    // A designator listing Volumes no range holds ("(GN 1, 3)") states its
+    // coverage, so the line's name never sizes it and no Volume is guessed:
+    // an Editor maps it.
+    if (line.coverageGapped) {
+      return await hold(
+        "packaging",
+        `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose Volume list no range holds — an Editor maps it.`,
+        series?.status === "active" ? series._id : undefined,
+      );
+    }
+
     // Packaging: an Edition Line member, never a Volume. A packaged line is
     // placed below by the best signal it carries: the designator's stated
     // range ("One Piece - [Omnibus] 33 - Wano (GN 97-99)" → volumes 97–99),

@@ -24,6 +24,7 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
+import { linkObservation } from "./lib/observations";
 import { drain, expectStampedAtHandOff, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 type FixtureRelease = {
@@ -1389,6 +1390,155 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
     const held = await obsFor(t, 9103);
     expect(held?.recordRef).toBeUndefined();
     expect(held?.conflicts?.[0]?.reason).toMatch(/would cover Volumes 25–27/);
+  });
+});
+
+// A designator listing Volumes no range holds ("(GN 1, 3)") states the
+// book's coverage in a way no Edition can hold: the page pass holds it, and
+// the line's name ("3-in-1") never sizes it. A contiguous list places as the
+// range it spans.
+describe("ann.syncReleasePages — Volume lists (C5)", () => {
+  const KAPPA: FixtureManga = {
+    id: 1900,
+    title: "Kappa",
+    releases: [
+      ...["1", "2", "3", "4", "5", "6"].map((n) => ({ annId: 9300 + Number(n), date: "2010-01-05", designator: `GN ${n}` })),
+      { annId: 9401, date: "2012-03-06", designator: "GN 1, 3", title: "Kappa [3-in-1 Edition]" },
+      { annId: 9402, date: "2012-06-05", designator: "GN 4, 5, 6", title: "Kappa [3-in-1 Edition]" },
+    ],
+  };
+  const GAPPED_ISBN = "9781421500010";
+  const pages = (gapped = "GN 1, 3") => ({
+    9401: releasePage({ title: "Kappa [3-in-1 Edition]", volume: gapped, distributor: "Viz Media", date: "2012-03-06", isbn13: GAPPED_ISBN, mangaId: 1900 }),
+    9402: releasePage({ title: "Kappa [3-in-1 Edition]", volume: "GN 4, 5, 6", distributor: "Viz Media", date: "2012-06-05", isbn13: "9781421500027", mangaId: 1900 }),
+  });
+
+  /** The Volume labels an Edition covers, in order. */
+  const coveredBy = (t: TestT, editionId: Id<"editions">) =>
+    t.run(async (ctx) => {
+      const coverages = (await ctx.db.query("volumeCoverages").collect())
+        .filter((c) => c.editionId === editionId)
+        .sort((a, b) => a.order - b.order);
+      return await Promise.all(coverages.map(async (c) => (await ctx.db.get(c.volumeId))!.label));
+    });
+  const holdFor = (t: TestT, observationId: Id<"sourceObservations">) =>
+    t.run((ctx) =>
+      ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", observationId))
+        .unique(),
+    );
+
+  async function mirrorAndPlace(t: TestT, gapped = "GN 1, 3") {
+    stubAnn(
+      [{ ...KAPPA, releases: KAPPA.releases.map((r) => (r.annId === 9401 ? { ...r, designator: gapped } : r)) }],
+      pages(gapped),
+    );
+    await sync(t, { releasePages: false });
+    return await syncPages(t);
+  }
+
+  it("holds a gapped list on a 3-in-1 line, creating no Volume, Edition, Release or Proposal for it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const held = (await obsFor(t, 9401))!;
+    expect(held.snapshot).toMatchObject({ multi: true, coverageGapped: true });
+    expect(held.snapshot.label).toBeUndefined();
+    expect(held.recordRef).toBeUndefined();
+    expect(held.conflicts?.find((c) => c.field === "placement")?.reason).toBe(
+      '"Kappa [3-in-1 Edition]" (GN 1, 3) is packaging whose Volume list no range holds — an Editor maps it.',
+    );
+    const series = await t.run(async (ctx) => (await ctx.db.query("series").collect())[0]!);
+    expect(await holdFor(t, held._id)).toMatchObject({ kind: "packaging", sourceKey: "ann", seriesId: series._id });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual(["1", "2", "3", "4", "5", "6"]);
+      expect((await ctx.db.query("releases").collect()).map((r) => r.isbn13)).not.toContain(GAPPED_ISBN);
+      // The one 3-in-1 member is the contiguous list's.
+      expect((await ctx.db.query("editions").collect()).filter((e) => e.editionLineId !== undefined)).toHaveLength(1);
+      // No Proposal, approved or queued, cites the held line.
+      const cited = (await ctx.db.query("proposalVersions").collect()).flatMap((version) =>
+        version.evidence.flatMap((e) => (e.kind === "observation" ? [e.observationId] : [])),
+      );
+      expect(cited).not.toContain(held._id);
+    });
+  });
+
+  it("places a contiguous list as the range it spans", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const placed = (await obsFor(t, 9402))!;
+    expect(placed.snapshot).toMatchObject({ multi: true, coverRange: { from: "4", to: "6" } });
+    expect(placed.recordRef?.type).toBe("release");
+    const release = await t.run(async (ctx) => (await ctx.db.get(placed.recordRef!.id as Id<"releases">))!);
+    expect(await coveredBy(t, release.editionId)).toEqual(["4", "5", "6"]);
+  });
+
+  it("releases the hold when ANN corrects the designator", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const held = (await obsFor(t, 9401))!;
+    expect(await holdFor(t, held._id)).not.toBeNull();
+    // ANN corrects the line to a range: the next mirror stores it and the
+    // page pass places it from the stored page.
+    await mirrorAndPlace(t, "GN 1-3");
+    const placed = (await obsFor(t, 9401))!;
+    expect(placed.snapshot.coverageGapped).toBeUndefined();
+    expect(placed.recordRef?.type).toBe("release");
+    expect(placed.conflicts?.find((c) => c.field === "placement")).toBeUndefined();
+    expect(await holdFor(t, placed._id)).toBeNull();
+    const release = await t.run(async (ctx) => (await ctx.db.get(placed.recordRef!.id as Id<"releases">))!);
+    expect(await coveredBy(t, release.editionId)).toEqual(["1", "2", "3"]);
+  });
+
+  it("an Editor placing a held line clears its hold, and later syncs keep the link", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const viz = await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const held = (await obsFor(t, 9401))!;
+    const releaseId = await t.run(async (ctx) => {
+      const id = await insertBook(ctx, viz, ["1", "3"], { release: { isbn13: GAPPED_ISBN } });
+      await linkObservation(ctx, held._id, { type: "release", id });
+      return id;
+    });
+    expect(await holdFor(t, held._id)).toBeNull();
+    // A line linked before this rule (placed by its line's size) is the
+    // same: an import never moves an existing link.
+    await mirrorAndPlace(t);
+    const linked = (await obsFor(t, 9401))!;
+    expect(linked.recordRef).toEqual({ type: "release", id: releaseId });
+    expect(linked.snapshot.coverageGapped).toBe(true);
+    expect(linked.conflicts?.find((c) => c.field === "placement")).toBeUndefined();
+    expect(await holdFor(t, held._id)).toBeNull();
+    expect(await coveredBy(t, (await t.run((ctx) => ctx.db.get(releaseId)))!.editionId)).toEqual(["1", "3"]);
+  });
+
+  it("a second unchanged sync rewrites neither the held line nor its hold", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await mirrorAndPlace(t);
+    const before = (await obsFor(t, 9401))!;
+    const hold = (await holdFor(t, before._id))!;
+    expect(hold).not.toBeNull();
+    const history = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query("observationSnapshots").collect()).filter((s) => s.observationId === before._id),
+      );
+    const stored = await history();
+    const second = await mirrorAndPlace(t);
+    const after = (await obsFor(t, 9401))!;
+    // The mirror bumps last-seen only; the page pass writes nothing.
+    expect({ ...after, lastSeenAt: 0 }).toEqual({ ...before, lastSeenAt: 0 });
+    expect(await holdFor(t, before._id)).toEqual(hold);
+    expect(second).toMatchObject({ recordsChanged: 0 });
+    expect(await history()).toEqual(stored);
   });
 });
 

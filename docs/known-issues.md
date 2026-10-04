@@ -69,10 +69,6 @@ is fixed.
   lists (no book yet, or only a digital one beside the entry's print
   books): a shared original creator decides nothing, so the title does
   ([imports](imports.md#matching-ladder)).
-- **ANN's title splitter has no rejected state.** `convex/lib/ann.ts` reads
-  "(GN 97-99)" ranges but cannot mark a statement as unreadable, so a
-  gapped list such as "(GN 1, 3)" on a 3-in-1 line is placed by the line's
-  size. The shared parser in `convex/lib/bookTitle.ts` rejects such lists.
 - **Open Library continuations re-download the dump.** `openLibrary:sync`
   restarts each continuation from byte zero and skips lines it already
   processed. Byte-offset continuation with HTTP Range, or a dump split into

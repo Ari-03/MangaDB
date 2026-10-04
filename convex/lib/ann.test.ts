@@ -154,6 +154,56 @@ describe("splitReleaseTitle", () => {
     expect(splitReleaseTitle("Frieren: The Movie (DVD)")).toBeNull();
     expect(splitReleaseTitle("No designator at all")).toBeNull();
   });
+
+  // What each designator form yields: [label, multi, coverRange, coverageGapped].
+  const coverage = (text: string) => {
+    const split = splitReleaseTitle(text);
+    return split && [split.label, split.multi, split.coverRange, split.coverageGapped];
+  };
+  const range = (from: string, to: string) => ({ from, to });
+
+  it("reads a contiguous Volume list as the range it spans, as a written range", () => {
+    expect(coverage("Alpha (GN 97-99)")).toEqual([undefined, true, range("97", "99"), undefined]);
+    expect(coverage("Alpha (eBook 8-10)")).toEqual([undefined, true, range("8", "10"), undefined]);
+    expect(coverage("Alpha (Omnibus GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
+    expect(coverage("Alpha (GN 1, 2, 3)")).toEqual([undefined, true, range("1", "3"), undefined]);
+    expect(coverage("Alpha (GN 1 & 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
+    expect(coverage("Alpha (GN 1 and 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
+    expect(coverage("Alpha (GN 1-3, 4-6)")).toEqual([undefined, true, range("1", "6"), undefined]);
+    expect(coverage("Alpha (GN 10.5-11)")).toEqual([undefined, true, range("10.5", "11"), undefined]);
+    // The release page's "of N" total, if a line ever carries it, is not a Volume.
+    expect(coverage("Alpha (GN 1-4 / 34)")).toEqual([undefined, true, range("1", "4"), undefined]);
+  });
+
+  it("rejects a list no range holds: multi-volume with neither label nor range", () => {
+    for (const designator of ["GN 1, 3", "GN 1-3, 5", "GN 1-2 & 4", "GN 3-1", "GN 1-3-5", "eBook 2, 4"]) {
+      expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
+    }
+    // On a 3-in-1 line too: the line's size never stands in for the list.
+    expect(splitReleaseTitle("Naruto [3-in-1 Edition] (GN 1, 3)", "Naruto")).toMatchObject({
+      title: "Naruto [3-in-1 Edition]",
+      multi: true,
+      editionLineHint: true,
+      coverageGapped: true,
+    });
+  });
+
+  it("keeps a single number, a half Volume, and a designator with no number as before", () => {
+    expect(coverage("Alpha (GN 1)")).toEqual(["1", false, undefined, undefined]);
+    expect(coverage("Alpha (GN 01)")).toEqual(["01", false, undefined, undefined]);
+    expect(coverage("Alpha (GN 10.5)")).toEqual(["10.5", false, undefined, undefined]);
+    expect(coverage("Alpha (GN box 2)")).toEqual(["2", false, undefined, undefined]);
+    expect(coverage("Alpha (eBook ex 3)")).toEqual(["3", false, undefined, undefined]);
+    expect(coverage("Alpha (GN 4 / 8)")).toEqual(["4", false, undefined, undefined]);
+    expect(coverage("Alpha (GN 1A)")).toEqual(["1", false, undefined, undefined]);
+    expect(coverage("Alpha (GN A)")).toEqual([undefined, false, undefined, undefined]);
+    expect(coverage("Alpha (GN)")).toEqual([undefined, false, undefined, undefined]);
+    expect(coverage("Alpha (eBook)")).toEqual([undefined, false, undefined, undefined]);
+    // Not book designators, chapters, and no designator at all: no line.
+    for (const text of ["Alpha (omnibus 1)", "Alpha (Box Set 1)", "Alpha (light novel)", "Alpha (eBook ch 17)", "Alpha"]) {
+      expect(splitReleaseTitle(text), text).toBeNull();
+    }
+  });
 });
 
 describe("parseApiResponse", () => {

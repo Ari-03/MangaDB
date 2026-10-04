@@ -23,7 +23,7 @@
 // `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
-import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
+import { coverRangeValidator, parseVolumeList } from "./bookTitle";
 import { datePartsValidator, type DateParts } from "./dates";
 import { toIsbn13 } from "./isbn";
 import {
@@ -52,17 +52,24 @@ const annReleaseValidator = v.object({
   date: v.optional(datePartsValidator),
   /** The English release title before the "(GN n)" designator. */
   title: v.string(),
-  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot. */
+  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot or a list. */
   label: v.optional(v.string()),
-  /** A "(GN 1-3)" range or omnibus/box-set designator (multi-volume). */
+  /** A "(GN 1-3)" range or list designator (multi-volume). */
   multi: v.boolean(),
   format: v.union(v.literal("physical"), v.literal("digital")),
   /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
   editionLineHint: v.boolean(),
   /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
   isbn13: v.optional(v.string()),
-  /** The Volumes a "(GN 97-99)" designator says the book collects. */
+  /** The Volumes a "(GN 97-99)" or "(GN 1, 2, 3)" designator says the book collects. */
   coverRange: v.optional(coverRangeValidator),
+  /**
+   * The designator lists Volumes no range holds: a gap ("GN 1, 3", "GN 1-3,
+   * 5"), a backwards range or a dash chain. Multi-volume with no label and no
+   * range, and never sized from the line's name: the page pass holds it.
+   * The same flag as a title's (lib/bookTitle.ts packagingValidator).
+   */
+  coverageGapped: v.optional(v.literal(true)),
 });
 export type AnnRelease = Infer<typeof annReleaseValidator>;
 
@@ -173,14 +180,27 @@ const TITLE_PACKAGING =
   /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1|complete (?:manga )?collection)\b/i;
 
 /**
+ * The designator's numbers: the first run of numbers joined as a list or
+ * range ("4", "97-99", "1, 3", "1-3, 5"). Text after it is not read: the
+ * total in "GN 4 / 8" or the part in "GN 3 Part 1".
+ */
+const DESIGNATOR_LIST = /\d+(?:\.\d+)?(?:\s*(?:[-–&,]|\band\b)\s*\d+(?:\.\d+)?)*/i;
+/** "1-3-5": a dash chain names no range. */
+const DASH_CHAIN = /[-–]\s*\d+(?:\.\d+)?\s*[-–]/;
+
+/**
  * Split one release line's text: "Frieren: Beyond Journey's End (GN 14)" →
  * title + label + format. GN/OGN designators are print, eBook digital;
- * omnibus/box-set designators flag Edition Line packaging; "1-3" ranges are
- * multi-volume. Returns null for lines that are not book releases (DVDs and
- * other designators ANN mixes into other media types) and for single
- * chapters ("eBook ch 17") — chapters are never Volumes. `entryName` (the
- * manga's own title) lets packaging words in the line title count only when
- * they are not part of the series name.
+ * omnibus/box-set designators flag Edition Line packaging. A list of
+ * Volumes is read by the shared grammar (lib/bookTitle.ts parseVolumeList):
+ * a range or contiguous list ("1-3", "1, 2, 3", "1 & 2") is multi-volume
+ * with that range; one no range holds ("1, 3", "1-3, 5", "3-1") is
+ * multi-volume with `coverageGapped` and neither label nor range. Returns
+ * null for lines that are not book releases (DVDs and other designators ANN
+ * mixes into other media types) and for single chapters ("eBook ch 17") —
+ * chapters are never Volumes. `entryName` (the manga's own title) lets
+ * packaging words in the line title count only when they are not part of
+ * the series name.
  */
 export function splitReleaseTitle(
   text: string,
@@ -199,15 +219,19 @@ export function splitReleaseTitle(
   const editionLineHint =
     DESIGNATOR_PACKAGING.test(designator) ||
     (titleWord !== undefined && !entryName.toLowerCase().includes(titleWord.toLowerCase()));
-  const range = /(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
-  const single = /(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
+  const numbers = DESIGNATOR_LIST.exec(designator)?.[0];
+  const list = numbers !== undefined ? parseVolumeList(numbers) : null;
+  const range = list?.coverRange;
+  const gapped =
+    list !== null &&
+    (range == null || DASH_CHAIN.test(numbers!) || Number(range.from) > Number(range.to));
   return {
     title,
-    label: range ? undefined : single?.[1],
-    multi: range !== undefined,
+    label: list === null ? numbers : undefined,
+    multi: list !== null,
     format: isEbook ? "digital" : "physical",
     editionLineHint,
-    ...(range ? { coverRange: { from: canonicalLabel(range[1]!), to: canonicalLabel(range[2]!) } } : {}),
+    ...(gapped ? { coverageGapped: true } : range ? { coverRange: range } : {}),
   };
 }
 
@@ -259,6 +283,7 @@ function parseReleases(body: string, entryName: string, mangaId: string): AnnRel
       editionLineHint: split.editionLineHint,
       ...(isbn13 !== undefined ? { isbn13 } : {}),
       ...(split.coverRange ? { coverRange: split.coverRange } : {}),
+      ...(split.coverageGapped ? { coverageGapped: true } : {}),
     });
   }
   return releases;
