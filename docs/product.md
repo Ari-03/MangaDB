@@ -152,8 +152,8 @@ Volume or Bundle text search. Search pages are noindex.
   aliases from `convex/lib/publishers.ts` ("Shonen Jump" finds VIZ Media)
   and merged publishers' old names.
 - The header box is a typeahead (`src/lib/searchSuggest.tsx`) showing up to
-  six Series, up to three publishers and a "See all results" row. Without
-  Convex or before hydration it is a plain GET form.
+  six Series, up to three publishers and a "See all results" row. Before
+  hydration it is a plain GET form.
 - When no Series contains every typed word and the query names no
   publisher, both the typeahead and the page offer "Did you mean" titles
   ("berzerk" finds Berserk). A typo in the first three letters of a

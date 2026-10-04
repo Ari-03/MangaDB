@@ -59,7 +59,7 @@ export function writeErrorMessage(err: unknown): string {
 
 /**
  * The signed-in viewer's Rating Format; null while loading, signed out, or
- * username pending. Only for components rendered under the Convex provider.
+ * username pending.
  */
 function useViewerFormat(): ScoreFormat | null {
   return useReadyViewer()?.scoreFormat ?? null;
