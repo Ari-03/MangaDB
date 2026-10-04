@@ -62,10 +62,6 @@ is fixed.
   impact preview, collect all of `collectionEntries` and
   `bundleMemberships` (`convex/lib/sensitiveOps.ts`), because variant pins
   have no index.
-- **Stored cover art never refreshes.** `src/server/covers.ts` writes
-  `fetchedAt` into each R2 object's metadata and never reads it. A copy in
-  R2 is served indefinitely, so a publisher's corrected jacket does not
-  reach the site without deleting the object.
 - **Three copies of the apply ladder.** `applyBook` in
   `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
   `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same

@@ -17,6 +17,16 @@
 // burst of lookups never hides art for a day. Spec §6: covers are stored under
 // industry-standard tolerance with the takedown contact on /about-the-data.
 //
+// A stored jacket is checked against its upstreams again once 90 days have
+// passed since they were last asked (R2 metadata `fetchedAt`, or `checkedAt`
+// when a check kept the copy). The copy is still served, for an hour at a
+// time, while the check runs in the background: real art replaces it, and a
+// miss, an outage or a stand-in keeps it and only records the check. No
+// response is cached past the moment its copy falls due, but a browser or
+// edge copy taken before a replacement is served until its lifetime ends,
+// so a corrected jacket takes up to an hour after its check to show, and
+// up to 90 days to be noticed upstream at all.
+//
 // Measured on a stratified sample of the catalog's ISBNs (docs/decisions.md,
 // "Cover art sources"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
 import { env, waitUntil } from "cloudflare:workers";
@@ -43,6 +53,12 @@ const PLACEHOLDER_SHA256 = new Set([
 ]);
 const HIT_TTL = 60 * 60 * 24 * 30; // a jacket rarely changes
 const MISS_TTL = 60 * 60 * 24; // recheck missing art daily
+/** A stored jacket is checked against its upstreams again after this long. */
+const REFRESH_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+/** Lifetime of a copy served while its check is due, so the result shows soon. */
+const STALE_TTL = 60 * 60;
+/** Checks running at once per isolate; a stale copy beyond it waits for a later request. */
+const REFRESH_LIMIT = 4;
 const USER_AGENT = "MangaDB/1.0 (+https://mangadb.org/about-the-data)";
 
 /**
@@ -81,19 +97,24 @@ function inBackground(label: string, work: Promise<unknown>): void {
   waitUntil(work.catch((error: unknown) => console.error(`covers: ${label} failed`, error)));
 }
 
+type StoredCover = {
+  bytes: ArrayBuffer;
+  etag: string;
+  httpMetadata?: { contentType?: string };
+  customMetadata?: Record<string, string>;
+};
+type Jacket = { bytes: ArrayBuffer; contentType: string; source: string };
+
 /** R2's copy of a cover, or null when absent or the bucket can't be read. */
 async function storedCover(
   bucket: NonNullable<typeof env.COVERS>,
   key: string,
-): Promise<Response | null> {
+): Promise<StoredCover | null> {
   try {
     const stored = await bucket.get(key);
     if (!stored) return null;
-    return coverOk(
-      await stored.arrayBuffer(),
-      stored.httpMetadata?.contentType ?? "image/jpeg",
-      "r2",
-    );
+    const { etag, httpMetadata, customMetadata } = stored;
+    return { bytes: await stored.arrayBuffer(), etag, httpMetadata, customMetadata };
   } catch (error) {
     console.error("covers: R2 read failed", error);
     return null;
@@ -105,33 +126,108 @@ async function lookup(isbn13: string): Promise<Response> {
   const key = `${isbn13}.jpg`;
 
   const stored = bucket && (await storedCover(bucket, key));
-  if (stored) return stored;
-
-  let unavailable = false;
-  for (const source of UPSTREAMS) {
-    const found = await fetchJacket(source(isbn13));
-    if (found === "unavailable") unavailable = true;
-    if (!found || found === "unavailable") continue;
-    if (bucket) {
-      inBackground(
-        "R2 write",
-        bucket.put(key, found.bytes, {
-          httpMetadata: { contentType: found.contentType },
-          customMetadata: { source: source(isbn13), fetchedAt: new Date().toISOString() },
-        }),
-      );
+  if (stored) {
+    const contentType = stored.httpMetadata?.contentType ?? "image/jpeg";
+    const fresh = lastChecked(stored.customMetadata) + REFRESH_AGE_MS - Date.now();
+    if (fresh > 0) {
+      // Never cached past the moment its check falls due.
+      return coverOk(stored.bytes, contentType, "r2", Math.min(HIT_TTL, Math.ceil(fresh / 1000)));
     }
-    return coverOk(found.bytes, found.contentType, "upstream");
+    refreshInBackground(bucket, isbn13, stored);
+    return coverOk(stored.bytes, contentType, "r2", STALE_TTL);
   }
+
+  const found = await firstJacket(isbn13, UPSTREAMS);
   // An upstream that couldn't answer might have had the art: a short-lived
   // miss, not a remembered one.
-  if (unavailable) {
+  if (found === "unavailable") {
     return new Response("Cover source unavailable", {
       status: 503,
       headers: { "Cache-Control": "public, max-age=300" },
     });
   }
-  return coverMissing();
+  if (!found) return coverMissing();
+  if (bucket) inBackground("R2 write", storeJacket(bucket, key, found));
+  return coverOk(found.bytes, found.contentType, "upstream", HIT_TTL);
+}
+
+/**
+ * When a stored jacket's upstreams were last asked: the later of `fetchedAt`
+ * (its bytes arrived) and `checkedAt` (a check kept them). 0 when neither
+ * is readable, so an object without them is due at once.
+ */
+function lastChecked(metadata: Record<string, string> | undefined): number {
+  const times = [metadata?.fetchedAt, metadata?.checkedAt]
+    .map((value) => (value ? Date.parse(value) : Number.NaN))
+    .filter((time) => !Number.isNaN(time));
+  return Math.max(0, ...times);
+}
+
+/**
+ * The first real jacket among `sources`, in order: null when none has art,
+ * "unavailable" when none has art and one of them couldn't say.
+ */
+async function firstJacket(
+  isbn13: string,
+  sources: ReadonlyArray<(isbn13: string) => string>,
+): Promise<Jacket | null | "unavailable"> {
+  let unavailable = false;
+  for (const source of sources) {
+    const url = source(isbn13);
+    const found = await fetchJacket(url);
+    if (found === "unavailable") unavailable = true;
+    else if (found) return { ...found, source: url };
+  }
+  return unavailable ? "unavailable" : null;
+}
+
+function storeJacket(bucket: NonNullable<typeof env.COVERS>, key: string, jacket: Jacket) {
+  return bucket.put(key, jacket.bytes, {
+    httpMetadata: { contentType: jacket.contentType },
+    customMetadata: { source: jacket.source, fetchedAt: new Date().toISOString() },
+  });
+}
+
+/** ISBNs whose stored jacket this isolate is checking now. */
+const refreshing = new Set<string>();
+
+/**
+ * Check a stored jacket against its upstreams after the response is sent, at
+ * most one check per ISBN and `REFRESH_LIMIT` in all per isolate. Only
+ * upstreams ranked at or above the one the copy came from are asked, so a
+ * passing outage at the first never trades its art for a lesser source's,
+ * and art from the first never costs an OpenLibrary lookup.
+ */
+function refreshInBackground(
+  bucket: NonNullable<typeof env.COVERS>,
+  isbn13: string,
+  stored: StoredCover,
+): void {
+  if (refreshing.has(isbn13) || refreshing.size >= REFRESH_LIMIT) return;
+  refreshing.add(isbn13);
+  inBackground("refresh", refresh(bucket, isbn13, stored).finally(() => refreshing.delete(isbn13)));
+}
+
+async function refresh(
+  bucket: NonNullable<typeof env.COVERS>,
+  isbn13: string,
+  stored: StoredCover,
+): Promise<void> {
+  const key = `${isbn13}.jpg`;
+  const rank = UPSTREAMS.findIndex((source) => source(isbn13) === stored.customMetadata?.source);
+  const found = await firstJacket(isbn13, rank < 0 ? UPSTREAMS : UPSTREAMS.slice(0, rank + 1));
+  if (found && found !== "unavailable") {
+    await storeJacket(bucket, key, found);
+    return;
+  }
+  // No art upstream is no evidence against the stored copy: keep it, and
+  // record the check so it is not repeated on every request. Skipped if the
+  // object changed since it was read, so a newer jacket is never undone.
+  await bucket.put(key, stored.bytes, {
+    httpMetadata: stored.httpMetadata,
+    customMetadata: { ...stored.customMetadata, checkedAt: new Date().toISOString() },
+    onlyIf: { etagMatches: stored.etag },
+  });
 }
 
 /**
@@ -172,11 +268,12 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function coverOk(bytes: ArrayBuffer, contentType: string, origin: string): Response {
+/** A jacket response; `maxAge` (seconds) is both the browser's and the edge cache's lifetime. */
+function coverOk(bytes: ArrayBuffer, contentType: string, origin: string, maxAge: number): Response {
   return new Response(bytes, {
     headers: {
       "Content-Type": contentType,
-      "Cache-Control": `public, max-age=${HIT_TTL}`,
+      "Cache-Control": `public, max-age=${maxAge}`,
       "X-Cover-Origin": origin,
     },
   });

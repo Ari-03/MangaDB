@@ -19,15 +19,18 @@ JACKET.set([0xff, 0xd8, 0xff]);
 const image = () => new Response(JACKET, { headers: { "Content-Type": "image/jpeg" } });
 const status = (code: number) => () => new Response("x", { status: code });
 
-let upstreams: Array<() => Response>;
+let upstreams: Array<() => Response | Promise<Response>>;
+let edge: Map<string, Response>;
 beforeEach(() => {
-  stubEdgeCache();
+  edge = stubEdgeCache();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => (upstreams.shift() ?? status(404))()),
   );
 });
-afterEach(() => {
+afterEach(async () => {
+  // Settle background work first: a refresh holds its ISBN until it ends.
+  await Promise.all(worker.background);
   vi.unstubAllGlobals();
   delete worker.env.COVERS;
   worker.background.length = 0;
@@ -123,6 +126,184 @@ describe("coverResponse", () => {
     const res = await get();
     expect(res?.status).toBe(200);
     expect(res?.headers.get("X-Cover-Origin")).toBe("upstream");
+  });
+});
+
+describe("coverResponse with a stored jacket", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const PRH = "https://images.penguinrandomhouse.com/cover/9781974700523";
+  const OPEN_LIBRARY = "https://covers.openlibrary.org/b/isbn/9781974700523-L.jpg?default=false";
+  const OLD = new Uint8Array(30_000).fill(3);
+  const daysAgo = (days: number) => new Date(Date.now() - days * DAY).toISOString();
+  /** An R2 bucket holding OLD under the test ISBN with `metadata`, recording writes. */
+  const stored = (metadata?: Record<string, string>) => {
+    const covers = {
+      get: vi.fn(async () => ({
+        arrayBuffer: async () => OLD.slice().buffer,
+        etag: "etag-1",
+        httpMetadata: { contentType: "image/jpeg" },
+        customMetadata: metadata,
+      })),
+      put: vi.fn(
+        async (
+          _key: string,
+          _value: ArrayBuffer,
+          _options: { customMetadata?: Record<string, string>; onlyIf?: object },
+        ) => {},
+      ),
+    };
+    worker.env.COVERS = covers;
+    return covers;
+  };
+  const settle = async () => {
+    await Promise.all(worker.background);
+    await Promise.all(worker.background);
+  };
+  const fetches = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+  const maxAge = (res: Response | undefined | null) =>
+    Number(/max-age=(\d+)/.exec(res?.headers.get("Cache-Control") ?? "")?.[1]);
+  /** The one write a refresh made: its bytes and metadata. */
+  const written = (covers: ReturnType<typeof stored>) => {
+    expect(covers.put).toHaveBeenCalledTimes(1);
+    const [key, value, options] = covers.put.mock.calls[0]!;
+    expect(key).toBe("9781974700523.jpg");
+    return { bytes: new Uint8Array(value), ...options };
+  };
+  const recent = (iso: string | undefined) => Date.now() - Date.parse(iso ?? "") < 60_000;
+
+  test("a fresh copy is served without asking any upstream", async () => {
+    const covers = stored({ source: PRH, fetchedAt: daysAgo(10) });
+    const res = await get();
+    expect(res?.headers.get("X-Cover-Origin")).toBe("r2");
+    await settle();
+    expect(fetches()).toEqual([]);
+    expect(covers.put).not.toHaveBeenCalled();
+  });
+
+  test("a fresh copy is cached no longer than the time left before its check", async () => {
+    stored({ source: PRH, fetchedAt: daysAgo(80) });
+    const res = await get();
+    const left = 10 * 24 * 60 * 60;
+    expect(maxAge(res)).toBeGreaterThan(left - 60);
+    expect(maxAge(res)).toBeLessThanOrEqual(left);
+    await settle();
+    expect(maxAge(edge.get("https://mangadb.org/covers/9781974700523.jpg"))).toBe(maxAge(res));
+  });
+
+  test("a newly checked copy is cached for the usual 30 days", async () => {
+    stored({ source: PRH, fetchedAt: daysAgo(200), checkedAt: daysAgo(1) });
+    expect(maxAge(await get())).toBe(60 * 60 * 24 * 30);
+  });
+
+  test("an old copy is served at once, then replaced by real art in the background", async () => {
+    const covers = stored({ source: PRH, fetchedAt: daysAgo(100) });
+    let answer!: (response: Response) => void;
+    upstreams = [() => new Promise<Response>((resolve) => (answer = resolve))];
+    const res = await get();
+    expect(res?.headers.get("X-Cover-Origin")).toBe("r2");
+    expect(new Uint8Array(await res!.arrayBuffer())).toEqual(OLD);
+    // Served with a short lifetime, at the edge as in the browser.
+    expect(maxAge(res)).toBe(60 * 60);
+    expect(covers.put).not.toHaveBeenCalled();
+    answer(image());
+    await settle();
+    expect(maxAge(edge.get("https://mangadb.org/covers/9781974700523.jpg"))).toBe(60 * 60);
+    expect(fetches()).toEqual([PRH]);
+    const write = written(covers);
+    expect(write.bytes).toEqual(JACKET);
+    expect(write.customMetadata?.source).toBe(PRH);
+    expect(recent(write.customMetadata?.fetchedAt)).toBe(true);
+  });
+
+  test("a copy with no readable timestamp counts as old", async () => {
+    const unreadable: Array<Record<string, string> | undefined> = [
+      undefined,
+      { source: PRH },
+      { source: PRH, fetchedAt: "soon" },
+    ];
+    for (const metadata of unreadable) {
+      edge.clear();
+      const covers = stored(metadata);
+      upstreams = [image];
+      expect(maxAge(await get())).toBe(60 * 60);
+      await settle();
+      expect(written(covers).bytes).toEqual(JACKET);
+    }
+  });
+
+  test("the same art again still restarts the clock", async () => {
+    const covers = stored({ source: PRH, fetchedAt: daysAgo(100) });
+    upstreams = [() => new Response(OLD, { headers: { "Content-Type": "image/jpeg" } })];
+    await get();
+    await settle();
+    const write = written(covers);
+    expect(write.bytes).toEqual(OLD);
+    expect(recent(write.customMetadata?.fetchedAt)).toBe(true);
+  });
+
+  test("art first found at OpenLibrary is replaced once the CDN has it", async () => {
+    const covers = stored({ source: OPEN_LIBRARY, fetchedAt: daysAgo(100) });
+    upstreams = [image];
+    await get();
+    await settle();
+    expect(fetches()).toEqual([PRH]);
+    expect(written(covers).customMetadata?.source).toBe(PRH);
+  });
+
+  test("art from the CDN is never traded for a lesser source's", async () => {
+    const covers = stored({ source: PRH, fetchedAt: daysAgo(100) });
+    upstreams = [status(503), image];
+    await get();
+    await settle();
+    expect(fetches()).toEqual([PRH]);
+    expect(written(covers).bytes).toEqual(OLD);
+  });
+
+  const placeholder = () =>
+    new Response(new Uint8Array(100), { headers: { "Content-Type": "image/jpeg" } });
+  test.each([
+    ["a miss", status(404)],
+    ["an outage", status(503)],
+    ["a stand-in", placeholder],
+  ])("%s upstream keeps the old art and records the check", async (_name, answer) => {
+    const metadata = { source: OPEN_LIBRARY, fetchedAt: daysAgo(100) };
+    const covers = stored(metadata);
+    upstreams = [answer, answer];
+    await get();
+    await settle();
+    const write = written(covers);
+    expect(write.bytes).toEqual(OLD);
+    expect(write.customMetadata).toMatchObject(metadata);
+    expect(recent(write.customMetadata?.checkedAt)).toBe(true);
+    // Lands only on the copy it read, never over a newer jacket.
+    expect(write.onlyIf).toEqual({ etagMatches: "etag-1" });
+  });
+
+  test("two requests for the same old copy start one check", async () => {
+    const covers = stored({ source: PRH, fetchedAt: daysAgo(100) });
+    upstreams = [image, image];
+    const both = await Promise.all([get(), get()]);
+    expect(both.map((res) => res?.headers.get("X-Cover-Origin"))).toEqual(["r2", "r2"]);
+    await settle();
+    expect(fetches()).toEqual([PRH]);
+    expect(covers.put).toHaveBeenCalledTimes(1);
+  });
+
+  test("only a few checks run at once in an isolate", async () => {
+    const covers = stored({ source: PRH, fetchedAt: daysAgo(100) });
+    const pending: Array<() => void> = [];
+    vi.mocked(fetch).mockImplementation(
+      () => new Promise<Response>((resolve) => pending.push(() => resolve(image()))),
+    );
+    await Promise.all(
+      Array.from({ length: 6 }, (_, n) =>
+        coverResponse(new Request(`https://mangadb.org/covers/97819747005${30 + n}.jpg`)),
+      ),
+    );
+    expect(pending).toHaveLength(4);
+    for (const resolve of pending) resolve();
+    await settle();
+    expect(covers.put).toHaveBeenCalledTimes(4);
   });
 });
 
