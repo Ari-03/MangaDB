@@ -198,7 +198,7 @@ describe("splitReleaseTitle", () => {
     }
     // The whole list is read, never its first numbers: a trailing item, a
     // numbered extra, words or a dangling separator leave it unread.
-    for (const designator of ["GN 1, 2, and 4", "GN 1, 2, & 4", "GN 1, and 3", "GN 1-2 + 3", "GN 1 and Vol. 3", "GN 3 Part 1-2", "GN 1 and"]) {
+    for (const designator of ["GN 1, 2, and 4", "GN 1, 2, & 4", "GN 1, and 3", "GN 1-2 + 3", "GN 1 and Vol. 3", "GN 3 Part 1-2", "GN 1 and", "GN 1-3 Special", "GN 1 Part 2"]) {
       expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
     }
     // Any number smaller than the one before it, not only the last.
