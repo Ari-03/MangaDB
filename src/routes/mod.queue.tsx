@@ -3,9 +3,9 @@ import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import { CommentsQueueLink, ModGate } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
+import { warningLabel } from "~/lib/proposalDraft";
 
 /**
  * The shared review queue (spec §5): every In-Review Proposal,
@@ -185,14 +185,7 @@ function Queue() {
                 {row.warnings.length > 0 ? (
                   <span className="queue-warnings">
                     warnings:{" "}
-                    {row.warnings
-                      .map(
-                        (warning) =>
-                          PROPOSAL_WARNINGS[
-                            warning as keyof typeof PROPOSAL_WARNINGS
-                          ] ?? warning,
-                      )
-                      .join("; ")}
+                    {row.warnings.map(warningLabel).join("; ")}
                   </span>
                 ) : null}
               </div>

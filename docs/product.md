@@ -347,7 +347,7 @@ work Pending, Reported, Hidden and Removed tabs at `/mod/comments`, and can
 shadow a user so their comments look published only to them. Every
 decision writes a `commentAudit` row. Rate limits: 20 posts and 10 reports
 an hour per user. The policy numbers are in `COMMENT_POLICY` in
-`convex/comments.ts`.
+`convex/lib/commentPolicy.ts`.
 
 To turn comments on, set `comments: true` in `convex/lib/features.ts` and
 deploy both halves. Staff the queue first.

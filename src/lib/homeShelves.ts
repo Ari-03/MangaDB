@@ -5,9 +5,21 @@
 //
 // Convex knows which ISBNs a book's jacket would be fetched by, not whether
 // art exists for them; the cover store does (server/covers.ts `coversOnFile`).
-// The route loader asks it about each shelf's candidates, and the same
-// selection runs again in the component with the answer. A book is judged
-// by its first ISBN, the one most likely to have art.
+// The route loader asks it about each shelf's candidates (`homeQuestions`),
+// then seats the books with the answer (`homeShelves`) and hands the page only
+// those, never the two months they were picked from. A book is judged by its
+// first ISBN, the one most likely to have art.
+
+/** Covers standing on the hero's ledges: three short rows at most. */
+export const HERO_ROWS = 3;
+export const HERO_COLS = 5;
+/** Home shelves are a taste of the month; the agenda holds the whole of it. */
+const SHELF_LIMIT = 14;
+const NEXT_SHELF_LIMIT = 7;
+/** Two ledges of the newest Series in the catalog. */
+const SERIES_SHELF_LIMIT = 14;
+/** Below this a shelf of Series reads as a gap, so the link list serves. */
+const SERIES_SHELF_MIN = 4;
 
 /** What a shelf needs to know about a book's art (catalog rows carry both). */
 export type Jacket = { coverUrl: string | null; coverIsbns: ReadonlyArray<string> };
@@ -150,4 +162,76 @@ export function heroBooks<Book extends HeroBook>(
   limit: number,
 ): Array<Book> {
   return jacketed(pool, onFile, limit).sort((a, b) => a.sort - b.sort);
+}
+
+/**
+ * Every home shelf's candidates in shelf order, before the jacket check: the
+ * month's books by day, and the hero wall's pool, which reaches into next
+ * month.
+ */
+export function homePools<Book extends HeroBook>(
+  releases: ReadonlyArray<Book>,
+  nextReleases: ReadonlyArray<Book>,
+  todaySort: number,
+) {
+  // A book's physical and digital Releases are one cover on a shelf.
+  const monthBooks = oneCoverPer(releases, (book) => book.edition.publicId);
+  const hero = heroPool(
+    [...monthBooks, ...oneCoverPer(nextReleases, (book) => book.edition.publicId)],
+    todaySort,
+    // The day the shelf below leads with (see shelfDays).
+    monthBooks.find((book) => book.day !== null && book.sort >= todaySort)?.sort ?? null,
+  );
+  return { days: shelfDays(monthBooks, todaySort), hero };
+}
+
+type HomePools<Book> = { days: ReturnType<typeof shelfDays<Book & Dated>>; hero: Array<Book> };
+type ShelfSeries = Jacket & { publicId: number; title: string };
+
+/** The cover store's questions for the home page: the hero wall, the two day shelves, the Series shelf. */
+export function homeQuestions(
+  { days: { primary, secondary, undated }, hero }: HomePools<Jacket>,
+  series: ReadonlyArray<Jacket>,
+): Array<CoverShelf> {
+  return [
+    coverShelf(hero, HERO_ROWS * HERO_COLS),
+    coverShelf(primary ? primary.releases : undated, SHELF_LIMIT),
+    coverShelf(secondary?.releases ?? [], NEXT_SHELF_LIMIT),
+    coverShelf(series, SERIES_SHELF_LIMIT),
+  ];
+}
+
+/** A day shelf as the page shows it: the day, every book that day, and the ones seated. */
+export type DayShelf<Book> = { day: number; count: number; books: Array<Book> };
+
+/**
+ * What the home page shows, once the cover store has answered: the hero
+ * wall; the nearest publication day and the day after it (the second only
+ * when it seats a book); the day-to-be-announced books, shelved only when
+ * the month has no dated day left; and the newest Series, as a shelf of
+ * jackets or, with too few of those, as a list of names.
+ */
+export function homeShelves<Book extends HeroBook, Series extends ShelfSeries>(
+  { days: { primary, secondary, undated }, hero }: HomePools<Book>,
+  series: ReadonlyArray<Series>,
+  onFile: CoversOnFile,
+) {
+  const seat = (group: DayGroup<Book>, limit: number): DayShelf<Book> => ({
+    day: group.day,
+    count: group.releases.length,
+    books: jacketed(group.releases, onFile, limit),
+  });
+  const next = secondary ? seat(secondary, NEXT_SHELF_LIMIT) : null;
+  const shelfSeries = jacketed(series, onFile, SERIES_SHELF_LIMIT);
+  const enoughSeries = shelfSeries.length >= SERIES_SHELF_MIN;
+  return {
+    hero: heroBooks(hero, onFile, HERO_ROWS * HERO_COLS),
+    primary: primary ? seat(primary, SHELF_LIMIT) : null,
+    secondary: next && next.books.length > 0 ? next : null,
+    undated: { count: undated.length, books: primary ? [] : jacketed(undated, onFile, SHELF_LIMIT) },
+    series: enoughSeries ? shelfSeries : [],
+    seriesLinks: enoughSeries
+      ? []
+      : series.slice(0, SERIES_SHELF_LIMIT).map(({ publicId, title }) => ({ publicId, title })),
+  };
 }

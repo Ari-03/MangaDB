@@ -17,7 +17,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { COMMENT_POLICY } from "../../convex/comments";
+import { COMMENT_POLICY } from "../../convex/lib/commentPolicy";
 import { track } from "~/lib/analytics";
 import { useIsModerator, useReadyViewer } from "~/lib/viewer";
 import { writeErrorMessage } from "~/lib/ratings";
