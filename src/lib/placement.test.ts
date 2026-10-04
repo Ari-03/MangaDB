@@ -153,6 +153,26 @@ describe("Held books on /mod/imports", () => {
     });
   });
 
+  it("offers another member Prepare placement beside a Draft that is not theirs, and only the link beside their own", async () => {
+    const t = makeT();
+    const { alice1 } = await seed(t);
+    const first = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
+    const buttons = (tree: Host[]) =>
+      row(tree, "Alice in Borderland, Vol. 1").filter((host) => host.type === "button").map((host) => text(host.props.children));
+    await show(t, carol);
+    expect(buttons(mount(imports))).toEqual([]);
+    await show(t, bob);
+    expect(buttons(mount(imports))).toEqual(["Prepare placement"]);
+    press(row(mount(imports), "Alice in Borderland, Vol. 1"), "Prepare placement").click();
+    await settle();
+    const proposals = await t.run((ctx) => ctx.db.query("proposals").collect());
+    expect(proposals.map((proposal) => [proposal._id === (first.status === "prepared" ? first.proposalId : null), proposal.state])).toEqual([
+      [true, "withdrawn"],
+      [false, "draft"],
+    ]);
+    expect(fakes.navigate).toHaveBeenCalledWith({ to: "/mod/proposal/$id", params: { id: proposals[1]!._id } });
+  });
+
   it("says why a book cannot be prepared, and writes nothing", async () => {
     const t = makeT();
     await seed(t);
@@ -210,6 +230,31 @@ describe("the placement panel on the Proposal page", () => {
     press(after, "Submit for review").click();
     await settle();
     expect(await t.run(async (ctx) => (await ctx.db.get(proposalId))?.state)).toBe("inReview");
+  });
+
+  it("suggests Volume 1 for Alice's book 1, saving it only when the author accepts it", async () => {
+    const t = makeT();
+    const { alice1 } = await seed(t);
+    const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
+    if (result.status === "unavailable") throw new Error(result.reason);
+    fakes.proposalId = result.proposalId;
+    await show(t, carol);
+    const before = mount(proposal);
+    expect(pageText(before)).toEqual(
+      expect.arrayContaining([
+        "Edition at viz-media covering: not stated yet",
+        "Check that this book is the manga and not a novel of the same title, and that its number is its Volume number.",
+      ]),
+    );
+    expect(press(before, "Submit for review").disabled).toBe(true);
+    press(before, "Accept Volume 1").click();
+    await settle();
+
+    await show(t, carol);
+    const after = mount(proposal);
+    expect(pageText(after)).toContain("Edition at viz-media covering: Volume 1 (new)");
+    expect(after.some((host) => host.type === "button" && text(host.props.children) === "Accept Volume 1")).toBe(false);
+    expect(press(after, "Submit for review").disabled).toBe(false);
   });
 
   it("shows another member the placement without the form", async () => {

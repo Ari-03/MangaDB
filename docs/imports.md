@@ -214,31 +214,62 @@ such line from that publisher) and the Release with the source's ISBN,
 format, binding, date, price and blurb. It applies to a `volumeMissing` or
 `packaging` hold whose Series is active and unlocked, whose publisher
 resolves to a Publisher row, whose ISBN no active Release holds, and that
-its adapter keeps in scope (not prose, a rebinder's copy, a variant cover
-or a box set). Anything else is refused with the reason and keeps its hold:
+its adapter's own checks keep in scope (a rebinder's copy, a variant cover,
+a box set, a prose imprint ANN names, or a title Yen Press holds out of
+scope are refused). Open Library drops only a title that says it is a
+novel, and Yen Press's out-of-scope ISBNs, so a light novel whose title
+does not say so can reach the list under a manga of the same name: the
+member checks it. Anything else is refused with the reason and keeps its hold:
 `series` holds need a Series chosen, unlocked or merged first, `isbn` holds
 a correction or merge of the Release that has the ISBN or slot, and
 `other` holds a Publisher row. It never creates a Series or a Publisher.
 
-Only an ordinary single book (no line, no multi-volume or line word, by
-the adapter's own parsing) with a plain numeric label is prefilled with
-that one Volume. Any other book's coverage is left for the member to
-state on the Proposal page (`placement.setPlacement`): a range of
-canonical Volumes, or Unmapped Packaging under its line. Until then the
-Draft cannot be submitted. A book number on a line is a position in the
-line, so "Vagabond Definitive Edition, Vol. 4" never becomes Volume 4, and
-the line's name never sizes the range.
+Every Draft starts with its coverage unstated; the member states it on
+the Proposal page (`placement.setPlacement`): a range of canonical
+Volumes, one Volume, or Unmapped Packaging under its line. Until then the
+Draft cannot be submitted. A source's number is not proof of one Volume:
+VIZ's English Alice in Borderland books are two-in-one with no line word
+in their titles. The page suggests one Volume, which the member must
+accept, only when today's title parser, run over the stored title beside
+the snapshot's stored flags, reads an ordinary single book (no line, no
+packaging or multi-volume signal, not a novel), its label is a plain
+number, and that number is at most one past the Series' highest numbered
+active Volume or fills a gap below it. Every placement shows a caution to
+check that the book is the manga, not a novel of the same title, and that
+its number is its Volume number. A book number on a line is a position in
+the line, so "Vagabond Definitive Edition, Vol. 4" never becomes Volume 4,
+and the line's name never sizes the range. A range that would need more
+than 25 ops is refused, as any Proposal over the cap is.
 
-The observation's `queuedProposalId` points at the Draft, so a second
-click by anyone opens it instead of writing another. Approval creates the
-records and links the observation to the new Release in the same
-transaction (`linkObservation`), which removes the hold and applies the
-book's 18+ evidence. If an import created the same records while the
-Proposal waited, approval reuses a Volume of the same label and an Edition
-with the same publisher, line, position and coverage. It refuses when the
-ISBN was taken or the observation was linked meanwhile, and marks the
-Proposal stale when the Series was hidden, merged or locked. Rejecting or
-withdrawing the Proposal leaves the book held, ready to prepare again.
+Only `convex/placement.ts` writes a placement: `saveDraft` refuses a
+create op carrying `placement`, and refuses to replace a placement
+Draft's ops (`placementDraft`). One check (`placeable`) decides whether a
+book can be placed, when the Draft is prepared, when its coverage is
+stated, at submission and at approval. Besides the conditions above, the
+Proposal must be the one the observation's `queuedProposalId` points at,
+its one placed Release must carry the book's ISBN-13, ISBN-10 and format
+under the Series the hold names, every Volume and line it creates or
+covers must be in that Series, and the Edition it joins must not already
+hold a Release in that format (the slot an `isbn` hold guards).
+
+The observation's `queuedProposalId` points at the Draft. A second click
+by its author, or by anyone once it is in review, opens it; another
+member's click withdraws an unsubmitted Draft, notes why on it, writes
+their own and points the observation at it. Approval creates the records
+and links the observation to the new Release in the same transaction
+(`linkObservation`), which removes the hold and applies the book's 18+
+evidence. If an import created the same records while the Proposal
+waited, approval reuses a Volume of the same label and an Edition with
+the same publisher, line, position and coverage. A matching record it may
+not join (a hidden Volume or one merged away, a hidden, merged or locked
+Edition, a hidden or merged line) makes the Proposal stale, as does a
+Series hidden, merged or locked meanwhile. When the book was withdrawn,
+re-held as another kind or under another Series, given another ISBN,
+linked, or its slot taken, approval refuses (`invalidCreate`) and writes
+nothing. Rejecting or withdrawing the Proposal leaves the book held, ready
+to prepare again; after a rejection the import does not queue its own
+creation Proposal for the book until its snapshot changes
+(`alreadyHandled`).
 
 Holds recorded before the list existed, and Open Library editions skipped
 without a note, reach it through a backfill. It pages over every

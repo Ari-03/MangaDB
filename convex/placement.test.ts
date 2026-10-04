@@ -1,8 +1,9 @@
 // "Prepare placement" on a Held Book (placement.ts): the Draft it writes for
 // an ordinary single book and for a book on a line, who may prepare, submit
-// and approve, the books it refuses and why, one Draft per book, and what
-// approval does when an import created the same records while the Proposal
-// waited.
+// and approve, the books it refuses and why, one live Draft per book, that
+// only placement.ts writes a placement, what approval does when an import
+// created the same records while the Proposal waited, and what it refuses
+// when the book or its hold changed.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +11,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { recordUnplaced } from "./lib/observations";
 import { parseDumpLine } from "./lib/openLibrary";
+import { reconcileFields } from "./lib/reconcile";
 import {
   insertCoverage,
   insertEdition,
@@ -111,67 +113,134 @@ const volumeLabels = (t: TestT, seriesId: Id<"series">) =>
 const linkOf = (t: TestT, observationId: Id<"sourceObservations">) =>
   t.run(async (ctx) => (await ctx.db.get(observationId))?.recordRef);
 
+/** The author states the Draft's coverage: Volumes `from` to `to`, outside any line unless given. */
+const state = (
+  t: TestT,
+  proposalId: Id<"proposals">,
+  from: string,
+  to = from,
+  line: { name: string; position: string | null } | null = null,
+  user: TestUser = carol,
+) =>
+  signedIn(t, user).mutation(api.placement.setPlacement, {
+    proposalId,
+    coverage: { from, to },
+    line,
+    comment: `Volumes ${from} to ${to}.`,
+  });
+
+const submit = (t: TestT, proposalId: Id<"proposals">, user: TestUser = carol) =>
+  signedIn(t, user).mutation(api.proposals.submitProposal, { proposalId });
+
+/** Alice 1 prepared by Carol, stated as Volume 1 and submitted. */
+async function submittedAlice() {
+  const t = makeT();
+  const ids = await held(t);
+  const proposalId = await prepare(t, ids.alice1);
+  await state(t, proposalId, "1");
+  await submit(t, proposalId);
+  return { t, ...ids, proposalId };
+}
+
 describe("an ordinary single book", () => {
-  it("prepared and submitted by an Editor, approved by a Moderator: Volume, Edition and Release exist and the book is linked", async () => {
-    const t = makeT();
-    const { alice1, aliceId, publisherId } = await held(t);
-    const proposalId = await prepare(t, alice1);
+  it.each([
+    { from: "1", to: "1", created: ["1"] },
+    { from: "1", to: "2", created: ["1", "2"] },
+  ])(
+    "starts with its coverage unstated, suggests Volume 1, and creates what the Editor states ($from to $to) once a Moderator approves",
+    async ({ from, to, created }) => {
+      const t = makeT();
+      const { alice1, aliceId, publisherId } = await held(t);
+      const proposalId = await prepare(t, alice1);
 
-    const draft = await detail(t, proposalId);
-    expect(draft).toMatchObject({ state: "draft", author: { kind: "user", username: "carol", role: "editor" } });
-    expect(draft!.placement).toMatchObject({
-      book: {
-        title: "Alice in Borderland, Vol. 1",
-        label: "1",
+      const draft = await detail(t, proposalId);
+      expect(draft).toMatchObject({ state: "draft", author: { kind: "user", username: "carol", role: "editor" } });
+      expect(draft!.placement).toMatchObject({
+        book: {
+          title: "Alice in Borderland, Vol. 1",
+          label: "1",
+          line: null,
+          publisher: "Viz Media",
+          isbn13: "9781974728374",
+          url: "https://openlibrary.org/books/OL1M",
+        },
+        series: { publicId: 7, title: "Alice in Borderland" },
+        suggestion: "1",
+        coverage: { kind: "pending" },
         line: null,
-        publisher: "Viz Media",
-        isbn13: "9781974728374",
-        url: "https://openlibrary.org/books/OL1M",
-        ordinary: true,
-      },
-      series: { publicId: 7, title: "Alice in Borderland" },
-      coverage: { kind: "volumes", volumes: [{ label: "1", created: true }] },
-      line: null,
-      publisherSlug: "viz-media",
-      release: { format: "physical", binding: "paperback", isbn13: "9781974728374" },
-    });
-    expect(draft!.draft!.evidence).toEqual([
-      { kind: "observation", sourceKey: "openlibrary", url: "https://openlibrary.org/books/OL1M" },
-    ]);
-    // While it is a Draft and while it waits, the book stays held, marked.
-    expect((await heldList(t)).page.find((row) => row.observationId === alice1)?.proposal).toEqual({
-      id: proposalId,
-      state: "draft",
-    });
+        publisherSlug: "viz-media",
+        release: { format: "physical", binding: "paperback", isbn13: "9781974728374" },
+      });
+      expect(draft!.draft!.ops.filter((op) => op.kind === "create" && op.table === "volumes")).toEqual([]);
+      expect(draft!.draft!.evidence).toEqual([
+        { kind: "observation", sourceKey: "openlibrary", url: "https://openlibrary.org/books/OL1M" },
+      ]);
+      await expect(submit(t, proposalId)).rejects.toMatchObject({ data: { code: "invalidCreate" } });
+      // While it is a Draft and while it waits, the book stays held, marked.
+      expect((await heldList(t)).page.find((row) => row.observationId === alice1)?.proposal).toEqual({
+        id: proposalId,
+        state: "draft",
+        mine: true,
+      });
 
-    await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
-    expect((await heldList(t)).page.find((row) => row.observationId === alice1)?.proposal).toEqual({
-      id: proposalId,
-      state: "inReview",
-    });
-    // An Editor cannot approve, their own Proposal included.
-    await expect(
-      signedIn(t, carol).mutation(api.proposals.approveProposal, { proposalId }),
-    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+      await state(t, proposalId, from, to);
+      expect((await detail(t, proposalId))!.placement!.coverage).toEqual({
+        kind: "volumes",
+        volumes: created.map((label) => ({ label, created: true })),
+      });
+      await submit(t, proposalId);
+      expect((await heldList(t)).page.find((row) => row.observationId === alice1)?.proposal).toEqual({
+        id: proposalId,
+        state: "inReview",
+        mine: true,
+      });
+      // An Editor cannot approve, their own Proposal included.
+      await expect(
+        signedIn(t, carol).mutation(api.proposals.approveProposal, { proposalId }),
+      ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
-    expect((await approve(t, proposalId)).status).toBe("approved");
-    expect(await volumeLabels(t, aliceId)).toEqual(["1", "4"]);
-    const release = await t.run(async (ctx) =>
-      ctx.db.query("releases").withIndex("by_isbn13", (q) => q.eq("isbn13", "9781974728374")).unique(),
-    );
-    expect(release).toMatchObject({ status: "active", format: "physical", publisherId, seriesIds: [aliceId] });
-    expect(await linkOf(t, alice1)).toEqual({ type: "release", id: release!._id });
-    expect((await heldList(t)).page.map((row) => row.observationId)).not.toContain(alice1);
-    const page = await t.query(api.catalog.seriesPage, { publicId: 7 });
-    expect(JSON.stringify(page!.editionGroups)).toContain("9781974728374");
-    expect(page!.volumes.map((volume) => volume.label)).toEqual(["1", "4"]);
+      expect((await approve(t, proposalId)).status).toBe("approved");
+      expect(await volumeLabels(t, aliceId)).toEqual([...created, "4"]);
+      const release = await t.run(async (ctx) =>
+        ctx.db.query("releases").withIndex("by_isbn13", (q) => q.eq("isbn13", "9781974728374")).unique(),
+      );
+      expect(release).toMatchObject({ status: "active", format: "physical", publisherId, seriesIds: [aliceId] });
+      expect(await linkOf(t, alice1)).toEqual({ type: "release", id: release!._id });
+      expect((await heldList(t)).page.map((row) => row.observationId)).not.toContain(alice1);
+      const page = await t.query(api.catalog.seriesPage, { publicId: 7 });
+      expect(JSON.stringify(page!.editionGroups)).toContain("9781974728374");
+      expect(page!.volumes.map((volume) => volume.label)).toEqual([...created, "4"]);
+    },
+  );
+
+  it("suggests one Volume only for a label at most one past the Series' last Volume or filling a gap, and never for a novel", async () => {
+    const t = makeT();
+    const { aliceId } = await held(t);
+    const suggestion = async (title: string, isbn: string) => {
+      const observationId = await t.run(async (ctx) => {
+        // Stored as titled, whatever the dump parser would make of it today.
+        const parsed = parseDumpLine(dumpLine(book(`/books/OL${isbn}M`, "Alice in Borderland, Vol. 2", isbn)))!;
+        const snapshot = { ...parsed, title, volumeLabel: /Vol\. (\d+)/.exec(title)![1] };
+        const id = await insertObservation(ctx, { sourceKey: "openlibrary", sourceRecordId: snapshot.key, snapshot });
+        await recordUnplaced(ctx, (await ctx.db.get(id))!, { kind: "volumeMissing", reason: "Held.", seriesId: aliceId }, Date.now());
+        return id;
+      });
+      return (await detail(t, await prepare(t, observationId)))!.placement!.suggestion;
+    };
+    // The Series holds only Volume 4.
+    expect(await suggestion("Alice in Borderland, Vol. 3", "9781974700103")).toBe("3");
+    expect(await suggestion("Alice in Borderland, Vol. 5", "9781974700110")).toBe("5");
+    expect(await suggestion("Alice in Borderland, Vol. 6", "9781974700127")).toBeNull();
+    expect(await suggestion("Alice in Borderland, Vol. 20", "9781974700134")).toBeNull();
+    expect(await suggestion("Alice in Borderland, Vol. 2 (light novel)", "9781974700141")).toBeNull();
   });
 
   it("lets a Moderator approve their own placement, as any Proposal of theirs", async () => {
     const t = makeT();
     const { alice1 } = await held(t);
     const proposalId = await prepare(t, alice1, bob);
-    await signedIn(t, bob).mutation(api.proposals.submitProposal, { proposalId });
+    await state(t, proposalId, "1", "1", null, bob);
+    await submit(t, proposalId, bob);
     expect((await approve(t, proposalId)).status).toBe("approved");
     expect(await linkOf(t, alice1)).toMatchObject({ type: "release" });
   });
@@ -200,7 +269,8 @@ describe("an ordinary single book", () => {
       return { seriesId, observationId };
     });
     const proposalId = await prepare(t, observationId);
-    await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
+    await state(t, proposalId, "3");
+    await submit(t, proposalId);
     expect((await approve(t, proposalId)).status).toBe("approved");
     expect((await t.run((ctx) => ctx.db.get(seriesId)))?.mature).toBe(true);
     expect(await volumeLabels(t, seriesId)).toEqual(["3"]);
@@ -223,7 +293,8 @@ describe("a book on a line", () => {
     const proposalId = await prepare(t, vagabond4);
     const draft = (await detail(t, proposalId))!;
     expect(draft.placement).toMatchObject({
-      book: { label: null, line: { name: "Definitive Edition", position: "4" }, ordinary: false },
+      book: { label: null, line: { name: "Definitive Edition", position: "4" } },
+      suggestion: null,
       coverage: { kind: "pending" },
       line: { name: "Definitive Edition", position: "4", created: true },
     });
@@ -302,6 +373,65 @@ describe("a book on a line", () => {
     await restate(carol);
     await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
     await expect(restate(carol)).rejects.toMatchObject({ data: { code: "badState" } });
+  });
+});
+
+describe("a book read with today's parser", () => {
+  it("reads a legacy Open Library snapshot with no packaging as the line book its title names", async () => {
+    const t = makeT();
+    const { vagabond4 } = await held(t);
+    // /books/OL57786217M as the export stores it: parsed before the parser knew the line.
+    await t.run(async (ctx) => {
+      const observation = (await ctx.db.get(vagabond4))!;
+      if (observation.snapshot?.kind !== "olEdition") throw new Error("not an Open Library edition");
+      await ctx.db.patch(vagabond4, {
+        snapshot: {
+          ...observation.snapshot,
+          seriesTitle: "Vagabond Definitive Edition",
+          volumeLabel: "4",
+          multiVolume: false,
+          packaging: undefined,
+        },
+      });
+    });
+    const placement = (await detail(t, await prepare(t, vagabond4)))!.placement;
+    expect(placement).toMatchObject({
+      book: { label: null, line: { name: "Definitive Edition", position: "4" } },
+      suggestion: null,
+      coverage: { kind: "pending" },
+      line: { name: "Definitive Edition", position: "4", created: true },
+    });
+  });
+
+  it("reads a legacy ANN line stored without its line flag as a line book", async () => {
+    const t = makeT();
+    const { vagabondId } = await held(t);
+    const observationId = await t.run(async (ctx) => {
+      const id = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "6004",
+        snapshot: {
+          kind: "annRelease",
+          annId: "6004",
+          mangaId: "88",
+          url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=6004",
+          title: "Vagabond Definitive Edition",
+          label: "4",
+          multi: false,
+          format: "physical",
+          editionLineHint: false,
+          isbn13: "9781974700417",
+          page: { status: "ok", fetchedAt: 1, distributor: "VIZ Media", isbn13: "9781974700417" },
+        },
+      });
+      await recordUnplaced(ctx, (await ctx.db.get(id))!, { kind: "volumeMissing", reason: "Held.", seriesId: vagabondId }, Date.now());
+      return id;
+    });
+    expect((await detail(t, await prepare(t, observationId)))!.placement).toMatchObject({
+      book: { label: null, line: { name: "Definitive Edition", position: "4" } },
+      suggestion: null,
+      coverage: { kind: "pending" },
+    });
   });
 });
 
@@ -414,26 +544,71 @@ describe("books it does not prepare", () => {
   });
 });
 
-describe("one Draft per book", () => {
-  it("opens the same Draft on a repeat, a replay and another member's click", async () => {
+describe("one live Draft per book", () => {
+  it("opens the author's Draft on a repeat and a replay, and anyone's once it is in review", async () => {
     const t = makeT();
     const { alice1 } = await held(t);
-    const first = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
-    expect(first.status).toBe("prepared");
-    const again = await signedIn(t, carol).mutation(api.placement.preparePlacement, { observationId: alice1 });
-    const other = await signedIn(t, bob).mutation(api.placement.preparePlacement, { observationId: alice1 });
-    expect([again, other]).toEqual([
-      { status: "existing", proposalId: first.status === "prepared" ? first.proposalId : null },
-      { status: "existing", proposalId: first.status === "prepared" ? first.proposalId : null },
-    ]);
+    const proposalId = await prepare(t, alice1);
+    const click = (user: TestUser) => signedIn(t, user).mutation(api.placement.preparePlacement, { observationId: alice1 });
+    expect(await click(carol)).toEqual({ status: "existing", proposalId });
+    await state(t, proposalId, "1");
+    await submit(t, proposalId);
+    expect(await click(bob)).toEqual({ status: "existing", proposalId });
     expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toHaveLength(1);
+  });
+
+  it("withdraws another member's unsubmitted Draft, with a note, and points the book at the new one", async () => {
+    const t = makeT();
+    const { alice1 } = await held(t);
+    const first = await prepare(t, alice1);
+    await state(t, first, "1");
+    expect((await heldList(t)).page.find((row) => row.observationId === alice1)?.proposal).toMatchObject({ mine: true });
+    expect((await signedIn(t, bob).query(api.imports.heldBooks, { paginationOpts: { numItems: 25, cursor: null } })).page.find(
+      (row) => row.observationId === alice1,
+    )?.proposal).toMatchObject({ id: first, mine: false });
+
+    const second = await prepare(t, alice1, bob);
+    expect(second).not.toBe(first);
+    expect(await t.run(async (ctx) => (await ctx.db.get(alice1))?.queuedProposalId)).toBe(second);
+    expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ state: "withdrawn" });
+    expect((await detail(t, first))!.notes).toEqual([
+      expect.objectContaining({ kind: "comment", text: expect.stringContaining("@bob prepared this book's placement again") }),
+    ]);
+    // The withdrawn Draft is no one's to state or submit; the new one is Bob's.
+    await expect(state(t, first, "1")).rejects.toMatchObject({ data: { code: "badState" } });
+    await expect(submit(t, first)).rejects.toMatchObject({ data: { code: "badState" } });
+    await state(t, second, "1", "1", null, bob);
+    await submit(t, second, bob);
+    expect((await approve(t, second)).status).toBe("approved");
+  });
+
+  it("keeps two copies in review safe: only the one the book points at is approved, and the other then refuses", async () => {
+    const t = makeT();
+    const { alice1, aliceId } = await held(t);
+    const first = await prepare(t, alice1);
+    await state(t, first, "1");
+    await submit(t, first);
+    // However the book came to point elsewhere, a second copy reaches review.
+    await t.run((ctx) => ctx.db.patch(alice1, { queuedProposalId: undefined }));
+    const second = await prepare(t, alice1, bob);
+    await state(t, second, "1", "1", null, bob);
+    await submit(t, second, bob);
+
+    await expect(approve(t, first)).rejects.toMatchObject({
+      data: { code: "invalidCreate", message: expect.stringContaining("another Proposal's") },
+    });
+    expect((await approve(t, second)).status).toBe("approved");
+    await expect(approve(t, first)).rejects.toMatchObject({ data: { code: "invalidCreate" } });
+    expect(await volumeLabels(t, aliceId)).toEqual(["1", "4"]);
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(1);
   });
 
   it("returns a rejected book to the held list, ready to prepare again", async () => {
     const t = makeT();
     const { alice1 } = await held(t);
     const proposalId = await prepare(t, alice1);
-    await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
+    await state(t, proposalId, "1");
+    await submit(t, proposalId);
     // Open Library lists it again while it waits: still held, still marked.
     await t.action(internal.openLibrary.sync, {});
     expect((await heldList(t)).page.find((row) => row.observationId === alice1)?.proposal?.state).toBe("inReview");
@@ -444,12 +619,75 @@ describe("one Draft per book", () => {
   });
 });
 
+describe("only placement.ts writes a placement", () => {
+  it("refuses a hand-written placement in saveDraft, on any book, Series or ISBN", async () => {
+    const t = makeT();
+    const { alice1, aliceId, vagabondId, publisherId } = await held(t);
+    const editionId = await t.run((ctx) => insertEdition(ctx, { publisherId }));
+    const release = (tempId: string, seriesId: Id<"series">, isbn13: string) => ({
+      kind: "create" as const,
+      table: "releases",
+      tempId,
+      fields: { editionId, format: "physical", language: "en", isbn13, placement: { observationId: alice1, seriesId } },
+    });
+    for (const ops of [[release("forged", vagabondId, "9781974758746")], [release("a", aliceId, "9781974728374"), release("b", aliceId, "9781974799991")]]) {
+      await expect(
+        signedIn(t, carol).mutation(api.proposals.saveDraft, {
+          ops,
+          evidence: [{ kind: "observation", observationId: alice1 }],
+          comment: "A release.",
+        }),
+      ).rejects.toMatchObject({ data: { code: "invalidCreate", message: expect.stringContaining("Prepare placement") } });
+    }
+    expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toEqual([]);
+  });
+
+  it("refuses saveDraft over a placement Draft, so its author restates it only through setPlacement", async () => {
+    const t = makeT();
+    const { alice1, vagabondId } = await held(t);
+    const proposalId = await prepare(t, alice1);
+    const before = (await t.run((ctx) => ctx.db.get(proposalId)))!.draft;
+    await expect(
+      signedIn(t, carol).mutation(api.proposals.saveDraft, {
+        proposalId,
+        ops: [{ kind: "create", table: "volumes", tempId: "v", fields: { seriesId: vagabondId, label: "99" } }],
+        evidence: [{ kind: "observation", observationId: alice1 }],
+        comment: "Rewritten.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "placementDraft" } });
+    expect((await t.run((ctx) => ctx.db.get(proposalId)))!.draft).toEqual(before);
+  });
+
+  it("shows the Series the ops create under, not the one their placement names", async () => {
+    const t = makeT();
+    const { alice1, vagabondId } = await held(t);
+    const proposalId = await prepare(t, alice1);
+    await state(t, proposalId, "1");
+    await t.run(async (ctx) => {
+      const draft = (await ctx.db.get(proposalId))!.draft!;
+      const ops = draft.ops.map((op) =>
+        op.kind === "create" && op.table === "releases"
+          ? { ...op, fields: { ...op.fields, placement: { observationId: alice1, seriesId: vagabondId } } }
+          : op,
+      );
+      await ctx.db.patch(proposalId, { draft: { ...draft, ops } });
+    });
+    expect((await detail(t, proposalId))!.placement!.series).toEqual({ publicId: 7, title: "Alice in Borderland" });
+    await expect(submit(t, proposalId)).rejects.toMatchObject({ data: { code: "invalidCreate" } });
+  });
+
+  it("refuses a range that would carry more ops than a Proposal may", async () => {
+    const t = makeT();
+    const { alice1 } = await held(t);
+    const proposalId = await prepare(t, alice1);
+    await expect(state(t, proposalId, "1", "50")).rejects.toMatchObject({ data: { code: "bulkCap" } });
+    expect((await detail(t, proposalId))!.placement!.coverage).toEqual({ kind: "pending" });
+  });
+});
+
 describe("approval after an import placed the same records", () => {
   it("joins the Volume and the sibling Edition an import created meanwhile, never a duplicate", async () => {
-    const t = makeT();
-    const { alice1, aliceId, publisherId } = await held(t);
-    const proposalId = await prepare(t, alice1);
-    await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
+    const { t, alice1, aliceId, publisherId, proposalId } = await submittedAlice();
     // Another source creates Volume 1 with VIZ's digital Release of it.
     const editionId = await t.run(async (ctx) => {
       const volumeId = await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1" });
@@ -472,23 +710,15 @@ describe("approval after an import placed the same records", () => {
     const t = makeT();
     const { vagabond4, vagabondId } = await held(t);
     const proposalId = await prepare(t, vagabond4);
-    await signedIn(t, carol).mutation(api.placement.setPlacement, {
-      proposalId,
-      coverage: { from: "10", to: "12" },
-      line: { name: "Definitive Edition", position: "4" },
-      comment: "Volumes 10 to 12.",
-    });
-    await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
+    await state(t, proposalId, "10", "12", { name: "Definitive Edition", position: "4" });
+    await submit(t, proposalId);
     await t.run((ctx) => insertVolume(ctx, { seriesId: vagabondId, position: 12, label: "12" }));
     expect((await approve(t, proposalId)).status).toBe("approved");
     expect(await volumeLabels(t, vagabondId)).toEqual(["10", "11", "12"]);
   });
 
   it("refuses when the ISBN was taken meanwhile, writing nothing, and a rejection returns the hold", async () => {
-    const t = makeT();
-    const { alice1, aliceId, publisherId } = await held(t);
-    const proposalId = await prepare(t, alice1);
-    await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
+    const { t, alice1, aliceId, publisherId, proposalId } = await submittedAlice();
     await t.run(async (ctx) => {
       const editionId = await insertEdition(ctx, { publisherId });
       await insertRelease(ctx, { editionId, publisherId, seriesIds: [aliceId], isbn13: "9781974728374" });
@@ -501,28 +731,9 @@ describe("approval after an import placed the same records", () => {
     expect((await heldList(t)).page.find((row) => row.observationId === alice1)).toMatchObject({ proposal: null });
   });
 
-  it("refuses when the book was linked meanwhile", async () => {
-    const t = makeT();
-    const { alice1, aliceId, publisherId } = await held(t);
-    const proposalId = await prepare(t, alice1);
-    await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
-    await t.run(async (ctx) => {
-      const editionId = await insertEdition(ctx, { publisherId });
-      const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [aliceId] });
-      await ctx.db.patch(alice1, { recordRef: { type: "release", id: releaseId } });
-    });
-    await expect(approve(t, proposalId)).rejects.toMatchObject({
-      data: { code: "invalidCreate", message: expect.stringContaining("already linked") },
-    });
-    expect(await volumeLabels(t, aliceId)).toEqual(["4"]);
-  });
-
   it("goes stale when the Series was locked or hidden meanwhile", async () => {
     for (const change of [{ locked: true }, { status: "hidden" as const }]) {
-      const t = makeT();
-      const { alice1, aliceId } = await held(t);
-      const proposalId = await prepare(t, alice1);
-      await signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId });
+      const { t, alice1, aliceId, proposalId } = await submittedAlice();
       await t.run((ctx) => ctx.db.patch(aliceId, change));
       expect(await approve(t, proposalId)).toMatchObject({
         status: "stale",
@@ -531,5 +742,112 @@ describe("approval after an import placed the same records", () => {
       expect(await volumeLabels(t, aliceId)).toEqual(["4"]);
       expect(await linkOf(t, alice1)).toBeNull();
     }
+  });
+
+  it("goes stale, creating nothing, when the matching Edition is locked or hidden, Volume 1 is hidden or merged away, or the line is hidden", async () => {
+    const cases = ["lockedEdition", "hiddenEdition", "hiddenVolume", "mergedVolume"] as const;
+    for (const change of cases) {
+      const { t, aliceId, publisherId, proposalId } = await submittedAlice();
+      const unavailable = await t.run(async (ctx) => {
+        if (change === "hiddenVolume") return await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1", status: "hidden" });
+        if (change === "mergedVolume") {
+          const survivor = await insertVolume(ctx, { seriesId: aliceId, position: 2, label: "2" });
+          return await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1", status: "merged", mergedIntoId: survivor });
+        }
+        const volumeId = await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1" });
+        const editionId = await insertEdition(ctx, {
+          publisherId,
+          ...(change === "lockedEdition" ? { locked: true } : { status: "hidden" as const }),
+        });
+        await insertCoverage(ctx, { editionId, volumeId });
+        return editionId;
+      });
+      const counts = () =>
+        t.run(async (ctx) => [(await ctx.db.query("volumes").collect()).length, (await ctx.db.query("editions").collect()).length]);
+      const before = await counts();
+      expect(await approve(t, proposalId)).toMatchObject({
+        status: "stale",
+        stale: [{ id: unavailable, reason: "unavailable" }],
+      });
+      expect(await counts()).toEqual(before);
+    }
+
+    const t = makeT();
+    const { vagabond4, vagabondId, publisherId } = await held(t);
+    const proposalId = await prepare(t, vagabond4);
+    await state(t, proposalId, "10", "11", { name: "Definitive Edition", position: "4" });
+    await submit(t, proposalId);
+    const lineId = await t.run((ctx) =>
+      ctx.db.insert("editionLines", { status: "hidden", seriesId: vagabondId, publisherId, name: "Definitive Edition" }),
+    );
+    expect(await approve(t, proposalId)).toMatchObject({ status: "stale", stale: [{ type: "editionLine", id: lineId }] });
+    expect(await t.run((ctx) => ctx.db.query("editionLines").collect())).toHaveLength(1);
+  });
+});
+
+describe("approval after the book or its hold changed", () => {
+  it.each([
+    ["withdrawn by its source", "Its source no longer lists it."],
+    ["held as a Series question now", "No single active, unlocked Series fits this book"],
+    ["held under another Series now", 'held under "Vagabond" now'],
+    ["given another ISBN by its source", "The Release's ISBN or format is not the book's"],
+    ["linked meanwhile", "already linked"],
+    ["its Edition's physical slot taken meanwhile", "slot for this publisher and format, is already taken"],
+  ])("refuses, writing nothing, when the book was %s", async (change, reason) => {
+    const { t, alice1, aliceId, vagabondId, publisherId, proposalId } = await submittedAlice();
+    await t.run(async (ctx) => {
+      const observation = (await ctx.db.get(alice1))!;
+      const rehold = (kind: "series" | "volumeMissing", seriesId: Id<"series">) =>
+        recordUnplaced(ctx, observation, { kind, reason: "Held again.", seriesId }, Date.now());
+      if (change === "withdrawn by its source") await ctx.db.patch(alice1, { withdrawn: true });
+      if (change === "held as a Series question now") await rehold("series", aliceId);
+      if (change === "held under another Series now") await rehold("volumeMissing", vagabondId);
+      if (change === "given another ISBN by its source" && observation.snapshot?.kind === "olEdition") {
+        await ctx.db.patch(alice1, { snapshot: { ...observation.snapshot, isbn13: "9781974758746" } });
+      }
+      if (change === "linked meanwhile") {
+        const editionId = await insertEdition(ctx, { publisherId });
+        const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [aliceId] });
+        await ctx.db.patch(alice1, { recordRef: { type: "release", id: releaseId } });
+      }
+      if (change === "its Edition's physical slot taken meanwhile") {
+        const volumeId = await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1" });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, { editionId, publisherId, seriesIds: [aliceId], isbn13: "9781974799991" });
+      }
+    });
+    const releasesBefore = await t.run(async (ctx) => (await ctx.db.query("releases").collect()).length);
+    await expect(approve(t, proposalId)).rejects.toMatchObject({
+      data: { code: "invalidCreate", message: expect.stringContaining(reason) },
+    });
+    expect(await t.run(async (ctx) => (await ctx.db.query("releases").collect()).length)).toBe(releasesBefore);
+    expect((await t.run((ctx) => ctx.db.get(proposalId)))?.state).toBe("inReview");
+  });
+
+  it("leaves a member's placement in review when its source links the book and queues a field conflict", async () => {
+    const { t, alice1, aliceId, publisherId, proposalId } = await submittedAlice();
+    await t.run(async (ctx) => {
+      const editionId = await insertEdition(ctx, { publisherId });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [aliceId],
+        binding: "hardcover",
+        overriddenFields: ["binding"],
+      });
+      await ctx.db.patch(alice1, { recordRef: { type: "release", id: releaseId } });
+      const result = await reconcileFields(ctx, {
+        sourceKey: "openlibrary",
+        ref: { type: "release", id: releaseId },
+        doc: (await ctx.db.get(releaseId))!,
+        offered: { binding: "paperback" },
+        observation: (await ctx.db.get(alice1))!,
+        citation: { sourceName: "Open Library", url: "https://openlibrary.org/books/OL1M" },
+        now: Date.now(),
+      });
+      expect(result.queued).toEqual(["binding"]);
+    });
+    expect((await t.run((ctx) => ctx.db.get(proposalId)))?.state).toBe("inReview");
   });
 });

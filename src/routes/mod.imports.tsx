@@ -201,8 +201,9 @@ type HeldBook = FunctionReturnType<typeof api.imports.heldBooks>["page"][number]
 
 /**
  * A held book's placement: a link to its open placement Proposal, marked
- * Draft or awaiting review, else "Prepare placement", which opens the Draft
- * it writes (or the one another member already wrote) or says why the book
+ * Draft or awaiting review, and "Prepare placement" unless that Proposal is
+ * in review or the viewer's own Draft. Preparing opens the Draft it writes
+ * (withdrawing another member's unsubmitted Draft) or says why the book
  * cannot be prepared.
  */
 function Placement({ book }: { book: HeldBook }) {
@@ -210,17 +211,20 @@ function Placement({ book }: { book: HeldBook }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  if (book.proposal !== null) {
-    return (
-      <div className="mod-actions">
+  const open = book.proposal;
+  const marked =
+    open === null ? null : (
+      <>
         <span className="chip mod-chip mod-chip--info">
-          {book.proposal.state === "draft" ? "Placement Draft" : "Placement awaiting review"}
+          {open.state === "draft" ? "Placement Draft" : "Placement awaiting review"}
         </span>
-        <Link to="/mod/proposal/$id" params={{ id: book.proposal.id }}>
+        <Link to="/mod/proposal/$id" params={{ id: open.id }}>
           Open the Proposal
         </Link>
-      </div>
+      </>
     );
+  if (open !== null && (open.state === "inReview" || open.mine)) {
+    return <div className="mod-actions">{marked}</div>;
   }
   const onPrepare = async () => {
     setBusy(true);
@@ -237,6 +241,7 @@ function Placement({ book }: { book: HeldBook }) {
   };
   return (
     <div className="mod-actions">
+      {marked}
       <button className="btn btn-sm" type="button" disabled={busy} onClick={() => void onPrepare()}>
         {busy ? "Preparing…" : "Prepare placement"}
       </button>
@@ -273,7 +278,8 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
         A book leaves this list once it is linked, an import queues a creation Proposal for it, or
         its source stops listing it. Prepare placement drafts a Proposal of your own that creates
         what a missing-Volume or packaging book needs under its Series; the book stays here,
-        marked, until that Proposal is approved.
+        marked, until that Proposal is approved. Preparing a book another member has an
+        unsubmitted Draft for withdraws their Draft.
       </p>
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>
         <label>

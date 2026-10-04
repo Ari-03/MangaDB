@@ -68,10 +68,12 @@ function coverageText(coverage: Placement["coverage"]): string {
 
 /**
  * A held book's placement: what its source says beside what approval
- * creates under the Series, and, for its author while it is a Draft, the
- * form that states its coverage (a range of canonical Volumes, or Unmapped
- * Packaging under its line), its line, and the change comment. Saving
- * rebuilds the Draft's ops (placement.setPlacement).
+ * creates under the Series, a caution to check the book, and, for its
+ * author while it is a Draft, the form that states its coverage (a range of
+ * canonical Volumes, or Unmapped Packaging under its line), its line, and
+ * the change comment, with the one Volume the page may suggest, saved only
+ * when the author accepts it. Saving rebuilds the Draft's ops
+ * (placement.setPlacement).
  */
 function PlacementPanel({
   placement,
@@ -85,7 +87,7 @@ function PlacementPanel({
   comment: string;
 }) {
   const setPlacement = useMutation(api.placement.setPlacement);
-  const { book, coverage } = placement;
+  const { book, coverage, suggestion } = placement;
   const covered = coverage.kind === "volumes" ? coverage.volumes : [];
   const [from, setFrom] = useState(covered[0]?.label ?? "");
   const [to, setTo] = useState(covered[covered.length - 1]?.label ?? "");
@@ -97,15 +99,15 @@ function PlacementPanel({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const onSave = async () => {
+  const save = async (stated: { from: string; to: string } | null) => {
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
       await setPlacement({
         proposalId,
-        coverage: unmapped ? "unmapped" : { from, to: to.trim() === "" ? from : to },
-        line: lineName.trim() === "" ? null : { name: lineName, position: linePosition.trim() || null },
+        coverage: stated ?? (unmapped ? "unmapped" : { from, to: to.trim() === "" ? from : to }),
+        line: stated === null && lineName.trim() !== "" ? { name: lineName, position: linePosition.trim() || null } : null,
         comment: changeComment,
       });
       setSaved(true);
@@ -181,19 +183,36 @@ function PlacementPanel({
           record to it
         </li>
       </ul>
+      <p className="notice">
+        Check that this book is the manga and not a novel of the same title, and that its number is
+        its Volume number.
+      </p>
       {coverage.kind === "pending" ? (
         <p className="notice">
-          This book is not an ordinary single Volume, so its coverage is yours to state: the canonical
-          Volumes it collects, or Unmapped Packaging under its line. A book number is a position in its
-          line, not a Volume number. The Draft cannot be submitted until you state it.
+          Its coverage is yours to state: the canonical Volumes it collects (one Volume is a range of
+          one), or Unmapped Packaging under its line. A book number is a position in its line, not a
+          Volume number. The Draft cannot be submitted until you state it.
         </p>
+      ) : null}
+      {editable && coverage.kind === "pending" && suggestion !== null ? (
+        <div className="mod-actions">
+          <span>The source's label suggests Volume {suggestion}, outside any line.</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy}
+            onClick={() => void save({ from: suggestion, to: suggestion })}
+          >
+            Accept Volume {suggestion}
+          </button>
+        </div>
       ) : null}
       {editable ? (
         <form
           className="mod-edit-form"
           onSubmit={(event) => {
             event.preventDefault();
-            void onSave();
+            void save(null);
           }}
         >
           <fieldset className="date-fieldset">

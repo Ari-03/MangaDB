@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { queueCreationProposal } from "./lib/pipeline";
-import { MAX_OPS_PER_PROPOSAL } from "./proposals";
+import { MAX_OPS_PER_PROPOSAL } from "./lib/proposalCreates";
 import { insertObservation, insertPublisher, insertSeries, insertSourceRevision, insertVolume } from "./test.factories";
 import {
   ADMIN,

@@ -113,13 +113,16 @@ is fixed.
   memberships of one-Release Bundles. Release, Bundle and Series merges
   log every moved row into one manifest document with no bound at all.
   The fix is a Split, and a merge manifest, that work in batches.
-- **Two kinds of Held Book have no Data Team route.** "Prepare placement"
+- **Three kinds of Held Book have no Data Team route.** "Prepare placement"
   (`convex/placement.ts`) refuses a box set, which is a Release Bundle no
   Proposal can create, and a book whose publisher has no Publisher row,
   which only code creates (an importer's `ensurePublisher`, or the
-  canonical list in `convex/lib/publishers.ts`). Outside Bootstrap Mode
-  such a book stays held until an operator repair (`convex/lib/repair`)
-  creates the Bundle or a deploy adds the Publisher.
+  canonical list in `convex/lib/publishers.ts`). A single book with a
+  non-numeric Volume label and no line cannot be stated: the coverage
+  form takes numbers only, so "Side Story" is refused, and Unmapped
+  Packaging needs a line. Outside Bootstrap Mode such a book stays held
+  until an operator repair (`convex/lib/repair`) creates the Bundle or
+  the Volume, or a deploy adds the Publisher.
 - **Some routes cannot tell that a book is for adults.** A Series is
   mature only from evidence the catalog holds (`convex/lib/mature.ts`).
   An ANN entry with no Objectionable-content rating and no erotica or

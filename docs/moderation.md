@@ -193,27 +193,43 @@ listed. See [imports](imports.md#held-books) for the kinds.
 Proposal for the book under its Series, authored by you and citing the
 source's record, and opens it on `/mod/proposal/{id}`. That page shows what
 the source says (title, label, line, publisher, ISBN, date, link) beside
-what approval creates (the Volumes it covers, those it creates marked new,
-the Edition and its line, the Release). An ordinary single book arrives
-with its one Volume. A book on a line or covering several Volumes arrives
-with no coverage: state the canonical Volumes it collects, first to last,
-or mark it Unmapped Packaging under its line, and save. A line's book
-number is not a Volume number, and the line's name never tells its size.
-Until the coverage is stated the Draft cannot be submitted. Then submit
-it like any Proposal: an Editor's waits for a Moderator, and a Moderator
-may approve their own, as with any Proposal. Readers cannot prepare.
+what approval creates under the Series (the Volumes it covers, those it
+creates marked new, the Edition and its line, the Release). Every Draft
+arrives with no coverage: state the canonical Volumes it collects, first to
+last (one Volume is a range of one), or mark it Unmapped Packaging under
+its line, and save. A source's number does not prove one Volume (VIZ's
+Alice in Borderland books are two-in-one), and a line's book number is not
+a Volume number. For an ordinary book whose number fits the Series (at
+most one past its last Volume, or a gap) the page suggests that Volume;
+it is saved only if you accept it. Check that the book is the manga, not a
+novel of the same title, and that its number is its Volume number. Until
+the coverage is stated the Draft cannot be submitted. Then submit it like
+any Proposal: an Editor's waits for a Moderator, and a Moderator may
+approve their own, as with any Proposal. Readers cannot prepare. A
+placement Draft is edited only on that page; the ordinary draft save
+refuses it, and refuses a hand-written placement.
 
 It does nothing for a book whose hold needs another decision first, and
 says why: no single active, unlocked Series (link, unlock or merge it), an
 ISBN or slot another Release holds (correct or merge that Release), a
-publisher with no Publisher row, a box set, or a book its source's checks
-put out of scope (prose, a rebinder's copy). It never creates a Series or
-a Publisher.
+publisher with no Publisher row, a box set, a book its source no longer
+lists, or a book its source's checks put out of scope (a prose imprint, a
+rebinder's copy). It never creates a Series or a Publisher.
 
 While the Proposal is open the row stays, marked "Placement Draft" or
-"Placement awaiting review" with a link, and any member's click opens the
-same Proposal. Approval creates the records and links the source's record
-to the new Release, which takes the book off the list. If an import placed
-the same book meanwhile, approval reuses its Volume and its matching
-Edition, and refuses rather than duplicate a Release with the same ISBN.
-After a rejection the book is held again and can be prepared anew.
+"Placement awaiting review" with a link. Your own Draft, or any Proposal
+in review, opens on a second click; preparing a book another member has
+an unsubmitted Draft for withdraws their Draft, with a note saying why.
+Approval creates the records and links the source's record to the new
+Release, which takes the book off the list. The new Release's fields count
+as human-authored, so a later differing value from the source (a date
+slip, a binding change) queues a review Proposal instead of updating it.
+If an import placed the same book meanwhile, approval reuses its Volume
+and its matching Edition, and refuses rather than duplicate a Release with
+the same ISBN. It refuses, writing nothing, when the book was withdrawn,
+held as another kind or under another Series, given another ISBN, linked,
+or the Edition it joins already has a Release in its format. It marks the
+Proposal stale when the Series, or a matching Volume, Edition or line it
+would join, was hidden, merged or locked. After a rejection the book is
+held again and can be prepared anew; its import does not queue a creation
+Proposal of its own for it until its source's record changes.

@@ -37,6 +37,8 @@ import {
 import { evidence, recordRef } from "./schema";
 import {
   applyCreatePlan,
+  carriesPlacement,
+  checkOpCount,
   planCreateOps,
   unavailableCreateRefs,
   CREATABLE_TABLES,
@@ -56,12 +58,9 @@ import {
 } from "./lib/sensitiveOps";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
-import { placementView } from "./placement";
+import { checkPlacement, placementView } from "./placement";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
-
-/** Bulk-operation cap: one coherent intent, not a mass migration. */
-export const MAX_OPS_PER_PROPOSAL = 25;
 
 // Token buckets per user (Convex rate-limiter component): steady editing
 // never hits these; scripted abuse does.
@@ -129,7 +128,8 @@ type OpInput =
  * record's current base Revision (the staleness anchor); a clearOverride
  * must name an editable field the record has overridden and gets the base
  * Revision too; create ops keep their validated raw fields so temp-ID
- * references survive verbatim. A record takes one update and any number of
+ * references survive verbatim, except a held book's `placement`, which only
+ * placement.ts writes. A record takes one update and any number of
  * clears, but never a change to a field and the clear of its override
  * together: the change is itself a human correction, and which of the two
  * applied last would decide the outcome.
@@ -141,17 +141,15 @@ async function buildDraftOps(
   if (submitted.length === 0) {
     fail("noOps", "A proposal needs at least one operation.");
   }
-  if (submitted.length > MAX_OPS_PER_PROPOSAL) {
-    fail(
-      "bulkCap",
-      `One proposal carries at most ${MAX_OPS_PER_PROPOSAL} operations — split unrelated work.`,
-    );
-  }
+  checkOpCount(submitted.length);
   const ops: StoredOp[] = [];
   const updatedRecords = new Set<string>();
   const clearedFields = new Set<string>();
   for (const op of submitted) {
     if (op.kind === "create") {
+      if (carriesPlacement(op)) {
+        fail("invalidCreate", "A held book's placement is prepared from its observation: use Prepare placement.");
+      }
       ops.push({
         kind: "create",
         table: op.table,
@@ -357,7 +355,9 @@ async function staleRecordsOf(
 /**
  * Create or update a Draft proposal — the mutable working copy. Validation
  * runs now so problems surface while drafting, and again at submission and
- * approval. Any data-team member may author proposals.
+ * approval. Any data-team member may author proposals. A Draft that places
+ * a held book is refused (`placementDraft`): its author states it through
+ * placement.setPlacement, which rebuilds its ops from the observation.
  */
 export const saveDraft = mutation({
   args: {
@@ -386,6 +386,9 @@ export const saveDraft = mutation({
       requireAuthor(proposal, user);
       if (proposal.state !== "draft") {
         fail("badState", "Only Draft proposals can be edited.");
+      }
+      if (proposal.draft?.ops.some((op) => op.kind === "create" && carriesPlacement(op))) {
+        fail("placementDraft", "This Draft places a held book: state its coverage, line and comment in its placement form.");
       }
       await ctx.db.patch(args.proposalId, { draft });
       return { proposalId: args.proposalId };
@@ -443,7 +446,7 @@ export const submitProposal = mutation({
         stale,
       });
     }
-    await planOps(ctx, draft.ops);
+    await checkPlacement(ctx, args.proposalId, await planOps(ctx, draft.ops));
     for (const op of draft.ops) {
       if (op.kind !== "update") continue;
       const ref = op.ref;
@@ -817,8 +820,10 @@ export const approveProposal = mutation({
     }
 
     // Approval re-runs validation (spec §5) before anything is written; a
-    // throw here rolls back the whole approval.
+    // throw here rolls back the whole approval. A held book's placement is
+    // checked against the book as it is now (placement.ts checkPlacement).
     const plans = await planOps(ctx, version.ops);
+    await checkPlacement(ctx, args.proposalId, plans);
 
     const temp = new Map<string, string>();
     const created: Array<{

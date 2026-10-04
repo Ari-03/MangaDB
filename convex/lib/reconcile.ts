@@ -332,8 +332,10 @@ export async function reconcileFields(
       result.queued = changes.map((c) => c.field);
     } else {
       // An outdated or stale open conflict from this observation is the
-      // importer's own — withdraw and replace it with the current diff.
-      if (open?.state === "inReview") {
+      // importer's own — withdraw and replace it with the current diff. A
+      // member's Proposal (a held book's placement) is never the importer's
+      // to withdraw.
+      if (open?.state === "inReview" && open.author.kind === "source") {
         await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
       }
       const reasons = unsuppressed.map((c) => `${c.field} (${c.decision.reason})`).join("; ");

@@ -673,8 +673,9 @@ export const markWithdrawn = internalMutation({
  * Held Books, most recently held first, optionally of one kind and from one
  * source. Data Team. Each row carries what the source says about the book,
  * why it is held, and the member's placement Proposal still open for it, if
- * any (placement.ts: a Draft, or awaiting review). A book whose import
- * Proposal is in review is never held: the review queue has it.
+ * any (placement.ts: a Draft, or awaiting review), and whether the viewer
+ * wrote it. A book whose import Proposal is in review is never held: the
+ * review queue has it.
  */
 export const heldBooks = query({
   args: {
@@ -683,7 +684,7 @@ export const heldBooks = query({
     sourceKey: v.optional(v.string()),
   },
   handler: async (ctx, { paginationOpts, kind, sourceKey }) => {
-    await requireDataTeam(ctx);
+    const viewer = await requireDataTeam(ctx);
     const holds = ctx.db.query("placementHolds");
     const ordered =
       sourceKey !== undefined && kind !== undefined
@@ -694,12 +695,12 @@ export const heldBooks = query({
             ? holds.withIndex("by_kind_held", (q) => q.eq("kind", kind))
             : holds.withIndex("by_held");
     const result = await ordered.order("desc").paginate(paginationOpts);
-    return { ...result, page: await Promise.all(result.page.map((hold) => heldBook(ctx, hold))) };
+    return { ...result, page: await Promise.all(result.page.map((hold) => heldBook(ctx, hold, viewer._id))) };
   },
 });
 
 /** One Held Books row: the hold and the source's own facts. */
-async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">) {
+async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id<"users">) {
   const observation = await ctx.db.get(hold.observationId);
   // Each source stores its own snapshot shape; these fields are common.
   const book = observation?.snapshot as
@@ -732,7 +733,13 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">) {
     series: series ? { publicId: series.publicId, title: series.title } : null,
     observationId: hold.observationId,
     proposal:
-      queued?.state === "draft" || queued?.state === "inReview" ? { id: queued._id, state: queued.state } : null,
+      queued?.state === "draft" || queued?.state === "inReview"
+        ? {
+            id: queued._id,
+            state: queued.state,
+            mine: queued.author.kind === "user" && queued.author.userId === viewerId,
+          }
+        : null,
   };
 }
 

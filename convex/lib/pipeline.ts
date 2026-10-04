@@ -1043,27 +1043,25 @@ async function ensureVolumes(
   return volumeIds;
 }
 
+/** Whether a Release may be filed under this Edition: active and unlocked. */
+export const joinableEdition = (edition: Doc<"editions">) => edition.status === "active" && !edition.locked;
+
 /**
- * An existing active Edition by this publisher covering exactly these
+ * Every Edition, in any state, by this publisher covering exactly these
  * volumes (complete, in order) in the same Edition Line at the same
- * position — or outside any line when the new Release has none. That is the
- * sibling edition a same-packaging Release in another Format/Binding
- * belongs to (spec §2: an Edition is realized by Releases differing only
- * there); an omnibus never joins a single volume's Edition, or vice versa.
- * A placement Proposal's Edition joins it too (lib/proposalCreates.ts).
+ * position — or outside any line when the new Release has none.
  */
-export async function findSiblingEdition(
+export async function siblingEditions(
   ctx: QueryCtx,
   publisherId: Id<"publishers">,
   volumeIds: Id<"volumes">[],
   line: { id: Id<"editionLines">; position: string | null } | null,
-): Promise<Id<"editions"> | null> {
-  if (volumeIds.length === 0) return null;
-  const coverages = await coveringOf(ctx, volumeIds[0]!);
-  for (const coverage of coverages) {
+): Promise<Doc<"editions">[]> {
+  if (volumeIds.length === 0) return [];
+  const siblings = [];
+  for (const coverage of await coveringOf(ctx, volumeIds[0]!)) {
     const edition = await ctx.db.get(coverage.editionId);
-    if (!edition || edition.status !== "active" || edition.locked) continue;
-    if (edition.publisherId !== publisherId) continue;
+    if (!edition || edition.publisherId !== publisherId) continue;
     if ((edition.editionLineId ?? null) !== (line?.id ?? null)) continue;
     if (line !== null && (edition.linePosition ?? null) !== line.position) continue;
     const rows = await coverageOf(ctx, edition._id);
@@ -1071,36 +1069,60 @@ export async function findSiblingEdition(
     const matches = rows
       .sort((a, b) => a.order - b.order)
       .every((row, i) => row.volumeId === volumeIds[i] && row.extent === "complete");
-    if (matches) return edition._id;
+    if (matches) siblings.push(edition);
   }
-  return null;
+  return siblings;
 }
 
 /**
- * The sibling of an Unmapped Packaging Release: the line member at the same
- * position from the same publisher that is itself still unmapped (print and
- * digital of "Deluxe 14" share one Edition). Coverage cannot tell them
- * apart yet, so the position does. A placement Proposal's unmapped Edition
- * joins it too (lib/proposalCreates.ts).
+ * The active, unlocked one of those siblings (siblingEditions): the
+ * Edition a same-packaging Release in another Format/Binding belongs to
+ * (spec §2: an Edition is realized by Releases differing only there); an
+ * omnibus never joins a single volume's Edition, or vice versa. A placement
+ * Proposal's Edition joins it too (lib/proposalCreates.ts).
+ */
+export async function findSiblingEdition(
+  ctx: QueryCtx,
+  publisherId: Id<"publishers">,
+  volumeIds: Id<"volumes">[],
+  line: { id: Id<"editionLines">; position: string | null } | null,
+): Promise<Id<"editions"> | null> {
+  return (await siblingEditions(ctx, publisherId, volumeIds, line)).find(joinableEdition)?._id ?? null;
+}
+
+/**
+ * The line's members, in any state, from this publisher at this position
+ * that are Unmapped Packaging: the siblings of an Unmapped Packaging
+ * Release (print and digital of "Deluxe 14" share one Edition). Coverage
+ * cannot tell them apart yet, so the position does.
+ */
+export async function unmappedSiblings(
+  ctx: QueryCtx,
+  publisherId: Id<"publishers">,
+  line: { id: Id<"editionLines">; position: string | null },
+): Promise<Doc<"editions">[]> {
+  const members = await ctx.db
+    .query("editions")
+    .withIndex("by_line", (q) => q.eq("editionLineId", line.id))
+    .collect();
+  return members.filter(
+    (edition) =>
+      edition.publisherId === publisherId &&
+      edition.coverageUnmapped === true &&
+      (edition.linePosition ?? null) === line.position,
+  );
+}
+
+/**
+ * The active, unlocked one of those (unmappedSiblings). A placement
+ * Proposal's unmapped Edition joins it too (lib/proposalCreates.ts).
  */
 export async function findUnmappedSibling(
   ctx: QueryCtx,
   publisherId: Id<"publishers">,
   line: { id: Id<"editionLines">; position: string | null },
 ): Promise<Id<"editions"> | null> {
-  const members = await ctx.db
-    .query("editions")
-    .withIndex("by_line", (q) => q.eq("editionLineId", line.id))
-    .collect();
-  const sibling = members.find(
-    (edition) =>
-      edition.status === "active" &&
-      !edition.locked &&
-      edition.publisherId === publisherId &&
-      edition.coverageUnmapped === true &&
-      (edition.linePosition ?? null) === line.position,
-  );
-  return sibling?._id ?? null;
+  return (await unmappedSiblings(ctx, publisherId, line)).find(joinableEdition)?._id ?? null;
 }
 
 /** The Series' active Edition Line of this name (any case) for one publisher. */
