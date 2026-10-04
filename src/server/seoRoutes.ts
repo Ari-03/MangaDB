@@ -213,10 +213,13 @@ async function childSitemapXml(
  * Serve `/robots.txt`, `/sitemap.xml`, and `/sitemaps/{child}.xml`; null for
  * every other request so the Start handler takes over. All URLs are emitted
  * against the canonical origin (spec §11) regardless of the request host.
+ * Only a child sitemap reads Convex, so only it builds the client: a
+ * missing `VITE_CONVEX_URL` throws there, and every other request reaches
+ * the app, whose error screen shows the message.
  */
 export async function seoResponse(
   request: Request,
-  data: SitemapData = convexSitemapData(),
+  data?: SitemapData,
 ): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") return null;
   const { pathname } = new URL(request.url);
@@ -241,7 +244,7 @@ export async function seoResponse(
 
   const match = /^\/sitemaps\/([a-z]+)\.xml$/.exec(pathname);
   const child = match && SITEMAP_CHILDREN.find((name) => name === match[1]);
-  if (child) return cachedChildSitemap(request, child, origin, data);
+  if (child) return cachedChildSitemap(request, child, origin, data ?? convexSitemapData());
 
   return null;
 }

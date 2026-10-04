@@ -74,8 +74,12 @@ export default function PostHogAnalytics({
   // Whatever unmounts the client after `loaded` therefore stops it. A
   // remount finds posthog-js already loaded, and ConsentSync applies the
   // consent at once.
+  // The ref follows the committed consent: a render React discards never
+  // reaches it, so `loaded` cannot apply a consent that did not commit.
   const latest = useRef(consent);
-  latest.current = consent;
+  useLayoutEffect(() => {
+    latest.current = consent;
+  });
   const options = useMemo(() => clientOptions(() => latest.current), []);
   return (
     <PostHogProvider apiKey={apiKey} options={options}>

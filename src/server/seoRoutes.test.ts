@@ -24,6 +24,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   background.length = 0;
 });
 
@@ -160,6 +161,16 @@ describe("seoResponse", () => {
     expect(
       await seoResponse(new Request(`${ORIGIN}/sitemap.xml`, { method: "POST" }), fakeData()),
     ).toBeNull();
+  });
+
+  it("needs the Convex URL only for a child sitemap", async () => {
+    vi.stubEnv("VITE_CONVEX_URL", undefined);
+    expect(await seoResponse(new Request(`${ORIGIN}/series/1/berserk`))).toBeNull();
+    expect((await seoResponse(new Request(`${ORIGIN}/robots.txt`)))?.status).toBe(200);
+    expect((await seoResponse(new Request(`${ORIGIN}/sitemap.xml`)))?.status).toBe(200);
+    await expect(seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`))).rejects.toThrow(
+      "VITE_CONVEX_URL is not set",
+    );
   });
 
   it("generates a child sitemap once and serves repeats from the edge cache", async () => {
