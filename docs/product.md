@@ -250,9 +250,13 @@ from the browser while signed in, and none of the events the user causes
 from the server, moderation included. Nothing is sent while a
 signed-in user's choice is still loading. If another tab turns analytics
 on while this one is Off or loading, a page opened in this tab before it
-catches up can still be named later: as the previous page of the next page
-view, or, if a visit began on it, as that visit's entry address, search
-text included, on every event of the visit. A browser that sends Do Not Track
+catches up can still reach PostHog later: the next events from this tab
+name it as the previous page, with how long it was open and how far it was
+scrolled, and carry any campaign tag in its address; if a visit began on
+it, every event of the visit carries its address, search text included.
+This tab catches up when the change reaches it, but if two tabs are signed
+in to different accounts at once, it lasts as long as the other account
+has analytics on. A browser that sends Do Not Track
 or Global Privacy Control sends nothing either way, and switches an account
 that has never chosen to Off, once; the panel says so. A browser without
 it never switches an account back on. Signed-out visitors have no toggle;

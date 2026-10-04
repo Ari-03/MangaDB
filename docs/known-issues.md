@@ -57,18 +57,24 @@ is fixed.
   in.** posthog-js stores its opt-out in localStorage, shared by every
   tab, so another tab of the same browser opting in (switching On,
   signing out) turns capturing back on in a tab that is Off or still
-  loading its choice, until that tab receives the same change or its
-  choice answers. `before_send` in `src/lib/analyticsClient.tsx` drops
-  the events of that moment, but posthog-js has already updated its state
-  from them. Once sending resumes, the next pageview names a dropped
-  pageview's pathname as `$prev_pageview_pathname`; and a session that
-  began on a dropped event (the first after 30 minutes idle, or the
-  browser's first) carries that event's address, query string included,
-  as `$session_entry_url` on every later event of the session, across
-  reloads. A fix needs a consent store not shared between tabs, or
-  clearing posthog-js's previous-page and session state, which its public
-  API does not offer: `reset()` starts a new session but keeps the
-  previous page and replaces the anonymous id. A test in
+  loading its choice. With one account in every tab that lasts until
+  Convex pushes the tab the changed choice or Clerk syncs a sign-out;
+  with Clerk's multi-session mode, a tab whose account is Off records
+  this state for as long as another tab's account is On. `before_send` in
+  `src/lib/analyticsClient.tsx` drops the events of that moment, but
+  posthog-js has already updated its state from them. Once sending
+  resumes, the tab's events carry a dropped pageview as the previous page
+  (`$pageview_id` until the next pageview, then `$prev_pageview_*` on
+  that pageview or a `$pageleave`: pathname, id, duration, scroll and
+  content) and its campaign parameters as `utm_*` until a reload; and a
+  session that began on a dropped event (the first after 30 minutes idle
+  or 24 hours into a session, or the browser's first) carries that
+  event's address, query string and fragment included, as
+  `$session_entry_url`, with `$session_entry_utm_*`, on every later event
+  of the session, across reloads. A fix needs a consent store not shared
+  between tabs, or clearing posthog-js's previous-page and session state,
+  which its public API does not offer: `reset()` starts a new session but
+  keeps the previous page and replaces the anonymous id. A test in
   `src/lib/analyticsClient.test.ts` pins the session case.
 
 ## Catalog and imports

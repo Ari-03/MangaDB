@@ -163,9 +163,11 @@ export function ViewerAnalytics() {
   else consent = { status: "identified", userId, username: viewer.username, role: viewer.role };
 
   // Fetched the first time capture is allowed, then kept: the client
-  // itself stops sending when consent is withdrawn.
+  // itself stops sending when consent is withdrawn. A remount starts from
+  // whether the client has loaded, since posthog-js outlives this component
+  // and must still be told a consent that withholds.
   const allowed = consent.status === "anonymous" || consent.status === "identified";
-  const [fetched, setFetched] = useState(false);
+  const [fetched, setFetched] = useState(client !== null);
   if (allowed && !fetched) setFetched(true);
   return allowed || fetched ? <PostHogClient consent={consent} /> : null;
 }

@@ -40,7 +40,11 @@ One-time setup:
    account" window of `<UserButton />` offers a "Delete account" button
    that deletes only the Clerk sign-in and leaves the user's MangaDB rows
    ([known issues](known-issues.md)).
-4. Set the variables below, and allow `mangadb.org` and the staging
+4. Multi-session mode (several accounts signed in on one browser), which
+   nothing in this repo sets, widens an analytics limit: a tab whose
+   account is Off can record state from its pages for as long as another
+   tab's account is On ([Analytics](#analytics-posthog)).
+5. Set the variables below, and allow `mangadb.org` and the staging
    workers.dev origin in the Clerk dashboard.
 
 ## App and Worker
@@ -119,19 +123,35 @@ and entry URL, the previous page), and its logs and metrics, which check
 keeping the distinct id it holds. That store is shared by every tab, so
 another tab opting in turns capturing back on in this one; the client's
 `before_send` drops every event while Off or loading to cover that, but
-posthog-js has already updated its own state from the dropped event. A
-dropped pageview's page is its previous page, so once sending resumes the
-next pageview can name a page browsed while Off as
-`$prev_pageview_pathname`, with its duration and scroll depth. If the
-session began on a dropped event (no session was live: the first event
-after 30 minutes idle, or the browser's first), that event's address is
-the session's entry URL, and every later event of the session, across
-reloads, carries it as `$session_entry_url`, query string included, and
-`$session_entry_pathname`. This happens only while another tab of the
-same browser has opted in and this one is Off or still loading its
-choice, which lasts until this tab receives the same change or its
-choice answers.
+posthog-js has already updated its own state from the dropped event, and
+this tab's events carry that state once it sends again. A dropped
+pageview becomes the previous page: the events until the next pageview
+carry its `$pageview_id`, and the next pageview or `$pageleave` carries
+its `$prev_pageview_*` fields (pathname, id, duration, scroll and content
+measurements). Campaign parameters in a dropped page's address become
+the `utm_*` properties of the tab's later events until it reloads, even
+in a session that began earlier while On. If the session began on a
+dropped event (no session was live: the first event after 30 minutes
+idle or 24 hours into a session, or the browser's first), every later
+event of the session, across reloads, carries that event's address as
+`$session_entry_url`, query string and fragment included, with
+`$session_entry_pathname` and `$session_entry_utm_*`. This happens only
+while another tab of the same browser has opted in and this one is Off
+or still loading its choice. With one account in every tab, this tab
+catches up when Convex pushes it the changed choice (at once, or when its
+connection is restored) or Clerk syncs a sign-out to it. With Clerk's
+multi-session mode, two tabs can hold different accounts, and a tab whose
+account is Off records this state for as long as another tab's account
+is On. The reverse holds too: a tab whose loaded client goes Off or back to loading
+(an in-page sign-in does, for one round trip) stores a denial that
+pauses capturing in every tab until it opts back in; the other tabs'
+events in that time are lost, not sent, and if that tab closes first
+they stay paused until their own consent next changes or they reload.
 Convex having no viewer yet for a new session counts as still loading.
+A render error or failed loader replaces the app with the router's error
+screen and remounts the client on the next navigation; posthog-js
+captures that navigation's pageview in its history listener before React
+remounts, so that one pageview goes out under the last consent applied.
 Remote config is off only because
 `advanced_disable_flags` is set. A browser sending Do Not Track or Global
 Privacy Control sets the opt-out once on an account that has never chosen,

@@ -4,7 +4,8 @@
 // The PostHog client (lib/analyticsClient.tsx) against the real posthog-js
 // in a happy-dom page: its options and applyConsent drive posthog.init and
 // every consent change, as the provider and ConsentSync do; the remount
-// tests render the real component (mountPage) instead. fetch, XHR and
+// tests render the real component (mountPage), or the real consent gate
+// (ViewerAnalytics) over a mocked Clerk and Convex session. fetch, XHR and
 // sendBeacon are stubbed, so nothing leaves the process, and every request
 // body is decoded into the events it carries. A page load is a fresh
 // posthog-js module over the same localStorage and cookies. Assertions are
@@ -15,7 +16,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsConsent } from "./analytics";
 
-vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => ({ isLoaded: false }) }));
+// The signed-in session ViewerAnalytics reads: Clerk's useAuth, and
+// users.viewer (undefined while loading).
+const session = vi.hoisted(() => ({
+  auth: { isLoaded: true, isSignedIn: true, userId: "user_b" },
+  viewer: undefined as
+    | { needsUsername: false; username: string; role: null; analyticsOptOut: boolean | null }
+    | undefined,
+}));
+vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => session.auth }));
+vi.mock("convex/react", () => ({ useQuery: () => session.viewer, useMutation: () => async () => {} }));
 
 type Sent = { event: string; properties: Record<string, unknown>; raw: string };
 
@@ -149,8 +159,10 @@ async function openPage(path: string, consent: AnalyticsConsent) {
 /**
  * Load a page at `path` with the real component (PostHogAnalytics, its
  * provider and ConsentSync) rendered in a React root. `render` passes the
- * session's consent as props; `unmount` removes the component while the
- * page and its posthog-js stay, as an error boundary reset does.
+ * session's consent as props; `renderGate` renders the consent gate
+ * (ViewerAnalytics) instead, which reads `session` and lazily loads the
+ * client; `unmount` removes either while the page and its posthog-js stay,
+ * as an error boundary reset does.
  */
 async function mountPage(path: string) {
   Object.assign(history, pristineHistory);
@@ -158,10 +170,13 @@ async function mountPage(path: string) {
   stubNetwork();
   vi.resetModules();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // Read when lib/analytics.tsx loads: without it the gate loads no client.
+  vi.stubEnv("VITE_PUBLIC_POSTHOG_KEY", "phc_test");
   const { act, createElement } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { default: posthog } = await import("posthog-js");
   const { default: PostHogAnalytics } = await import("./analyticsClient");
+  const { ViewerAnalytics } = await import("./analytics");
   const init = posthog.init.bind(posthog);
   // happy-dom's user agent reads as a bot, which posthog-js drops.
   vi.spyOn(posthog, "init").mockImplementation((token, config, name) =>
@@ -175,6 +190,11 @@ async function mountPage(path: string) {
     render: async (consent: AnalyticsConsent) => {
       await act(async () => root.render(createElement(PostHogAnalytics, { apiKey: "phc_test", consent })));
       await settle();
+    },
+    renderGate: async () => {
+      await act(async () => root.render(createElement(ViewerAnalytics)));
+      // The lazy client chunk resolves inside act.
+      await act(settle);
     },
     unmount: async () => {
       await act(async () => root.render(null));
@@ -213,6 +233,14 @@ const ANONYMOUS: AnalyticsConsent = { status: "anonymous" };
 const PENDING: AnalyticsConsent = { status: "pending" };
 const OFF: AnalyticsConsent = { status: "off" };
 
+/** users.viewer for user_b, who has chosen On (`false`) or Off (`true`). */
+const viewerB = (analyticsOptOut: boolean): NonNullable<typeof session.viewer> => ({
+  needsUsername: false,
+  username: "user_b",
+  role: null,
+  analyticsOptOut,
+});
+
 // The pages browsed while analytics is off carry this in their address,
 // and only they are at /search, so a leaked pathname shows too.
 const OFF_TIME = "offtime";
@@ -243,6 +271,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  session.viewer = undefined;
 });
 
 describe("analyticsClient against posthog-js", () => {
@@ -565,5 +595,43 @@ describe("analyticsClient against posthog-js", () => {
     expect(since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
       ["$pageview", "user_b", "/series/2"],
     ]);
+  });
+
+  it("sends nothing while loading and then Off after the consent gate remounts over a loaded client", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    await page.go("/series/2");
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    // Switched Off in another tab while this page showed an error screen.
+    await page.unmount();
+    const switched = requests.length;
+    session.viewer = undefined;
+    await page.renderGate();
+    session.viewer = viewerB(true);
+    await page.renderGate();
+    await page.go("/series/3");
+    await page.go(`/search?q=${OFF_TIME}`);
+    expect(requests.slice(switched)).toEqual([]);
+  });
+
+  it("sends nothing while the viewer loads after the consent gate remounts over a loaded client", async () => {
+    const page = await mountPage("/series/1");
+    session.viewer = viewerB(false);
+    await page.renderGate();
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    await page.unmount();
+    const remounted = requests.length;
+    session.viewer = undefined;
+    await page.renderGate();
+    await page.go("/series/3");
+    expect(requests.slice(remounted)).toEqual([]);
   });
 });
