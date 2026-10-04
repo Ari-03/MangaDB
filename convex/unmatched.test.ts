@@ -1248,6 +1248,15 @@ describe("Kodansha's packaging note, through a volume page", () => {
       `"Gamma Quest 3-in-1 Edition Volume 2 (Vol. 4-6)" is 3-in-1 Edition of "Gamma Quest", stating Volumes 4-6 in its title. The Kodansha importer does not place packaging — an Editor maps it.`,
     );
   });
+
+  // The page's own title states nothing, so only the series name's gapped list stops the size.
+  it("quotes no line size under a series name listing Volumes with a gap", async () => {
+    expect(
+      await volumePageNote("Gamma Quest 3-in-1 Edition (Vol. 1 & 3)", "Gamma Quest 3-in-1 Edition Volume 2"),
+    ).toBe(
+      `"Gamma Quest 3-in-1 Edition Volume 2" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
 });
 
 // ---------- what each case does today ----------

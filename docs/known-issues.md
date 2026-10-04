@@ -292,7 +292,7 @@ is fixed.
   stays empty, and the box unheld, while its record states no usable
   coverage. Once the snapshot yields usable coverage, a later apply can
   add the matching Releases that exist, under the usual bundle
-  reconciliation checks (`reconcileCatalogBox`, `addLateBundleMembers` in
+  reconciliation checks (`addLateBundleMembers` in
   `convex/lib/pipeline.ts`): it adds none while they do not exist yet or
   the bundle is locked, and a title with a gapped list ("(Vol. 1 & 3)")
   keeps a blurb from supplying coverage. Such a bundle is marked
@@ -315,10 +315,24 @@ is fixed.
   (`createReleaseBundle` in `convex/lib/pipeline.ts`), so with the ISBN
   kept, a repaired box whose record later states a range in Bootstrap
   Mode would link the hidden bundle again and be neither held nor shown;
-  with it cleared, it gets a bundle of its own. Applied to a healthy
-  bundle the repair would do harm: it hides a bundle that would fill as
-  its box's Volumes arrive, and the box is then held or given a new
-  bundle.
+  with it cleared, it gets a bundle of its own. Clearing the ISBN moves
+  nothing that points at the bundle by its id: collection entries and any
+  other observation linked to it stay on the hidden bundle, so the repair
+  has to list them and refile or drop each on purpose. Applied to a
+  healthy bundle the repair would do harm: it hides a bundle that would
+  fill as its box's Volumes arrive, and the box is then held or given a
+  new bundle.
+- **A box set can link a merged Release Bundle instead of its survivor.**
+  A box finds an existing bundle by its ISBN-13 whatever the bundle's
+  status (`createReleaseBundle` in `convex/lib/pipeline.ts`), and a merged
+  bundle keeps its ISBN-13. After a Moderator merges bundle A into B, A's
+  observations move to B, but a box carrying A's ISBN that is applied
+  with no link of its own (a second source seeing it for the first time,
+  or an observation unlinked since) links to merged A in Bootstrap Mode:
+  it is not held and adds no members to B, since
+  `addLateBundleMembers` stops for an inactive bundle. The fix is for
+  `createReleaseBundle` to follow a merged bundle to its survivor before
+  it links and reconciles.
 - **Two packaging notes give the wrong reason.** In Bootstrap Mode PRH and
   Yen Press hold a box set with one base Series, stated coverage and no
   imprint with the note `Box set "…" is a Release Bundle — steady state
@@ -328,10 +342,12 @@ is fixed.
   held, held with a note that the title does not state its covered
   Volumes (the packaging `hold` in `applyCatalogTitle`; Seven Seas'
   `unplacedNote` in `convex/sevenSeas.ts` says neither the title, the
-  blurb, nor the line name states them), though the title does. It is
-  held in steady state or with no line name; in Bootstrap Mode a gapped
-  title with a line name, a publisher and no ambiguous Series is created
-  as Unmapped Packaging instead, with no note (`placeUnmatched` in
+  blurb, nor the line name states them), though the title does. That
+  note is written in steady state or with no line name; in Bootstrap Mode
+  a gapped title with a line name, a publisher and no ambiguous Series
+  can be created as Unmapped Packaging instead, with no note, under the
+  tail's other checks: a locked Series holds it with the lock's note, and
+  a ladder flag queues it (`placeUnmatched` in
   `convex/lib/unmatched.ts`). A fix is a note of its own for a box set
   with no publisher, and for a gapped title one saying it states no
   contiguous range. `storedHoldKind` (`convex/imports.ts`) classifies

@@ -183,7 +183,9 @@ with. Two differences are options of the function:
   own title repeats it, and the note then quotes no coverage at all. Under
   a series name that states Volumes the line's size is never quoted, since
   some spellings of that range ("… Vol. 1-3") are not read from the
-  composed title, and the size could contradict the range it shows.
+  composed title, and the size could contradict the range it shows. The
+  rule covers the ranges the title parser reads: a range spelled in words
+  ("… Vol. 1 to 3") is read by neither, and the size is quoted beside it.
 - A queued ambiguity quotes the book's title with the reason "ambiguous
   series" (PRH, Yen Press), or the Series title with the count (Seven Seas,
   Kodansha).
