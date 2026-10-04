@@ -369,6 +369,57 @@ describe("analyticsClient against posthog-js", () => {
     ]);
   });
 
+  it("resumes a page that loaded pending after another tab's reset() cleared the stored opt-out", async () => {
+    await openPage("/", identified("user_a"));
+    const reloaded = events.length;
+    const page = await openPage("/series/1", PENDING);
+    localStorage.removeItem("__ph_opt_in_out_phc_test");
+    await page.apply(identified("user_b"));
+    await page.go("/series/2");
+
+    const sent = since(reloaded);
+    const anonymousId = sent.find((e) => e.event === "$identify")?.properties.$anon_distinct_id;
+    expect(anonymousId).not.toBe("user_a");
+    const expected = [
+      ["$pageview", anonymousId, "/series/1"],
+      ["$identify", "user_b", "/series/1"],
+      ["$pageview", "user_b", "/series/2"],
+    ];
+    const received = sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]);
+    expect(received).toHaveLength(expected.length);
+    expect(received).toEqual(expect.arrayContaining(expected));
+  });
+
+  it("resumes a page that loaded pending after another tab opted the browser in", async () => {
+    const page = await openPage("/series/1", PENDING);
+    localStorage.setItem("__ph_opt_in_out_phc_test", "1");
+    await page.apply(ANONYMOUS);
+    await page.go("/series/2");
+
+    const anonymousId = page.posthog.get_distinct_id();
+    expect(events.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", anonymousId, "/series/1"],
+      ["$pageview", anonymousId, "/series/2"],
+    ]);
+  });
+
+  it("resumes a page that loaded under Do Not Track once Do Not Track is turned off", async () => {
+    Object.defineProperty(navigator, "doNotTrack", { configurable: true, value: "1" });
+    const page = await openPage("/series/1", identified("user_a"));
+    Object.defineProperty(navigator, "doNotTrack", { configurable: true, value: null });
+    await page.apply(identified("user_b"));
+    await page.go("/series/2");
+
+    // posthog-js dropped the initial pageview under Do Not Track and does not send it again.
+    const expected = [
+      ["$identify", "user_b", "/series/1"],
+      ["$pageview", "user_b", "/series/2"],
+    ];
+    const received = events.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]);
+    expect(received).toHaveLength(expected.length);
+    expect(received).toEqual(expect.arrayContaining(expected));
+  });
+
   it("sends nothing while off when another tab opts the browser back in", async () => {
     const page = await openPage("/", ANONYMOUS);
     const switched = requests.length;

@@ -35,6 +35,10 @@ const baseOptions: Partial<PostHogConfig> = {
 
 // Whether the consent last applied (applyConsent) lets events out.
 let sending = false;
+// Whether this tab's posthog-js still needs opt_in_capturing(): it opted out
+// or found a denial, and has not opted in since. The stored opt-out cannot
+// say, since another tab's reset() or opt-in changes it for every tab.
+let needsOptIn = false;
 
 /**
  * posthog.init's options: `loaded` hands the instance to track() and applies
@@ -81,28 +85,33 @@ export default function PostHogAnalytics({
  * posthog-js holds an identified user other than this one, so two accounts
  * are never merged and no event carries the other's id (reset() clears the
  * stored denial and keeps `$device_id`); then opt back in, with no `$opt_in`
- * event, if a denial was stored before the reset, which also covers a
- * denial left by an earlier page load; then `identified` identifies with
- * username and role (never email). Opting in starts the send queue and
- * sends the initial `$pageview` if this page load has not sent it, under
- * the id of that moment; reset() does neither, so a client that loaded
- * opted out needs the opt-in after it. Applying the same consent twice
- * changes nothing.
+ * event, if this tab opted out and has not opted in since, or a denial was
+ * stored before the reset (one left by an earlier page load); then
+ * `identified` identifies with username and role (never email). Opting in
+ * starts the send queue and sends the initial `$pageview` if this page load
+ * has not sent it, under the id of that moment; reset() does neither, so a
+ * client that loaded opted out needs the opt-in after it. Applying the same
+ * consent twice changes nothing.
  */
 export function applyConsent(consent: AnalyticsConsent) {
   sending = consent.status === "anonymous" || consent.status === "identified";
   if (!sending) {
     posthog.opt_out_capturing();
+    needsOptIn = true;
     return;
   }
   const userId = consent.status === "identified" ? consent.userId : null;
-  // Read before reset(), which clears it.
-  const optedOut = posthog.has_opted_out_capturing();
+  // A denial stored by an earlier page load. Read before reset(), which clears it.
+  needsOptIn ||= posthog.has_opted_out_capturing();
   // identify() records itself in posthog-js's persisted `$user_state`.
   if (posthog.get_property("$user_state") === "identified" && posthog.get_distinct_id() !== userId) {
     posthog.reset();
   }
-  if (optedOut) posthog.opt_in_capturing({ captureEventName: false });
+  if (needsOptIn) {
+    posthog.opt_in_capturing({ captureEventName: false });
+    // Still denied under Do Not Track, so the next resume tries again.
+    needsOptIn = posthog.has_opted_out_capturing();
+  }
   if (consent.status === "identified") {
     const { username, role } = consent;
     // The second argument is the $set payload.

@@ -118,7 +118,10 @@ and entry URL, the previous page), and its logs and metrics, which check
 `is_capturing()`, stop too. posthog-js stores the denial in localStorage,
 keeping the distinct id it holds. That store is shared by every tab, so
 another tab opting in turns capturing back on in this one; the client's
-`before_send` drops every event while Off or loading to cover that.
+`before_send` drops every event while Off or loading to cover that, but
+posthog-js has already recorded a dropped pageview's page as its previous
+page, so once sending resumes the next pageview can name a page browsed
+while Off as `$prev_pageview_pathname`.
 Convex having no viewer yet for a new session counts as still loading.
 Remote config is off only because
 `advanced_disable_flags` is set. A browser sending Do Not Track or Global
@@ -130,9 +133,12 @@ Sending resumes (switching On, signing out, a sign-in's choice answering)
 in a fixed order. First the client notes whether a denial is stored. Then
 `reset()`, when posthog-js holds an identified id other than the one now
 signed in: on sign-out, or when a different user signs in. It clears the
-stored denial too. Then, if a denial was stored before the reset,
+stored denial too. Then, if this tab opted out and has not opted in
+since, or a denial was stored before the reset,
 `opt_in_capturing({ captureEventName: false })`, which sends no `$opt_in`
-event. Then `identify()`. The client does the same when it loads, so a
+event. The tab keeps that record itself because the stored denial is
+shared by every tab, so another tab's reset or opt-in can clear it while
+this tab's send queue is still paused. Then `identify()`. The client does the same when it loads, so a
 denial stored on an earlier page load, by an account since signed out or
 before a reload, does not outlive the choice. Opting in starts
 posthog-js's send queue and sends the page's initial `$pageview` if this
