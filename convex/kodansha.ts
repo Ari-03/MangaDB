@@ -54,7 +54,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
-import type { CoverRange, Packaging } from "./lib/bookTitle";
+import { parseBookTitle, type CoverRange, type Packaging } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import { coverKey, coverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
@@ -661,14 +661,18 @@ async function withPageFacts(
 /**
  * The note an unmatched packaging volume is held with. This importer never
  * places packaging (it passes the tail no labels for it), so the note says
- * so, and quotes the coverage the snapshot states, if any: the title's own
- * range, else the size its line's name declares (lib/coverage.ts).
+ * so, and quotes the coverage the book states, if any: the range its own
+ * title states, read with the shared title parser, else the size its line's
+ * name declares (lib/coverage.ts). The snapshot's `packaging` comes from
+ * the series name, which every member of the line shares, so its range is
+ * never quoted.
  */
 function packagingHold(snapshot: KodanshaSnapshot, packaging: Packaging): string {
+  const own = parseBookTitle(snapshot.title).packaging;
   const fromLine = coverageFromLine(packaging.lineName, packaging.linePosition);
-  const stated = packaging.coverRange
-    ? { range: packaging.coverRange, by: "in its title" }
-    : fromLine && !packaging.coverageGapped
+  const stated = own?.coverRange
+    ? { range: own.coverRange, by: "in its title" }
+    : fromLine && !own?.coverageGapped
       ? { range: fromLine, by: "by its line's size" }
       : null;
   const volumes = (range: CoverRange) =>
@@ -814,9 +818,9 @@ export const applyVolume = internalMutation({
     }
 
     // A packaging line's volume (omnibus, box set, collector's edition) is
-    // an Edition Line member whose covered Volumes Kodansha never states: it
-    // links by ISBN (multiVolume skips the label rungs) or is left for an
-    // Editor — never a Volume, never a Series of its own.
+    // an Edition Line member whose covered Volumes this importer does not
+    // read: it links by ISBN (multiVolume skips the label rungs) or is left
+    // for an Editor — never a Volume, never a Series of its own.
     const packaging = snapshot.packaging ?? null;
     const publisherRef = packaging ? PUBLISHER : await publisherForSeries(ctx, seriesId);
     const publisher = packaging ? null : await publisherBySlug(ctx, publisherRef.slug);
@@ -874,8 +878,8 @@ export const applyVolume = internalMutation({
           ? { amountCents: snapshot.priceCents, currency: "USD" }
           : undefined,
     };
-    // Kodansha never states which Volumes a packaging line's volume
-    // collects: it covers none the tail could place, so it is held.
+    // A packaging line's volume covers no Volume the tail could place, even
+    // when its title states a range (its note quotes it), so it is held.
     const labels = !packaging && snapshot.volumeLabel !== undefined ? [snapshot.volumeLabel] : [];
 
     // No Release matched: the shared tail holds, queues, or creates it

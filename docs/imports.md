@@ -156,11 +156,12 @@ as a Held Book (below).
 `convex/lib/catalogTitle.ts`) hand a book that matched no Release to one
 function, `placeUnmatched` in `convex/lib/unmatched.ts`. In order, it holds
 packaging with no usable coverage, holds a book whose Series is locked
-(`series`, in Bootstrap Mode too, with nothing created or queued), queues a
-ladder flag for review, records a book with no publisher, queues a title
-that names several Series, queues what a steady-state gate stops (but holds
-a book whose new Series would recreate a hidden work, even when its
-Proposal is already in review), and otherwise creates the records. Queuing
+(`series`, in Bootstrap Mode too, with nothing created or queued, unless the
+book has no publisher), queues a ladder flag for review, records a book with
+no publisher, queues a title that names several Series, queues what a
+steady-state gate stops (but holds a book whose new Series would recreate a
+hidden work, even when its Proposal is already in review), and otherwise
+creates the records. Queuing
 first creates the publisher row if it is missing, or takes a merged row's
 survivor, so approval finds it; a hidden row stays hidden, and approval
 finds the Proposal stale. Each adapter keeps its parsing, its own series
@@ -171,10 +172,21 @@ with. Two differences are options of the function:
 - Seven Seas, PRH and Yen Press create Unmapped Packaging in Bootstrap Mode.
   Kodansha's adapter does not place packaging: it passes no labels for it,
   so every such book is held, with a note that says so and quotes the
-  coverage the title or the line's size states.
+  coverage the book's own title states, else its line's size. Kodansha reads
+  a book's packaging from its series name, which every member of the line
+  shares, so the note never quotes a range from it.
 - A queued ambiguity quotes the book's title with the reason "ambiguous
   series" (PRH, Yen Press), or the Series title with the count (Seven Seas,
   Kodansha).
+
+An apply that does not hold the book for a lock removes a lock hold an
+earlier apply left, whichever way it ends, so the hold goes with the lock
+the next time the importer applies the book (`holdUnderLock`). Seven Seas,
+PRH and Yen Press hold a box set the same way, with the same note, where
+Bootstrap Mode would otherwise make it a Release Bundle under a locked
+Series. A box set already placed as a Release Bundle still takes members
+that arrive later when its Series is locked: like a linked Release, only the
+bundle's own lock stops that.
 
 A book already linked to a Release under a locked Series does not reach
 this function. Its adapter reconciles the Release's fields as for any

@@ -8,7 +8,8 @@
 // 1. packaging whose coverage nothing states is held for an Editor, unless
 //    Bootstrap Mode may create it as Unmapped Packaging under its line
 // 2. a book under a locked Series is held, in either mode: a lock is an
-//    Editor's, and an import writes nothing under it
+//    Editor's, and an import writes nothing under it (a book with no
+//    publisher is not: step 4 records it)
 // 3. a ladder flag (rung ②–④) queues the pre-filled creation guess for review
 // 4. with no publisher to file it under, the book is only recorded
 // 5. a title naming several Series queues the guess for review
@@ -18,7 +19,9 @@
 // 7. otherwise it is created (lib/pipeline.ts createCanonicalRecords)
 //
 // Queueing is deduplicated per observation (lib/pipeline.ts alreadyHandled)
-// and first ensures the publisher row, so approval finds it.
+// and first ensures the publisher row, so approval finds it. An apply that
+// does not hold the book for a lock leaves no lock hold behind, whichever
+// step it ends at (`holdUnderLock`).
 // Bootstrap Mode is read only at a step that uses it (1 and 6), unless the
 // adapter already read it, so a book held or queued before those steps
 // leaves app config out of its transaction's reads.
@@ -33,7 +36,7 @@ import { getBootstrapMode } from "../importSources";
 import type { Packaging } from "./bookTitle";
 import type { CoverRequest } from "./covers";
 import type { MatchOutcome } from "./matching";
-import { recordUnplaced } from "./observations";
+import { clearHold, recordUnplaced } from "./observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
@@ -106,8 +109,8 @@ export type UnmatchedOptions = {
   /**
    * In Bootstrap Mode, a named line's member with no stated coverage is
    * created as Unmapped Packaging (CONTEXT.md) for a Moderator to map.
-   * Seven Seas, PRH, Yen Press. Kodansha's adapter reads no coverage: it
-   * passes no labels for packaging, so every such book is held.
+   * Seven Seas, PRH, Yen Press. Kodansha's adapter places no packaging: it
+   * passes no labels for it, so every such book is held.
    */
   unmappedPackaging: boolean;
   /**
@@ -117,6 +120,45 @@ export type UnmatchedOptions = {
    */
   ambiguityQuotesBook: boolean;
 };
+
+/**
+ * The note a book under a locked Series is held with. It tells a lock hold
+ * from the tail's other `series` hold (a hidden work's) and from an
+ * adapter's (a box set with no unique base Series); imports.ts
+ * storedHoldKind lists it.
+ */
+const LOCK_NOTE = /^Series \d+ is locked\.$/;
+
+/**
+ * Hold a book under a locked Series, in Bootstrap Mode or out of it: a lock
+ * is an Editor's, and an import creates and queues nothing under it (Open
+ * Library and ANN hold the same way). The hold names the Series, for
+ * whoever lifts the lock. Returns the result to answer with, or null when
+ * `seriesId` is not locked; then a lock hold an earlier apply left (row and
+ * note) goes, so it never outlives the lock, whichever way this apply ends.
+ * The tail calls it for every book with a publisher; Seven Seas, PRH and
+ * Yen Press for a box set they would place as a Release Bundle.
+ */
+export async function holdUnderLock(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  seriesId: Id<"series"> | null,
+  now: number,
+): Promise<ApplyResult | null> {
+  const series = seriesId !== null ? await ctx.db.get(seriesId) : null;
+  if (series?.locked) {
+    await recordUnplaced(
+      ctx,
+      observation,
+      { kind: "series", reason: `Series ${series.publicId} is locked.`, seriesId: series._id },
+      now,
+    );
+    return { status: "recordOnly", changed: false, reason: "locked series" };
+  }
+  const note = observation.conflicts?.find((c) => c.field === "placement")?.reason;
+  if (note !== undefined && LOCK_NOTE.test(note)) await clearHold(ctx, observation._id);
+  return null;
+}
 
 /**
  * Hold, queue, or create one unmatched book (the order is the header's).
@@ -190,19 +232,11 @@ export async function placeUnmatched(
     return { status: reason ? "needsReview" : "queued", changed: true, reason };
   };
 
-  // A locked Series takes no new books from an import, in Bootstrap Mode or
-  // out of it, and nothing is queued for it (Open Library and ANN hold the
-  // same way). The hold names the Series, for whoever lifts the lock.
-  const series = seriesId !== null ? await ctx.db.get(seriesId) : null;
-  if (series?.locked) {
-    await recordUnplaced(
-      ctx,
-      observation,
-      { kind: "series", reason: `Series ${series.publicId} is locked.`, seriesId: series._id },
-      now,
-    );
-    return { status: "recordOnly", changed: false, reason: "locked series" };
-  }
+  // A locked Series takes no new books from an import. A book with no
+  // publisher could not be created anyway, so the lock does not hold it
+  // (step 4 records it); it still drops a lock hold left from before.
+  const held = await holdUnderLock(ctx, observation, publisher !== undefined ? seriesId : null, now);
+  if (held !== null) return held;
 
   // Ambiguity always queues flagged (spec §6), in Bootstrap Mode or out of
   // it: the importer never merges.

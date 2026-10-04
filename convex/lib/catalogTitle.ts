@@ -30,7 +30,7 @@ import {
 } from "./pipeline";
 import { canonicalPublisherFor, type CanonicalPublisher } from "./publishers";
 import { reconcileFields } from "./reconcile";
-import { placeUnmatched, type ApplyResult } from "./unmatched";
+import { holdUnderLock, placeUnmatched, type ApplyResult } from "./unmatched";
 
 /** The snapshot fields every catalog-title source normalizes to. */
 export const catalogTitleFields = {
@@ -388,6 +388,9 @@ export async function applyCatalogTitle(
       );
       return { status: "recordOnly", changed: false, reason: "box set" };
     }
+    // A locked Series takes no box set either, held as the tail holds a book.
+    const held = await holdUnderLock(ctx, observation, seriesId, now);
+    if (held !== null) return held;
     const bundle = await createReleaseBundle(ctx, {
       sourceKey: opts.sourceKey,
       observation,

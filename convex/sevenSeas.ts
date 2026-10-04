@@ -65,7 +65,7 @@ import {
   type BookSnapshot,
 } from "./lib/sevenSeas";
 import { withExceptionCapture } from "./lib/posthog";
-import { placeUnmatched, type ApplyResult } from "./lib/unmatched";
+import { holdUnderLock, placeUnmatched, type ApplyResult } from "./lib/unmatched";
 
 export const SOURCE_KEY = "sevenseas";
 const BASE_URL = "https://sevenseasentertainment.com";
@@ -642,6 +642,9 @@ export const applyBook = internalMutation({
         );
         return { status: "recordOnly", changed: false, reason: "box set" };
       }
+      // A locked Series takes no box set either, held as the tail holds a book.
+      const held = await holdUnderLock(ctx, observation, seriesId, now);
+      if (held !== null) return held;
       const bundle = await createReleaseBundle(ctx, {
         sourceKey: SOURCE_KEY,
         observation,
