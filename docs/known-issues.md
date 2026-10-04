@@ -67,7 +67,9 @@ is fixed.
   repaired by hand on 2026-09-28. A new import no longer links such an
   entry to a Series another live ANN entry holds unless they share an
   ISBN; entries already linked keep their link
-  ([imports](imports.md#matching-ladder)).
+  ([imports](imports.md#matching-ladder)). A Series no ANN entry holds (a
+  publisher feed's) with no ISBN in a format the entry lists still takes
+  the entry by title.
 - **Open Library continuations re-download the dump.** `openLibrary:sync`
   restarts each continuation from byte zero and skips lines it already
   processed. Byte-offset continuation with HTTP Range, or a dump split into

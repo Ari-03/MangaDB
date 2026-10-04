@@ -499,12 +499,11 @@ type SetAside = { series: Doc<"series">; heldBy: string | null };
 // is not seen, and the title links as it did before the rule.
 const SERIES_LINK_SCAN = 20;
 
-/** The id of another live ANN entry linked to the Series, or null. */
-async function annEntryHolding(
-  ctx: MutationCtx,
-  seriesId: Id<"series">,
-  annId: string,
-): Promise<string | null> {
+/**
+ * The id of a live ANN entry linked to the Series, or null. Asked only for
+ * an entry that has no Series link, so the holder is always another entry.
+ */
+async function annEntryHolding(ctx: MutationCtx, seriesId: Id<"series">): Promise<string | null> {
   const links = await ctx.db
     .query("sourceObservations")
     .withIndex("by_record", (q) => q.eq("recordRef.type", "series").eq("recordRef.id", seriesId))
@@ -513,19 +512,19 @@ async function annEntryHolding(
     (link) =>
       link.sourceKey === SOURCE_KEY &&
       !link.withdrawn &&
-      link.sourceRecordId.startsWith("manga:") &&
-      link.sourceRecordId !== `manga:${annId}`,
+      link.sourceRecordId.startsWith("manga:"),
   );
   return holder?.sourceRecordId.slice("manga:".length) ?? null;
 }
 
 /**
  * Flag the Series ANN created for an entry beside the one Series of the
- * entry's title that it set aside: a duplicate candidate for the Data Team
- * (/mod/launch), whose reason says why. The created Series is new, so the
- * pair is too.
+ * entry's title that it set aside, for sharing no ISBN with the entry's
+ * books or for being held by another live ANN entry: a duplicate candidate
+ * for the Data Team (/mod/launch), whose reason says which. The created
+ * Series is new, so the pair is too.
  */
-async function flagDisjointTwin(
+async function flagSetAsideTwin(
   ctx: MutationCtx,
   createdId: Id<"series">,
   { series, heldBy }: SetAside,
@@ -730,7 +729,7 @@ export const applyManga = internalMutation({
           const verdict = await workMatch(ctx, series._id, evidence);
           if (verdict === "disjointBooks") disjoint.push({ series, heldBy: null });
           else if (verdict === "unknown") {
-            const heldBy = await annEntryHolding(ctx, series._id, snapshot.id);
+            const heldBy = await annEntryHolding(ctx, series._id);
             if (heldBy === null) kept.push(series);
             else disjoint.push({ series, heldBy });
           } else if (verdict === "same") kept.push(series);
@@ -826,7 +825,7 @@ export const applyManga = internalMutation({
       }
       seriesId = creation.seriesId;
       await linkObservation(ctx, observation._id, { type: "series", id: seriesId });
-      if (setAside !== null) await flagDisjointTwin(ctx, seriesId, setAside, snapshot);
+      if (setAside !== null) await flagSetAsideTwin(ctx, seriesId, setAside, snapshot);
       changed = true;
     } else if (labels.length > 0) {
       // The Volume backbone under a linked Series — within the spec §6

@@ -1781,6 +1781,23 @@ describe("ann.sync — a title match that is another work", () => {
     expect(await linkOf(t, 15837)).toEqual(held);
   });
 
+  it("links by title a Series nobody holds whose only ISBN is digital, for a print-only entry", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const { seriesId } = await t.run((ctx) =>
+      seedCatalog(ctx, {
+        publisher: { name: "Seven Seas Entertainment", slug: "seven-seas" },
+        series: { title: "Citrus", altTitles: [] },
+        release: { isbn13: "9781626922617", format: "digital" },
+      }),
+    );
+    // workMatch compares books of a format both list; a digital book says
+    // nothing about a print-only entry, so the title links.
+    stubAnn([entry(15835, "Citrus", "9781626922600")]);
+    await sync(t, { releasePages: false });
+    expect(await linkOf(t, 15835)).toEqual({ type: "series", id: seriesId });
+  });
+
   it("never links through an alt title a Series another live ANN entry holds", async () => {
     const t = makeT();
     await seedRegistry(t, true);
@@ -2790,7 +2807,7 @@ describe("ann — release-page descriptions", () => {
   });
 });
 
-describe("ann — a title match set aside for disjoint ISBNs is flagged", () => {
+describe("ann — a title match set aside is flagged", () => {
   const ISBN = (n: number) => `97819753000${String(n).padStart(2, "0")}`;
   // ANN's entry lists only Volumes 1 to 9.
   const ENTRY: FixtureManga = {
@@ -2863,5 +2880,45 @@ describe("ann — a title match set aside for disjoint ISBNs is flagged", () => 
       expect(await ctx.db.query("series").collect()).toHaveLength(1);
       expect(await ctx.db.query("duplicateCandidates").collect()).toEqual([]);
     });
+  });
+
+  it("names the Series another ANN entry holds on the creation Proposal it queues in steady state", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const first: FixtureManga = {
+      id: 15835,
+      title: "Citrus",
+      releases: [{ annId: 15836, date: "2016-01-12", designator: "GN 1" }],
+    };
+    const second: FixtureManga = { ...first, id: 15837, releases: [{ ...first.releases[0]!, annId: 15838 }] };
+    stubAnn([first]);
+    await sync(t, { releasePages: false });
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    stubAnn([first, second]);
+    await sync(t, { releasePages: false });
+
+    const state = () =>
+      t.run(async (ctx) => ({
+        series: await ctx.db.query("series").collect(),
+        link: (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === "manga:15837")
+          ?.recordRef,
+        comments: (await ctx.db.query("proposalVersions").collect()).map((v) => v.changeComment),
+        candidates: await ctx.db.query("duplicateCandidates").collect(),
+      }));
+    const queued = await state();
+    expect(queued.series).toHaveLength(1);
+    expect(queued.link).toBeUndefined();
+    const { publicId } = queued.series[0]!;
+    expect(
+      queued.comments.filter((c) =>
+        c.includes(
+          ` Series ${publicId} ("Citrus") has this title, but ANN entry 15835 already holds it, so the import did not link it: it may be one work ANN lists twice.`,
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(queued.candidates).toEqual([]);
+
+    await sync(t, { releasePages: false });
+    expect((await state()).comments).toHaveLength(queued.comments.length);
   });
 });

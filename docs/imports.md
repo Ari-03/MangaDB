@@ -94,7 +94,9 @@ steady state the queued creation Proposal names the dropped Series and the
 reason in its comment. The cost is an entry whose id ANN replaced: the old
 entry is withdrawn only when a complete mirror ends, so the new id arrives
 while the old one still holds the Series, and unless that Series has one
-of its ISBNs it gets a Series of its own and a duplicate candidate. A
+of its ISBNs the new id does not link to it. In Bootstrap Mode it gets a
+Series of its own, with a duplicate candidate only when its title named
+the held Series; in steady state it gets a creation Proposal instead. A
 stored link is never revisited, so entries already on one Series stay
 there. The reasons are in [decisions.md](decisions.md#disjoint-isbns-mean-another-work).
 
