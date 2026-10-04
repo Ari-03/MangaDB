@@ -588,7 +588,8 @@ describe("bounded personal repair work (Standards 1)", () => {
     const rerun = await runLegs(t, s.entry, privateReading);
     expect(rerun.at(-1)).toBe("alreadyApplied");
     expect((await trailOf(t)).records).toHaveLength(trail.records.length);
-  });
+    // Three legs need over 2 × SWEEP_BUDGET readers, and convex-test answers each reader's state lookups by scanning every document.
+  }, 60_000);
 
   for (const kind of ["releaseBundle", "remodelEdition"] as const) {
     it(`hands a large box set's Collection Entries to its Bundle over several legs, keeping private owners private (${kind})`, async () => {

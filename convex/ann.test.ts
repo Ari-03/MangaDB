@@ -289,17 +289,27 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
   it("mirrors in chained links and withdraws entries a complete mirror stopped seeing", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    // 510 entries: a full 500-item report page (10 batches) + a short second
-    // page. Budget is page-aligned, so with maxBatches 10 the first link
-    // stops at the page boundary and hands the run to a continuation.
-    const many: FixtureManga[] = Array.from({ length: 510 }, (_, i) => ({
+    // A full 500-row report page, then a short second page. Paging counts
+    // every row but only manga rows are mirrored, so anime rows fill the
+    // first page around 51 manga (two detail batches); 2 manga follow on the
+    // second. Budget is page-aligned, so with maxBatches 1 the first link
+    // still finishes both batches of its page, stops at the page boundary
+    // and hands the run to a continuation.
+    const manga = (i: number): FixtureManga => ({
       id: 1000 + i,
       title: `Chain Series ${i}`,
       releases: [{ annId: 20000 + i, date: "2026-03-03", designator: "GN 1" }],
-    }));
+    });
+    const anime = (i: number): FixtureManga => ({ id: 5000 + i, title: `Chain Anime ${i}`, type: "anime", releases: [] });
+    const many: FixtureManga[] = [
+      ...Array.from({ length: 51 }, (_, i) => manga(i)),
+      ...Array.from({ length: 449 }, (_, i) => anime(i)),
+      manga(51),
+      manga(52),
+    ];
     stubAnn(many);
-    const first = await sync(t, { maxBatches: 10 });
-    expect(first).toMatchObject({ continued: true, recordsSeen: 500 });
+    const first = await sync(t, { maxBatches: 1 });
+    expect(first).toMatchObject({ continued: true, recordsSeen: 51 });
     // The run stays open across the chain.
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
@@ -310,8 +320,8 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
-      expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 510 });
-      expect(await ctx.db.query("series").collect()).toHaveLength(510);
+      expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 53 });
+      expect(await ctx.db.query("series").collect()).toHaveLength(53);
     });
 
     // Now drop one entry from ANN and mirror again: it withdraws.
@@ -325,10 +335,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       const kept = observations.find((o) => o.sourceRecordId === "manga:1001")!;
       expect(kept.withdrawn).toBe(false);
     });
-    // 510 fixture records across three mirror passes; each new Series costs
-    // two title searches (candidates, then the hidden-Series check), which
-    // convex-test simulates by scanning the table.
-  }, 60000);
+  });
 
   it.each(["html report", "missing detail", "failed detail", "malformed report item"])(
     "preserves observations and fails an incomplete sweep: %s",
