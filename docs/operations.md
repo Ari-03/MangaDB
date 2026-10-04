@@ -107,6 +107,15 @@ a change now, or where nothing scheduled will.
 action and finish in scheduled continuations; `publisher:rebuildBoards`
 runs in one action.
 
+`npx convex run` waits about five minutes for an action. One that runs
+longer keeps running on the deployment, but the command prints
+`✖ Failed to run function "…": Error` with no message and exits 1. Seen
+on staging on 2026-10-04 with `openLibrary:sync`, five minutes after it
+started, while its Import Run kept counting records. Do not rerun on
+that message alone: look at the Import Run on `/mod/imports`,
+or at the deployment's scheduled functions and logs, to see whether the
+job is still going.
+
 ### Mature evidence after a deploy
 
 For a change to what makes a Series mature: the adult-only list
@@ -227,7 +236,10 @@ links to.
    the backfill has finished when the log shows
    `[imports.backfillHolds] done: …`. Safe to rerun; a failed page
    ends the chain, and a rerun starts from the top
-   ([Held books](imports.md#held-books)).
+   ([Held books](imports.md#held-books)). It reads every observation, ten
+   to a page, so it takes hours: on staging's 130,000 observations it ran
+   between 170 and 870 observations a minute, slowest through unlinked
+   Open Library editions. The list fills as it goes.
 7. Clear the stored Series on read counts:
    `npx convex run reading:unsetProgressSeries '{}'`. Safe to rerun, and
    done when the log shows `[reading.unsetProgressSeries] done: N rows
@@ -242,7 +254,11 @@ links to.
    today's reading on the next sync: the monthly run, or
    `npx convex run openLibrary:sync '{}'`, which continues itself under
    one Import Run and has finished when that run is no longer `running`
-   (`/mod/imports`). A linked edition is reconciled again only when
+   (`/mod/imports`). The command itself prints an error after about five
+   minutes while the run goes on (see
+   [After deploying a change](#after-deploying-a-change)); on staging the
+   run read about 225 dump lines a minute, which makes about four hours
+   if the dump holds the 58,000 editions staging has stored. A linked edition is reconciled again only when
    today's parse changes its snapshot. Safe to rerun; each run downloads
    the dump ([Open Library](imports.md#open-library)). The backfill in
    step 6 reads stored snapshots, so it classifies such an edition by its
