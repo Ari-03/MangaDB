@@ -17,7 +17,14 @@ import { api, internal } from "./_generated/api";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import type { Packaging } from "./lib/bookTitle";
-import { parseCalendar, parseSeriesName, sourceRecordId, toSnapshots } from "./lib/kodansha";
+import {
+  parseCalendar,
+  parseSeriesName,
+  parseVolumePage,
+  sourceRecordId,
+  toBacklistSnapshots,
+  toSnapshots,
+} from "./lib/kodansha";
 import { linkSeriesObservation } from "./lib/pipeline";
 import { BOOK_PAGE_VERSION } from "./lib/sevenSeas";
 import type { ApplyResult } from "./lib/unmatched";
@@ -1150,6 +1157,40 @@ async function calendarNote(seriesName: string) {
   return (await holdState(t, "kodansha")).note;
 }
 
+/**
+ * Kodansha's note for a volume page titled `pageTitle` under `seriesName`,
+ * through the path the back catalog takes: parseVolumePage,
+ * toBacklistSnapshots, then applyVolume, with "Gamma Quest" in the catalog.
+ */
+async function volumePageNote(seriesName: string, pageTitle: string) {
+  const t = makeT();
+  tickingClock();
+  await seedRegistry(t, false);
+  await t.run((ctx) => gammaQuest(ctx));
+  const url = `https://kodansha.us/series/${SLUG}/volume-2/`;
+  const html = `<html><head><script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "Book",
+    name: pageTitle,
+    url,
+    isPartOf: { "@type": "BookSeries", name: seriesName },
+    workExample: [
+      {
+        "@type": "Book",
+        bookFormat: "https://schema.org/Paperback",
+        // A volume page drops an offer whose ISBN fails its check digit, as ISBN's does.
+        isbn: "9781999000301",
+        datePublished: "2026-05-12",
+        offers: { price: 12.99, priceCurrency: "USD" },
+      },
+    ],
+  })}</script></head></html>`;
+  for (const { sourceRecordId: id, snapshot } of toBacklistSnapshots(parseVolumePage(html, url)!)) {
+    await t.mutation(internal.kodansha.applyVolume, { sourceRecordId: id, snapshot });
+  }
+  return (await holdState(t, "kodansha")).note;
+}
+
 describe("Kodansha's packaging note, through the calendar", () => {
   it("quotes no range the title takes from its series name", async () => {
     expect(await calendarNote("Gamma Quest Omnibus (Vol. 1-3)")).toBe(
@@ -1160,6 +1201,31 @@ describe("Kodansha's packaging note, through the calendar", () => {
   it("quotes its line's size", async () => {
     expect(await calendarNote("Gamma Quest 3-in-1 Edition")).toBe(
       `"Gamma Quest 3-in-1 Edition Volume 2" is 3-in-1 Edition of "Gamma Quest", stating Volumes 4-6 by its line's size. The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
+
+  // The title states a range, the series name's, so the line's size is not quoted for it.
+  it("quotes no coverage when the title's range is its series name's, on a sized line", async () => {
+    expect(await calendarNote("Gamma Quest 3-in-1 Edition (Vol. 1-3)")).toBe(
+      `"Gamma Quest 3-in-1 Edition (Vol. 1-3) Volume 2" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
+});
+
+describe("Kodansha's packaging note, through a volume page", () => {
+  it("quotes no coverage when the title repeats its series name's range, on a sized line", async () => {
+    expect(
+      await volumePageNote("Gamma Quest 3-in-1 Edition (Vol. 1-3)", "Gamma Quest 3-in-1 Edition Volume 2 (Vol. 1-3)"),
+    ).toBe(
+      `"Gamma Quest 3-in-1 Edition Volume 2 (Vol. 1-3)" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
+
+  it("quotes a range of its own in its title", async () => {
+    expect(
+      await volumePageNote("Gamma Quest 3-in-1 Edition (Vol. 1-3)", "Gamma Quest 3-in-1 Edition Volume 2 (Vol. 4-6)"),
+    ).toBe(
+      `"Gamma Quest 3-in-1 Edition Volume 2 (Vol. 4-6)" is 3-in-1 Edition of "Gamma Quest", stating Volumes 4-6 in its title. The Kodansha importer does not place packaging — an Editor maps it.`,
     );
   });
 });

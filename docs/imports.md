@@ -174,12 +174,13 @@ with. Two differences are options of the function:
 - Seven Seas, PRH and Yen Press create Unmapped Packaging in Bootstrap Mode.
   Kodansha's adapter does not place packaging: it passes no labels for it,
   so every such book is held, with a note that says so and quotes the
-  coverage the book's own title states, else its line's size. Kodansha reads
-  a book's packaging from its series name, which every member of the line
-  shares, so the note never quotes a range from it. The calendar titles a
-  book "{series name} Volume N", so a title range equal to the series
-  name's is not quoted either, even from a volume page whose own title
-  repeats it.
+  coverage the book's own title states, else, when the title states no
+  range at all, its line's size. Kodansha reads a book's packaging from its
+  series name, which every member of the line shares, so the note never
+  quotes a range from it. The calendar titles a book "{series name} Volume
+  N", so a title range equal to the series name's is not quoted either,
+  even from a volume page whose own title repeats it, and the note then
+  quotes no coverage at all, not even its line's size.
 - A queued ambiguity quotes the book's title with the reason "ambiguous
   series" (PRH, Yen Press), or the Series title with the count (Seven Seas,
   Kodansha).

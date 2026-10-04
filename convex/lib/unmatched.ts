@@ -138,9 +138,11 @@ export const LOCK_NOTE = /^Series \d+ is locked\.$/;
  * `seriesId` is not locked; then a lock hold an earlier apply left (row and
  * note) goes, so an apply that reaches the tail or a box set's branch
  * leaves none behind, whichever way it ends from there. The tail calls it
- * for every book with a publisher; Seven Seas, PRH and Yen Press for a box
- * set they would place as a Release Bundle (the branch's other exits
- * replace the note with their own).
+ * for every book that gets past step 1, passing no Series for a book with
+ * no publisher (which the lock does not hold, so it only drops the hold);
+ * Seven Seas, PRH and Yen Press for a box set they would place as a
+ * Release Bundle (the branch's other exits replace the note with their
+ * own).
  */
 export async function holdUnderLock(
   ctx: MutationCtx,
