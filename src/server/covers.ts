@@ -13,19 +13,21 @@
 // either is "no cover", remembered for a day; the app draws its cloth
 // placeholder for those (see ~/lib/cover.tsx). An upstream that is down,
 // refusing us (OpenLibrary answers 403 past ~100 ISBN lookups per 5 minutes
-// per IP), or cut off mid-download makes it a five-minute miss instead, so a
-// burst of lookups never hides art for a day. Spec §6: covers are stored under
-// industry-standard tolerance with the takedown contact on /about-the-data.
+// per IP), or cut off or stalled mid-download makes it a five-minute miss
+// instead, so a burst of lookups never hides art for a day. Spec §6: covers
+// are stored under industry-standard tolerance with the takedown contact on
+// /about-the-data.
 //
 // A stored jacket is checked against its upstreams again once 90 days have
 // passed since they were last asked (R2 metadata `fetchedAt`, or `checkedAt`
 // when a check kept the copy). The copy is still served, for an hour at a
 // time, while the check runs in the background: real art replaces it, and a
-// miss, an outage or a stand-in keeps it and only records the check. No
-// response is cached past the moment its copy falls due, but a browser or
-// edge copy taken before a replacement is served until its lifetime ends,
-// so a corrected jacket takes up to an hour after its check to show, and
-// up to 90 days to be noticed upstream at all.
+// miss or a stand-in keeps it and only records the check. An outage records
+// nothing, so the copy stays due and the first request after its hour asks
+// again. No response is cached past the moment its copy falls due, but a
+// browser or edge copy taken before a replacement is served until its
+// lifetime ends, so a corrected jacket takes up to an hour after its check
+// to show, and up to 90 days to be noticed upstream at all.
 //
 // Measured on a stratified sample of the catalog's ISBNs (docs/decisions.md,
 // "Cover art sources"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
@@ -59,6 +61,8 @@ const REFRESH_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 const STALE_TTL = 60 * 60;
 /** Checks running at once per isolate; a stale copy beyond it waits for a later request. */
 const REFRESH_LIMIT = 4;
+/** An upstream that has not delivered its jacket by then couldn't answer. */
+const UPSTREAM_TIMEOUT_MS = 10_000;
 const USER_AGENT = "MangaDB/1.0 (+https://mangadb.org/about-the-data)";
 
 /**
@@ -181,10 +185,17 @@ async function firstJacket(
   return unavailable ? "unavailable" : null;
 }
 
-function storeJacket(bucket: NonNullable<typeof env.COVERS>, key: string, jacket: Jacket) {
+/** Store `jacket` under `key`; with `onlyIf`, only over the object that etag names. */
+function storeJacket(
+  bucket: NonNullable<typeof env.COVERS>,
+  key: string,
+  jacket: Jacket,
+  onlyIf?: { etagMatches: string },
+) {
   return bucket.put(key, jacket.bytes, {
     httpMetadata: { contentType: jacket.contentType },
     customMetadata: { source: jacket.source, fetchedAt: new Date().toISOString() },
+    onlyIf,
   });
 }
 
@@ -216,17 +227,23 @@ async function refresh(
   const key = `${isbn13}.jpg`;
   const rank = UPSTREAMS.findIndex((source) => source(isbn13) === stored.customMetadata?.source);
   const found = await firstJacket(isbn13, rank < 0 ? UPSTREAMS : UPSTREAMS.slice(0, rank + 1));
-  if (found && found !== "unavailable") {
-    await storeJacket(bucket, key, found);
+  // Nobody looked: the copy stays due, asked about again after its hour.
+  if (found === "unavailable") return;
+  // Either write lands only on the object this check read: a jacket another
+  // isolate stored meanwhile was checked at least as recently, and is kept.
+  // R2's etag for a single-part upload derives from its bytes, so the
+  // condition tells different jackets apart.
+  const onlyIf = { etagMatches: stored.etag };
+  if (found) {
+    await storeJacket(bucket, key, found, onlyIf);
     return;
   }
   // No art upstream is no evidence against the stored copy: keep it, and
-  // record the check so it is not repeated on every request. Skipped if the
-  // object changed since it was read, so a newer jacket is never undone.
+  // record the check so it is not repeated on every request.
   await bucket.put(key, stored.bytes, {
     httpMetadata: stored.httpMetadata,
     customMetadata: { ...stored.customMetadata, checkedAt: new Date().toISOString() },
-    onlyIf: { etagMatches: stored.etag },
+    onlyIf,
   });
 }
 
@@ -234,15 +251,18 @@ async function refresh(
  * One upstream's jacket for a URL: the image, null when it has no real art
  * (404, non-image, a tiny or known stand-in), or "unavailable" when it
  * couldn't say (network error or a body cut off mid-read, rate limit,
- * server error).
+ * server error, or no complete answer within UPSTREAM_TIMEOUT_MS).
  */
 async function fetchJacket(
   url: string,
 ): Promise<{ bytes: ArrayBuffer; contentType: string } | null | "unavailable"> {
   let upstream: Response;
   try {
+    // The signal also aborts the body read below, so a download that
+    // stalls midway fails it too.
     upstream = await fetch(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "image/*" },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
   } catch {
     return "unavailable";

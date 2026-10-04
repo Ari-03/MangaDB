@@ -213,6 +213,7 @@ describe("coverResponse with a stored jacket", () => {
     expect(write.bytes).toEqual(JACKET);
     expect(write.customMetadata?.source).toBe(PRH);
     expect(recent(write.customMetadata?.fetchedAt)).toBe(true);
+    expect(write.onlyIf).toEqual({ etagMatches: "etag-1" });
   });
 
   test("a copy with no readable timestamp counts as old", async () => {
@@ -256,14 +257,13 @@ describe("coverResponse with a stored jacket", () => {
     await get();
     await settle();
     expect(fetches()).toEqual([PRH]);
-    expect(written(covers).bytes).toEqual(OLD);
+    expect(covers.put).not.toHaveBeenCalled();
   });
 
   const placeholder = () =>
     new Response(new Uint8Array(100), { headers: { "Content-Type": "image/jpeg" } });
   test.each([
     ["a miss", status(404)],
-    ["an outage", status(503)],
     ["a stand-in", placeholder],
   ])("%s upstream keeps the old art and records the check", async (_name, answer) => {
     const metadata = { source: OPEN_LIBRARY, fetchedAt: daysAgo(100) };
@@ -277,6 +277,102 @@ describe("coverResponse with a stored jacket", () => {
     expect(recent(write.customMetadata?.checkedAt)).toBe(true);
     // Lands only on the copy it read, never over a newer jacket.
     expect(write.onlyIf).toEqual({ etagMatches: "etag-1" });
+  });
+
+  test("an outage records nothing, so the copy is checked again after its hour", async () => {
+    const covers = stored({ source: OPEN_LIBRARY, fetchedAt: daysAgo(100) });
+    upstreams = [status(503), status(403)];
+    expect(maxAge(await get())).toBe(60 * 60);
+    await settle();
+    expect(covers.put).not.toHaveBeenCalled();
+    // The hour is up: the next request finds the copy still due.
+    edge.clear();
+    upstreams = [image];
+    expect(maxAge(await get())).toBe(60 * 60);
+    await settle();
+    expect(fetches()).toEqual([PRH, OPEN_LIBRARY, PRH]);
+    expect(written(covers).bytes).toEqual(JACKET);
+  });
+
+  test("a check never overwrites a jacket another isolate stored meanwhile", async () => {
+    // One object with R2's conditional write: each write gets a new etag.
+    let object = { bytes: OLD, etag: "etag-1", source: OPEN_LIBRARY, fetchedAt: daysAgo(100) };
+    let writes = 1;
+    worker.env.COVERS = {
+      get: async () => ({
+        arrayBuffer: async () => object.bytes.slice().buffer,
+        etag: object.etag,
+        httpMetadata: { contentType: "image/jpeg" },
+        customMetadata: { source: object.source, fetchedAt: object.fetchedAt },
+      }),
+      put: async (
+        _key: string,
+        value: ArrayBuffer,
+        options: { customMetadata: Record<string, string>; onlyIf?: { etagMatches: string } },
+      ) => {
+        if (options.onlyIf && options.onlyIf.etagMatches !== object.etag) return null;
+        const { source = "", fetchedAt = "" } = options.customMetadata;
+        object = { bytes: new Uint8Array(value), etag: `etag-${++writes}`, source, fetchedAt };
+        return {};
+      },
+    };
+    const OTHER = new Uint8Array(25_000).fill(9);
+    let cdnFailsA!: () => void;
+    upstreams = [
+      // Isolate A's CDN request hangs, then fails...
+      () => new Promise<Response>((resolve) => (cdnFailsA = () => resolve(status(503)()))),
+      // ...while isolate B's finds the jacket and stores it...
+      image,
+      // ...and A falls back to OpenLibrary's art.
+      () => new Response(OTHER, { headers: { "Content-Type": "image/jpeg" } }),
+    ];
+    await get();
+    // A second isolate: its own module state, and its own colo's edge cache.
+    vi.resetModules();
+    const isolateB = await import("./covers");
+    edge.clear();
+    await isolateB.coverResponse(new Request("https://mangadb.org/covers/9781974700523.jpg"));
+    await vi.waitFor(() => expect(object.source).toBe(PRH));
+    cdnFailsA();
+    await settle();
+    expect(fetches()).toEqual([PRH, PRH, OPEN_LIBRARY]);
+    expect(object).toMatchObject({ bytes: JACKET, source: PRH, etag: "etag-2" });
+  });
+
+  test("an upstream that never answers frees its ISBN and its slot once it times out", async () => {
+    const covers = stored({ source: PRH, fetchedAt: daysAgo(100) });
+    // Every upstream request's timeout, run out by the test in its place.
+    const expiry = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(expiry.signal);
+    // A connection that is accepted and never answered: it settles only
+    // when its signal aborts. One sent without a signal fails at once, so
+    // this test fails rather than hangs.
+    vi.mocked(fetch).mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) reject(new Error("sent without a timeout"));
+          else if (signal.aborted) reject(signal.reason);
+          else signal.addEventListener("abort", () => reject(signal.reason));
+        }),
+    );
+    const cover = (n: number) =>
+      coverResponse(new Request(`https://mangadb.org/covers/97819747005${40 + n}.jpg`));
+    await Promise.all([0, 1, 2, 3, 4].map(cover));
+    // Four checks hang; the fifth found every slot taken.
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expiry.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    await settle();
+    timeout.mockRestore();
+    expect(covers.put).not.toHaveBeenCalled();
+
+    // A timed-out ISBN, and the one turned away, are both checked now.
+    edge.clear();
+    vi.mocked(fetch).mockImplementation(async () => image());
+    await Promise.all([0, 4].map(cover));
+    await settle();
+    expect(covers.put).toHaveBeenCalledTimes(2);
   });
 
   test("two requests for the same old copy start one check", async () => {

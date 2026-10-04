@@ -394,20 +394,22 @@ Release with an ISBN-13. It tries the edge cache, then the `mangadb-covers`
 R2 bucket, then Penguin Random House's distribution CDN, then the Open
 Library Covers API. Known "no image" and "coming soon" stand-ins are
 rejected, so those books stay cloth. A miss everywhere is remembered for a
-day. An upstream that is down or rate-limiting gives a five-minute miss.
+day. An upstream that is down, rate-limiting or has not delivered within 10
+seconds gives a five-minute miss.
 Found art is stored in R2 and cached for 30 days.
 
 A stored jacket is checked again once 90 days have passed since its
 upstreams were last asked. The stored copy is still served, cached for an
 hour, while the check runs in the background in the same source order,
-stopping at the source the copy came from. Real art replaces it; a miss,
-an outage or a stand-in keeps it, and the check is recorded either way, so
-the next one is 90 days off. A response is never cached past the moment its
-copy falls due, but a browser or edge copy taken before a replacement is
-still shown until its lifetime ends: a corrected jacket appears within about
-an hour of the check, not the moment the publisher changes it. To replace
-one sooner, delete its object from the bucket; edge and browser copies
-still run out their lifetime.
+stopping at the source the copy came from. Real art replaces it; a miss or
+a stand-in keeps it, and the check is recorded either way, so the next one
+is 90 days off. An upstream that could not answer records nothing: the copy
+stays due, and the first request after its hour asks again. A response is
+never cached past the moment its copy falls due, but a browser or edge copy
+taken before a replacement is still shown until its lifetime ends: a
+corrected jacket appears within about an hour of the check, not the moment
+the publisher changes it. To replace one sooner, delete its object from
+the bucket; edge and browser copies still run out their lifetime.
 
 Only Kodansha and Seven Seas art lives in Convex file storage, stored once
 per Edition and image URL. A Release wears its Edition's jacket, physical
