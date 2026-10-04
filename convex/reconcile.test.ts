@@ -72,6 +72,87 @@ const fabricateIncumbent = (
   pubDate: { year: number; month?: number; day?: number; sort: number },
 ) => fabricateRevision(t, sourceKey, { pubDate });
 
+describe("authority rules — after a Human Override is cleared", () => {
+  /** The Release's newest Revision: the base a Moderator's edit or clear names. */
+  const latestRevision = async (t: TestT) => {
+    const release = await theRelease(t);
+    return await t.run(async (ctx) =>
+      (await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id))
+        .order("desc")
+        .first())!,
+    );
+  };
+
+  /** Import Volume 1, then have the Moderator correct its date: a Human Override. */
+  async function overriddenDate(t: TestT) {
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    const asMod = await setupModerator(t);
+    await asMod.mutation(api.moderation.submitDirectEdit, {
+      ref: { type: "release", id: (await theRelease(t))._id },
+      baseRevisionId: (await latestRevision(t))._id,
+      changes: [{ field: "pubDate", value: { year: 2026, month: 3, day: 1 } }],
+      comment: "The publisher moved it.",
+    });
+    expect((await theRelease(t)).overriddenFields).toEqual(["pubDate"]);
+    return asMod;
+  }
+
+  async function clearPubDate(t: TestT, asMod: Awaited<ReturnType<typeof setupModerator>>) {
+    await asMod.mutation(api.moderation.submitDirectClear, {
+      ref: { type: "release", id: (await theRelease(t))._id },
+      field: "pubDate",
+      baseRevisionId: (await latestRevision(t))._id,
+      comment: "Let the publisher's date through again.",
+    });
+    expect((await theRelease(t)).overriddenFields).toBeUndefined();
+  }
+
+  it("still queues a differing value over the value a human wrote, once", async () => {
+    const t = makeT();
+    const asMod = await overriddenDate(t);
+    await clearPubDate(t, asMod);
+
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
+    await sync(t);
+    expect((await theRelease(t)).pubDate?.sort).toBe(20260301);
+    const open = await inReviewProposals(t);
+    expect(open).toHaveLength(1);
+    expect((await versionOf(t, open[0]!))?.ops[0]).toMatchObject({
+      changes: [{ field: "pubDate", after: { year: 2026, month: 2, day: 3, sort: 20260203 } }],
+    });
+  });
+
+  it("lets a source update a value a source wrote under the usual rules", async () => {
+    const t = makeT();
+    const asMod = await overriddenDate(t);
+    // The import offers another date; the override queues it, and the
+    // Moderator approves the import's value: source-written, still overridden.
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
+    await sync(t);
+    const [conflict] = await inReviewProposals(t);
+    await asMod.mutation(api.proposals.approveProposal, { proposalId: conflict!._id });
+    expect(await theRelease(t)).toMatchObject({
+      pubDate: { sort: 20260203 },
+      overriddenFields: ["pubDate"],
+    });
+    // While overridden, the next move only queues.
+    stubSite([{ ...ALPHA_1, modified: "2026-08-11T00:00:00", date: "April 7, 2026" }]);
+    await sync(t);
+    expect((await theRelease(t)).pubDate?.sort).toBe(20260203);
+    expect(await inReviewProposals(t)).toHaveLength(1);
+
+    // Cleared, the source's own fact applies on its next move.
+    await clearPubDate(t, asMod);
+    stubSite([{ ...ALPHA_1, modified: "2026-08-12T00:00:00", date: "May 5, 2026" }]);
+    await sync(t);
+    expect((await theRelease(t)).pubDate?.sort).toBe(20260505);
+  });
+});
+
 describe("authority rules — sticky Human Overrides and suppression", () => {
   it("withdraws a stale conflict when the source returns to the approved value", async () => {
     const t = makeT();

@@ -45,6 +45,7 @@ function liveForm(name: string, baseRevisionId: string | null = null) {
     locked: false,
     title: name,
     overriddenFields: [],
+    overrides: [],
     backLink: null,
   };
 }

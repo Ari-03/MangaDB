@@ -22,12 +22,15 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import {
+  applyClearOverride,
   applyUpdate,
   displayInfo,
   getCanonical,
   insertRevision,
+  requireOverridden,
   revisionsOf,
   validateChanges,
+  writtenBy,
   type FieldChange,
   type RecordRef,
 } from "./moderation";
@@ -79,8 +82,9 @@ type Evidence = Doc<"proposalVersions">["evidence"][number];
 type Draft = NonNullable<Doc<"proposals">["draft"]>;
 
 // What clients submit when drafting: creates carry raw fields (validated by
-// the creation registry); updates carry field/value pairs — the server
-// computes before/after and captures the base Revision.
+// the creation registry); updates carry field/value pairs and a
+// clearOverride names one overridden field — the server computes
+// before/after and captures the base Revision.
 const opInput = v.union(
   v.object({
     kind: v.literal("create"),
@@ -92,6 +96,11 @@ const opInput = v.union(
     kind: v.literal("update"),
     ref: recordRef,
     changes: v.array(v.object({ field: v.string(), value: v.any() })),
+  }),
+  v.object({
+    kind: v.literal("clearOverride"),
+    ref: recordRef,
+    field: v.string(),
   }),
 );
 
@@ -109,13 +118,19 @@ type OpInput =
       kind: "update";
       ref: RecordRef;
       changes: Array<{ field: string; value: unknown }>;
-    };
+    }
+  | { kind: "clearOverride"; ref: RecordRef; field: string };
 
 /**
  * Validate submitted draft ops against the current database and return the
  * stored form: update ops get normalized before/after changes and the
- * record's current base Revision (the staleness anchor); create ops keep
- * their validated raw fields so temp-ID references survive verbatim.
+ * record's current base Revision (the staleness anchor); a clearOverride
+ * must name an editable field the record has overridden and gets the base
+ * Revision too; create ops keep their validated raw fields so temp-ID
+ * references survive verbatim. A record takes one update and any number of
+ * clears, but never a change to a field and the clear of its override
+ * together: the change is itself a human correction, and which of the two
+ * applied last would decide the outcome.
  */
 async function buildDraftOps(
   ctx: MutationCtx,
@@ -132,6 +147,7 @@ async function buildDraftOps(
   }
   const ops: StoredOp[] = [];
   const updatedRecords = new Set<string>();
+  const clearedFields = new Set<string>();
   for (const op of submitted) {
     if (op.kind === "create") {
       ops.push({
@@ -143,26 +159,54 @@ async function buildDraftOps(
       continue;
     }
     const ref = op.ref;
-    if (updatedRecords.has(ref.id as string)) {
-      fail("duplicateRecord", "One proposal may update each record only once.");
+    if (op.kind === "update") {
+      if (updatedRecords.has(ref.id as string)) {
+        fail("duplicateRecord", "One proposal may update each record only once.");
+      }
+      updatedRecords.add(ref.id as string);
+    } else {
+      const key = `${ref.id}:${op.field}`;
+      if (clearedFields.has(key)) {
+        fail("duplicateRecord", "One proposal may clear each override only once.");
+      }
+      clearedFields.add(key);
     }
-    updatedRecords.add(ref.id as string);
     const doc = await getCanonical(ctx, ref);
-    if (!doc) fail("notFound", "A record this proposal updates does not exist.");
+    if (!doc) fail("notFound", "A record this proposal changes does not exist.");
     if (doc.status !== "active" || doc.locked) {
       fail(
         "locked",
-        `A record this proposal updates is ${doc.locked ? "locked" : doc.status}.`,
+        `A record this proposal changes is ${doc.locked ? "locked" : doc.status}.`,
       );
     }
-    const changes = validateChanges(ref.type, doc, op.changes);
     const latest = (await revisionsOf(ctx, ref))[0];
-    ops.push({
-      kind: "update",
-      ref,
-      baseRevisionId: latest?._id,
-      changes,
-    });
+    if (op.kind === "update") {
+      ops.push({
+        kind: "update",
+        ref,
+        baseRevisionId: latest?._id,
+        changes: validateChanges(ref.type, doc, op.changes),
+      });
+    } else {
+      requireOverridden(ref.type, doc, op.field);
+      ops.push({
+        kind: "clearOverride",
+        ref,
+        field: op.field,
+        baseRevisionId: latest?._id,
+      });
+    }
+  }
+  for (const op of ops) {
+    if (op.kind !== "update") continue;
+    for (const { field } of op.changes) {
+      if (clearedFields.has(`${op.ref.id}:${field}`)) {
+        fail(
+          "clearsChangedField",
+          `This proposal changes "${field}" and clears its override: a changed field stays a human correction. Clear the override on its own.`,
+        );
+      }
+    }
   }
   await planOps(ctx, ops);
   return ops;
@@ -253,16 +297,21 @@ function needsSourceEvidence(ops: StoredOp[]): boolean {
 
 // ---------- staleness ----------
 
-type StaleRecord = { type: string; id: string; reason: "baseChanged" | "unavailable" };
+type StaleRecord = {
+  type: string;
+  id: string;
+  reason: "baseChanged" | "unavailable" | "notOverridden";
+};
 
 /**
  * Which records an op set can no longer be applied to as reviewed: the base
  * Revision moved (someone else's change landed first), the record itself
- * left ordinary editing (hidden, merged, locked, deleted), or a record a
- * create op references by ID — an importer's coverage over existing Volumes,
- * a new volume's series — is no longer active. Spec §5: any base change
- * before approval makes the version stale — explicit rebase and resubmit,
- * never a silent rebase.
+ * left ordinary editing (hidden, merged, locked, deleted), a field a
+ * clearOverride names is no longer overridden, or a record a create op
+ * references by ID — an importer's coverage over existing Volumes, a new
+ * volume's series — is no longer active. Spec §5: any base change before
+ * approval makes the version stale — explicit rebase and resubmit, never a
+ * silent rebase.
  */
 async function staleRecordsOf(
   ctx: QueryCtx | MutationCtx,
@@ -270,7 +319,7 @@ async function staleRecordsOf(
 ): Promise<StaleRecord[]> {
   const stale: StaleRecord[] = [];
   for (const op of ops) {
-    if (op.kind !== "update") continue;
+    if (op.kind !== "update" && op.kind !== "clearOverride") continue;
     const ref = op.ref;
     const doc = await getCanonical(ctx, ref);
     if (!doc || doc.status !== "active" || doc.locked) {
@@ -280,6 +329,11 @@ async function staleRecordsOf(
     const latest = (await revisionsOf(ctx, ref))[0];
     if ((latest?._id ?? null) !== (op.baseRevisionId ?? null)) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "baseChanged" });
+    } else if (
+      op.kind === "clearOverride" &&
+      !(doc.overriddenFields ?? []).includes(op.field)
+    ) {
+      stale.push({ type: ref.type, id: ref.id as string, reason: "notOverridden" });
     }
   }
   const creates = ops.filter((op): op is CreateOpInput => op.kind === "create");
@@ -460,8 +514,10 @@ export const withdrawProposal = mutation({
  * version (or an outdated draft) back to Draft against today's records.
  * Every update op re-anchors on the current base Revision with refreshed
  * before-values; changes the world already made become no-ops and drop out;
- * ops whose record vanished drop entirely (reported back). The author then
- * reviews the rebased draft and resubmits as a new immutable version.
+ * a clearOverride re-anchors too, or drops when its field is no longer
+ * overridden; ops whose record vanished drop entirely (reported back). The
+ * author then reviews the rebased draft and resubmits as a new immutable
+ * version.
  */
 export const rebaseProposal = mutation({
   args: { proposalId: v.id("proposals") },
@@ -497,7 +553,7 @@ export const rebaseProposal = mutation({
     const ops: StoredOp[] = [];
     const dropped: string[] = [];
     for (const op of source.ops) {
-      if (op.kind !== "update") {
+      if (op.kind !== "update" && op.kind !== "clearOverride") {
         ops.push(op);
         continue;
       }
@@ -505,6 +561,15 @@ export const rebaseProposal = mutation({
       const doc = await getCanonical(ctx, ref);
       if (!doc || doc.status !== "active" || doc.locked) {
         dropped.push(`${ref.type} is no longer editable`);
+        continue;
+      }
+      if (op.kind === "clearOverride") {
+        if (!(doc.overriddenFields ?? []).includes(op.field)) {
+          dropped.push(`${ref.type} no longer overrides ${op.field}`);
+          continue;
+        }
+        const latest = (await revisionsOf(ctx, ref))[0];
+        ops.push({ ...op, baseRevisionId: latest?._id });
         continue;
       }
       const changes: FieldChange[] = [];
@@ -717,11 +782,12 @@ export const rejectProposal = mutation({
 
 /**
  * Approve the exact reviewed version and apply every op in this one
- * mutation — creates in temp-ID order, then updates through the same
- * `applyUpdate` path as direct edits — producing one public Revision per
- * affected record. Stale-base detection blocks approval: instead of
- * applying, the proposal is flagged stale and the caller is told which
- * records moved; the author must explicitly rebase and resubmit.
+ * mutation — creates in temp-ID order, then updates and clearOverrides
+ * through the same `applyUpdate` and `applyClearOverride` paths as direct
+ * edits — producing one public Revision per update or clear. Stale-base
+ * detection blocks approval: instead of applying, the proposal is flagged
+ * stale and the caller is told which records moved; the author must
+ * explicitly rebase and resubmit.
  */
 export const approveProposal = mutation({
   args: { proposalId: v.id("proposals") },
@@ -757,6 +823,12 @@ export const approveProposal = mutation({
       approvedBy: user._id,
       comment: version.changeComment,
     };
+    // The stale gate checked every op's base before anything was written; a
+    // record this approval has already revised is checked against that
+    // Revision instead, so its update and clears apply in op order.
+    const revisedHere = new Map<string, Id<"revisions">>();
+    const baseOf = (op: { ref: RecordRef; baseRevisionId?: Id<"revisions"> }) =>
+      revisedHere.get(op.ref.id) ?? op.baseRevisionId ?? null;
     let planCursor = 0;
     for (const op of version.ops) {
       if (op.kind === "create") {
@@ -787,19 +859,24 @@ export const approveProposal = mutation({
         const { revisionId } = await applyUpdate(ctx, {
           ref,
           doc: doc!,
-          baseRevisionId: op.baseRevisionId ?? null,
+          baseRevisionId: baseOf(op),
           changes,
           proposalId: args.proposalId,
           author: proposal.author,
           approvedBy: user._id,
           comment: version.changeComment,
         });
+        revisedHere.set(ref.id, revisionId);
         revisionIds.push(revisionId);
       } else if (op.kind === "clearOverride") {
-        return fail(
-          "unsupportedOp",
-          `"${op.kind}" operations are not approvable yet.`,
-        );
+        const { revisionId } = await applyClearOverride(ctx, {
+          ref: op.ref,
+          field: op.field,
+          baseRevisionId: baseOf(op),
+          meta,
+        });
+        revisedHere.set(op.ref.id, revisionId);
+        revisionIds.push(revisionId);
       } else {
         // Sensitive catalog operations: the same apply
         // functions as the direct Moderator mutations (sensitiveOps.ts) —
@@ -972,6 +1049,30 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
           Boolean(doc.locked) ||
           (latest?._id ?? null) !== (op.baseRevisionId ?? null),
       });
+    } else if (op.kind === "clearOverride") {
+      const ref = op.ref;
+      const doc = await getCanonical(ctx, ref);
+      const history = await revisionsOf(ctx, ref);
+      const base = op.baseRevisionId ? await ctx.db.get(op.baseRevisionId) : null;
+      rendered.push({
+        kind: "clearOverride" as const,
+        recordType: ref.type,
+        recordId: ref.id as string,
+        recordTitle: doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)",
+        field: op.field,
+        fieldLabel: fieldDescriptor(ref.type, op.field)?.label ?? op.field,
+        value: doc ? (doc as Record<string, unknown>)[op.field] : undefined,
+        writtenBy: writtenBy(history, op.field),
+        base: base
+          ? { seq: base.seq, comment: base.comment }
+          : { seq: 0, comment: null },
+        stale:
+          !doc ||
+          doc.status !== "active" ||
+          Boolean(doc.locked) ||
+          !(doc.overriddenFields ?? []).includes(op.field) ||
+          (history[0]?._id ?? null) !== (op.baseRevisionId ?? null),
+      });
     } else if (op.kind === "merge") {
       rendered.push({
         kind: "merge" as const,
@@ -988,13 +1089,12 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
 }
 
 /** How a summary line names each single-record op. */
-const OP_VERBS: Record<SingleRecordOp | "clearOverride", string> = {
+const OP_VERBS: Record<SingleRecordOp, string> = {
   hide: "Hide",
   restore: "Restore",
   split: "Split out",
   lock: "Lock",
   unlock: "Unlock",
-  clearOverride: "Clear an override on",
 };
 
 /** `type "title"` label for a sensitive-op summary line. */

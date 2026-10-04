@@ -14,7 +14,7 @@ import {
   type FormState,
 } from "~/lib/editForm";
 import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
-import { ModGate } from "~/lib/moderation";
+import { CLEAR_OVERRIDE_HINT, ModGate, writtenByLabel } from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
@@ -22,9 +22,11 @@ import { convexClient } from "~/providers";
  * The Editor update-proposal form (spec §5): edits become a
  * Draft Proposal; submission validates, requires a change comment (and
  * source evidence for factual changes), and lands the immutable Proposal
- * Version In Review in the shared queue. Renders from the same registry the
- * mutations validate against. Auth-gated client-side for UX; the Convex
- * functions re-check the role on every call. Never indexed.
+ * Version In Review in the shared queue. Each Human Override on an editable
+ * field can be ticked for clearing, which adds a clearOverride op to the
+ * same Proposal. Renders from the same registry the mutations validate
+ * against. Auth-gated client-side for UX; the Convex functions re-check the
+ * role on every call. Never indexed.
  */
 export const Route = createFileRoute("/mod/propose/$type/$key")({
   head: () => ({ meta: [{ title: "Propose a change — MangaDB" }] }),
@@ -67,6 +69,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const draft = useProposalDraft();
   const [state, setState] = useState<FormState | null>(null);
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
+  const [clears, setClears] = useState<ReadonlySet<string>>(new Set());
   const [comment, setComment] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
   const [evidenceNote, setEvidenceNote] = useState("");
@@ -97,6 +100,14 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   };
 
   const editable = form.status === "active" && !form.locked;
+  const toggleClear = (field: string, on: boolean) => {
+    const next = new Set(clears);
+    if (on) next.add(field);
+    else next.delete(field);
+    setClears(next);
+    draft.clearSaved();
+  };
+  const changed = dirty.size > 0 || clears.size > 0;
 
   const buildArgs = (): DraftContent => {
     const changes: Array<{ field: string; value: unknown }> = [];
@@ -117,11 +128,14 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
     }
     return {
       ops: [
-        {
-          kind: "update" as const,
+        ...(changes.length > 0
+          ? [{ kind: "update" as const, ref: form.ref as never, changes }]
+          : []),
+        ...[...clears].map((field) => ({
+          kind: "clearOverride" as const,
           ref: form.ref as never,
-          changes,
-        },
+          field,
+        })),
       ],
       evidence,
       comment,
@@ -164,6 +178,20 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
               setValue={setValue}
             />
           ))}
+          {form.overrides.map((override) => (
+            <label key={override.field}>
+              <span>
+                <input
+                  type="checkbox"
+                  checked={clears.has(override.field)}
+                  onChange={(event) => toggleClear(override.field, event.target.checked)}
+                />{" "}
+                Clear the Human Override on {override.label} (
+                {writtenByLabel(override.writtenBy)})
+              </span>
+              <span className="field-help">{CLEAR_OVERRIDE_HINT}</span>
+            </label>
+          ))}
           <label>
             Change comment (required)
             <textarea
@@ -199,7 +227,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="button"
               className="btn"
-              disabled={draft.busy || dirty.size === 0}
+              disabled={draft.busy || !changed}
               onClick={() => void draft.saveDraft(buildArgs)}
             >
               Save draft
@@ -207,7 +235,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={draft.busy || dirty.size === 0 || comment.trim() === ""}
+              disabled={draft.busy || !changed || comment.trim() === ""}
             >
               {draft.busy ? "Working…" : "Submit for review"}
             </button>

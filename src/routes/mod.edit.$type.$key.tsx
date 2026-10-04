@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ConvexError } from "convex/values";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -16,6 +17,7 @@ import {
   type EditDraft,
 } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
+import { CLEAR_OVERRIDE_HINT, renderFieldValue, writtenByLabel } from "~/lib/moderation";
 import { slugParams } from "~/lib/slug";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { useIsModerator } from "~/lib/viewer";
@@ -32,7 +34,9 @@ import { convexClient } from "~/providers";
  * follows the live record; after it, values and base are pinned together,
  * and a newer Revision arriving asks the Moderator to reload before saving.
  * The inputs lock while a save is in flight, since its success resets the
- * form to the live record.
+ * form to the live record. Each Human Override on the record has a Clear
+ * control that lifts it the same way: a reason, a preview of what stays,
+ * and an immediately approved Proposal with one public Revision.
  *
  * Auth-gated client-side for UX; the Convex functions re-check the role on
  * every call. Never indexed.
@@ -178,10 +182,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
         revision to this record's history.
       </p>
       {form.overriddenFields.length > 0 ? (
-        <p className="notice">
-          Human-corrected fields (imports never overwrite these):{" "}
-          {form.overriddenFields.join(", ")}.
-        </p>
+        <HumanOverrides form={form} editable={editable} />
       ) : null}
       {!editable ? (
         <p className="notice">
@@ -259,6 +260,134 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
         <SourceDescriptions recordRef={{ type, id: form.ref.id }} />
       ) : null}
     </main>
+  );
+}
+
+type EditForm = NonNullable<FunctionReturnType<typeof api.moderation.editForm>>;
+
+/**
+ * The record's Human Overrides, each editable one with a Clear control: the
+ * Moderator gives a reason, sees the value that stays and who wrote it, and
+ * the clear applies at once (moderation.submitDirectClear) against the base
+ * Revision the form shows, so a concurrent change is refused as stale.
+ */
+function HumanOverrides({ form, editable }: { form: EditForm; editable: boolean }) {
+  const submitDirectClear = useMutation(api.moderation.submitDirectClear);
+  const [clearing, setClearing] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [cleared, setCleared] = useState<{ label: string; seq: number } | null>(null);
+
+  const clearable = new Set(form.overrides.map((override) => override.field));
+  const others = form.overriddenFields.filter((field) => !clearable.has(field));
+  const selected = form.overrides.find((override) => override.field === clearing);
+
+  const clear = async ({ field, label }: EditForm["overrides"][number]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { seq } = await submitDirectClear({
+        ref: form.ref as never,
+        field,
+        baseRevisionId: form.baseRevisionId ?? undefined,
+        comment: reason,
+      });
+      setCleared({ label, seq });
+      setClearing(null);
+      setReason("");
+    } catch (err) {
+      setError(mutationErrorMessage(err, "Clearing the override failed. Nothing was changed."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mod-panel">
+      <h2>Human Overrides</h2>
+      <p className="section-hint">
+        Imports never overwrite these fields. {CLEAR_OVERRIDE_HINT}
+        {others.length > 0 ? ` Also overridden, and not editable here: ${others.join(", ")}.` : null}
+      </p>
+      <ol className="revision-list">
+        {form.overrides.map((override) => (
+          <li key={override.field} className="revision">
+            <div className="revision-meta">
+              <span className="revision-author">{override.label}</span>
+              <span>{writtenByLabel(override.writtenBy)}</span>
+              {editable && clearing !== override.field ? (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setClearing(override.field);
+                    setError(null);
+                    setCleared(null);
+                  }}
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ol>
+      {selected ? (
+        <form
+          className="mod-edit-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void clear(selected);
+          }}
+        >
+          <p className="section-hint">
+            Clearing the override on {selected.label} keeps its value,{" "}
+            <code>
+              {renderFieldValue(form.fields.find((field) => field.name === selected.field)?.value)}
+            </code>{" "}
+            ({writtenByLabel(selected.writtenBy)}), and adds a public revision to this record's
+            history.
+          </p>
+          <label>
+            Reason (required)
+            <textarea
+              value={reason}
+              onChange={(event) => {
+                if (!busy) setReason(event.target.value);
+              }}
+              disabled={busy}
+              rows={2}
+              placeholder="Why should imports weigh this field again?"
+              required
+            />
+          </label>
+          <div className="mod-actions">
+            <button type="submit" className="btn btn-primary" disabled={busy || reason.trim() === ""}>
+              {busy ? "Clearing…" : "Clear override"}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => {
+                setClearing(null);
+                setError(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : null}
+      {error ? <p className="form-error">{error}</p> : null}
+      {cleared ? (
+        <p className="notice">
+          Override on {cleared.label} cleared — revision #{cleared.seq} recorded.
+        </p>
+      ) : null}
+    </section>
   );
 }
 

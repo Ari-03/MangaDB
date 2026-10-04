@@ -46,8 +46,31 @@ private to the Data Team.
 **Human Overrides.** An approved human change to a field whose latest
 Revision came from an import adds that field to the record's
 `overriddenFields`. Imports may then report conflicts on it but never
-overwrite it. The schema has a `clearOverride` op to lift an override, but
-approval refuses it today (see [known issues](known-issues.md)).
+overwrite it.
+
+A `clearOverride` op lifts one override: it names a record and one
+editable field on that record's `overriddenFields`, and carries the
+record's base Revision like an update. A Moderator clears directly with
+"Clear" beside the field on the edit page, giving a reason
+(`moderation.submitDirectClear`, an immediately approved Proposal like a
+direct edit). An Editor ticks the field on the propose page, and the clear
+goes to review in that Proposal. Either way `applyClearOverride` takes the
+field off the list and writes one public Revision recording
+`overriddenFields` before and after, with the reason as its comment.
+
+Clearing removes only the sticky flag. The field keeps its value, and the
+Revisions that wrote it are unchanged. If a source wrote the current
+value, the next differing import value is weighed under the usual Field
+Authority rules and may apply. If a person wrote it, or nothing records
+who did, that value still goes to review once. Clearing replays no stored
+observation: an import changes the field only when its source offers a
+value again. To take a value a source already offered, approve that
+source's conflict Proposal. Clearing a description override changes which
+Release speaks for an Edition or Volume at the next page read.
+
+A Proposal may clear overrides beside other ops, on the same record or
+others, and applies all of them or none. It may not both change a field
+and clear that field's override: the change is itself a human correction.
 
 ## Proposals and the review queue
 
@@ -69,10 +92,11 @@ neither the review queue nor the held list. `requestChanges` refuses it
 and the Proposal page does not offer the button. Approve it, reject it,
 or edit the record directly.
 
-Every update op records the record's base Revision. If any base moves
-before approval, approval applies nothing and marks the proposal stale.
-The author rebases it (`rebaseProposal`), reviews and resubmits. There is
-no silent rebase.
+Every update and clearOverride op records the record's base Revision. If
+any base moves before approval, or a field a clear names is no longer
+overridden, approval applies nothing and marks the proposal stale. The
+author rebases it (`rebaseProposal`), which drops a clear with nothing left
+to clear, reviews and resubmits. There is no silent rebase.
 
 One Proposal can create several records at once. Create ops may refer to
 earlier create ops by temp-ID, so a Volume, Edition, coverage and Release

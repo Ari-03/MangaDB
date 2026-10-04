@@ -107,6 +107,7 @@ function Queue() {
             <option value="">any</option>
             <option value="create">create</option>
             <option value="update">update</option>
+            <option value="clearOverride">clear override</option>
           </select>
         </label>
         <label>

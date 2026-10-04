@@ -56,8 +56,6 @@ is fixed.
 
 ## Catalog and imports
 
-- **Human Overrides cannot be lifted.** Approving a `clearOverride` op fails
-  with `unsupportedOp` (`convex/proposals.ts`).
 - **Sequel books ANN filed under the first work stay there.** Before ANN
   lines of another work were told apart (`sequelWork` in
   `convex/lib/ann.ts`), such a line became a Volume of its entry's Series,

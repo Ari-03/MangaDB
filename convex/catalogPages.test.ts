@@ -15,7 +15,7 @@ import {
   insertVariant,
   insertVolume,
 } from "./test.factories";
-import { makeT, type TestT } from "./test.helpers";
+import { MOD, alice, bob, makeT, seedTeam, type TestT } from "./test.helpers";
 
 // Fixture ISBNs (fake but distinct); checksum validity is the route's
 // concern — the Convex queries take any normalized string.
@@ -282,6 +282,22 @@ describe("Edition Description", () => {
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
     expect(page?.description).toEqual({ source: "release", text: "Corrected." });
+  });
+
+  it("falls back to the print blurb once the digital Human Override is cleared", async () => {
+    const t = makeT();
+    await seedTeam(t, [alice, bob]);
+    const { r2 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(r2, { description: "Corrected.", overriddenFields: ["description"] });
+    });
+    await t.withIdentity({ subject: MOD }).mutation(api.moderation.submitDirectClear, {
+      ref: { type: "release", id: r2 },
+      field: "description",
+      comment: "The print blurb speaks for this Edition again.",
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page?.description).toEqual({ source: "release", text: "Back-cover blurb." });
   });
 
   it("fills an Edition from its one described Release", async () => {

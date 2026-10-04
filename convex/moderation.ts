@@ -2,10 +2,11 @@
 // single write path for catalog changes. This module holds the
 // Administrator/Moderator direct edit — a save that is an immediately
 // approved Proposal Version — producing one immutable public Revision per
-// affected record, plus the public per-record history and the implicit
-// Human Override marking. Editor submission and the review queue live in
-// proposals.ts and reuse `applyUpdate`, `validateChanges`, and the record
-// plumbing exported here.
+// affected record, plus the public per-record history, the implicit Human
+// Override marking and the clear that lifts one. Editor submission and the
+// review queue live in proposals.ts and reuse `applyUpdate`,
+// `applyClearOverride`, `validateChanges`, and the record plumbing exported
+// here.
 
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -250,8 +251,7 @@ export async function applyUpdate(
 
   // Implicit Human Override (spec §4): a human author's approved change to an
   // import-authored field joins the record's sticky overridden-fields list.
-  // Only an explicit clearOverride op may remove an entry, and none is
-  // approvable yet.
+  // Only an approved clearOverride op removes an entry (`applyClearOverride`).
   if (args.author.kind === "user") {
     const overridden = importAuthoredFields(
       history,
@@ -265,6 +265,104 @@ export async function applyUpdate(
 
   await ctx.db.patch(ref.id, patch as never);
   return await insertRevision(ctx, ref, latest, changes, args);
+}
+
+// ---------- lifting a Human Override ----------
+
+/**
+ * Refuse a clearOverride of anything but an editable field that is on the
+ * record's overriddenFields. Drafting and applying both check it.
+ */
+export function requireOverridden(type: RecordType, doc: CatalogDoc, field: string): void {
+  if (!fieldDescriptor(type, field)) {
+    fail("unknownField", `"${field}" is not an editable field of a ${type}.`);
+  }
+  if (!(doc.overriddenFields ?? []).includes(field)) {
+    fail("notOverridden", `"${field}" carries no Human Override.`);
+  }
+}
+
+/**
+ * Lift one Human Override: take `field` off an active, unlocked record's
+ * overriddenFields and record that list's before and after as a Revision.
+ * The field's value and the Revisions that wrote it stay as they are, so an
+ * import's next differing value still queues when a human wrote the value
+ * and follows Field Authority when a source did (`decideField`). `baseRevisionId`
+ * is the record's newest Revision as the caller last saw it. Shared by
+ * review-queue approval and the Moderator's direct clear.
+ */
+export async function applyClearOverride(
+  ctx: MutationCtx,
+  args: {
+    ref: RecordRef;
+    field: string;
+    baseRevisionId: Id<"revisions"> | null;
+    meta: OpMeta;
+  },
+) {
+  const { ref, field } = args;
+  const doc = await getCanonical(ctx, ref);
+  if (!doc) fail("notFound", "No such record.");
+  if (doc.status !== "active") {
+    fail("locked", `This record is ${doc.status} and locked against ordinary edits.`);
+  }
+  if (doc.locked) fail("locked", "This record is temporarily locked.");
+  requireOverridden(ref.type, doc, field);
+  const latest = (await revisionsOf(ctx, ref))[0] ?? null;
+  if ((latest?._id ?? null) !== args.baseRevisionId) {
+    fail("stale", "This record changed since the override was loaded. Reload and try again.");
+  }
+  const before = doc.overriddenFields ?? [];
+  const after = before.filter((name) => name !== field);
+  await ctx.db.patch(ref.id, { overriddenFields: after.length > 0 ? after : undefined });
+  return await insertRevision(ctx, ref, latest, [{ field: "overriddenFields", before, after }], args.meta);
+}
+
+/**
+ * The Moderator's direct clear of one Human Override, recorded like a
+ * direct edit: an immediately approved Proposal whose one clearOverride op
+ * the Moderator approves, and one public Revision carrying the reason.
+ */
+export const submitDirectClear = mutation({
+  args: {
+    ref: recordRef,
+    field: v.string(),
+    baseRevisionId: v.optional(v.id("revisions")),
+    comment: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireModerator(ctx);
+    const comment = args.comment.trim();
+    if (comment === "") fail("commentRequired", "Every change needs a change comment.");
+    const { ref, field } = args;
+    const author = { kind: "user" as const, userId: user._id, roleAtAuthorship: user.role };
+    const proposalId = await insertApprovedProposal(ctx, author, user._id);
+    await insertFirstVersion(ctx, proposalId, {
+      ops: [{ kind: "clearOverride", ref, field, baseRevisionId: args.baseRevisionId }],
+      evidence: [],
+      changeComment: comment,
+    });
+    const { revisionId, seq } = await applyClearOverride(ctx, {
+      ref,
+      field,
+      baseRevisionId: args.baseRevisionId ?? null,
+      meta: { proposalId, author, approvedBy: user._id, comment },
+    });
+    return { proposalId, revisionId, seq };
+  },
+});
+
+export type WrittenBy = { kind: "human" } | { kind: "source"; sourceKey: string } | { kind: "unrecorded" };
+
+/**
+ * Who wrote a field's current value, as the import rules weigh it: the
+ * latest Revision touching it (`latestTouch`), or none on record. Shown
+ * beside a Human Override so whoever lifts it knows what imports will do.
+ */
+export function writtenBy(revisionsNewestFirst: Array<Doc<"revisions">>, field: string): WrittenBy {
+  const author = latestTouch(revisionsNewestFirst, field)?.author;
+  if (!author) return { kind: "unrecorded" };
+  return author.kind === "user" ? { kind: "human" } : { kind: "source", sourceKey: author.sourceKey };
 }
 
 /**
@@ -449,9 +547,10 @@ export async function displayInfo(
  * Everything the edit and propose forms need (Data Team only): the record's
  * editable fields with current values (straight from the registry the
  * mutations validate against), the base Revision for the staleness check,
- * and the record's overridden-fields list. Editors use it to draft update
- * Proposals; Moderators for direct edits — the mutations re-check the
- * stronger role.
+ * the record's overridden-fields list, and for each overridden editable
+ * field who wrote its value (what clearing it would leave imports to weigh).
+ * Editors use it to draft update and clearOverride Proposals; Moderators for
+ * direct edits and clears — the mutations re-check the stronger role.
  */
 export const editForm = query({
   args: { type: recordType, key: v.string() },
@@ -468,6 +567,12 @@ export const editForm = query({
       status: doc.status,
       locked: doc.locked ?? false,
       overriddenFields: doc.overriddenFields ?? [],
+      overrides: (doc.overriddenFields ?? []).flatMap((field) => {
+        const descriptor = fieldDescriptor(type, field);
+        return descriptor
+          ? [{ field, label: descriptor.label, writtenBy: writtenBy(history, field) }]
+          : [];
+      }),
       baseRevisionId: history[0]?._id ?? null,
       fields: EDITABLE_FIELDS[type].map((descriptor) => ({
         ...descriptor,

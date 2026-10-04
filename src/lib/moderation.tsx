@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
+import type { WrittenBy } from "../../convex/moderation";
 import { convexClient } from "~/providers";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
@@ -42,6 +43,37 @@ export function renderFieldValue(value: unknown): string {
     }
   }
   return JSON.stringify(value);
+}
+
+/**
+ * What lifting a Human Override does, said beside every control that lifts
+ * one: the flag goes, the value and its author stay, and the import rules
+ * weigh that author (convex/lib/authority.ts decideField).
+ */
+export const CLEAR_OVERRIDE_HINT =
+  "Clearing keeps the current value and who wrote it: unless a source wrote it, the next differing import value still goes to review; if a source did, imports update it under the usual Field Authority rules.";
+
+/** Who wrote a field's current value, as moderation.writtenBy reports it. */
+export function writtenByLabel(author: WrittenBy): string {
+  if (author.kind === "human") return "written by a person";
+  if (author.kind === "source") return `imported from ${author.sourceKey}`;
+  return "no recorded author";
+}
+
+/** A revision's change to `overriddenFields`, read as the overrides it set or cleared. */
+function overrideChangeText(before: unknown, after: unknown): string {
+  const names = (value: unknown) =>
+    Array.isArray(value) ? value.filter((name): name is string => typeof name === "string") : [];
+  const was = names(before);
+  const now = names(after);
+  const cleared = was.filter((name) => !now.includes(name));
+  const set = now.filter((name) => !was.includes(name));
+  return [
+    cleared.length > 0 ? `Human Override cleared on ${cleared.join(", ")}` : null,
+    set.length > 0 ? `Human Override set on ${set.join(", ")}` : null,
+  ]
+    .filter((part) => part !== null)
+    .join("; ");
 }
 
 const ROLE_LABELS = {
@@ -147,13 +179,17 @@ function RecordHistoryInner({
             </div>
             <p className="revision-comment">{revision.comment}</p>
             <ul className="revision-changes">
-              {revision.changes.map((change) => (
-                <li key={change.field}>
-                  <code>{change.field}</code>:{" "}
-                  <del>{renderFieldValue(change.before)}</del> →{" "}
-                  <ins>{renderFieldValue(change.after)}</ins>
-                </li>
-              ))}
+              {revision.changes.map((change) =>
+                change.field === "overriddenFields" ? (
+                  <li key={change.field}>{overrideChangeText(change.before, change.after)}</li>
+                ) : (
+                  <li key={change.field}>
+                    <code>{change.field}</code>:{" "}
+                    <del>{renderFieldValue(change.before)}</del> →{" "}
+                    <ins>{renderFieldValue(change.after)}</ins>
+                  </li>
+                ),
+              )}
             </ul>
             {revision.citation ? (
               <p className="revision-citation">

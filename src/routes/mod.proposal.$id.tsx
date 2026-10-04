@@ -6,7 +6,13 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
-import { ModGate, ProposalStateChip, renderFieldValue } from "~/lib/moderation";
+import {
+  CLEAR_OVERRIDE_HINT,
+  ModGate,
+  ProposalStateChip,
+  renderFieldValue,
+  writtenByLabel,
+} from "~/lib/moderation";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
 import { convexClient } from "~/providers";
@@ -94,6 +100,29 @@ function OpsList({ ops }: { ops: RenderedOps }) {
                     <ins>{renderFieldValue(change.after)}</ins>
                   </li>
                 ))}
+              </ul>
+            </>
+          ) : op.kind === "clearOverride" ? (
+            <>
+              <p>
+                <strong>
+                  Clear the Human Override on {op.fieldLabel} of {op.recordType}:{" "}
+                  {op.recordTitle}
+                </strong>{" "}
+                <span className="proposal-base">
+                  (base: revision #{op.base.seq}
+                  {op.base.comment ? ` — ${op.base.comment}` : ""})
+                </span>{" "}
+                {op.stale ? (
+                  <span className="chip mod-chip mod-chip--bad">stale</span>
+                ) : null}
+              </p>
+              <ul className="revision-changes">
+                <li>
+                  <code>{op.field}</code> keeps its value:{" "}
+                  {renderFieldValue(op.value)} ({writtenByLabel(op.writtenBy)})
+                </li>
+                <li>{CLEAR_OVERRIDE_HINT}</li>
               </ul>
             </>
           ) : (
