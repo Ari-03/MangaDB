@@ -325,10 +325,15 @@ function DeleteAccountInner() {
 
 /**
  * Signs out a session whose account deletion is under way, then goes home.
- * The deletion goes ahead whether or not this works, so a failed sign-out
- * says both, with another try and a way off the page.
+ * The first try waits for clerk-js to load: before then clerk.signOut()
+ * only queues the call and resolves at once, so the page would leave
+ * before any sign-out. (useAuth's isLoaded is no signal here: the server's
+ * auth state makes it true before clerk-js has loaded.) The deletion goes
+ * ahead whether or not this works, so a failed sign-out says both, with
+ * another try and a way off the page.
  */
 function SignOutDeleted() {
+  // useClerk re-renders on every Clerk status change, so `loaded` is live.
   const clerk = useClerk();
   const navigate = useNavigate();
   const [failed, setFailed] = useState(false);
@@ -345,12 +350,12 @@ function SignOutDeleted() {
     await navigate({ to: "/" });
   }, [clerk, navigate]);
 
-  // Once on arrival; the button retries.
+  // Once Clerk has loaded; the button retries.
   useEffect(() => {
-    if (started.current) return;
+    if (started.current || !clerk.loaded) return;
     started.current = true;
     void signOut();
-  }, [signOut]);
+  }, [clerk.loaded, signOut]);
 
   if (!failed) {
     return (

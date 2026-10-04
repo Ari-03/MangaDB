@@ -730,52 +730,52 @@ export const queueCounts = query({
 // ---------- upkeep (users.purgeUser) ----------
 
 /**
- * Hard-delete up to `limit` of a User's Comment rows, for one run of the
+ * One account-purge run's allowance (users.purgeUser): each call answers
+ * whether one more unit of work fits in the transaction, and counts it.
+ */
+export type PurgeRoom = () => Promise<boolean>;
+
+/**
+ * Hard-delete a User's Comment rows while `room` allows, for one run of the
  * account purge: reports they filed (lowering those Comments' counts, never
  * unhiding one), then each of their Comments once its reports are deleted
  * and its replies detached. A detached reply loses its parent and becomes
  * top-level; one of their own is then deleted in its turn. Each unit is one
- * row deleted or detached. Returns the units used: fewer than `limit`
- * means none of their reports or Comments remain. commentAudit rows stay,
- * like reviewAudit.
+ * row deleted or detached. Returns true once none of their reports or
+ * Comments remain, false when it stopped for want of room. commentAudit
+ * rows stay, like reviewAudit.
  */
-export async function purgeUserComments(ctx: MutationCtx, userId: Id<"users">, limit: number): Promise<number> {
-  const filed = await ctx.db
-    .query("commentReports")
-    .withIndex("by_reporter", (q) => q.eq("reporterId", userId))
-    .take(limit);
-  for (const row of filed) {
+export async function purgeUserComments(ctx: MutationCtx, userId: Id<"users">, room: PurgeRoom): Promise<boolean> {
+  const filed = ctx.db.query("commentReports").withIndex("by_reporter", (q) => q.eq("reporterId", userId));
+  for await (const row of filed) {
+    if (!(await room())) return false;
     await ctx.db.delete(row._id);
     const comment = await ctx.db.get(row.commentId);
     if (comment && comment.userId !== userId) {
       await ctx.db.patch(comment._id, { reportCount: Math.max(0, comment.reportCount - 1) });
     }
   }
-  let used = filed.length;
-  while (used < limit) {
+  for (;;) {
     const comment = await ctx.db
       .query("comments")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
-    if (!comment) break;
-    const reports = await ctx.db
+    if (!comment) return true;
+    const reports = ctx.db
       .query("commentReports")
-      .withIndex("by_comment_reporter", (q) => q.eq("commentId", comment._id))
-      .take(limit - used);
-    for (const row of reports) await ctx.db.delete(row._id);
-    used += reports.length;
-    if (used === limit) break;
-    const replies = await ctx.db
-      .query("comments")
-      .withIndex("by_parent", (q) => q.eq("parentId", comment._id))
-      .take(limit - used);
-    for (const reply of replies) await ctx.db.patch(reply._id, { parentId: undefined, replyCount: 0 });
-    used += replies.length;
-    if (used === limit) break;
+      .withIndex("by_comment_reporter", (q) => q.eq("commentId", comment._id));
+    for await (const row of reports) {
+      if (!(await room())) return false;
+      await ctx.db.delete(row._id);
+    }
+    const replies = ctx.db.query("comments").withIndex("by_parent", (q) => q.eq("parentId", comment._id));
+    for await (const reply of replies) {
+      if (!(await room())) return false;
+      await ctx.db.patch(reply._id, { parentId: undefined, replyCount: 0 });
+    }
+    if (!(await room())) return false;
     // Another user's thread loses one approved reply.
     if (comment.parentId && comment.status === "approved") await bumpReplyCount(ctx, comment.parentId, -1);
     await ctx.db.delete(comment._id);
-    used += 1;
   }
-  return used;
 }

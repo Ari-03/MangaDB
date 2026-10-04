@@ -5,9 +5,9 @@
 // A User whose account deletion is under way (`deletingSince` set by
 // users.deleteAccount) counts as gone from that moment: signed out to
 // themselves, absent to everyone else. Their row stays until the purge has
-// emptied every personal table and Clerk has deleted the sign-in, and still
-// holds their username and Clerk subject so neither can be claimed again in
-// the meantime. Moderation reads the row itself: a Shadowed User's
+// emptied every personal table and a day has passed since Clerk deleted the
+// sign-in, and still holds their username and Clerk subject so neither can
+// be claimed again in the meantime, even by a token issued before. Moderation reads the row itself: a Shadowed User's
 // Comments stay hidden while they wait for the purge (comments.ts).
 
 import { ConvexError } from "convex/values";

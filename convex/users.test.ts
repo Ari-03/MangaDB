@@ -6,7 +6,7 @@ import { purgeUserComments } from "./comments";
 import { applyRatingDelta } from "./lib/ratings";
 import { insertSeries, seedCatalog } from "./test.factories";
 import { alice, bob, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
-import { CLERK_RETRY_DELAYS, PURGE_BATCH, PURGE_RATINGS } from "./users";
+import { CLERK_RETRY_DELAYS, PURGE_BATCH, PURGED_ROW_GRACE } from "./users";
 
 const SUBJECT_A = "user_2abc";
 const SUBJECT_B = "user_2xyz";
@@ -284,7 +284,7 @@ describe("users.purgeUser", () => {
     expect(await personalRows(t)).toEqual(before);
   });
 
-  it("purges more rows than one run holds across several runs, PURGE_RATINGS Ratings a run, keeping the row", async () => {
+  it("purges more rows than one run holds across several runs, PURGE_BATCH a run, keeping the row", async () => {
     const t = makeT({ transactionLimits: true });
     const { leaving, staying, seriesId } = await t.run(async (ctx) => {
       const { seriesId, volumeId, releaseId } = await seedCatalog(ctx);
@@ -338,9 +338,8 @@ describe("users.purgeUser", () => {
         };
       });
 
-    // 460 rows: the other tables empty in three runs, while the 50 Ratings
-    // go PURGE_RATINGS a run. The run that reads every table to its end
-    // marks the row purged and hands it to the Clerk deletion.
+    // 460 small rows, PURGE_BATCH a run: the run that reads every table to
+    // its end marks the row purged and hands it to the Clerk deletion.
     let runs = 0;
     for (;;) {
       await t.mutation(internal.users.purgeUser, { userId: leaving });
@@ -353,12 +352,13 @@ describe("users.purgeUser", () => {
       }
       expect(now.left).toBeGreaterThan(0);
       if (runs === 1) {
-        // A full batch: PURGE_RATINGS Ratings, each moving the aggregate, and the rest of PURGE_BATCH.
+        // A full batch: all 50 Ratings, each moving the aggregate, then the rest of PURGE_BATCH.
         expect(now.left).toBe(460 - PURGE_BATCH);
-        expect(now.stats).toMatchObject({ count: 51 - PURGE_RATINGS, sum: (50 - PURGE_RATINGS) * 40 + 90 });
+        expect(now.ratings).toBe(0);
+        expect(now.stats).toMatchObject({ count: 1, sum: 90 });
       }
     }
-    expect(runs).toBe(Math.ceil(50 / PURGE_RATINGS));
+    expect(runs).toBe(Math.ceil(460 / PURGE_BATCH));
     const end = await state();
     expect(end.stats).toMatchObject({ count: 1, sum: 90 });
     expect(end.jobs.filter((name) => name.endsWith("deleteClerkIdentity"))).toHaveLength(1);
@@ -376,12 +376,10 @@ describe("users.purgeUser", () => {
     expect(kept.entries).toMatchObject([{ userId: staying }]);
   });
 
-  it("purges 200 Series Ratings beside ~400 KB library packs within transaction limits, projections exact", async () => {
+  it("purges Ratings that rewrite a ~1 MB library pack beside maximum-length Reviews within transaction limits", async () => {
     const t = makeT({ transactionLimits: true });
-    const SERIES = 200;
-    // Every fourth Series has three other raters, so removing this rating
-    // moves its rank and rewrites the pack; the rest lose their only rating.
-    const shared = (publicId: number) => publicId % 4 === 0;
+    const SERIES = 40;
+    const REVIEWS = 190;
     const leaving = await t.run(async (ctx) => {
       const user = (username: string) =>
         ctx.db.insert("users", {
@@ -394,10 +392,11 @@ describe("users.purgeUser", () => {
         });
       const leaving = await user("leaving");
       const others = [await user("other1"), await user("other2"), await user("other3")];
+      // A pack near the 1 MiB document limit: long search keys on all 1,000 entries.
       const entries = Array.from({ length: 1000 }, (_, publicId) => ({
         publicId,
         titleSort: `a reasonably long series title ${publicId}`,
-        searchKey: `a reasonably long series title ${publicId} alternative title in english another alternative title`,
+        searchKey: `${publicId} `.padEnd(680, "x"),
         sourceStatus: "ongoing" as const,
         publishers: [{ name: "Publisher", slug: "publisher" }],
         hasPhysical: true,
@@ -408,14 +407,14 @@ describe("users.purgeUser", () => {
         lastReleasedSort: 20260901,
         followers: 0,
         collectors: 0,
-        ratingRank: publicId >= 1 && publicId <= SERIES && shared(publicId) ? 70 : 0,
+        ratingRank: publicId >= 1 && publicId <= SERIES ? 70 : 0,
       }));
       await ctx.db.insert("seriesStatsPacks", { block: 0, entries });
       for (let publicId = 1; publicId <= SERIES; publicId++) {
         const seriesId = await insertSeries(ctx, { publicId });
         const entry = entries[publicId]!;
-        // Three others at 60 and this user at 100: 70 over four ratings.
-        const raters = shared(publicId) ? others : [];
+        // Three others at 60 and this user at 100: 70 over four ratings, so
+        // removing this one moves every Series' rank and rewrites the pack.
         await ctx.db.insert("seriesStats", {
           ...entry,
           seriesId,
@@ -426,49 +425,64 @@ describe("users.purgeUser", () => {
           coverUrl: null,
           coverIsbn: null,
           rebuiltAt: 0,
-          ratingCount: raters.length + 1,
-          ratingAverage: raters.length ? 70 : 100,
+          ratingCount: 4,
+          ratingAverage: 70,
         });
         await ctx.db.insert("ratings", { userId: leaving, seriesId, score: 100, updatedAt: 0 });
-        for (const userId of raters) await ctx.db.insert("ratings", { userId, seriesId, score: 60, updatedAt: 0 });
-        await ctx.db.insert("ratingStats", { seriesId, sum: 100 + 60 * raters.length, count: raters.length + 1 });
+        for (const userId of others) await ctx.db.insert("ratings", { userId, seriesId, score: 60, updatedAt: 0 });
+        await ctx.db.insert("ratingStats", { seriesId, sum: 280, count: 4 });
+      }
+      // Maximum-length Reviews of three-byte characters: 15,000 bytes of body each.
+      for (let n = 0; n < REVIEWS; n++) {
+        const seriesId = await insertSeries(ctx, { publicId: 1000 + n });
+        await ctx.db.insert("reviews", {
+          userId: leaving,
+          seriesId,
+          body: "界".repeat(5000),
+          status: "visible",
+          spoiler: false,
+          createdAt: 0,
+        });
       }
       await ctx.db.patch(leaving, { deletingSince: Date.now() });
       return leaving;
     });
     const packBytes = await t.run(async (ctx) => JSON.stringify(await ctx.db.query("seriesStatsPacks").first()).length);
-    expect(packBytes).toBeGreaterThan(350_000);
+    expect(packBytes).toBeGreaterThan(1_000_000);
+    expect(packBytes).toBeLessThan(1_048_576);
 
-    let runs = 0;
+    // The first run takes every Review, then stops for budget, not count:
+    // fewer Ratings than PURGE_BATCH leaves room for.
+    await t.mutation(internal.users.purgeUser, { userId: leaving });
+    const left = await t.run(async (ctx) => ({
+      reviews: await ctx.db.query("reviews").collect(),
+      ratings: (await ctx.db.query("ratings").collect()).filter((row) => row.userId === leaving).length,
+    }));
+    expect(left.reviews).toEqual([]);
+    expect(left.ratings).toBeGreaterThan(SERIES - (PURGE_BATCH - REVIEWS));
+    expect(left.ratings).toBeLessThan(SERIES);
     while ((await t.run((ctx) => ctx.db.get(leaving)))?.purgedAt === undefined) {
       await t.mutation(internal.users.purgeUser, { userId: leaving });
-      runs += 1;
     }
-    // Full runs of PURGE_RATINGS, then one more: a full take never proves the table empty.
-    expect(runs).toBe(Math.floor(SERIES / PURGE_RATINGS) + 1);
 
     const end = await t.run(async (ctx) => ({
       series: await ctx.db.query("series").collect(),
       stats: await ctx.db.query("ratingStats").collect(),
       library: await ctx.db.query("seriesStats").collect(),
       pack: (await ctx.db.query("seriesStatsPacks").first())!.entries,
+      reviews: await ctx.db.query("reviews").collect(),
       theirs: (await ctx.db.query("ratings").collect()).filter((row) => row.userId === leaving),
     }));
     expect(end.theirs).toEqual([]);
-    for (const series of end.series) {
-      const stats = end.stats.find((row) => row.seriesId === series._id);
-      const library = end.library.find((row) => row.seriesId === series._id);
-      const packed = end.pack.find((entry) => entry.publicId === series.publicId);
-      if (shared(series.publicId)) {
-        expect(stats).toMatchObject({ sum: 180, count: 3 });
-        expect(library).toMatchObject({ ratingCount: 3, ratingAverage: 60, ratingRank: 60 });
-        expect(packed?.ratingRank).toBe(60);
-      } else {
-        expect(stats).toBeUndefined();
-        expect(library).toMatchObject({ ratingCount: 0, ratingRank: 0 });
-        expect(library?.ratingAverage).toBeUndefined();
-        expect(packed?.ratingRank).toBe(0);
-      }
+    expect(end.reviews).toEqual([]);
+    for (const series of end.series.filter((row) => row.publicId <= SERIES)) {
+      expect(end.stats.find((row) => row.seriesId === series._id)).toMatchObject({ sum: 180, count: 3 });
+      expect(end.library.find((row) => row.seriesId === series._id)).toMatchObject({
+        ratingCount: 3,
+        ratingAverage: 60,
+        ratingRank: 60,
+      });
+      expect(end.pack.find((entry) => entry.publicId === series.publicId)?.ratingRank).toBe(60);
     }
   });
 
@@ -519,8 +533,16 @@ describe("users.purgeUser", () => {
     });
 
     // One row a call: each call stops wherever its single unit runs out.
+    const oneUnit = () => {
+      let taken = false;
+      return async () => {
+        if (taken) return false;
+        taken = true;
+        return true;
+      };
+    };
     let calls = 0;
-    while ((await t.run((ctx) => purgeUserComments(ctx, leaving, 1))) === 1) calls += 1;
+    while (!(await t.run((ctx) => purgeUserComments(ctx, leaving, oneUnit())))) calls += 1;
     expect(calls).toBeGreaterThan(5);
 
     const after = await t.run(async (ctx) => ({
@@ -643,7 +665,7 @@ describe("users.deleteAccount", () => {
     ).rejects.toThrow(/taken/);
     expect((await personalRows(t)).users.map((row) => row._id)).toContain(leaving);
 
-    // Once the purge is done and Clerk has confirmed, the name is free.
+    // A day after the purge is done and Clerk has confirmed, the name is free.
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     await t.withIdentity({ subject: "user_new" }).mutation(api.users.claimUsername, { username: "leaving" });
   });
@@ -739,29 +761,61 @@ describe("users.deleteAccount", () => {
     const retried = stubClerk(200);
     await t.action(internal.users.deleteClerkIdentity, { clerkSubject: SUBJECT_A, attempt: 0 });
     expect(retried).toHaveLength(1);
+    // The row goes PURGED_ROW_GRACE later.
+    expect((await personalRows(t)).users.map((row) => row._id)).toContain(leaving);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await personalRows(t)).toEqual(without(before, leaving));
   });
 
-  it("deletes an identity with no account through Clerk alone, and spares an account it claims before a retry", async () => {
+  it("refuses an identity with no account, and schedules nothing", async () => {
     const t = makeT();
     await seedTwoUsers(t);
-    const requests = stubClerk(503, 200);
-    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const requests = stubClerk(200);
     const asNew = t.withIdentity({ subject: "user_unclaimed" });
 
-    expect(await asNew.mutation(api.users.deleteAccount, {})).toBeNull();
-    expect((await scheduled(t)).map((job) => job.name)).toEqual([expect.stringContaining("deleteClerkIdentity")]);
-    await runDue(t);
-    expect(requests).toHaveLength(1);
-
-    // A username claimed before the retry is a new account; the retry leaves it be.
+    await expect(asNew.mutation(api.users.deleteAccount, {})).rejects.toMatchObject({
+      data: { code: "noAccount" },
+    });
+    expect(await scheduled(t)).toEqual([]);
+    // A username claimed afterwards is an ordinary new account.
     await asNew.mutation(api.users.claimUsername, { username: "fresh" });
-    await asNew.mutation(api.users.setScoreFormat, { format: "star5" });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(requests).toEqual([]);
+    expect(await asNew.query(api.users.viewer, {})).toMatchObject({ username: "fresh" });
+  });
 
+  it("keeps the purged row for PURGED_ROW_GRACE after Clerk confirms, refusing a still-valid token's claim", async () => {
+    const t = makeT();
+    const { leaving } = await seedTwoUsers(t);
+    const before = await personalRows(t);
+    const requests = stubClerk(200);
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+
+    await asA.mutation(api.users.deleteAccount, {});
+    await runDue(t);
+
+    // Clerk has confirmed; the row stays, marked and purged, and holds the name.
     expect(requests).toHaveLength(1);
-    expect(warnings).toHaveBeenCalledWith(expect.stringContaining("Not deleting Clerk identity user_unclaimed"));
-    expect(await asNew.query(api.users.viewer, {})).toMatchObject({ username: "fresh", scoreFormat: "star5" });
+    expect((await personalRows(t)).users.find((row) => row._id === leaving)).toMatchObject({
+      deletingSince: expect.any(Number),
+      purgedAt: expect.any(Number),
+    });
+    await expect(asA.mutation(api.users.claimUsername, { username: "after" })).rejects.toMatchObject({
+      data: { code: "unauthenticated" },
+    });
+    await expect(
+      t.withIdentity({ subject: "user_new" }).mutation(api.users.claimUsername, { username: "leaving" }),
+    ).rejects.toThrow(/taken/);
+
+    // A repeated Clerk success, by the operator's retry, schedules a second removal; both are harmless.
+    await t.action(internal.users.deleteClerkIdentity, { clerkSubject: SUBJECT_A, attempt: 0 });
+    const removals = (await scheduled(t)).filter((job) => job.name.endsWith("removePurgedUser"));
+    expect(removals).toHaveLength(2);
+    expect(removals.every((job) => job.scheduledTime >= Date.now() + PURGED_ROW_GRACE - 1000)).toBe(true);
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await personalRows(t)).toEqual(without(before, leaving));
+    await t.withIdentity({ subject: "user_new" }).mutation(api.users.claimUsername, { username: "leaving" });
   });
 
   it("answers a second request with the same result and schedules nothing more", async () => {

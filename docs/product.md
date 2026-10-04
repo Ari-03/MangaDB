@@ -247,8 +247,9 @@ personal page treats them as signed out, and the browser signs out. If
 signing out fails, the page says the deletion goes ahead and offers
 another try. Their collection, reading, follows, ratings, reviews,
 favorites, comments and reports are then deleted in batches. Then the
-Clerk sign-in is deleted, with retries, and the user row last, which frees
-the username. Until then, a session on another device that opens `/me` is
+Clerk sign-in is deleted, with retries, and the user row a day later,
+which frees the username; the day covers session tokens issued before the
+sign-in went. Until then, a session on another device that opens `/me` is
 told the account is being deleted and signed out, and the sign-in cannot
 claim a new username. If Clerk keeps failing, an operator finishes it
 ([operations](operations.md#account-deletion)). The last active

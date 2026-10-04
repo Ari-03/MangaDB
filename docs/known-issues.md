@@ -28,6 +28,14 @@ is fixed.
   (`seriesTracking`) are right. The `by_user_series` index on
   `volumeProgress` cannot be trusted until Split re-derives the field from
   each Volume's Series and existing rows are backfilled.
+- **A sign-in without a username cannot be deleted on the site.**
+  `users.deleteAccount` refuses an identity with no `users` row: no page
+  offers deletion before a username is claimed, and deleting the Clerk
+  sign-in alone could not be ordered against a claim landing during the
+  request (the claim and its first rows would survive without a sign-in).
+  Someone who signed in but never claimed a username must have their
+  sign-in deleted in the Clerk dashboard; the Convex database holds
+  nothing for them.
 
 ## Catalog and imports
 

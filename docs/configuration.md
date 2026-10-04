@@ -15,8 +15,9 @@ ignoring case, checked against the reserved list in
 once. Account deletion (`/me`, Settings, Account) is one Convex mutation
 that marks the user as deleting and schedules the rest: a batched purge of
 every MangaDB record of that user, then the deletion of the Clerk identity
-through Clerk's Backend API, retried if Clerk fails, then the user row
-([operations](operations.md#account-deletion)).
+through Clerk's Backend API, retried if Clerk fails, then the user row a
+day later ([operations](operations.md#account-deletion)). A signed-in
+visitor with no username has no account to delete.
 
 On each server request `clerkMiddleware()` (`src/start.ts`) authenticates.
 The gated routes read a Convex token minted from the Clerk JWT template
@@ -31,6 +32,9 @@ One-time setup:
    Enable Google OAuth and email/password with email verification.
 2. Create a JWT template named `convex` (Clerk has a Convex preset) and
    note its issuer domain (`https://<slug>.clerk.accounts.dev` in dev).
+   Keep its token lifetime under a day: account deletion keeps the deleted
+   user's row a day after Clerk confirms, so a token issued before cannot
+   claim a username.
 3. Set the variables below, and allow `mangadb.org` and the staging
    workers.dev origin in the Clerk dashboard.
 

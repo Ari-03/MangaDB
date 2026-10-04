@@ -100,9 +100,10 @@ export async function seedTeam(t: TestT, users: readonly TestUser[]) {
  * Purges `subject`'s account as users.deleteAccount would, with Clerk
  * answering at once: marks their User deleting, runs purgeUser until it
  * sets `purgedAt`, then stands in for the Clerk deletion it scheduled,
- * cancelling it and removing the row as a confirmed one does
- * (removePurgedUser). The manifest redaction the purge schedules stays
- * queued for `drain`. A no-op for a subject with no User.
+ * cancelling it and removing the row at once, as the removal a confirmed
+ * one schedules does a day later (removePurgedUser). The manifest
+ * redaction the purge schedules stays queued for `drain`. A no-op for a
+ * subject with no User.
  */
 export async function purgeAccount(t: TestT, subject: string) {
   const userId = await t.run(async (ctx) => {
