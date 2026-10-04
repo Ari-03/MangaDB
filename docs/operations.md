@@ -133,8 +133,9 @@ apply it at once from then on. For what the catalog already holds:
    350 ms pace 1,000 pages take ten minutes or more, inside the 30-minute
    action limit. While the backlog lasts, runs whose budget runs out
    withdraw nothing. A re-read page that rates its book Mature or names an
-   adult-only imprint makes the Series mature at once, with its library
-   row.
+   adult-only imprint makes the Series mature at once; its library row and
+   pack entry follow in a scheduled job (`seriesBrowse:projectMature`), and
+   the next rebuild sets them if that job failed.
 
    `"completeSweep": true` does not mean the re-read finished. It means
    the run's budget reached every page waiting for one; a page that could

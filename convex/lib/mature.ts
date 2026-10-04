@@ -13,22 +13,22 @@
 //   (publishers.contentRating = "mature": FAKKU, 801 Media, Ghost Ship,
 //   Steamship).
 // The Series library rebuild derives `series.mature` from these
-// (seriesBrowse.upsertStats). An import applies new evidence at once
-// (applyMatureEvidence, from lib/observations.ts): linking an observation
-// that is evidence, or one to a Release under an adult-only Publisher, a
-// linked observation's snapshot turning into evidence, and a withdrawn
-// linked one listed again. So does an edit to a Series' contentRating
-// (moderation.applyUpdate). These wait for the rebuild: evidence that goes
-// away, a Publisher row marked adult-only later, and a merge or Split,
-// which repoint observations directly (lib/sensitiveOps.ts), not through
-// linkObservation, so a survivor or a restored Series is flagged only then.
-// An observation linked to a Release Bundle is evidence for neither the
-// import nor the rebuild.
-//
-// A flip rewrites the Series' library pack, about 500 KB in production, so
-// a mutation that applies a batch of observations stops at
-// MATURE_FLIPS_PER_MUTATION that could flip a Series and hands the rest
-// back to its caller.
+// (seriesBrowse.upsertStats). An import sets the flag on the Series in its
+// own transaction when it brings new evidence (applyMatureEvidence, from
+// lib/observations.ts): linking an observation that is evidence, or one to a
+// Release under an adult-only Publisher, a linked observation's snapshot
+// turning into evidence, and a withdrawn linked one listed again. The
+// Series' library row and pack entry follow in a scheduled job
+// (seriesBrowse.projectMature), since a pack is a document of up to 1 MiB
+// many Series share. Until it runs, the library's filtered totals and facet
+// counts still include the Series; its cards check the Series itself. A
+// Data Team edit to a Series' contentRating sets the flag and the
+// projection at once (moderation.applyUpdate). These wait for the rebuild:
+// evidence that goes away, a Publisher row marked adult-only later, a merge
+// or Split, which repoint observations directly (lib/sensitiveOps.ts), not
+// through linkObservation, so a survivor or a restored Series is flagged
+// only then, and a projection job that failed. An observation linked to a
+// Release Bundle is evidence for neither the import nor the rebuild.
 //
 // Visibility: everyone can see a Mature Series' own pages, but discovery
 // (browse, search, the calendars, boards, author shelves, the sitemap)
@@ -36,19 +36,19 @@
 // viewer's choice as a `showMature` argument, since they run without auth.
 
 import { v } from "convex/values";
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { canonicalPublisherFor } from "./publishers";
 import { patchPackEntry, seriesStatsRow } from "./seriesStats";
 
 /**
- * The most observations that could flip a Series one batch mutation
- * applies (kodansha.recordListingRatings, prh.notePresent): each flip reads
- * and rewrites the Series' library pack (syncMatureProjection). With a
- * 705 KB pack (production's run 470 to 500 KB), five flips read 7.1 MB of
- * the 16 MiB limit and write 3.5 MB of 16 MiB (kodansha.test.ts).
+ * The most Series one projectMature job carries into the library: each
+ * rewrites the Series' pack (syncMatureProjection), up to 1 MiB, so a job
+ * reads and writes at most five packs, about 5 MB with packs near the
+ * limit, whatever an import flipped.
  */
-export const MATURE_FLIPS_PER_MUTATION = 5;
+export const MATURE_PROJECTIONS_PER_JOB = 5;
 
 /** The `showMature` argument every public discovery query accepts. */
 export const showMatureArg = { showMature: v.optional(v.boolean()) };
@@ -104,10 +104,15 @@ export async function sourceRatesMature(
  * the observation rates mature (observationRatesMature), or it links a
  * Release whose Edition's Publisher is adult-only. lib/observations.ts calls
  * this when it links an observation, when a linked one's snapshot changes,
- * and when a withdrawn one is seen again, for every importer, so the home shelves and discovery leave the
- * Series out from the import's own transaction. A Series the Data Team rated
- * keeps its call. Nothing here clears the flag: a Series whose evidence went
- * away is cleared by the next rebuild.
+ * and when a withdrawn one is seen again, for every importer, so discovery
+ * leaves the Series out from the import's own transaction. A Series
+ * the Data Team rated keeps its call. Nothing here clears the flag: a Series
+ * whose evidence went away is cleared by the next rebuild.
+ *
+ * Only `series.mature` is written here; when any Series flips, one
+ * seriesBrowse.projectMature job is scheduled to update their library rows
+ * and pack entries. A Series flips once per transaction, so a mutation
+ * schedules at most one job per Series it flips.
  */
 export async function applyMatureEvidence(ctx: MutationCtx, observation: Doc<"sourceObservations">) {
   const ref = observation.recordRef;
@@ -126,22 +131,27 @@ export async function applyMatureEvidence(ctx: MutationCtx, observation: Doc<"so
   } else {
     return;
   }
+  const flipped: Id<"series">[] = [];
   for (const seriesId of seriesIds) {
     const series = await ctx.db.get(seriesId);
     if (series?.status !== "active" || series.mature === true) continue;
     if (ratedByDataTeam(series.contentRating) !== null) continue;
     // Derived data, no Revision, as in the rebuild.
     await ctx.db.patch(series._id, { mature: true });
-    await syncMatureProjection(ctx, series, true);
+    flipped.push(series._id);
+  }
+  if (flipped.length > 0) {
+    await ctx.scheduler.runAfter(0, internal.seriesBrowse.projectMature, { seriesIds: flipped });
   }
 }
 
 /**
- * Carry a Series' new `mature` flag into its library row and pack entry at
- * once (applyMatureEvidence, and a Data Team rating edit in
+ * Carry a Series' new `mature` flag into its library row and pack entry
+ * (seriesBrowse.projectMature, and a Data Team rating edit in
  * moderation.applyUpdate), so the filtered library and its facets show it
  * without waiting for the next rebuild. A Series without a row yet (never
- * rebuilt, or bookless) has nothing to update.
+ * rebuilt, or bookless) has nothing to update, and one already carrying the
+ * flag is left as it is.
  */
 export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
   const flag = mature ? { mature: true as const } : { mature: undefined };

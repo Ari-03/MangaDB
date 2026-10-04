@@ -14,6 +14,7 @@ import type { WithoutSystemFields } from "convex/server";
 
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { PACK_SPAN, type PackEntry } from "./lib/seriesStats";
 
 type Fields<T extends TableNames> = WithoutSystemFields<Doc<T>>;
 /** A table's fields: those in `Required` must be given, the rest default. */
@@ -120,6 +121,34 @@ export async function insertObservation(
   fields: Overrides<"sourceObservations", "sourceKey" | "sourceRecordId">,
 ) {
   return await ctx.db.insert("sourceObservations", { snapshot: {}, lastSeenAt: 0, withdrawn: false, ...fields });
+}
+
+/**
+ * Library pack 0 with an entry for each of its PACK_SPAN publicIds, about
+ * 1 KB each, so the pack is 1.02 MB, near the 1 MiB document limit
+ * (production's run 470 to 500 KB): the most one projection rewrites.
+ */
+export async function insertFullPack(ctx: MutationCtx) {
+  const entries = Array.from(
+    { length: PACK_SPAN },
+    (_, publicId): PackEntry => ({
+      publicId,
+      titleSort: `series ${publicId}`,
+      searchKey: `series ${publicId} `.padEnd(720, "its title and alternative titles "),
+      sourceStatus: "ongoing",
+      publishers: [{ name: "Kodansha", slug: "kodansha" }],
+      hasPhysical: true,
+      hasDigital: true,
+      volumeCount: 12,
+      latestReleaseSort: 20260101,
+      nextReleaseSort: 20261101,
+      lastReleasedSort: 20260101,
+      followers: 3,
+      collectors: 7,
+      ratingRank: 0.5,
+    }),
+  );
+  return await ctx.db.insert("seriesStatsPacks", { block: 0, entries });
 }
 
 /**

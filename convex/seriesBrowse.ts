@@ -39,7 +39,14 @@ import {
 } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { releasesOf } from "./lib/editionRows";
-import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
+import {
+  MATURE_PROJECTIONS_PER_JOB,
+  ratedByDataTeam,
+  showMatureArg,
+  sourceRatesMature,
+  syncMatureProjection,
+  visibleTo,
+} from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
 import { PACK_SPAN, patchPackEntry, seriesStatsRow, type PackEntry as Entry } from "./lib/seriesStats";
@@ -231,6 +238,31 @@ export async function syncRatingProjection(
     ratingRank,
   });
 }
+
+/**
+ * Carry Series an import just made mature into their library rows and pack
+ * entries (scheduled by lib/mature.ts applyMatureEvidence): the first
+ * MATURE_PROJECTIONS_PER_JOB now, the rest in a job of their own, so no
+ * transaction rewrites more packs than that. Each Series is read again: one
+ * hidden, merged, deleted or rated `general` by the Data Team since is
+ * skipped, and one already projected is left as it is. A failed or lost job
+ * leaves the projection to the next rebuild.
+ */
+export const projectMature = internalMutation({
+  args: { seriesIds: v.array(v.id("series")) },
+  handler: async (ctx, { seriesIds }) => {
+    for (const seriesId of seriesIds.slice(0, MATURE_PROJECTIONS_PER_JOB)) {
+      const series = await ctx.db.get(seriesId);
+      if (series?.status === "active" && series.mature === true) {
+        await syncMatureProjection(ctx, series, true);
+      }
+    }
+    const rest = seriesIds.slice(MATURE_PROJECTIONS_PER_JOB);
+    if (rest.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.seriesBrowse.projectMature, { seriesIds: rest });
+    }
+  },
+});
 
 /** Packs a reader takes at most: room for 100k publicIds. */
 const MAX_PACKS = 100;

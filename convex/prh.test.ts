@@ -10,12 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
 import * as catalogTitle from "./lib/catalogTitle";
-import { MATURE_FLIPS_PER_MUTATION } from "./lib/mature";
+import { MATURE_PROJECTIONS_PER_JOB } from "./lib/mature";
 import { parseTitle } from "./lib/prh";
+import { PACK_SPAN } from "./lib/seriesStats";
 import {
   type CatalogOverrides,
   insertCoverage,
   insertEdition,
+  insertFullPack,
   insertObservation,
   insertPublisher,
   insertRelease,
@@ -24,7 +26,20 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { alice, bundleMembers, drain, expectStampedAtHandOff, makeT, seedRegistry, seedTeam, signedIn, tickingClock, type TestT } from "./test.helpers";
+import {
+  alice,
+  bundleMembers,
+  drain,
+  expectStampedAtHandOff,
+  makeT,
+  matureFlags,
+  projectionJobs,
+  seedRegistry,
+  seedTeam,
+  signedIn,
+  tickingClock,
+  type TestT,
+} from "./test.helpers";
 
 type FixtureTitle = {
   isbn: string;
@@ -1827,6 +1842,10 @@ describe("prh — a book of an adult-only imprint makes its Series mature", () =
   const seed = (t: TestT) => t.mutation(internal.launch.seedPublishers, {});
   const rebuild = (t: TestT) => t.action(internal.seriesBrowse.rebuild, {});
 
+  // The library projection job waits until the test runs it.
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
   /**
    * Three Editions under the publisher row `slug` (unmarked), each Release
    * linked to its PRH title, and ANN's entry on the Series rating nothing.
@@ -1886,6 +1905,25 @@ describe("prh — a book of an adult-only imprint makes its Series mature", () =
   }
   const LISTED = { mature: undefined, newest: true, month: true };
   const HIDDEN = { mature: true, newest: false, month: false, library: false };
+  /**
+   * Whether the Series' library row and pack entry carry the flag: the
+   * projection the filtered library's totals and facets count from, which
+   * follows the import in a scheduled job (seriesBrowse.projectMature).
+   */
+  const projected = (t: TestT) =>
+    t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect()).find((s) => s.title === TITLE)!;
+      const row = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+        .unique();
+      const pack = await ctx.db
+        .query("seriesStatsPacks")
+        .withIndex("by_block", (q) => q.eq("block", Math.floor(series.publicId / PACK_SPAN)))
+        .unique();
+      const entry = pack?.entries.find((e) => e.publicId === series.publicId);
+      return { row: row?.mature === true, pack: entry?.mature === true };
+    });
   /** Whether the library has a row for the Series at all (a viewer who opted in sees it). */
   const inLibrary = async (t: TestT) =>
     (await t.query(api.seriesBrowse.browse, { sort: "title", showMature: true })).items.some(
@@ -1940,6 +1978,10 @@ describe("prh — a book of an adult-only imprint makes its Series mature", () =
 
     expect(await apply(t, 1)).toMatchObject({ status: "linked" });
     expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await projected(t)).toEqual({ row: false, pack: false });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await projected(t)).toEqual({ row: true, pack: true });
     expect(await inLibrary(t)).toBe(true);
   });
 
@@ -1967,26 +2009,11 @@ describe("prh — a book of an adult-only imprint makes its Series mature", () =
 
     expect(await apply(t, 1)).toMatchObject({ changed: false });
     expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await projected(t)).toEqual({ row: false, pack: false });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await projected(t)).toEqual({ row: true, pack: true });
     expect(await inLibrary(t)).toBe(true);
-  });
-
-  it("notes at most MATURE_FLIPS_PER_MUTATION withdrawn titles present per mutation, and hands back the rest", async () => {
-    const t = makeT();
-    const isbns = Array.from({ length: MATURE_FLIPS_PER_MUTATION + 2 }, (_, i) => `97800000000${10 + i}`);
-    await t.run(async (ctx) => {
-      for (const isbn of isbns) {
-        await insertObservation(ctx, { sourceKey: "prh", sourceRecordId: isbn, withdrawn: true });
-      }
-    });
-    const withdrawn = () =>
-      t.run(async (ctx) => (await ctx.db.query("sourceObservations").collect()).filter((o) => o.withdrawn).length);
-
-    const unknown = "9780000000999";
-    const rest = await t.mutation(internal.prh.notePresent, { isbns: [unknown, ...isbns] });
-    expect(rest).toEqual(isbns.slice(MATURE_FLIPS_PER_MUTATION));
-    expect(await withdrawn()).toBe(2);
-    expect(await t.mutation(internal.prh.notePresent, { isbns: rest })).toEqual([]);
-    expect(await withdrawn()).toBe(0);
   });
 
   it("a Data Team general rating keeps the Series listed in each case", async () => {
@@ -2034,5 +2061,104 @@ describe("prh — a book of an adult-only imprint makes its Series mature", () =
     await fileUnder(t, "seven-seas", { contentRating: "general" });
     await rebuild(t);
     expect(await shownTo(t)).toEqual(general);
+  });
+});
+
+// A presence batch relisting withdrawn titles of an adult-only imprint flags
+// their Series in its own transaction and leaves the library packs to
+// seriesBrowse.projectMature, a few Series per job (lib/mature.ts), so no
+// Release's fan-out or page of ISBNs makes one transaction rewrite many
+// packs near 1 MiB.
+describe("prh.notePresent — relisted Steamship titles and the library projection", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * `releases` PRH titles naming Steamship, each on a Release covering
+   * `perRelease` Series (publicIds from 1), every Series in a library pack
+   * of 1.02 MB. Written without reads, so a test can cap the reads of what
+   * follows. Returns the titles' ISBNs.
+   */
+  const steamshipTitles = (t: TestT, releases: number, perRelease: number, withdrawn = true) =>
+    t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" });
+      const isbns: string[] = [];
+      let publicId = 0;
+      for (let r = 0; r < releases; r++) {
+        const seriesIds = [];
+        for (let k = 0; k < perRelease; k++) seriesIds.push(await insertSeries(ctx, { publicId: ++publicId }));
+        const editionId = await insertEdition(ctx, { publisherId });
+        const isbn13 = `97800000${String(r).padStart(5, "0")}`;
+        const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds, isbn13 });
+        await insertObservation(ctx, {
+          sourceKey: "prh",
+          sourceRecordId: isbn13,
+          snapshot: { isbn13, imprint: "Steamship" },
+          recordRef: { type: "release", id: releaseId },
+          withdrawn,
+        });
+        isbns.push(isbn13);
+      }
+      await insertFullPack(ctx);
+      return isbns;
+    });
+  const upTo = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+
+  it("five relisted titles, each on a Release of four Series, flag all 20 in one mutation and their pack entries after", async () => {
+    const t = makeT({ transactionLimits: true });
+    const isbns = await steamshipTitles(t, 5, 4);
+
+    await t.mutation(internal.prh.notePresent, { isbns });
+    expect(await matureFlags(t)).toEqual({ series: upTo(20), pack: [] });
+    expect(await projectionJobs(t)).toEqual(Array(5).fill("pending"));
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await matureFlags(t)).toEqual({ series: upTo(20), pack: upTo(20) });
+    expect(await projectionJobs(t)).toEqual(Array(5).fill("success"));
+  });
+
+  it("a Release covering more Series than one job projects is finished by the job's own continuations", async () => {
+    // 20 rewrites of a 1.02 MB pack would pass the 16 MiB read limit.
+    const t = makeT({ transactionLimits: true });
+    const isbns = await steamshipTitles(t, 1, 20);
+
+    await t.mutation(internal.prh.notePresent, { isbns });
+    expect(await matureFlags(t)).toEqual({ series: upTo(20), pack: [] });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await matureFlags(t)).toEqual({ series: upTo(20), pack: upTo(20) });
+    expect(await projectionJobs(t)).toEqual(Array(20 / MATURE_PROJECTIONS_PER_JOB).fill("success"));
+  });
+
+  it("the job skips a Series hidden, rated general, or deleted since the flip, and running it again changes nothing", async () => {
+    const t = makeT();
+    const isbns = await steamshipTitles(t, 1, 4);
+    await t.mutation(internal.prh.notePresent, { isbns });
+    const seriesIds = await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      const [hidden, general, deleted] = series;
+      await ctx.db.patch(hidden!._id, { status: "hidden" });
+      // As moderation.applyUpdate leaves a Data Team "general" rating.
+      await ctx.db.patch(general!._id, { contentRating: "general", mature: undefined });
+      await ctx.db.delete(deleted!._id);
+      return series.map((s) => s._id);
+    });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await matureFlags(t)).toEqual({ series: [1, 4], pack: [4] });
+    expect(await projectionJobs(t)).toEqual(["success"]);
+
+    await t.mutation(internal.seriesBrowse.projectMature, { seriesIds });
+    expect(await matureFlags(t)).toEqual({ series: [1, 4], pack: [4] });
+  });
+
+  it("an ordinary page of 200 present titles reads only their observations and schedules nothing", async () => {
+    // Two reads per ISBN, its observation and the last-seen patch: a title's
+    // evidence applied again would read its Release and Series too.
+    const t = makeT({ transactionLimits: { documentsRead: 400 } });
+    const isbns = await steamshipTitles(t, 200, 1, false);
+
+    await t.mutation(internal.prh.notePresent, { isbns });
+    expect(await projectionJobs(t)).toEqual([]);
   });
 });

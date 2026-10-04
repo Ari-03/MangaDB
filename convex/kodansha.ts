@@ -91,7 +91,6 @@ import {
   type SeriesListingEntry,
 } from "./lib/kodansha";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
-import { MATURE_FLIPS_PER_MUTATION } from "./lib/mature";
 import {
   getObservation,
   linkObservation,
@@ -323,23 +322,16 @@ export const recordSeriesCrawl = internalMutation({
  * mature at once (lib/mature.ts). Kodansha rates series,
  * not books, and the listing is fetched in full every run, so this costs no
  * page fetches. A series linked later this run gets its rating next run.
- * Writes at most MATURE_FLIPS_PER_MUTATION new 18+ ratings and returns the
- * entries it did not reach, for the caller to send again.
  */
 export const recordListingRatings = internalMutation({
   args: { entries: v.array(v.object({ slug: v.string(), mature: v.boolean() })) },
   handler: async (ctx, { entries }) => {
     const now = Date.now();
-    let flips = 0;
-    for (const [i, { slug, mature }] of entries.entries()) {
+    for (const { slug, mature } of entries) {
       const link = await getObservation(ctx, SOURCE_KEY, `series:${slug}`);
       if (!link) continue;
       const snapshot = link.snapshot as { mature?: boolean };
       if (snapshot.mature === mature) continue;
-      if (mature) {
-        if (flips === MATURE_FLIPS_PER_MUTATION) return entries.slice(i);
-        flips++;
-      }
       await upsertObservation(ctx, {
         sourceKey: SOURCE_KEY,
         sourceRecordId: link.sourceRecordId,
@@ -347,7 +339,6 @@ export const recordListingRatings = internalMutation({
         now,
       });
     }
-    return [];
   },
 });
 
@@ -459,12 +450,9 @@ export const backlistSync = internalAction({
         let budgetSpent = false;
         for (let offset = 0; offset < listing.length && !budgetSpent; offset += PLAN_CHUNK) {
           const chunk = listing.slice(offset, offset + PLAN_CHUNK);
-          let ratings = chunk.map(({ slug, mature }) => ({ slug, mature }));
-          while (ratings.length > 0) {
-            ratings = await ctx.runMutation(internal.kodansha.recordListingRatings, {
-              entries: ratings,
-            });
-          }
+          await ctx.runMutation(internal.kodansha.recordListingRatings, {
+            entries: chunk.map(({ slug, mature }) => ({ slug, mature })),
+          });
           const due: Array<{
             slug: string;
             mode: "full" | "recheck";

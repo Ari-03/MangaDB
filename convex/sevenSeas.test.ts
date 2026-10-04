@@ -25,7 +25,7 @@ import {
   insertSourceRevision,
   seedCatalog,
 } from "./test.factories";
-import { alice, bundleMembers, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { alice, bundleMembers, drain, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
 import { pubDate } from "./test.catalog";
 import {
   ALPHA_1,
@@ -1943,6 +1943,8 @@ describe("sevenSeas.sync — mature evidence from the book page", () => {
       ).releases.some((row) => row.series.some((series) => series.title === title)),
     };
   }
+  /** Hidden by the import's own transaction: every place but the facets reads `series.mature`. */
+  const HIDDEN_AT_ONCE = { library: false, filtered: false, newest: false, month: false };
 
   it("a Steamship book filed under Seven Seas makes its Series mature at once", async () => {
     const t = makeT();
@@ -1993,14 +1995,11 @@ describe("sevenSeas.sync — mature evidence from the book page", () => {
     const { series } = await seriesOf(t, WHISPER_1);
     expect(series.title).toBe(title);
     expect(series.mature).toBe(true);
-    // No rebuild in between.
-    expect(await shownTo(t, title, month)).toEqual({
-      library: false,
-      filtered: false,
-      facets: 0,
-      newest: false,
-      month: false,
-    });
+    // No rebuild in between. The facets count from the library pack, which
+    // a scheduled job updates (seriesBrowse.projectMature).
+    expect(await shownTo(t, title, month)).toMatchObject(HIDDEN_AT_ONCE);
+    await drain(t);
+    expect(await shownTo(t, title, month)).toEqual({ ...HIDDEN_AT_ONCE, facets: 0 });
   });
 
   it("re-reads a page an older parser rated false, corrects it, and then leaves it", async () => {
@@ -2033,13 +2032,9 @@ describe("sevenSeas.sync — mature evidence from the book page", () => {
       parserVersion: BOOK_PAGE_VERSION,
     });
     expect((await seriesOf(t, PETER_GRILL_15)).series.mature).toBe(true);
-    expect(await shownTo(t, title, month)).toEqual({
-      library: false,
-      filtered: false,
-      facets: 0,
-      newest: false,
-      month: false,
-    });
+    expect(await shownTo(t, title, month)).toMatchObject(HIDDEN_AT_ONCE);
+    await drain(t);
+    expect(await shownTo(t, title, month)).toEqual({ ...HIDDEN_AT_ONCE, facets: 0 });
 
     // Read with the current parser: the next sync fetches nothing and writes nothing.
     const history = () =>

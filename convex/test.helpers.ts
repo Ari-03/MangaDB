@@ -146,6 +146,30 @@ export async function drain(t: Pick<Accessor, "finishAllScheduledFunctions">) {
   }
 }
 
+/** The publicIds flagged mature on the Series, and in library pack 0 (lib/mature.ts). */
+export async function matureFlags(t: Pick<Accessor, "run">) {
+  return await t.run(async (ctx) => {
+    const series = await ctx.db.query("series").collect();
+    const pack = await ctx.db
+      .query("seriesStatsPacks")
+      .withIndex("by_block", (q) => q.eq("block", 0))
+      .unique();
+    return {
+      series: series.filter((s) => s.mature).map((s) => s.publicId),
+      pack: (pack?.entries ?? []).filter((entry) => entry.mature).map((entry) => entry.publicId),
+    };
+  });
+}
+
+/** The state of each seriesBrowse.projectMature job scheduled so far, oldest first. */
+export async function projectionJobs(t: Pick<Accessor, "run">) {
+  return await t.run(async (ctx) =>
+    (await ctx.db.system.query("_scheduled_functions").collect())
+      .filter((job) => job.name === "seriesBrowse:projectMature")
+      .map((job) => job.state.kind),
+  );
+}
+
 /** A clock that moves a millisecond at each reading, so no two stamps share a time; mockRestore() stops it. */
 export function tickingClock() {
   let now = Date.now();

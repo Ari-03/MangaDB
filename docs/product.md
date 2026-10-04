@@ -371,10 +371,13 @@ shows your own books.
 The library rebuild derives `series.mature`. A Data Team call applies at
 once, and so does an import that links a book which is evidence, or whose
 Edition is under an adult-only publisher, that brings a linked book new
-evidence, or that lists a withdrawn linked book again; other changes, such
-as a publisher marked adult-only later, evidence that went away, or a merge
-or Split, wait for the next rebuild. Evidence, strongest
-first:
+evidence, or that lists a withdrawn linked book again. Such an import flags
+the Series in its own transaction, so it leaves the home page, the
+calendars and the library's pages at once; the library's filtered totals
+and facet counts follow a moment later, when a scheduled job updates the
+library pack. Other changes, such as a publisher marked adult-only later,
+evidence that went away, or a merge or Split, wait for the next rebuild.
+Evidence, strongest first:
 
 | Evidence | Source |
 |---|---|
