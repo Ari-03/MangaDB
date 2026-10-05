@@ -58,6 +58,7 @@ import {
 } from "./lib/seriesStats";
 import { withExceptionCapture } from "./lib/posthog";
 import { sameValue } from "./lib/values";
+import { memoize } from "./releases";
 
 export const SORTS = [
   "title",
@@ -170,11 +171,14 @@ export const rebuildBatch = internalMutation({
         afterPublicId === null ? q : q.gt("publicId", afterPublicId),
       )
       .take(REBUILD_BATCH);
+    // Editions across the batch share a few Publishers: read each once, a
+    // missing one included. One transaction, so no row can change under it.
+    const publisherOf = memoize((id: Id<"publishers">) => ctx.db.get(id));
     let count = 0;
     for (const series of docs) {
       if (series.status !== "active") continue;
       await syncSearchText(ctx, series);
-      await upsertStats(ctx, series, rebuiltAt);
+      await upsertStats(ctx, series, rebuiltAt, publisherOf);
       count++;
     }
     const last = docs[docs.length - 1];
@@ -327,9 +331,15 @@ export const repackBlock = internalMutation({
 
 /**
  * Compute and write one Series' row from its canonical records, deriving
- * the Series' `bookless` and `mature` flags on the way.
+ * the Series' `bookless` and `mature` flags on the way. `publisherOf` is
+ * the batch's memoized Publisher get (`rebuildBatch`).
  */
-async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: number) {
+async function upsertStats(
+  ctx: MutationCtx,
+  series: Doc<"series">,
+  rebuiltAt: number,
+  publisherOf: (id: Id<"publishers">) => Promise<Doc<"publishers"> | null>,
+) {
   const volumes = await activeVolumes(ctx, series._id);
 
   // The Series' books, Unmapped Packaging included; only an active Edition
@@ -380,7 +390,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   const today = todaySortKey(new Date());
 
   for (const [editionId, edition] of editions) {
-    const publisher = await ctx.db.get(edition.publisherId);
+    const publisher = await publisherOf(edition.publisherId);
     if (publisher && publisher.status === "active") {
       publishers.set(publisher.slug, { name: publisher.name, slug: publisher.slug });
     }
