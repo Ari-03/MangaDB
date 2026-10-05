@@ -19,7 +19,8 @@
 // Scope (spec §1): Yen On (light novels) and Yen Audio never enter;
 // JY manga is allowed. Neither do the light-novel/audio
 // categories (which is how J-Novel Club's novels, distributed by Yen, stay
-// out while its print manga comes in), single digital chapters
+// out while its print manga comes in), merchandise (including the Manga
+// Spot Merchandise collection), single digital chapters
 // ("…, Chapter 22 (v-scroll)"), or Yen's western "comics" — except Ize
 // Press, whose manhwa Yen files under comics. Everything fetched is
 // still observed (the fetch state that keeps the adapter incremental); an
@@ -205,11 +206,10 @@ function formatOf(tab: string): { format: "physical" | "digital"; binding?: stri
 }
 
 /** Why a page's book is out of catalog scope, or null when it is manga. */
-function scopeReason(
-  page: YenTitlePage,
-  imprint: string | undefined,
-  parsed: ParsedBookTitle,
-): string | null {
+function scopeReason(page: YenTitlePage, entry: YenFormat, parsed: ParsedBookTitle): string | null {
+  const { imprint, seriesName } = entry;
+  // Yen's merchandise collection uses the same manga labels and format tabs as books.
+  if (/^manga spot merchandise$/i.test(seriesName?.trim() ?? "")) return "merchandise";
   if (imprint !== undefined && DENIED_IMPRINTS.test(imprint)) return `imprint ${imprint}`;
   // Single digital chapters ("…, Chapter 22 (v-scroll)") are never
   // Volumes; an arc name with a volume ("Re:ZERO, Chapter 5: …, Vol. 2") is.
@@ -245,8 +245,7 @@ export function toSnapshots(page: YenTitlePage, url: string): YenTitleSnapshot[]
   for (const entry of page.formats) {
     if (entry.isbn13 === undefined || !ENGLISH_ISBN.test(entry.isbn13)) continue;
     const format = formatOf(entry.tab);
-    const reason =
-      format === null ? `format ${entry.tab}` : scopeReason(page, entry.imprint, parsed);
+    const reason = format === null ? `format ${entry.tab}` : scopeReason(page, entry, parsed);
     snapshots.push({
       kind: "yenTitle",
       url,

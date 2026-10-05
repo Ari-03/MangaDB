@@ -827,8 +827,9 @@ export function isNovelTitle(title: string): boolean {
 
 export type ScopeReason = "novel" | "merchandise" | "sampler" | "nonEnglish" | "childrensBook";
 
+// Publishers also give shirts and standees ISBNs and book-format labels.
 const MERCHANDISE =
-  /\b(?:playing cards|scratch cards|card game|roll & clash|advent calendar|stick it|activity book|colou?ring book|color the classics|papertoy|paper toy|fan notebook|sudoku|number place|origami|kirigami|papercrafts?|sticker book|postcard book|poster book|tarot deck|board game)\b|\b(?:\d{4}\s+)?(?:wall\s+)?calendar$/i;
+  /\b(?:t[-\s\u2010-\u2015]?shirts?|acrylic\s+standees?|playing cards|scratch cards|card game|roll & clash|advent calendar|stick it|activity book|colou?ring book|color the classics|papertoy|paper toy|fan notebook|sudoku|number place|origami|kirigami|papercrafts?|sticker book|postcard book|poster book|tarot deck|board game)\b|\b(?:\d{4}\s+)?(?:wall\s+)?calendar$/i;
 
 const SAMPLER =
   /\b(?:manga showcase|free sample|fcbd|free comic book day|convention exclusive|manga magazine|sampler)\b/i;

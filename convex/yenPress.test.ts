@@ -28,7 +28,7 @@ import {
   type TestT,
 } from "./test.helpers";
 
-// Trimmed first-party HTML fetched 2026-09-26; only fields used by the parser.
+// Trimmed first-party HTML; fixture comments record fetch dates where needed.
 const liveFixture = (name: string) =>
   readFileSync(new URL(`./lib/__fixtures__/yenPress/${name}.html`, import.meta.url), "utf8");
 
@@ -238,6 +238,43 @@ async function seed(t: TestT) {
 
 const sync = (t: TestT, args: object = {}) =>
   t.action(internal.yenPress.sync, { politeDelayMs: 0, ...args });
+
+describe("Yen merchandise pages", () => {
+  it.each([
+    ["delicious-in-dungeon-shirt", "Paperback"],
+    ["delicious-in-dungeon-acrylic-standee", "Hardback"],
+  ])("observes %s without creating catalog records", async (fixture, tab) => {
+    const t = makeT();
+    await seed(t);
+    const page = parseTitlePage(liveFixture(fixture))!;
+    // Yen labels these products as manga and gives them book format tabs.
+    expect(page.category).toBe("manga");
+    expect(page.formats[0]!.tab).toBe(tab);
+    const snapshot = toSnapshots(page, "https://yenpress.com/titles/merchandise")[0]!;
+    expect(await t.mutation(internal.yenPress.applyTitle, { snapshot })).toMatchObject({
+      status: "recordOnly",
+      reason: "merchandise",
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("series").collect()).toHaveLength(0);
+      expect(await ctx.db.query("editions").collect()).toHaveLength(0);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations).toHaveLength(1);
+      expect(observations[0]).toMatchObject({ snapshot: { outOfScope: "merchandise" } });
+      expect(observations[0]!.recordRef).toBeUndefined();
+    });
+  });
+
+  it("excludes Yen's merchandise collection even without a product type in the title", () => {
+    const page = parseTitlePage(liveFixture("delicious-in-dungeon-shirt"))!;
+    const [snapshot] = toSnapshots(
+      { ...page, title: "Delicious in Dungeon Party Artwork" },
+      "https://yenpress.com/titles/merchandise",
+    );
+    expect(snapshot!.outOfScope).toBe("merchandise");
+  });
+});
 
 describe("yenPress.booksToFetch", () => {
   it("fetches a page when a newly listed format has no observation yet", async () => {
