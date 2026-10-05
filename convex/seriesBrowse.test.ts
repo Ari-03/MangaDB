@@ -734,6 +734,38 @@ describe("seriesBrowse filters first, then the sort", () => {
     expect(blocks).toEqual([0]);
   });
 
+  it("skips unchanged pack writes, still publishes and cleans up, and writes changed facts", async () => {
+    const t = await shelf();
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("seriesStats").collect())
+        await ctx.db.patch(row._id, { rebuiltAt: row.rebuiltAt + 1 });
+      for (const config of await ctx.db.query("appConfig").collect())
+        await ctx.db.delete(config._id);
+      await ctx.db.insert("seriesStatsPacks", { block: 7, entries: [] });
+    });
+    await t.run(async (ctx) => {
+      const before = await ctx.meta.getTransactionMetrics();
+      expect(await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: 0 })).toBe(false);
+      // Only delete the stale pack and publish appConfig; do not rewrite block 0.
+      const after = await ctx.meta.getTransactionMetrics();
+      expect(after.documentsWritten.used - before.documentsWritten.used).toBe(2);
+      expect((await ctx.db.query("seriesStatsPacks").collect()).map((p) => p.block)).toEqual([0]);
+      expect(await ctx.db.query("appConfig").first()).toMatchObject({ seriesPacksReady: true });
+    });
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("seriesStats").first())!;
+      await ctx.db.patch(row._id, { volumeCount: row.volumeCount + 1 });
+      const before = await ctx.meta.getTransactionMetrics();
+      await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: 0 });
+      const after = await ctx.meta.getTransactionMetrics();
+      expect(after.documentsWritten.used - before.documentsWritten.used).toBe(1);
+      const pack = (await ctx.db.query("seriesStatsPacks").first())!;
+      expect(pack.entries.find((entry) => entry.publicId === row.publicId)?.volumeCount).toBe(
+        row.volumeCount + 1,
+      );
+    });
+  });
+
   it("filters from the rows themselves before any pack is written", async () => {
     const t = await shelf();
     await t.run(async (ctx) => {
