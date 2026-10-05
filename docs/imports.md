@@ -522,6 +522,44 @@ never moves one. Lines the line-size rule placed before this check are
 not reported; after one mirror their `release:` observations carry
 `coverageGapped: true` beside a `recordRef`, which is how to find them.
 
+A line is packaging when its designator says so ("(Omnibus GN 1-3)",
+"(GN box 2)") or its title names an Edition Line, bracketed or not
+("Vagabond [VIZBIG Edition]", "Attack on Titan [Colossal Edition]",
+"Death Note - Library Edition"). The line names are the shared title
+parser's (`EDITION_LINE_NAME` in `convex/lib/bookTitle.ts`), and a name the
+manga entry's own title contains ("Makunouchi Deluxe") does not count. The
+designator's number is then the book's position in its line, never a
+Volume, and the line adds no Volume to the backbone: "Vagabond [VIZBIG
+Edition] (GN 1)" is VIZBIG Edition 1, which the line's size places on
+Volumes 1–3. A size the name only implies (VIZBIG, Colossal and the other
+`FIXED_LINE_SIZES`, not "3-in-1") places a book only when size − 1 books
+follow it, both by the Series' highest Volume and by ANN's own count of
+the line's books when the page gives one ("(GN 5 / 5)"): VIZ put
+Inuyasha's 56 Volumes in 18 VIZBIG books, 17 and 18 holding four each, so
+those two, like any book that near the end, place as Unmapped Packaging.
+A Volume statement in brackets at the end of such a title is the book's
+coverage, read as a designator's list is: "Rurouni Kenshin - VIZBIG
+Edition [13-15] (GN 5)" is VIZBIG Edition 5 covering 13–15. One the list
+grammar does not read as a range ("[1, 3]", "[1 and Vol. 3]"), or that
+differs from the designator's own list ("[1, 3]" beside "(GN 1-3)"),
+holds the line as a gapped designator does, and is never replaced by the
+line's size. Two more cases are held as `packaging` for an Editor, never
+placed: a line whose title names another work than the Series or the
+entry ("Dragon Ball Z [VIZBIG Edition]" in ANN's Dragon Ball entry), whose
+numbers, stated or not, are that work's; and a line's last book by ANN's
+count ("(GN 9 / 9)") whose stated range ends before the Series' highest
+Volume, since the last book takes what is left ("Rurouni Kenshin - VIZBIG
+Edition [25-27]" collects 25–28). A stated range is never extended. A line
+with no known size ("[Library Edition]") places as Unmapped Packaging. A
+reissue, binding or variant tag names no line
+("[2nd Edition]", "[2nd Ed]", "[Revised Edition]", "[Hardcover]",
+"[Limited Edition]"), and neither does an anniversary reprint, which ANN
+numbers by Volume ("NANA - [25th Anniversary Edition] (GN 2)"): those
+lines stay single Volumes, and one whose Volume
+already has the publisher's Release in its format is held as a reprint
+(`isbn`). A line held as a reprint before this rule is read again by the
+next mirror, and the page pass after it handles the line as packaging.
+
 The page's description fills
 a blank Release Description at weak authority, and the pass refetches up
 to 2,000 linked pages a run to read descriptions. Citations link the

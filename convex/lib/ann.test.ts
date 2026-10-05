@@ -423,6 +423,114 @@ describe("release lines — ISBNs, chapters, packaging in the title", () => {
       editionLineHint: false,
     });
   });
+
+  // Staging's Held Books (2026-10-05): these lines were read as Volume N and
+  // held as a reprint of the Volume's existing Release.
+  it("flags an Edition Line named in the title, bracketed or after a dash", () => {
+    for (const [title, entry] of [
+      ["Vagabond [VIZBIG Edition]", "Vagabond"],
+      ["Inuyasha [VIZBIG Edition]", "Inuyasha"],
+      ["Dragon Ball Z [VIZBIG Edition]", "Dragon Ball"],
+      ["Fushigi Yûgi [VIZBIG Edition]", "Fushigi Yûgi"],
+      ["Hot Gimmick [VIZBIG Edition]", "Hot Gimmick"],
+      ["Attack on Titan [Colossal Edition]", "Attack on Titan"],
+      ["Death Note [Black Edition]", "Death Note"],
+      ["Fairy Tail [Master's Edition]", "Fairy Tail"],
+      ["Death Note - Library Edition", "Death Note"],
+      ["Naruto - [Library Edition]", "Naruto"],
+      ["Vagabond - Definitive Edition [Hardcover]", "Vagabond"],
+    ]) {
+      expect(splitReleaseTitle(`${title} (GN 2)`, entry), title).toMatchObject({
+        title,
+        label: "2",
+        multi: false,
+        editionLineHint: true,
+      });
+    }
+    // The entry's own name carries the line name: its lines are its Volumes.
+    expect(splitReleaseTitle("Makunouchi Deluxe (GN 2)", "Makunouchi Deluxe")).toMatchObject({
+      label: "2",
+      editionLineHint: false,
+    });
+  });
+
+  it("leaves reissues, bindings and variants single Volumes", () => {
+    for (const [title, entry] of [
+      ["Dragon Ball Z [2nd Edition]", "Dragon Ball"],
+      ["Oh My Goddess! [2nd Ed]", "Oh My Goddess!"],
+      ["Buddha - Deer Park [Hardcover]", "Buddha"],
+      ["Gunsmith Cats [Revised Edition]", "Gunsmith Cats"],
+      ["Dominion [4th Edition]", "Dominion"],
+      ["Kamisama Kiss - [Limited Edition]", "Kamisama Kiss"],
+      ["Soul Eater - [Slipcased Edition]", "Soul Eater"],
+      ["Attack on Titan - [Special Edition with DVD]", "Attack on Titan"],
+      // Anniversary reprints, numbered by Volume.
+      ["NANA - [25th Anniversary Edition]", "NANA"],
+      ["Bleach - 20th Anniversary Edition", "Bleach"],
+      ["The Walking Man [Anniversary Edition]", "The Walking Man"],
+    ]) {
+      const split = splitReleaseTitle(`${title} (GN 5)`, entry);
+      expect(split, title).toMatchObject({ label: "5", multi: false, editionLineHint: false });
+      expect(split?.coverRange, title).toBeUndefined();
+    }
+  });
+
+  it("reads a packaged title's bracketed Volume list as its coverage", () => {
+    // VIZ's VIZBIG Rurouni Kenshin: the designator is the line position.
+    expect(
+      splitReleaseTitle("Rurouni Kenshin - VIZBIG Edition [13-15] (GN 5 / 9)", "Rurouni Kenshin"),
+    ).toMatchObject({
+      title: "Rurouni Kenshin - VIZBIG Edition [13-15]",
+      label: "5",
+      multi: false,
+      editionLineHint: true,
+      coverRange: { from: "13", to: "15" },
+    });
+    // A list no range holds is a statement all the same: held, never sized.
+    // So is one the grammar does not read: never the line's size instead.
+    for (const list of ["1, 3", "3-1", "1 and Vol. 3", "5"]) {
+      const split = splitReleaseTitle(`Alpha - VIZBIG Edition [${list}] (GN 1)`, "Alpha");
+      expect(split, list).toMatchObject({
+        label: "1",
+        editionLineHint: true,
+        coverageGapped: true,
+      });
+      expect(split?.coverRange, list).toBeUndefined();
+    }
+    // A line, reissue or binding tag with a number in it states no Volumes.
+    for (const [title, entry] of [
+      ["Naruto [3-in-1 Edition]", "Naruto"],
+      ["Vagabond - Definitive Edition [Hardcover]", "Vagabond"],
+      ["Dragon Ball [VIZBIG Edition] [2nd Edition]", "Dragon Ball"],
+    ]) {
+      const split = splitReleaseTitle(`${title} (GN 2)`, entry);
+      expect(split, title).toMatchObject({ label: "2", editionLineHint: true });
+      expect(split?.coverageGapped, title).toBeUndefined();
+    }
+    // Beside a designator's own list the two must agree, or the line is held.
+    const both = (text: string) => {
+      const split = splitReleaseTitle(text, "Alpha");
+      return split && [split.multi, split.coverRange, split.coverageGapped];
+    };
+    expect(both("Alpha - VIZBIG Edition [1-3] (GN 1-3)")).toEqual([
+      true,
+      { from: "1", to: "3" },
+      undefined,
+    ]);
+    for (const text of [
+      "Alpha - VIZBIG Edition [1, 3] (GN 1-3)",
+      "Alpha - VIZBIG Edition [4-6] (GN 1-3)",
+      "Alpha - VIZBIG Edition [1-3] (GN 1, 3)",
+    ]) {
+      expect(both(text), text).toEqual([true, undefined, true]);
+    }
+    // Only a packaged line's list: a bracket on any other line is its name's.
+    expect(splitReleaseTitle("Alpha [1-3] (GN 1)", "Alpha")).toMatchObject({
+      label: "1",
+      editionLineHint: false,
+    });
+    expect(splitReleaseTitle("Alpha [1-3] (GN 1)", "Alpha")?.coverRange).toBeUndefined();
+  });
 });
 
 // Trimmed copies of live release pages (fetched 2026-09-25, 10948 and 23227

@@ -1513,6 +1513,287 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
     expect(held?.recordRef).toBeUndefined();
     expect(held?.conflicts?.[0]?.reason).toMatch(/would cover Volumes 25–27/);
   });
+
+  /** Plain "(GN n)" lines for Volumes 1 to `count`, ANN ids from `firstId`. */
+  const plainVolumes = (count: number, firstId: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      annId: firstId + i,
+      date: "2002-04-05",
+      designator: `GN ${i + 1}`,
+    }));
+  /** A VIZ release page for one fixture line, keyed by its ANN id. */
+  const vizPage = (annId: number, title: string, volume: string, isbn13: string, mangaId: number) =>
+    [
+      annId,
+      releasePage({ title, volume, distributor: "Viz Media", date: "2008-01-08", isbn13, mangaId }),
+    ] as const;
+  /** A Series' books after the page pass: line name, position, covered Volumes. */
+  const booksOf = (t: TestT, title: string) =>
+    t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect()).find((s) => s.title === title)!;
+      const volumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+        .collect();
+      const labels = new Map(volumes.map((v) => [v._id, v.label]));
+      const lines = await ctx.db
+        .query("editionLines")
+        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+        .collect();
+      const coverage = await ctx.db.query("volumeCoverages").collect();
+      const covered = (editionId: Id<"editions">) =>
+        coverage
+          .filter((c) => c.editionId === editionId && labels.has(c.volumeId))
+          .sort((a, b) => a.order - b.order)
+          .map((c) => labels.get(c.volumeId));
+      return (await ctx.db.query("editions").collect())
+        .filter((e) => lines.some((l) => l._id === e.editionLineId) || covered(e._id).length > 0)
+        .map((e) => [
+          lines.find((l) => l._id === e.editionLineId)?.name ?? null,
+          e.linePosition ?? null,
+          e.coverageUnmapped ? "unmapped" : covered(e._id).join(","),
+        ])
+        .sort();
+    });
+
+  // Staging held these as reprints of Volume N (2026-10-05): a line name in
+  // the title is packaging, and "[1-3]" after it is the book's coverage.
+  it("places a line named in the title by its title's list or its line's size; a reissue stays a Volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const VAGABOND: FixtureManga = {
+      id: 1595,
+      title: "Vagabond",
+      releases: [
+        // Twelve Volumes: VIZBIG 2 (4–6) has two whole books after it.
+        ...plainVolumes(12, 18001),
+        {
+          annId: 11073,
+          date: "2008-09-16",
+          designator: "GN 1",
+          title: "Vagabond [VIZBIG Edition]",
+        },
+        {
+          annId: 11704,
+          date: "2008-12-16",
+          designator: "GN 2",
+          title: "Vagabond [VIZBIG Edition]",
+        },
+        { annId: 11055, date: "2007-06-00", designator: "GN 1", title: "Vagabond - [2nd Ed]" },
+      ],
+    };
+    const KENSHIN: FixtureManga = {
+      id: 1995,
+      title: "Rurouni Kenshin",
+      releases: [
+        ...plainVolumes(3, 10001),
+        {
+          annId: 10520,
+          date: "2008-01-08",
+          designator: "GN 1",
+          title: "Rurouni Kenshin - VIZBIG Edition [1-3]",
+        },
+        {
+          annId: 16344,
+          date: "2003-12-00",
+          designator: "GN 1",
+          title: "Rurouni Kenshin - [Library Edition]",
+        },
+        // The title's list and the designator's disagree: held, never placed.
+        {
+          annId: 10999,
+          date: "2008-04-01",
+          designator: "GN 1-3",
+          title: "Rurouni Kenshin - VIZBIG Edition [1, 3]",
+        },
+      ],
+    };
+    stubAnn(
+      [VAGABOND, KENSHIN],
+      Object.fromEntries([
+        vizPage(11073, "Vagabond [VIZBIG Edition]", "GN 1", "9781421520544", 1595),
+        vizPage(11704, "Vagabond [VIZBIG Edition]", "GN 2", "9781421522449", 1595),
+        vizPage(11055, "Vagabond - [2nd Ed]", "GN 1", "9781421519111", 1595),
+        vizPage(10520, "Rurouni Kenshin - VIZBIG Edition [1-3]", "GN 1 / 9", "9781421520735", 1995),
+        vizPage(16344, "Rurouni Kenshin - [Library Edition]", "GN 1 / 28", "9781417651245", 1995),
+        vizPage(10999, "Rurouni Kenshin - VIZBIG Edition [1, 3]", "GN 1-3", "9781421520742", 1995),
+      ]),
+    );
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    expect(await booksOf(t, "Vagabond")).toEqual([
+      // The reissue is Volume 1 in another printing, a book of its own.
+      [null, null, "1"],
+      ["VIZBIG Edition", "1", "1,2,3"],
+      ["VIZBIG Edition", "2", "4,5,6"],
+    ]);
+    expect(await booksOf(t, "Rurouni Kenshin")).toEqual([
+      ["Library Edition", "1", "unmapped"],
+      ["VIZBIG Edition", "1", "1,2,3"],
+    ]);
+    const disagreeing = await obsFor(t, 10999);
+    expect(disagreeing?.recordRef).toBeUndefined();
+    expect(disagreeing?.conflicts?.[0]?.reason).toMatch(/Volume list no range holds/);
+    await t.run(async (ctx) => {
+      // No line's number became a Volume: the backbone is the plain GN lines.
+      expect(
+        (await ctx.db.query("volumes").collect()).map((v) => Number(v.label)).sort((a, b) => a - b),
+      ).toEqual([1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    });
+  });
+
+  // VIZ put Inuyasha's 56 Volumes in 18 VIZBIG books, 17 and 18 holding
+  // four each (49–52, 53–56): the line's size of three holds only short of
+  // the Series' end, and the last books wait for an Editor.
+  it("sizes a VIZBIG book only short of the Series' end: Inuyasha 17 and 18 are unmapped", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const vizbig = [
+      [22589, "16", "9781421532950"],
+      [25147, "17", "9781421532967"],
+      [25148, "18", "9781421532974"],
+    ] as const;
+    const INUYASHA: FixtureManga = {
+      id: 76,
+      title: "Inuyasha",
+      releases: [
+        ...plainVolumes(56, 30001),
+        ...vizbig.map(([annId, n]) => ({
+          annId,
+          date: "2013-11-12",
+          designator: `GN ${n}`,
+          title: "Inuyasha [VIZBIG Edition]",
+        })),
+      ],
+    };
+    stubAnn(
+      [INUYASHA],
+      Object.fromEntries(
+        vizbig.map(([annId, n, isbn13]) =>
+          vizPage(annId, "Inuyasha [VIZBIG Edition]", `GN ${n}`, isbn13, 76),
+        ),
+      ),
+    );
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    expect(await booksOf(t, "Inuyasha")).toEqual([
+      ["VIZBIG Edition", "16", "46,47,48"],
+      ["VIZBIG Edition", "17", "unmapped"],
+      ["VIZBIG Edition", "18", "unmapped"],
+    ]);
+  });
+
+  // ANN's Dragon Ball entry also lists Dragon Ball Z's 26 books, so its
+  // Series runs to Volume 26; the page's own count ("GN 5 / 5") still marks
+  // VIZBIG 5 (13–16) as the line's last book, and a Z book numbers Z's
+  // Volumes, never this Series'.
+  it("sizes no VIZBIG book near the line's last by the page's count, nor one titled for another work", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const vizbig = [
+      [12899, "Dragon Ball [VIZBIG Edition]", "3", "5", "9781421520612"],
+      [13924, "Dragon Ball [VIZBIG Edition]", "5", "5", "9781421520636"],
+      [10479, "Dragon Ball Z [VIZBIG Edition]", "1", "9", "9781421520643"],
+      // A stated range is Z's numbering too.
+      [10849, "Dragon Ball Z - VIZBIG Edition [1-3]", "1", "9", "9781421520650"],
+    ] as const;
+    stubAnn(
+      [
+        {
+          id: 297,
+          title: "Dragon Ball",
+          releases: [
+            ...plainVolumes(26, 40001),
+            ...vizbig.map(([annId, title, n]) => ({
+              annId,
+              date: "2009-03-03",
+              designator: `GN ${n}`,
+              title,
+            })),
+          ],
+        },
+      ],
+      Object.fromEntries(
+        vizbig.map(([annId, title, n, of, isbn13]) =>
+          vizPage(annId, title, `GN ${n} / ${of}`, isbn13, 297),
+        ),
+      ),
+    );
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    expect(await booksOf(t, "Dragon Ball")).toEqual([
+      ["VIZBIG Edition", "3", "7,8,9"],
+      ["VIZBIG Edition", "5", "unmapped"],
+    ]);
+    // Both Z books are held for an Editor, stated range or not.
+    for (const annId of [10479, 10849]) {
+      const held = await obsFor(t, annId);
+      expect(held?.recordRef).toBeUndefined();
+      expect(held?.conflicts?.[0]?.reason).toMatch(/titled for another work/);
+    }
+  });
+
+  // VIZ's VIZBIG 9 of Rurouni Kenshin collects 25–28, but ANN's title says
+  // "[25-27]": the line's last book ("GN 9 / 9") stating less than the
+  // Series' 28 Volumes is held, never extended (staging release:15141).
+  it("holds a line's last book whose stated range stops short of the Series' end", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const title = "Rurouni Kenshin - VIZBIG Edition [25-27]";
+    stubAnn(
+      [
+        {
+          id: 1995,
+          title: "Rurouni Kenshin",
+          releases: [
+            ...plainVolumes(28, 50001),
+            { annId: 15141, date: "2010-03-16", designator: "GN 9", title },
+          ],
+        },
+      ],
+      Object.fromEntries([vizPage(15141, title, "GN 9 / 9", "9781421520810", 1995)]),
+    );
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    expect(await booksOf(t, "Rurouni Kenshin")).toEqual([]);
+    const held = await obsFor(t, 15141);
+    expect(held?.recordRef).toBeUndefined();
+    expect(held?.conflicts?.[0]?.reason).toMatch(
+      /line's last book.*end at 27, before the Series' 28/,
+    );
+  });
+
+  // VIZ's NANA 25th Anniversary Edition reprints the Volumes one by one
+  // (staging release 55366 is Volume 2): a plain single Volume, no line.
+  it("places an anniversary reprint as the single Volume it numbers", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const title = "NANA - [25th Anniversary Edition]";
+    stubAnn(
+      [
+        {
+          id: 300,
+          title: "NANA",
+          releases: [
+            ...plainVolumes(2, 60001),
+            { annId: 55366, date: "2026-04-21", designator: "GN 2", title },
+          ],
+        },
+      ],
+      Object.fromEntries([vizPage(55366, title, "GN 2", "9781974759279", 300)]),
+    );
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    expect(await booksOf(t, "NANA")).toEqual([[null, null, "2"]]);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("editionLines").collect()).toHaveLength(0);
+    });
+  });
 });
 
 // A designator listing Volumes no range holds ("(GN 1, 3)") states the

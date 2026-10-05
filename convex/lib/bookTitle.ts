@@ -245,6 +245,15 @@ const PACKAGING_PHRASE = [
   "slipcase\\s+set",
 ].join("|");
 
+/**
+ * An Edition Line's name anywhere in a title, in the phrase vocabulary
+ * above: "Vagabond [VIZBIG Edition]", "Death Note - Library Edition",
+ * "Rurouni Kenshin - VIZBIG Edition [13-15]". A reissue ("[2nd Edition]"),
+ * a binding ("[Hardcover]") or a variant ("[Limited Edition]") names none.
+ * ANN reads a release line's packaging with it (lib/ann.ts).
+ */
+export const EDITION_LINE_NAME = new RegExp(`\\b(?:${PACKAGING_PHRASE})(?![\\w-])`, "i");
+
 const SEASON_PREFIX =
   "(?:(?:the\\s+)?(?:final\\s+)?season(?:\\s+(?!part\\b)\\w+)?(?:\\s+part\\s+\\w+)?\\s+)";
 const POSITION = `(?:${NUM}|${ROMAN}|${WORD_NUMBER})`;

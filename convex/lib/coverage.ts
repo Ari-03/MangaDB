@@ -313,9 +313,12 @@ const FIXED_LINE_SIZES: Array<[RegExp, number]> = [
   [/\bdefinitive\s+(?:hardcover\s+)?(?:edition|collection)\b/i, 3], // VIZ Vagabond, Kodansha AoT
 ];
 
+/** A name that states its own size: "3-in-1 Edition". */
+const N_IN_1 = /\b(\d)-in-1\b/i;
+
 export function declaredLineSize(lineName: string | null): number | null {
   if (lineName === null) return null;
-  const nIn1 = /\b(\d)-in-1\b/i.exec(lineName);
+  const nIn1 = N_IN_1.exec(lineName);
   if (nIn1) return Number(nIn1[1]);
   for (const [pattern, size] of FIXED_LINE_SIZES) {
     if (pattern.test(lineName)) return size;
@@ -323,14 +326,34 @@ export function declaredLineSize(lineName: string | null): number | null {
   return null;
 }
 
-/** "3-in-1 Edition" at position 5 → volumes 13–15; null without a declared size or an integer position. */
+/**
+ * "3-in-1 Edition" at position 5 → volumes 13–15; null without a declared
+ * size or an integer position.
+ *
+ * A size the name only implies (FIXED_LINE_SIZES) can break where a finished
+ * Series ends: VIZ put Inuyasha's 56 Volumes in 18 VIZBIG books, 17 and 18
+ * holding four each (49–52, 53–56), Vagabond's 37 in 12 and Dragon Ball's
+ * 16 in 5, the last holding four. The Volumes left over are fewer than a
+ * book's size, so they reach back at most size − 1 books. Given where the
+ * end is, such a size places a book only when that many books follow it:
+ * `lastVolume`, the Series' highest known Volume, must leave that many
+ * whole books of Volumes after it, and `lastPosition`, the source's own
+ * count of the line's books, that many books. An "n-in-1" name states its
+ * own size: a shorter last book asks for a Volume the Series lacks instead.
+ */
 export function coverageFromLine(
   lineName: string | null,
   linePosition: string | null,
+  end: { lastVolume?: number; lastPosition?: number } = {},
 ): CoverRange | null {
   const size = declaredLineSize(lineName);
   if (size === null || linePosition === null || !/^\d{1,3}$/.test(linePosition)) return null;
   const position = Number(linePosition);
+  if (lineName !== null && !N_IN_1.test(lineName)) {
+    const reach = position + size - 1;
+    if (end.lastVolume !== undefined && size * reach > end.lastVolume) return null;
+    if (end.lastPosition !== undefined && reach > end.lastPosition) return null;
+  }
   return range(size * (position - 1) + 1, size * position);
 }
 

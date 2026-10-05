@@ -23,7 +23,13 @@
 // `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
-import { coverRangeValidator, statedList, WHOLE_VOLUME_LIST } from "./bookTitle";
+import {
+  type CoverRange,
+  coverRangeValidator,
+  EDITION_LINE_NAME,
+  statedList,
+  WHOLE_VOLUME_LIST,
+} from "./bookTitle";
 import { datePartsValidator, type DateParts } from "./dates";
 import { toIsbn13 } from "./isbn";
 import {
@@ -57,17 +63,27 @@ const annReleaseValidator = v.object({
   /** A "(GN 1-3)" range or list designator (multi-volume). */
   multi: v.boolean(),
   format: v.union(v.literal("physical"), v.literal("digital")),
-  /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
+  /**
+   * Omnibus/box-set/deluxe packaging — an Edition Line shape, from the
+   * designator ("Omnibus GN 1-3") or a line name in the title ("[VIZBIG
+   * Edition]", "- Library Edition").
+   */
   editionLineHint: v.boolean(),
   /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
   isbn13: v.optional(v.string()),
-  /** The Volumes a "(GN 97-99)" or "(GN 1, 2, 3)" designator says the book collects. */
+  /**
+   * The Volumes a "(GN 97-99)" or "(GN 1, 2, 3)" designator says the book
+   * collects, or a packaged line's title list ("VIZBIG Edition [13-15]").
+   */
   coverRange: v.optional(coverRangeValidator),
   /**
    * The designator lists Volumes no range holds: a gap ("GN 1, 3", "GN 1-3,
    * 5"), a numbered extra ("GN 1-2 + 3"), a backwards range, a dash chain, or
    * text the list grammar does not read. Multi-volume with no label and no
-   * range, and never sized from the line's name: the page pass holds it.
+   * range, and never sized from the line's name: the page pass holds it. A
+   * packaged line's title statement no range holds ("VIZBIG Edition [1, 3]",
+   * "[1 and Vol. 3]"), or one that differs from the designator's list, sets
+   * it too.
    * The same flag as a title's (lib/bookTitle.ts packagingValidator).
    */
   coverageGapped: v.optional(v.literal(true)),
@@ -173,12 +189,34 @@ export function parseAnnDate(text: string): DateParts | undefined {
 }
 
 // Packaging words. In the designator ("Omnibus GN 1-3", "GN box 2") they
-// always mean packaging; in the line's own title ("Berserk Deluxe Edition
-// (GN 1)", "Summer Ghost: The Complete Manga Collection (GN)") only when
-// the entry's name does not itself contain them.
+// always mean packaging. In the line's own title an Edition Line's name, in
+// the shared title parser's vocabulary (lib/bookTitle.ts EDITION_LINE_NAME:
+// "Berserk Deluxe Edition (GN 1)", "Vagabond [VIZBIG Edition] (GN 1)",
+// "Death Note - Library Edition (GN 1)", "Summer Ghost: The Complete Manga
+// Collection (GN)"), means packaging only when the entry's name does not
+// itself contain it. A reissue or binding tag ("[2nd Edition]",
+// "[Hardcover]") is no line: such a line stays a single Volume. So is an
+// anniversary reprint, which ANN numbers by Volume ("NANA - [25th
+// Anniversary Edition] (GN 2)" is Volume 2 again), though the shared
+// vocabulary names it a line.
 const DESIGNATOR_PACKAGING = /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s|hardcover)\b/i;
-const TITLE_PACKAGING =
-  /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1|complete (?:manga )?collection)\b/i;
+const ANNIVERSARY = /\b(?:\d+(?:st|nd|rd|th)\s+)?anniversary\s+edition\b/gi;
+
+/** Bracket text that only speaks of Volumes: numbers, "Vol." and "#" markers, list joins. */
+const VOLUME_STATEMENT = /^(?=.*\d)(?:[\d\s.,&+#/\-–—]|\b(?:and|vols?|volumes?)\b)+$/i;
+
+/**
+ * A line title ending in a bracketed Volume statement, as ANN writes VIZ's
+ * VIZBIG Rurouni Kenshin: "Rurouni Kenshin - VIZBIG Edition [13-15]" (GN 5).
+ * The title before it, and the statement, which the list grammar may not
+ * read ("[1 and Vol. 3]"); null for any other title, a reissue or line tag
+ * among them ("[2nd Edition]", "[3-in-1 Edition]").
+ */
+export function titleVolumeList(title: string): { rest: string; list: string } | null {
+  const m = /^(.*?)\s*\[([^[\]]+)\]\s*$/.exec(title);
+  const list = m?.[2]?.trim() ?? "";
+  return m && VOLUME_STATEMENT.test(list) ? { rest: m[1]!, list } : null;
+}
 
 // The format markers: GN/OGN and "graphic novel" are print, eBook digital.
 // A designator's coverage follows its first marker; anything before it ("2nd
@@ -223,11 +261,14 @@ function readCoverage(
  * Split one release line's text: "Frieren: Beyond Journey's End (GN 14)" →
  * title + label + format. The designator is the line's last parenthesised
  * group, so a year or edition in the title's own parentheses is never read.
- * GN/OGN designators are print, eBook digital; omnibus/box-set designators
- * flag Edition Line packaging. What follows the first format marker is the
- * coverage (`readCoverage`). Returns null for lines that are not book
- * releases (DVDs and other designators ANN mixes into other media types)
- * and for single chapters ("eBook ch 17") — chapters are never Volumes.
+ * GN/OGN designators are print, eBook digital; omnibus/box-set designators,
+ * and an Edition Line name in the title ("Vagabond [VIZBIG Edition]"), flag
+ * Edition Line packaging. What follows the first format marker is the
+ * coverage (`readCoverage`), and so is a packaged line's list ending its
+ * title ("[13-15]"), which must agree with the designator's. Returns null
+ * for lines that are not book releases (DVDs and other designators ANN
+ * mixes into other media types) and for single chapters ("eBook ch 17") —
+ * chapters are never Volumes.
  * `entryName` (the manga's own title) lets packaging words in the line
  * title count only when they are not part of the series name.
  */
@@ -246,21 +287,41 @@ export function splitReleaseTitle(
     .sort((a, b) => a.index - b.index)[0];
   if (marker === undefined) return null;
   if (/\bch(?:apter)?\.?\s*\d/i.test(designator)) return null;
-  const titleWord = TITLE_PACKAGING.exec(title)?.[1];
+  const lineName = EDITION_LINE_NAME.exec(title.replace(ANNIVERSARY, ""))?.[0];
   const editionLineHint =
     DESIGNATOR_PACKAGING.test(designator) ||
-    (titleWord !== undefined && !entryName.toLowerCase().includes(titleWord.toLowerCase()));
-  const { label, multi, ...stated } = readCoverage(
+    (lineName !== undefined && !entryName.toLowerCase().includes(lineName.toLowerCase()));
+  const { label, multi, ...designated } = readCoverage(
     designator.slice(marker.index + marker[0].length),
   );
+  // A packaged title's own statement says what the book collects too, read
+  // as a designator's list is: "Rurouni Kenshin - VIZBIG Edition [13-15]"
+  // (GN 5) is 13–15. Anything else holds the line (`coverageGapped`), never
+  // sized from its line's name: a statement the grammar does not read as a
+  // range ("[1, 3]", "[1 and Vol. 3]"), or one that differs from the
+  // designator's own list.
+  const titleList = editionLineHint ? titleVolumeList(title) : null;
+  const listed = titleList !== null ? readCoverage(titleList.list).coverRange : null;
+  const { coverRange, coverageGapped } =
+    listed === null
+      ? designated
+      : listed !== undefined && (!multi || sameRange(designated.coverRange, listed))
+        ? { coverRange: listed, coverageGapped: undefined }
+        : { coverRange: undefined, coverageGapped: true as const };
   return {
     title,
     label,
     multi,
     format: EBOOK_MARKER.test(designator) ? "digital" : "physical",
     editionLineHint,
-    ...stated,
+    ...(coverRange ? { coverRange } : {}),
+    ...(coverageGapped ? { coverageGapped } : {}),
   };
+}
+
+/** Two stated ranges that name the same Volumes. */
+function sameRange(a: CoverRange | undefined, b: CoverRange | undefined): boolean {
+  return a !== undefined && b !== undefined && a.from === b.from && a.to === b.to;
 }
 
 // ---------- manga records ----------

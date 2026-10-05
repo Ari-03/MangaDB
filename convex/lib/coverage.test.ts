@@ -70,6 +70,37 @@ describe("coverageFromLine — line names that declare their size", () => {
     expect(coverageFromLine("Fullmetal Edition", "1")).toBeNull();
   });
 
+  it("trusts an implied size only short of the Series' end, where a book may hold more", () => {
+    // VIZ's Inuyasha: 56 Volumes in 18 VIZBIG books, 17 and 18 holding four
+    // each (49–52, 53–56). Two whole books must follow a sized book.
+    const inuyasha = { lastVolume: 56 };
+    expect(coverageFromLine("VIZBIG Edition", "16", inuyasha)).toEqual({ from: "46", to: "48" });
+    expect(coverageFromLine("VIZBIG Edition", "17", inuyasha)).toBeNull();
+    expect(coverageFromLine("VIZBIG Edition", "18", inuyasha)).toBeNull();
+    // Vagabond: 37 Volumes in 12 books, the last holding 34–37.
+    const vagabond = { lastVolume: 37 };
+    expect(coverageFromLine("VIZBIG Edition", "10", vagabond)).toEqual({ from: "28", to: "30" });
+    expect(coverageFromLine("VIZBIG Edition", "12", vagabond)).toBeNull();
+    // Dragon Ball's 5 books ("GN 5 / 5"), the last holding 13–16: the line's
+    // own count stops it where the Series' Volumes (Z's too) would not.
+    const dragonBall = { lastVolume: 26, lastPosition: 5 };
+    expect(coverageFromLine("VIZBIG Edition", "3", dragonBall)).toEqual({ from: "7", to: "9" });
+    expect(coverageFromLine("VIZBIG Edition", "4", dragonBall)).toBeNull();
+    expect(coverageFromLine("VIZBIG Edition", "5", dragonBall)).toBeNull();
+    // Attack on Titan's 34 Volumes: a five-Volume book needs four after it.
+    expect(coverageFromLine("Colossal Edition", "2", { lastVolume: 34 })).toEqual({
+      from: "6",
+      to: "10",
+    });
+    expect(coverageFromLine("Colossal Edition", "3", { lastVolume: 34 })).toBeNull();
+    // "n-in-1" states its size; without the end nothing is cut.
+    expect(coverageFromLine("3-in-1 Edition", "2", { lastVolume: 6, lastPosition: 2 })).toEqual({
+      from: "4",
+      to: "6",
+    });
+    expect(coverageFromLine("VIZBIG Edition", "17")).toEqual({ from: "49", to: "51" });
+  });
+
   it("never guesses for an undeclared size or a non-numeric position", () => {
     expect(coverageFromLine("Omnibus", "7")).toBeNull();
     expect(coverageFromLine("Deluxe Edition", "14")).toBeNull();

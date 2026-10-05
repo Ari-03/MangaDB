@@ -70,6 +70,7 @@ import {
   parseReleasePage,
   parseReport,
   releaseUrl,
+  titleVolumeList,
   toSnapshot,
   type AnnMangaSnapshot,
 } from "./lib/ann";
@@ -979,11 +980,13 @@ export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
 }
 
 /**
- * ANN's packaged line titles come in two shapes: "Naruto [3-in-1 Edition]"
- * (the designator number is the line position) and "One Piece - [Omnibus]
- * 33 - Wano" (the position follows the tag; the designator holds the volume
- * range). Both yield the line name and position; a bare "(GN 1-3)" range
- * with no tag is an Omnibus. Box sets are bundles, never lines: null.
+ * ANN's packaged line titles come in three shapes: "Naruto [3-in-1 Edition]"
+ * (the designator number is the line position), "One Piece - [Omnibus] 33 -
+ * Wano" (the position follows the tag; the designator holds the volume
+ * range) and "Rurouni Kenshin - VIZBIG Edition [13-15]" (an untagged line
+ * name, its covered Volumes in brackets, the position in the designator).
+ * All yield the line name and position; a bare "(GN 1-3)" range with no tag
+ * is an Omnibus. Box sets are bundles, never lines: null.
  */
 export function packagingOf(line: {
   title: string;
@@ -991,17 +994,31 @@ export function packagingOf(line: {
   multi: boolean;
   coverRange?: { from: string; to: string };
 }): { name: string; position: string | null } | null {
-  const tagged = /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(
-    line.title,
-  );
-  const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : line.title;
-  const parsed = parseBookTitle(probe);
+  const { parsed, tagPosition } = readLineTitle(line.title);
   if (parsed.isBox) return null;
   const name = parsed.packaging?.lineName ?? (line.multi && line.coverRange ? "Omnibus" : null);
   if (name === null) return null;
-  const position = tagged?.[3] ?? line.label ?? null;
+  const position = tagPosition ?? line.label ?? null;
   return { name, position: position === null ? null : canonicalLabel(position) };
 }
+
+/**
+ * A packaged line title read by the shared parser (`packagingOf`): the tag
+ * beside the work's name ("One Piece [Omnibus]"), and a position after the
+ * tag. The bracketed Volume statement is coverage (lib/ann.ts
+ * splitReleaseTitle), never a tag.
+ */
+function readLineTitle(raw: string) {
+  const title = titleVolumeList(raw)?.rest ?? raw;
+  const tagged = /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(
+    title,
+  );
+  const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : title;
+  return { parsed: parseBookTitle(probe), tagPosition: tagged?.[3] };
+}
+
+/** A title's letters and digits only, lower-cased: how a line's work is matched to its Series. */
+const lettersOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
 /** Whether a line needs (another) page fetch, per its stored fetch state. */
 function needsFetch(page: PageState | undefined, now: number): boolean {
@@ -1435,10 +1452,13 @@ export const applyReleasePage = internalMutation({
     }
 
     // Packaging: an Edition Line member, never a Volume. A packaged line is
-    // placed below by the best signal it carries: the designator's stated
-    // range ("One Piece - [Omnibus] 33 - Wano (GN 97-99)" → volumes 97–99),
-    // else the line name's declared size (lib/coverage.ts: "[3-in-1
-    // Edition]" at GN 5 → 13–15), else as Unmapped Packaging. Box sets and
+    // placed below by the best signal it carries: its stated range, from the
+    // designator ("One Piece - [Omnibus] 33 - Wano (GN 97-99)" → volumes
+    // 97–99) or the title ("Rurouni Kenshin - VIZBIG Edition [13-15]"), else
+    // the line name's declared size (lib/coverage.ts: "[3-in-1 Edition]" or
+    // "[VIZBIG Edition]" at GN 5 → 13–15, VIZBIG only short of the Series'
+    // end), else as Unmapped Packaging. A line titled for another work, or
+    // a last book stating less than the Series holds, is held. Box sets and
     // variant covers still only link by ISBN.
     const packaging = line.editionLineHint || line.multi ? packagingOf(line) : null;
     if ((line.multi || line.editionLineHint) && packaging === null) {
@@ -1469,7 +1489,46 @@ export const applyReleasePage = internalMutation({
       .withIndex("by_series", (q) => q.eq("seriesId", series._id))
       .collect();
     if (packaging !== null) {
-      const range = line.coverRange ?? coverageFromLine(packaging.name, packaging.position);
+      // A line titled for another work numbers that work's Volumes, stated
+      // or not: ANN's Dragon Ball entry lists "Dragon Ball Z [VIZBIG
+      // Edition]" too. The work is the Series' or the entry's own title.
+      const lineWork = lettersOf(readLineTitle(line.title).parsed.seriesTitle);
+      const entryTitle = (mangaObs?.snapshot as AnnMangaSnapshot | undefined)?.title ?? "";
+      if (![series.title, entryTitle].some((title) => lettersOf(title) === lineWork)) {
+        return await hold(
+          "packaging",
+          `"${line.title}" is packaging titled for another work than Series ${series.publicId} ("${series.title}"): its Volume numbers are that work's — an Editor places it.`,
+          series._id,
+        );
+      }
+      // The end of the Series and of the line: the Series' highest Volume,
+      // and ANN's own count of the line's books ("GN 9 / 9").
+      const lastVolume = Math.max(
+        0,
+        ...volumes.filter((vol) => vol.status === "active").map((vol) => Number(vol.label) || 0),
+      );
+      const lastPosition = Number(/\/\s*(\d+)\s*$/.exec(page.volume ?? "")?.[1]) || undefined;
+      // The line's last book takes what is left of the Series: one whose
+      // stated range stops short of the Series' last Volume misstates it
+      // ("Rurouni Kenshin - VIZBIG Edition [25-27]", GN 9 / 9, collects
+      // 25–28). Never extended: an Editor maps it.
+      const stated = line.coverRange;
+      if (
+        stated !== undefined &&
+        Number(packaging.position) === lastPosition &&
+        Number(stated.to) < lastVolume
+      ) {
+        return await hold(
+          "packaging",
+          `"${line.title}" (${page.volume}) is its line's last book, but the Volumes it states end at ${stated.to}, before the Series' ${lastVolume} — an Editor maps it.`,
+          series._id,
+        );
+      }
+      // A size the line's name only implies stops short of both ends, where
+      // a book may hold more (lib/coverage.ts coverageFromLine).
+      const range =
+        stated ??
+        coverageFromLine(packaging.name, packaging.position, { lastVolume, lastPosition });
       const labels = range ? rangeLabels(range) : [];
       // Leaf boundary holds for packaging too: every collected Volume must
       // already exist under the Series (the backbone the mirror built).
