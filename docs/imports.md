@@ -388,10 +388,14 @@ with evidence, and the operator records it with
 `printings:recordDecidedInternal`, which checks only the invariants
 ([operations](operations.md#recording-decided-other-printings)).
 
-Once recorded, the printing's ISBN finds the Release on `/isbn/{isbn}`, on
-the matching ladder's ISBN rung and on ANN's page pass, so a later sync of
-that book, from any source, links to the Release. Linking marks the record
-as the printing's (`printingIsbn13` on the observation), and a marked
+Once recorded, the printing's ISBN, in any spelling (ISBN-10 or -13,
+hyphens), finds the Release on `/isbn/{isbn}`, on the matching ladder's
+ISBN rung and on ANN's page pass, so a sync of that book that reaches
+matching, from any source, links to the Release. When a source reads a
+book again is its own schedule, so another held record of the same
+printing is not promised a link by any particular run. Linking marks the
+record as the printing's (`printingIsbn13` on the observation) unless the
+ISBN is the Release's own ISBN-13 or ISBN-10, and a marked
 record changes nothing on the Release, even after its snapshot drops or
 changes the ISBN. `reconcileFields` skips it, Seven Seas and Kodansha
 store no art from it, and its withdrawal queues no cancellation review. No

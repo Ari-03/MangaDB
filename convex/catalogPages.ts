@@ -21,7 +21,7 @@ import { representativeDescription } from "./lib/descriptions";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
-import { otherPrintingsOf, printingReleases } from "./lib/releaseIsbns";
+import { otherPrintingsOf, primaryIsbnsOf, printingReleases } from "./lib/releaseIsbns";
 import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
@@ -158,8 +158,9 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
  * Description: the page shows one resolved description instead.
  */
 async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
+  const own = primaryIsbnsOf(release);
   const otherPrintings = (await otherPrintingsOf(ctx, release._id))
-    .filter((row) => row.isbn13 !== release.isbn13)
+    .filter((row) => !own.has(row.isbn13))
     .map((row) => ({ isbn13: row.isbn13, year: row.pubDate?.year ?? null }));
 
   const variants = (

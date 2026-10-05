@@ -4,8 +4,10 @@
 // that printing's and never writes the Release's own fields; hiding the
 // Release hides its printings; a merge carries them to a physical survivor
 // and Split brings them back unless another owner now holds the ISBN;
-// a printing's withdrawal queues no cancellation review; and a decided
-// printing is recorded only when the invariants hold.
+// a printing's withdrawal queues no cancellation review; every ISBN
+// spelling reads as its ISBN-13 and a Release's ISBN-10 counts as its own;
+// and a decided printing is recorded only when the invariants hold, once,
+// citing a usable URL, with a refusal writing nothing.
 
 import { describe, expect, it } from "vitest";
 
@@ -13,8 +15,15 @@ import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { matchRelease } from "./lib/matching";
-import { linkObservation, recordUnplaced } from "./lib/observations";
+import { holdOf, linkObservation, recordUnplaced } from "./lib/observations";
+import { recordPrinting } from "./lib/printings";
 import { reconcileFields } from "./lib/reconcile";
+import {
+  observedIsbn13,
+  primaryIsbnsOf,
+  printingIsbnOf,
+  printingReleases,
+} from "./lib/releaseIsbns";
 import { impactOf } from "./lib/sensitiveOps";
 import {
   insertCoverage,
@@ -437,6 +446,18 @@ describe("merge and Split", () => {
     expect(await lookup(t, OLDER)).toMatchObject({ edition: { publicId: 880 } });
   });
 
+  it("keeps a moved printing the survivor has only as its own ISBN-10, so its ISBN-13 still finds it", async () => {
+    const t = makeT();
+    const { releaseId, loserId } = await duplicates(t);
+    await t.run((ctx) => ctx.db.patch(releaseId, { isbn13: undefined, isbn10: OLDER_10 }));
+    await mergeAs(t, { type: "release", id: releaseId }, { type: "release", id: loserId });
+    expect(await printingsOf(t, releaseId)).toEqual([CURRENT, OLDER]);
+    // The Release lookup reads an ISBN-13 against `isbn13` only, so the row is the way there.
+    expect(await lookup(t, OLDER)).toMatchObject({ edition: { publicId: 880 } });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 880 });
+    expect(page?.releases[0]?.otherPrintings).toEqual([{ isbn13: CURRENT, year: null }]);
+  });
+
   it("counts them in the merge's impact preview", async () => {
     const t = makeT();
     const { loserId } = await duplicates(t);
@@ -722,10 +743,10 @@ describe("printings.recordDecidedInternal", () => {
       "The book's record is already linked to a record.",
     );
     expect(await refused(ids.badIsbn, ids.releaseId)).toBe(
-      "The record gives no valid ISBN-13 (9781591160343).",
+      "The record gives an invalid ISBN (9781591160343).",
     );
     expect(await refused(ids.ownIsbn, ids.releaseId)).toBe(
-      `ISBN ${CURRENT} is already an active Release's own.`,
+      `ISBN ${CURRENT} is the Release's own: a record of its own printing is linked to it, not recorded as another printing.`,
     );
     expect(await refused(ids.tenHeld, ids.releaseId)).toBe(
       "ISBN 9781591160496 is already an active Release's own.",
@@ -757,5 +778,246 @@ describe("printings.recordDecidedInternal", () => {
     });
     // The same book, once nothing stands in the way, records.
     expect(await decide(t, ids.fine, ids.releaseId)).toMatchObject({ status: "recorded" });
+  });
+
+  /** Everything a refused decision must leave as it was. */
+  const writes = (t: TestT, observationId: Id<"sourceObservations">) =>
+    t.run(async (ctx) => ({
+      rows: (await ctx.db.query("releaseIsbns").collect()).map((row) => row.isbn13),
+      proposals: (await ctx.db.query("proposals").collect()).length,
+      revisions: (await ctx.db.query("revisions").collect()).length,
+      observation: await ctx.db.get(observationId),
+      hold: await holdOf(ctx, observationId),
+    }));
+
+  it("refuses the Release's own ISBN, as its ISBN-13 or ISBN-10, before a retained row", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const ids = await t.run(async (ctx) => {
+      const { releaseId, seriesId, publisherId, volumeId } = await vagabond(ctx);
+      // A row from before a correction made CURRENT the Release's own.
+      await insertPrinting(ctx, releaseId, CURRENT);
+      const editionId = await insertEdition(ctx, { publicId: 882, publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
+      const tenOnly = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn10: "1591160499",
+      });
+      const openLibrary = async (id: string, isbns: object) => {
+        const observationId = await insertObservation(ctx, {
+          sourceKey: "openlibrary",
+          sourceRecordId: id,
+          snapshot: {
+            url: `https://openlibrary.org${id}`,
+            title: "Vagabond, Vol. 1",
+            publishers: ["VIZ Media"],
+            ...isbns,
+          },
+        });
+        await recordUnplaced(
+          ctx,
+          (await ctx.db.get(observationId))!,
+          { kind: "isbn", reason: "Volume 1 is taken.", seriesId },
+          Date.now(),
+        );
+        return observationId;
+      };
+      return {
+        releaseId,
+        tenOnly,
+        own13: await holdLine(ctx, seriesId, "7001", CURRENT),
+        own10: await openLibrary("/books/OL7M", { isbn10: "1-42151-911-9" }),
+        tenOnly13: await holdLine(ctx, seriesId, "7002", "9781591160496"),
+        tenOnly10: await openLibrary("/books/OL8M", { isbn10: "1 59116 049 9" }),
+      };
+    });
+    const own = (isbn13: string) =>
+      `ISBN ${isbn13} is the Release's own: a record of its own printing is linked to it, not recorded as another printing.`;
+    for (const [observationId, releaseId, isbn13] of [
+      [ids.own13, ids.releaseId, CURRENT],
+      [ids.own10, ids.releaseId, CURRENT],
+      [ids.tenOnly13, ids.tenOnly, "9781591160496"],
+      [ids.tenOnly10, ids.tenOnly, "9781591160496"],
+    ] as const) {
+      const before = await writes(t, observationId);
+      expect(before.hold).not.toBeNull();
+      expect(await decide(t, observationId, releaseId)).toEqual({
+        status: "refused",
+        reason: own(isbn13),
+      });
+      expect(await writes(t, observationId)).toEqual(before);
+    }
+  });
+
+  it("refuses a second decision for a recorded printing, writing and linking nothing", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId, first, second, hyphenated } = await t.run(async (ctx) => {
+      const { releaseId, seriesId } = await vagabond(ctx);
+      return {
+        releaseId,
+        first: await holdLine(ctx, seriesId, "5001", OLDER),
+        second: await holdLine(ctx, seriesId, "5002", OLDER),
+        hyphenated: await holdLine(ctx, seriesId, "5003", "978-1-59116-034-2"),
+      };
+    });
+    expect(await decide(t, first, releaseId)).toEqual({ status: "recorded", isbn13: OLDER });
+    const already = `ISBN ${OLDER} is already recorded as another printing of this Release. Nothing was recorded; this record stays held until a reviewed link links it.`;
+    for (const observationId of [second, hyphenated]) {
+      const before = await writes(t, observationId);
+      expect(before).toMatchObject({ rows: [OLDER], proposals: 1, revisions: 1 });
+      expect(before.observation?.recordRef).toBeUndefined();
+      expect(before.hold).not.toBeNull();
+      expect(await decide(t, observationId, releaseId)).toEqual({
+        status: "refused",
+        reason: already,
+      });
+      expect(await writes(t, observationId)).toEqual(before);
+    }
+
+    // The shared write refuses too, before writing or linking anything.
+    const before = await writes(t, second);
+    await t.run(async (ctx) => {
+      await expect(
+        recordPrinting(ctx, {
+          release: (await ctx.db.get(releaseId))!,
+          isbn13: OLDER,
+          reason: "A second record of the 2002 printing.",
+          sourceKey: "ann",
+          observationId: second,
+          citation: { sourceName: "ANN", url: "https://www.viz.com/vagabond" },
+          now: Date.now(),
+        }),
+      ).rejects.toMatchObject({ data: { code: "conflict" } });
+    });
+    expect(await writes(t, second)).toEqual(before);
+  });
+
+  const viz = "https://www.viz.com/vagabond";
+  const annUrl = "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=5001";
+  const malformed = (url: string) => `The evidence URL (${url}) is not an absolute http(s) URL.`;
+  const uncited = "The decision cites no evidence URL, and the record has no http(s) URL.";
+  it.each([
+    ["no evidence URL: the record's", undefined, annUrl, { url: annUrl }],
+    ["an empty one: the record's", "", annUrl, { url: annUrl }],
+    ["a blank one: the record's", " \t ", annUrl, { url: annUrl }],
+    ["a padded one, trimmed", `  ${viz}  `, annUrl, { url: viz }],
+    ["a bare host", "www.viz.com/vagabond", annUrl, { refusal: malformed("www.viz.com/vagabond") }],
+    ["a relative path", "/vagabond", annUrl, { refusal: malformed("/vagabond") }],
+    [
+      "another scheme",
+      "ftp://viz.com/vagabond",
+      annUrl,
+      { refusal: malformed("ftp://viz.com/vagabond") },
+    ],
+    ["a script URL", "javascript:alert(1)", annUrl, { refusal: malformed("javascript:alert(1)") }],
+    ["no host", "https://", annUrl, { refusal: malformed("https://") }],
+    ["no evidence URL and none on the record", undefined, undefined, { refusal: uncited }],
+    ["a blank one and a relative record URL", " ", "/releases.php?id=5001", { refusal: uncited }],
+  ] as const)("cites %s", async (_, evidenceUrl, recordUrl, expected) => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId, observationId } = await t.run(async (ctx) => {
+      const { releaseId, seriesId } = await vagabond(ctx);
+      const observationId = await holdLine(ctx, seriesId, "5001", OLDER);
+      const { url: _, ...snapshot } = annLine("5001", "Vagabond [1st Ed]", "1", OLDER, 2002);
+      await ctx.db.patch(observationId, {
+        snapshot: recordUrl !== undefined ? { ...snapshot, url: recordUrl } : snapshot,
+      });
+      return { releaseId, observationId };
+    });
+    const before = await writes(t, observationId);
+    const result = await t.mutation(internal.printings.recordDecidedInternal, {
+      observationId,
+      releaseId,
+      reason: "VIZ's 2002 first printing of Vagabond vol 1.",
+      ...(evidenceUrl !== undefined ? { evidenceUrl } : {}),
+    });
+    if ("refusal" in expected) {
+      expect(result).toEqual({ status: "refused", reason: expected.refusal });
+      expect(await writes(t, observationId)).toEqual(before);
+      return;
+    }
+    expect(result).toEqual({ status: "recorded", isbn13: OLDER });
+    const revisions = await t.run((ctx) => ctx.db.query("revisions").collect());
+    expect(revisions.map((revision) => revision.citation?.url)).toEqual([expected.url]);
+  });
+});
+
+describe("ISBN spellings", () => {
+  // 142159000X's check character is X; a 979 ISBN has no ISBN-10.
+  const X_13 = "9781421590004";
+  const NEW_979 = "9798888430019";
+
+  it("reads every helper input as its ISBN-13, and a bad check digit as none", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const { releaseId } = await vagabond(ctx);
+      for (const isbn13 of [OLDER, X_13, NEW_979]) await insertPrinting(ctx, releaseId, isbn13);
+      const spellings = [
+        [OLDER, [OLDER, "978-1-59116-034-2", "978 1 59116 034 2", OLDER_10, "1-59116-034-0"]],
+        [X_13, [X_13, "142159000X", "142159000x", "1-42159-000-x"]],
+        [NEW_979, [NEW_979, "979-8-88843-001-9"]],
+      ] as const;
+      for (const [isbn13, forms] of spellings) {
+        for (const form of forms) {
+          expect((await printingReleases(ctx, form)).map((r) => r?._id)).toEqual([releaseId]);
+          expect(await printingIsbnOf(ctx, releaseId, form)).toBe(isbn13);
+        }
+      }
+      for (const bad of ["9781591160343", "1591160341", "1-59116-034-1", "15911603400", "x", ""]) {
+        expect(await printingReleases(ctx, bad)).toEqual([]);
+        expect(await printingIsbnOf(ctx, releaseId, bad)).toBeUndefined();
+      }
+    });
+  });
+
+  it("reads a record's ISBN from its first valid statement, the ANN page first", () => {
+    expect(observedIsbn13({ isbn13: "978-1-59116-034-2" })).toBe(OLDER);
+    expect(observedIsbn13({ isbn10: "1-59116-034-0" })).toBe(OLDER);
+    expect(observedIsbn13({ isbn13: CURRENT, page: { isbn13: OLDER } })).toBe(OLDER);
+    expect(observedIsbn13({ isbn13: OLDER, page: { isbn13: "9781591160343" } })).toBe(OLDER);
+    expect(observedIsbn13({ isbn13: "9781591160343" })).toBeUndefined();
+    expect(observedIsbn13(null)).toBeUndefined();
+  });
+
+  it("reads both of a Release's own ISBN fields as its own", () => {
+    expect(primaryIsbnsOf({ isbn13: CURRENT, isbn10: "1-59116-034-0" })).toEqual(
+      new Set([CURRENT, OLDER]),
+    );
+    expect(primaryIsbnsOf({ isbn10: "142159000x" })).toEqual(new Set([X_13]));
+    expect(primaryIsbnsOf({ isbn13: "9781591160343" })).toEqual(new Set());
+  });
+
+  it("never marks or lists an ISBN-10-only Release's own ISBN as another printing", async () => {
+    const t = makeT();
+    const ids = await t.run(async (ctx) => {
+      const { releaseId } = await vagabond(ctx);
+      await ctx.db.patch(releaseId, { isbn13: undefined, isbn10: OLDER_10 });
+      // A row from before a correction made OLDER the Release's own, and a real printing.
+      await insertPrinting(ctx, releaseId, OLDER, { pubDate: year(2002) });
+      await insertPrinting(ctx, releaseId, "9781569318546", { pubDate: year(2003) });
+      const linked = async (id: string, snapshot: object) => {
+        const observationId = await insertObservation(ctx, {
+          sourceKey: "openlibrary",
+          sourceRecordId: id,
+          snapshot,
+        });
+        await linkObservation(ctx, observationId, { type: "release", id: releaseId });
+        return observationId;
+      };
+      return {
+        own: await linked("/books/OL1M", { isbn13: OLDER }),
+        printing: await linked("/books/OL2M", { isbn10: "1569318549" }),
+      };
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(ids.own))?.printingIsbn13).toBeUndefined();
+      expect((await ctx.db.get(ids.printing))?.printingIsbn13).toBe("9781569318546");
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 880 });
+    expect(page?.releases[0]?.otherPrintings).toEqual([{ isbn13: "9781569318546", year: 2003 }]);
   });
 });

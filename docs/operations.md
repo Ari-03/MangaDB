@@ -302,7 +302,10 @@ It is for decisions made one book at a time with their evidence, never
 for a bulk guess. It writes the `releaseIsbns` row, the record's link and
 `printingIsbn13` mark (which take it off the Held Books list), and an
 approved Proposal with an `otherPrinting` Revision on the Release that
-carries the reason and cites `evidenceUrl` (else the record's own URL).
+carries the reason and cites `evidenceUrl`. The URL is trimmed and must be
+an absolute `http(s)` URL; nothing fetches it. An `evidenceUrl` left out,
+empty or blank falls back to the record's own URL, which must pass the
+same test. A given `evidenceUrl` that fails it is refused, never replaced.
 The `observationId` is the held record's (`/mod/imports` shows the source
 record; its observation is the one the hold row names), and the
 `releaseId` the Release whose slot it is held for.
@@ -314,8 +317,9 @@ fails, so a script can log it and go on:
 - the reason is not empty;
 - the record is not withdrawn or already linked, and does not call the
   book digital (its format, Binding, ANN designator or title);
-- it gives a valid ISBN-13 that no active Release has as its own (ISBN-13
-  or ISBN-10) and no other Release has as a printing;
+- every ISBN the record states (an ANN line's page first, ISBN-13s before
+  ISBN-10s, any spelling) is valid and names the same book;
+- the citation URL above is usable;
 - the Release is active, unlocked and physical;
 - the book is held under one of the Release's Series, each followed
   through merges;
@@ -323,11 +327,25 @@ fails, so a script can log it and go on:
   merges. The name is ANN's distributor, the first name in Open Library's
   list that resolves, the PRH or Yen Press imprint, or Seven Seas for its
   own feed. A name that resolves to no publisher row is refused. Kodansha's
-  records name none, since its feed also lists Vertical's books.
+  records name none, since its feed also lists Vertical's books;
+- the ISBN is not the Release's own, as its ISBN-13 or its ISBN-10. A record
+  of the Release's own printing is linked, not recorded, and this check
+  comes first, even when a row from before a correction holds the ISBN
+  too;
+- no other active Release has the ISBN as its own (ISBN-13 or ISBN-10),
+  and no other Release has it as a printing;
+- the ISBN is not already a printing of this Release. A second record of
+  a recorded printing is refused rather than linked without an audit of
+  its own: it stays held, and linking it needs a reviewed link. No import
+  run is promised to link it, since each source rereads books on its own
+  schedule.
 
-A success answers `{"status": "recorded", "isbn13": "…"}`. Nothing takes
-one back yet ([known issues](known-issues.md#catalog-and-imports)), so
-record only what the evidence settles.
+A refusal writes nothing. A success answers
+`{"status": "recorded", "isbn13": "…"}`. Nothing takes one back yet
+([known issues](known-issues.md#catalog-and-imports)), so record only
+what the evidence settles. The shared write (`lib/printings.ts`
+`recordPrinting`) throws a `conflict` for an ISBN already recorded on any
+Release, before it writes or links anything.
 
 ## Account deletion
 
