@@ -1450,6 +1450,21 @@ describe("canonicalLabel / rangeLabels", () => {
 });
 
 describe("outOfScopeReason", () => {
+  it.each([
+    "Delicious in Dungeon Party Backs T-Shirt - M",
+    "Bungo Stray Dogs T Shirt - XL",
+    "The Summer Hikaru Died T\u2011Shirt - L",
+    "Delicious in Dungeon Acrylic Standee",
+  ])("excludes merchandise sold as %s", (title) => {
+    expect(outOfScopeReason(title)).toBe("merchandise");
+  });
+
+  it("keeps the manga and its illustrated world guide in scope", () => {
+    expect(outOfScopeReason("Delicious in Dungeon, Vol. 14")).toBeNull();
+    expect(outOfScopeReason("Delicious in Dungeon World Guide: The Adventurer's Bible")).toBeNull();
+    expect(outOfScopeReason("My Dress-Up Darling, Vol. 1")).toBeNull();
+  });
+
   it("classifies the scope audit's clear-cut classes", () => {
     expect(outOfScopeReason("The Seven Deadly Sins (Novel)")).toBe("novel");
     expect(outOfScopeReason("Cowboy Bebop - Playing Cards")).toBe("merchandise");
