@@ -1074,6 +1074,19 @@ describe("storedHoldKind", () => {
       ],
       ["Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.", "packaging"],
       ["A store-exclusive or variant cover: never a Release of its own.", null],
+      ["Packaging its title marks a novel: out of manga scope.", null],
+      [
+        '"Citrus+ [VIZBIG Edition]" is packaging titled for another work than Series 3 ("Citrus"), or a spelling of it this check cannot confirm: its Volume numbers may be that work\'s — an Editor places it.',
+        "packaging",
+      ],
+      [
+        '"Alpha Deluxe [VIZBIG Edition]" is packaging whose title names more than one Edition Line, so its work is unclear — an Editor places it.',
+        "packaging",
+      ],
+      [
+        `"Rurouni Kenshin - VIZBIG Edition [25-27]" (GN 9 / 9) is packaging, its line's last book, but the Volumes it states end at 27, before the Series' 28 — an Editor maps it.`,
+        "packaging",
+      ],
       ["The manga entry has no linked active Series.", "series"],
       ["The Series is locked.", "series"],
       ["The release page names no distributor.", "other"],

@@ -767,7 +767,7 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id
  */
 export function storedHoldKind(reason: string): HoldKind | null {
   if (
-    /^ANN lists no ISBN|^A store-exclusive or variant cover|" is a prose imprint:|" publishes in another language:/.test(
+    /^ANN lists no ISBN|^A store-exclusive or variant cover|^Packaging its title marks a novel:|" is a prose imprint:|" publishes in another language:/.test(
       reason,
     )
   ) {

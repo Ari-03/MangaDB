@@ -297,11 +297,13 @@ export function coverageFromText(text: string | undefined): CoverRange | null {
 }
 
 /**
- * Volumes per book when the line NAME guarantees it, per the publishers'
- * own descriptions: every book of these lines collects the same count. Names whose size varies by series — "Deluxe" (1–3 across
- * publishers), "Collector's Edition" (1.3–3), "Perfect Edition", plain
- * "Omnibus" (2 or 3), kanzenban recuts like "Fullmetal Edition" — return
- * null and wait for a blurb or a Moderator.
+ * Volumes per book when the line NAME implies it, per the publishers' own
+ * descriptions: every book of these lines collects that count except, at
+ * times, a line's last books, which may hold more or fewer
+ * (`coverageFromLine`'s `end`). Names whose size varies by series —
+ * "Deluxe" (1–3 across publishers), "Collector's Edition" (1.3–3),
+ * "Perfect Edition", plain "Omnibus" (2 or 3), kanzenban recuts like
+ * "Fullmetal Edition" — return null and wait for a blurb or a Moderator.
  */
 const FIXED_LINE_SIZES: Array<[RegExp, number]> = [
   [/\bvizbig\b/i, 3], // VIZ: "collects the material from three standard volumes"
@@ -330,16 +332,20 @@ export function declaredLineSize(lineName: string | null): number | null {
  * "3-in-1 Edition" at position 5 → volumes 13–15; null without a declared
  * size or an integer position.
  *
- * A size the name only implies (FIXED_LINE_SIZES) can break where a finished
- * Series ends: VIZ put Inuyasha's 56 Volumes in 18 VIZBIG books, 17 and 18
- * holding four each (49–52, 53–56), Vagabond's 37 in 12 and Dragon Ball's
- * 16 in 5, the last holding four. The Volumes left over are fewer than a
- * book's size, so they reach back at most size − 1 books. Given where the
- * end is, such a size places a book only when that many books follow it:
+ * A size the name only implies (FIXED_LINE_SIZES) can break near a line's
+ * end, where the last books may hold more or fewer: VIZ put Inuyasha's 56
+ * Volumes in 18 VIZBIG books, 17 and 18 holding four each (49–52, 53–56),
+ * Vagabond's 37 in 12 and Dragon Ball's 16 in 5, the last holding four.
+ * The odd Volumes reach back at most size − 1 books, so given where the end
+ * is, such a size places a book only when size − 1 books follow it:
  * `lastVolume`, the Series' highest known Volume, must leave that many
  * whole books of Volumes after it, and `lastPosition`, the source's own
- * count of the line's books, that many books. An "n-in-1" name states its
- * own size: a shorter last book asks for a Volume the Series lacks instead.
+ * count of the line's books, that many books. Nothing here knows whether
+ * the Series is finished: a backbone still growing, or a line abandoned
+ * before the Series' end, only leaves more books unsized. An "n-in-1" name
+ * states its own size and is never cut: a shorter last book asks for a
+ * Volume the Series lacks instead. Callers that pass no `end` (every
+ * importer but ANN) get the plain size.
  */
 export function coverageFromLine(
   lineName: string | null,

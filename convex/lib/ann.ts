@@ -193,14 +193,136 @@ export function parseAnnDate(text: string): DateParts | undefined {
 // the shared title parser's vocabulary (lib/bookTitle.ts EDITION_LINE_NAME:
 // "Berserk Deluxe Edition (GN 1)", "Vagabond [VIZBIG Edition] (GN 1)",
 // "Death Note - Library Edition (GN 1)", "Summer Ghost: The Complete Manga
-// Collection (GN)"), means packaging only when the entry's name does not
-// itself contain it. A reissue or binding tag ("[2nd Edition]",
-// "[Hardcover]") is no line: such a line stays a single Volume. So is an
-// anniversary reprint, which ANN numbers by Volume ("NANA - [25th
-// Anniversary Edition] (GN 2)" is Volume 2 again), though the shared
-// vocabulary names it a line.
+// Collection (GN)"), means packaging unless the entry's own name accounts
+// for it: "Makunouchi Deluxe (GN 2)" is a Volume, "Makunouchi Deluxe
+// [VIZBIG Edition] (GN 1)" a VIZBIG book (`readAnnLineTitle`). A reissue or
+// binding tag ("[2nd Edition]", "[Hardcover]") is no line: such a line
+// stays a single Volume. So is an anniversary reprint, which ANN numbers by
+// Volume ("NANA - [25th Anniversary Edition] (GN 2)" is Volume 2 again),
+// though the shared vocabulary names it a line.
 const DESIGNATOR_PACKAGING = /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s|hardcover)\b/i;
 const ANNIVERSARY = /\b(?:\d+(?:st|nd|rd|th)\s+)?anniversary\s+edition\b/gi;
+
+const LINE_NAMES = new RegExp(EDITION_LINE_NAME.source, "gi");
+
+/** Where a text names an Edition Line, anniversary reprints aside, with each name's spelling key. */
+function lineNameHits(text: string): Array<{ start: number; end: number; key: string }> {
+  const blanked = text.replace(ANNIVERSARY, (phrase) => " ".repeat(phrase.length));
+  return [...blanked.matchAll(LINE_NAMES)].map((m) => ({
+    start: m.index,
+    end: m.index + m[0].length,
+    key: m[0].toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " "),
+  }));
+}
+
+/** Whether a text names an Edition Line in the shared vocabulary, anniversary reprints aside. */
+export function namesEditionLine(text: string): boolean {
+  return lineNameHits(text).length > 0;
+}
+
+/**
+ * The line names a title adds to a work's own name: each of the name's
+ * line words ("Makunouchi Deluxe", "The Omnibus Club") accounts for one
+ * like occurrence in the title, leftmost first. Several names are
+ * spellings of one work, so the one that accounts for the most counts.
+ */
+function addedLineNames(title: string, names: readonly string[]) {
+  const hits = lineNameHits(title);
+  let best = hits;
+  for (const name of names) {
+    const own = lineNameHits(name).map((hit) => hit.key);
+    const added = hits.filter((hit) => {
+      const i = own.findIndex((key) => key.includes(hit.key));
+      if (i === -1) return true;
+      own.splice(i, 1);
+      return false;
+    });
+    if (added.length < best.length) best = added;
+  }
+  return best;
+}
+
+/** What may follow a line's name: a position, a subtitle after a separator, bracket tags. */
+const LINE_TAIL =
+  /^\s*(?:(?:[Vv]ols?\.?|[Vv]olumes?|[Bb]ook|#)\s*)?(?:\d+(?:\.\d+)?|[IVXLC]+\b)?\s*(?:[-–—:,]\s*\S.*|(?:[([][^()[\]]*[)\]]\s*)*)$/;
+
+/** The open bracket enclosing `index`, or -1. */
+function enclosingBracket(text: string, index: number): number {
+  const open: number[] = [];
+  for (let i = 0; i < index; i++) {
+    if (text[i] === "[" || text[i] === "(") open.push(i);
+    else if (text[i] === "]" || text[i] === ")") open.pop();
+  }
+  return open.at(-1) ?? -1;
+}
+
+/**
+ * What an ANN release line's title says about its work and its Edition
+ * Line, read without the general title parser, whose job is splitting
+ * book numbers off: it reads "Kingdom Hearts II [VIZBIG Edition]" as
+ * Kingdom Hearts, and "Alpha 2 [VIZBIG Edition]" as Alpha.
+ *
+ * - `single`: the title names no Edition Line beyond the work's own name
+ *   (`names`, its known spellings, own "Makunouchi Deluxe"). The whole
+ *   title is the work, less the Volume list ending it when the line is
+ *   `packaged` (its stored `editionLineHint`: the list is then coverage).
+ *   A bracket tag only the general parser calls packaging ("[Limited
+ *   Edition]") stays in the work.
+ * - `line`: it names exactly one more Edition Line. The work is the text
+ *   before that line's name (or before the bracket holding it), every
+ *   number and mark kept; the name, its position, a subtitle after a
+ *   separator, trailing bracket tags and the stated Volume list go
+ *   ("One Piece - [Omnibus] 33 - Wano" is One Piece; "Rurouni Kenshin -
+ *   VIZBIG Edition [13-15]" is Rurouni Kenshin). `lineName` is the name as
+ *   written; `tail` the title from the line's name on, for the parser.
+ * - `ambiguous`: it names two lines beyond the work's own name
+ *   ("Makunouchi Deluxe [VIZBIG Edition]" with no name to own "Deluxe"),
+ *   no work before its line, an unclosed bracket around it, or more words
+ *   after it than a position and subtitle explain ("Alpha Omnibus Club").
+ *   Nothing may be placed by it.
+ *
+ * A novel marker is not this reading's to judge: `isNovelTitle` reads the
+ * whole title.
+ */
+export type AnnLineTitle =
+  | { kind: "single"; work: string }
+  | { kind: "line"; work: string; lineName: string; tail: string }
+  | { kind: "ambiguous"; reason: string };
+
+export function readAnnLineTitle(
+  title: string,
+  options: { names?: readonly string[]; packaged?: boolean } = {},
+): AnnLineTitle {
+  const text = titleVolumeList(title)?.rest ?? title;
+  const added = addedLineNames(text, options.names ?? []);
+  const [hit] = added;
+  if (hit === undefined) return { kind: "single", work: options.packaged ? text : title };
+  if (added.length > 1) {
+    return { kind: "ambiguous", reason: "names more than one Edition Line" };
+  }
+  let start = hit.start;
+  let end = hit.end;
+  const open = enclosingBracket(text, hit.start);
+  if (open !== -1) {
+    const close = text.indexOf(text[open] === "[" ? "]" : ")", hit.end);
+    if (close === -1)
+      return { kind: "ambiguous", reason: "leaves its Edition Line's bracket open" };
+    start = open;
+    end = close + 1;
+  }
+  const work = text
+    .slice(0, start)
+    .replace(/(?:\s*[,:;]|\s+[-–—])+\s*$/, "")
+    .trim();
+  if (work === "") return { kind: "ambiguous", reason: "names no work before its Edition Line" };
+  if (!LINE_TAIL.test(text.slice(end))) {
+    return {
+      kind: "ambiguous",
+      reason: "goes on after its Edition Line in words no position explains",
+    };
+  }
+  return { kind: "line", work, lineName: text.slice(hit.start, hit.end), tail: text.slice(start) };
+}
 
 /** Bracket text that only speaks of Volumes: numbers, "Vol." and "#" markers, list joins. */
 const VOLUME_STATEMENT = /^(?=.*\d)(?:[\d\s.,&+#/\-–—]|\b(?:and|vols?|volumes?)\b)+$/i;
@@ -287,10 +409,9 @@ export function splitReleaseTitle(
     .sort((a, b) => a.index - b.index)[0];
   if (marker === undefined) return null;
   if (/\bch(?:apter)?\.?\s*\d/i.test(designator)) return null;
-  const lineName = EDITION_LINE_NAME.exec(title.replace(ANNIVERSARY, ""))?.[0];
   const editionLineHint =
     DESIGNATOR_PACKAGING.test(designator) ||
-    (lineName !== undefined && !entryName.toLowerCase().includes(lineName.toLowerCase()));
+    readAnnLineTitle(title, { names: [entryName] }).kind !== "single";
   const { label, multi, ...designated } = readCoverage(
     designator.slice(marker.index + marker[0].length),
   );

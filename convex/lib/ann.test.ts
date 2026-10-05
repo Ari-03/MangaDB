@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  readAnnLineTitle,
   cleanAnnDescription,
   parseAnnDate,
   parseApiResponse,
@@ -530,6 +531,126 @@ describe("release lines — ISBNs, chapters, packaging in the title", () => {
       editionLineHint: false,
     });
     expect(splitReleaseTitle("Alpha [1-3] (GN 1)", "Alpha")?.coverRange).toBeUndefined();
+  });
+
+  // A line word in the entry's own name accounts for one like word in the
+  // title, never for a second line the title adds.
+  it("flags a line added to a name carrying a line word, and only that", () => {
+    for (const [title, entry] of [
+      ["Makunouchi Deluxe [VIZBIG Edition]", "Makunouchi Deluxe"],
+      ["The Omnibus Club [Colossal Edition]", "The Omnibus Club"],
+      ["The Omnibus Club - [Omnibus]", "The Omnibus Club"],
+      ["Makunouchi Deluxe Deluxe Edition", "Makunouchi Deluxe"],
+    ]) {
+      expect(splitReleaseTitle(`${title} (GN 1)`, entry), title).toMatchObject({
+        label: "1",
+        multi: false,
+        editionLineHint: true,
+      });
+    }
+    for (const [title, entry] of [
+      ["Makunouchi Deluxe", "Makunouchi Deluxe"],
+      ["The Omnibus Club", "The Omnibus Club"],
+      ["MAKUNOUCHI DELUXE", "Makunouchi Deluxe"],
+      // A shortened name is still the entry's own.
+      ["Alpha Deluxe", "Alpha Deluxe Edition"],
+    ]) {
+      expect(splitReleaseTitle(`${title} (GN 2)`, entry), title).toMatchObject({
+        label: "2",
+        editionLineHint: false,
+      });
+    }
+  });
+});
+
+describe("readAnnLineTitle — a packaged line's work", () => {
+  it("keeps every number and mark of the work before the line's name", () => {
+    for (const [title, work, lineName] of [
+      ["Kingdom Hearts II [VIZBIG Edition]", "Kingdom Hearts II", "VIZBIG Edition"],
+      ["Alpha 2 [VIZBIG Edition]", "Alpha 2", "VIZBIG Edition"],
+      ["Citrus+ [VIZBIG Edition]", "Citrus+", "VIZBIG Edition"],
+      ["Bastard!! [VIZBIG Edition]", "Bastard!!", "VIZBIG Edition"],
+      ["E’S [VIZBIG Edition]", "E’S", "VIZBIG Edition"],
+      ["Alpha (Manga) [VIZBIG Edition]", "Alpha (Manga)", "VIZBIG Edition"],
+      ["Alpha (Light Novel) [VIZBIG Edition]", "Alpha (Light Novel)", "VIZBIG Edition"],
+      ["Naruto [3-in-1 Edition]", "Naruto", "3-in-1 Edition"],
+      ["Fullmetal Alchemist (3-in-1 Edition)", "Fullmetal Alchemist", "3-in-1 Edition"],
+      ["Death Note - Library Edition", "Death Note", "Library Edition"],
+      ["Berserk Deluxe Edition", "Berserk", "Deluxe Edition"],
+      ["Fairy Tail [Master's Edition]", "Fairy Tail", "Master's Edition"],
+      [
+        "Summer Ghost: The Complete Manga Collection",
+        "Summer Ghost",
+        "The Complete Manga Collection",
+      ],
+      // The line's position, subtitle, tags and stated Volumes go too.
+      ["One Piece - [Omnibus] 33 - Wano", "One Piece", "Omnibus"],
+      ["Rurouni Kenshin - VIZBIG Edition [13-15]", "Rurouni Kenshin", "VIZBIG Edition"],
+      ["Rurouni Kenshin - VIZBIG Edition [1, 3]", "Rurouni Kenshin", "VIZBIG Edition"],
+      ["Vagabond - Definitive Edition [Hardcover]", "Vagabond", "Definitive Edition"],
+      ["Dragon Ball [VIZBIG Edition] [2nd Edition]", "Dragon Ball", "VIZBIG Edition"],
+      ["Sailor Moon Eternal Edition 2", "Sailor Moon", "Eternal Edition"],
+    ] as const) {
+      expect(readAnnLineTitle(title), title).toMatchObject({ kind: "line", work, lineName });
+    }
+  });
+
+  it("leaves the work's own line words in the work", () => {
+    expect(
+      readAnnLineTitle("Makunouchi Deluxe [VIZBIG Edition]", { names: ["Makunouchi Deluxe"] }),
+    ).toEqual({
+      kind: "line",
+      work: "Makunouchi Deluxe",
+      lineName: "VIZBIG Edition",
+      tail: "[VIZBIG Edition]",
+    });
+    expect(
+      readAnnLineTitle("The Omnibus Club [Colossal Edition]", { names: ["The Omnibus Club"] }),
+    ).toMatchObject({ kind: "line", work: "The Omnibus Club", lineName: "Colossal Edition" });
+    // Any of the work's spellings may account for its words.
+    expect(
+      readAnnLineTitle("Makunouchi Deluxe [VIZBIG Edition]", {
+        names: ["Makunouchi", "Makunouchi Deluxe"],
+      }),
+    ).toMatchObject({ kind: "line", work: "Makunouchi Deluxe" });
+  });
+
+  it("reads a title naming no line beyond the work's own as wholly the work", () => {
+    expect(readAnnLineTitle("Makunouchi Deluxe", { names: ["Makunouchi Deluxe"] })).toEqual({
+      kind: "single",
+      work: "Makunouchi Deluxe",
+    });
+    expect(readAnnLineTitle("One Piece")).toEqual({ kind: "single", work: "One Piece" });
+    // Neither an anniversary reprint nor a reissue or binding tag names a line.
+    for (const title of [
+      "NANA - [25th Anniversary Edition]",
+      "Kamisama Kiss - [Limited Edition]",
+      "Oh My Goddess! [2nd Ed]",
+    ]) {
+      expect(readAnnLineTitle(title), title).toEqual({ kind: "single", work: title });
+    }
+    // A stated Volume list is coverage only on a packaged line.
+    expect(readAnnLineTitle("Alpha [1-3]")).toEqual({ kind: "single", work: "Alpha [1-3]" });
+    expect(readAnnLineTitle("Alpha [1-3]", { packaged: true })).toEqual({
+      kind: "single",
+      work: "Alpha",
+    });
+  });
+
+  it("names no work when the title leaves it unclear", () => {
+    for (const [title, names] of [
+      // Two lines, and no name to own either word.
+      ["Makunouchi Deluxe [VIZBIG Edition]", []],
+      ["Makunouchi Deluxe [VIZBIG Edition]", ["Makunouchi"]],
+      ["Alpha Omnibus [VIZBIG Edition]", ["Alpha"]],
+      // No work before the line, an open bracket, words no position explains.
+      ["VIZBIG Edition", []],
+      ["[VIZBIG Edition] Vagabond", ["Vagabond"]],
+      ["Alpha [VIZBIG Edition", ["Alpha"]],
+      ["Alpha Omnibus Club", ["Alpha"]],
+    ] as const) {
+      expect(readAnnLineTitle(title, { names }), title).toMatchObject({ kind: "ambiguous" });
+    }
   });
 });
 

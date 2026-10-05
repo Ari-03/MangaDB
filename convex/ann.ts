@@ -66,9 +66,11 @@ import {
   annMangaValidator,
   annReleasePageValidator,
   cleanAnnDescription,
+  namesEditionLine,
   parseApiResponse,
   parseReleasePage,
   parseReport,
+  readAnnLineTitle,
   releaseUrl,
   titleVolumeList,
   toSnapshot,
@@ -88,7 +90,7 @@ import {
   stampHandOff,
   stopAtGate,
 } from "./lib/importRuns";
-import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
+import { canonicalLabel, isNovelTitle, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import {
@@ -96,6 +98,7 @@ import {
   isbnHolders,
   isWholeSingleVolume,
   labelsEqual,
+  sameWorkTitle,
   survivorOf,
   workMatch,
   type WorkEvidence,
@@ -961,7 +964,8 @@ const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
 
 /**
  * Why a release line is out of scope, from its title and stored page, or
- * null: a store-exclusive or variant cover, a prose imprint, or a
+ * null: a store-exclusive or variant cover, packaging its title marks a
+ * novel ("Alpha (Light Novel) [VIZBIG Edition]"), a prose imprint, or a
  * foreign-language distributor. No one places such a line, so it is noted
  * and never a Held Book (applyReleasePage; imports.backfillHolds reads the
  * stored line the same way).
@@ -969,6 +973,8 @@ const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
 export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
   if (VARIANT_LINE.test(line.title))
     return "A store-exclusive or variant cover: never a Release of its own.";
+  if ((line.multi || line.editionLineHint) && isNovelTitle(line.title))
+    return "Packaging its title marks a novel: out of manga scope.";
   const distributor = line.page?.distributor;
   if (distributor === undefined) return null;
   if (NOVEL_DISTRIBUTORS.test(distributor))
@@ -987,20 +993,37 @@ export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
  * name, its covered Volumes in brackets, the position in the designator).
  * All yield the line name and position; a bare "(GN 1-3)" range with no tag
  * is an Omnibus. Box sets are bundles, never lines: null.
+ *
+ * `names`, the work's known titles, keep a line word of the work's own
+ * name from naming its line: "Makunouchi Deluxe [VIZBIG Edition]" is a
+ * VIZBIG book, and "Makunouchi Deluxe (GN 1-3)" an Omnibus. The line is
+ * read from the title's own line name on (lib/ann.ts readAnnLineTitle),
+ * the work's name standing aside.
  */
-export function packagingOf(line: {
-  title: string;
-  label?: string;
-  multi: boolean;
-  coverRange?: { from: string; to: string };
-}): { name: string; position: string | null } | null {
-  const { parsed, tagPosition } = readLineTitle(line.title);
+export function packagingOf(
+  line: {
+    title: string;
+    label?: string;
+    multi: boolean;
+    coverRange?: { from: string; to: string };
+  },
+  names: readonly string[] = [],
+): { name: string; position: string | null } | null {
+  const read = readAnnLineTitle(line.title, { names });
+  const { parsed, tagPosition } = readLineTitle(
+    read.kind === "line" ? `${WORK_STAND_IN} ${read.tail}` : line.title,
+  );
   if (parsed.isBox) return null;
-  const name = parsed.packaging?.lineName ?? (line.multi && line.coverRange ? "Omnibus" : null);
+  const parsedName = parsed.packaging?.lineName ?? null;
+  const ownWord = read.kind === "single" && parsedName !== null && namesEditionLine(parsedName);
+  const name = (ownWord ? null : parsedName) ?? (line.multi && line.coverRange ? "Omnibus" : null);
   if (name === null) return null;
   const position = tagPosition ?? line.label ?? null;
   return { name, position: position === null ? null : canonicalLabel(position) };
 }
+
+/** A plain word standing in for a work's name, so the parser reads only the line after it. */
+const WORK_STAND_IN = "Work";
 
 /**
  * A packaged line title read by the shared parser (`packagingOf`): the tag
@@ -1016,9 +1039,6 @@ function readLineTitle(raw: string) {
   const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : title;
   return { parsed: parseBookTitle(probe), tagPosition: tagged?.[3] };
 }
-
-/** A title's letters and digits only, lower-cased: how a line's work is matched to its Series. */
-const lettersOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
 /** Whether a line needs (another) page fetch, per its stored fetch state. */
 function needsFetch(page: PageState | undefined, now: number): boolean {
@@ -1456,11 +1476,15 @@ export const applyReleasePage = internalMutation({
     // designator ("One Piece - [Omnibus] 33 - Wano (GN 97-99)" → volumes
     // 97–99) or the title ("Rurouni Kenshin - VIZBIG Edition [13-15]"), else
     // the line name's declared size (lib/coverage.ts: "[3-in-1 Edition]" or
-    // "[VIZBIG Edition]" at GN 5 → 13–15, VIZBIG only short of the Series'
-    // end), else as Unmapped Packaging. A line titled for another work, or
-    // a last book stating less than the Series holds, is held. Box sets and
-    // variant covers still only link by ISBN.
-    const packaging = line.editionLineHint || line.multi ? packagingOf(line) : null;
+    // "[VIZBIG Edition]" at GN 5 → 13–15, an implied size like VIZBIG's only
+    // short of the line's end), else as Unmapped Packaging. A line titled
+    // for another work or for no clear one, or a last book stating less
+    // than the Series holds, is held. Box sets and variant covers still only
+    // link by ISBN. The work's known titles keep its own name's line words
+    // ("Makunouchi Deluxe") from naming its line.
+    const entryTitle = (mangaObs?.snapshot as AnnMangaSnapshot | undefined)?.title ?? "";
+    const workNames = series ? [series.title, entryTitle] : [entryTitle];
+    const packaging = line.editionLineHint || line.multi ? packagingOf(line, workNames) : null;
     if ((line.multi || line.editionLineHint) && packaging === null) {
       return await hold(
         "packaging",
@@ -1491,13 +1515,27 @@ export const applyReleasePage = internalMutation({
     if (packaging !== null) {
       // A line titled for another work numbers that work's Volumes, stated
       // or not: ANN's Dragon Ball entry lists "Dragon Ball Z [VIZBIG
-      // Edition]" too. The work is the Series' or the entry's own title.
-      const lineWork = lettersOf(readLineTitle(line.title).parsed.seriesTitle);
-      const entryTitle = (mangaObs?.snapshot as AnnMangaSnapshot | undefined)?.title ?? "";
-      if (![series.title, entryTitle].some((title) => lettersOf(title) === lineWork)) {
+      // Edition]" too. The work is the title before its line's name, every
+      // number and mark kept (lib/ann.ts readAnnLineTitle), and it must be
+      // the Series' own title (lib/matching.ts sameWorkTitle): Citrus+ is
+      // not Citrus, Kingdom Hearts II not Kingdom Hearts. The entry's title
+      // proves nothing more: its Series link may be an old one, and where
+      // it is the Series' title by the same rule it adds no spelling.
+      const read = readAnnLineTitle(line.title, {
+        names: workNames,
+        packaged: line.editionLineHint,
+      });
+      if (read.kind === "ambiguous") {
         return await hold(
           "packaging",
-          `"${line.title}" is packaging titled for another work than Series ${series.publicId} ("${series.title}"): its Volume numbers are that work's — an Editor places it.`,
+          `"${line.title}" is packaging whose title ${read.reason}, so its work is unclear — an Editor places it.`,
+          series._id,
+        );
+      }
+      if (!sameWorkTitle(read.work, series.title)) {
+        return await hold(
+          "packaging",
+          `"${line.title}" is packaging titled for another work than Series ${series.publicId} ("${series.title}"), or a spelling of it this check cannot confirm: its Volume numbers may be that work's — an Editor places it.`,
           series._id,
         );
       }
@@ -1520,7 +1558,7 @@ export const applyReleasePage = internalMutation({
       ) {
         return await hold(
           "packaging",
-          `"${line.title}" (${page.volume}) is its line's last book, but the Volumes it states end at ${stated.to}, before the Series' ${lastVolume} — an Editor maps it.`,
+          `"${line.title}" (${page.volume}) is packaging, its line's last book, but the Volumes it states end at ${stated.to}, before the Series' ${lastVolume} — an Editor maps it.`,
           series._id,
         );
       }

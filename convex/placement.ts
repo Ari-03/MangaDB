@@ -31,7 +31,13 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { lineOutOfScope, packagingOf, pageDescriptionText, type AnnReleaseSnapshot } from "./ann";
+import {
+  lineOutOfScope,
+  packagingOf,
+  pageDescriptionText,
+  SOURCE_KEY as ANN,
+  type AnnReleaseSnapshot,
+} from "./ann";
 import { PUBLISHER as KODANSHA } from "./kodansha";
 import { outOfScopeElsewhere, REBINDER } from "./openLibrary";
 import { PUBLISHER as SEVEN_SEAS } from "./sevenSeas";
@@ -40,7 +46,8 @@ import { resolveBaseSeries } from "./lib/catalogTitle";
 import type { DateParts } from "./lib/dates";
 import { fail } from "./lib/errors";
 import type { KodanshaSnapshot } from "./lib/kodansha";
-import { holdOf, type HoldKind } from "./lib/observations";
+import type { AnnMangaSnapshot } from "./lib/ann";
+import { getObservation, holdOf, type HoldKind } from "./lib/observations";
 import type { OlEditionSnapshot } from "./lib/openLibrary";
 import {
   creationOps,
@@ -163,6 +170,12 @@ async function bookFacts(
       const read = titleReading(snapshot.title, {
         multi: snapshot.multi || snapshot.editionLineHint,
       });
+      // The entry's title keeps its own name's line words ("Makunouchi
+      // Deluxe") from naming the book's line.
+      const entry = read.packaged
+        ? await getObservation(ctx, ANN, `manga:${snapshot.mangaId}`)
+        : null;
+      const entryTitle = (entry?.snapshot as AnnMangaSnapshot | undefined)?.title;
       return {
         title: snapshot.title,
         url: snapshot.url,
@@ -170,7 +183,7 @@ async function bookFacts(
         isbn10: page?.isbn10,
         label: read.packaged ? null : (snapshot.label ?? null),
         ...read,
-        line: read.packaged ? packagingOf(snapshot) : null,
+        line: read.packaged ? packagingOf(snapshot, entryTitle ? [entryTitle] : []) : null,
         statedRange: snapshot.coverRange ?? read.statedRange,
         publisherNames: page?.distributor !== undefined ? [page.distributor] : [],
         format: snapshot.format,

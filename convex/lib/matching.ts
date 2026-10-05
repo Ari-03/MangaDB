@@ -84,6 +84,40 @@ function exactTitleAmong(title: string, series: Doc<"series">[]): Doc<"series">[
 }
 
 /**
+ * A work-name key that keeps every mark a title's identity can rest on:
+ * "+", "!", apostrophes, digits, dashes, a leading "The" and bracketed
+ * text all stay. It folds only spelling noise: entities, the apostrophe
+ * glyphs (mapped before NFKD, which would turn "´" into a space and a
+ * combining mark), accents, full-width forms, case, "&" and "and", the
+ * hyphen, en and em dash glyphs as "-", and runs of whitespace. Spacing
+ * around a dash still counts: "Alpha-Beta" is not "Alpha - Beta".
+ */
+function workKey(title: string): string {
+  return decodeEntities(title)
+    .replace(/[’‘`´ʼ]/g, "'")
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[‐‑–—]/g, "-")
+    .replace(/&/g, " and ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Whether two titles name the same work, strictly: Citrus is not Citrus+,
+ * E'S is not ES, Bastard is not Bastard!!, Kingdom Hearts is not Kingdom
+ * Hearts II, and a novel is never its manga. Only `workKey`'s spelling
+ * noise differs between titles it calls equal; an empty title names no
+ * work. The guard for creating records under a selected Series (ann.ts
+ * packaging); search and the matching ladder keep their looser keys.
+ */
+export function sameWorkTitle(a: string, b: string): boolean {
+  const key = workKey(a);
+  return key !== "" && key === workKey(b) && isNovelTitle(a) === isNovelTitle(b);
+}
+
+/**
  * Loose title-similarity sanity check for the ISBN rung (spec §6): at least
  * half of the shorter title's tokens must appear in the other, on the same
  * folding as normalizeTitle. A novel is never similar to a manga.

@@ -518,6 +518,48 @@ describe("a book read with today's parser", () => {
       coverage: { kind: "pending" },
     });
   });
+
+  // The entry's own name accounts for its line word: the book is a VIZBIG
+  // book, never a "Deluxe" one, on the Draft an Editor prepares.
+  it("names an ANN book's line from the title's own line, past a line word in the entry's name", async () => {
+    const t = makeT();
+    const { vagabondId } = await held(t);
+    const observationId = await t.run(async (ctx) => {
+      await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "manga:89",
+        snapshot: { title: "Makunouchi Deluxe" },
+      });
+      const id = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:6005",
+        snapshot: {
+          kind: "annRelease",
+          annId: "6005",
+          mangaId: "89",
+          url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=6005",
+          title: "Makunouchi Deluxe [VIZBIG Edition]",
+          label: "2",
+          multi: false,
+          format: "physical",
+          editionLineHint: true,
+          isbn13: "9781974700424",
+          page: { status: "ok", fetchedAt: 1, distributor: "VIZ Media", isbn13: "9781974700424" },
+        },
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(id))!,
+        { kind: "packaging", reason: "Held.", seriesId: vagabondId },
+        Date.now(),
+      );
+      return id;
+    });
+    expect((await detail(t, await prepare(t, observationId)))!.placement).toMatchObject({
+      book: { label: null, line: { name: "VIZBIG Edition", position: "2" } },
+      suggestion: null,
+    });
+  });
 });
 
 describe("books it does not prepare", () => {
