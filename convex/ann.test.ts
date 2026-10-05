@@ -24,8 +24,8 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { splitReleaseTitle } from "./lib/ann";
-import { linkObservation } from "./lib/observations";
+import { type AnnRelease, splitReleaseTitle } from "./lib/ann";
+import { linkObservation, recordUnplaced } from "./lib/observations";
 import { drain, expectStampedAtHandOff, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 type FixtureRelease = {
@@ -1823,6 +1823,10 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
      * pass's fresh reading alone must hold or size it.
      */
     stale?: boolean;
+    /** Stored coverage facts written over the snapshot's ("6-4" from an older reader). */
+    stored?: Pick<AnnRelease, "coverRange" | "coverageGapped">;
+    /** The line is already a Held Book under the Series, as it is on staging. */
+    held?: boolean;
   };
 
   /** One line through applyReleasePage, and every row it could have written. */
@@ -1835,7 +1839,9 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
       ? splitReleaseTitle(`${entry} (${designator})`, entry)
       : splitReleaseTitle(`${c.title} (${designator})`, entry);
     if (split === null) throw new Error(`No ANN designator in ${c.title}`);
-    const parsed = c.stale ? { ...split, title: c.title, editionLineHint: true } : split;
+    const read = c.stale ? { ...split, title: c.title, editionLineHint: true } : split;
+    const { coverRange: _range, coverageGapped: _gapped, ...facts } = read;
+    const parsed = c.stored ? { ...facts, ...c.stored } : read;
     const { seriesId, observationId } = await t.run(async (ctx) => {
       await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
       const seriesId = await insertSeries(ctx, { title: c.series });
@@ -1866,6 +1872,14 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
           },
         },
       });
+      if (c.held) {
+        await recordUnplaced(
+          ctx,
+          (await ctx.db.get(observationId))!,
+          { kind: "packaging", reason: "Packaging held for content verification.", seriesId },
+          1,
+        );
+      }
       return { seriesId, observationId };
     });
     const result = await t.mutation(internal.ann.applyReleasePage, { annId: "5000" });
@@ -2267,6 +2281,169 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
       },
       /VIZBIG Edition 1: steady state leaves Edition Line creation to review/,
       false,
+    ));
+
+  // Every statement a line's segment makes is read whole and kept, wherever
+  // it is written: a second range a subtitle appends is never dropped, a
+  // list no range holds is never read as a range or as silence, and a
+  // number beside the line's name is the book's, never the name's. Each
+  // case starts as a Held Book, as staging's do, and runs on a fresh and a
+  // stale snapshot.
+  describe.each([false, true])("every statement, read whole (stale snapshot: %s)", (stale) => {
+    const alpha = (c: Omit<Case, "series">): Case => ({ series: "Alpha", held: true, stale, ...c });
+
+    // C66-R2-01: the subtitle's complete statement, not the shared parser's prefix.
+    it.each([
+      "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 7-9",
+      "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus #7-9",
+      "Alpha [VIZBIG Edition] 1: Includes Vols. 1-3 plus 7-9",
+      "Alpha [VIZBIG Edition] 1: Includes Vols. 1-3 plus #7-9",
+      "Alpha [VIZBIG Edition Includes Vols. 1-3 plus 7-9]",
+      "Alpha VIZBIG Edition 1: Includes Vols. 1-3 along with 7-9",
+      "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 7-9 plus 10-12",
+      "Alpha VIZBIG Edition 1: Includes Vols. 4-6 and Volume 7 of Beta",
+      "Alpha VIZBIG Edition 1: Includes Vols. 1-3. Contains Vols. 4-6.",
+    ])("holds %s, whose statement no range holds", (title) =>
+      expectHeld(alpha({ title }), NO_RANGE),
+    );
+
+    it.each([
+      "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 4-6",
+      "Alpha [VIZBIG Edition] 1: Includes Vols. 1-3 plus 4-6",
+      "Alpha [VIZBIG Edition Includes Vols. 1-3 plus 4-6]",
+      "Alpha [VIZBIG Edition Vol. 1-3, Vol. 4-6]",
+    ])("places %s on all six Volumes it states", (title) =>
+      expectCreated(alpha({ title }), "VIZBIG Edition", ["1", "2", "3", "4", "5", "6"], "1"),
+    );
+
+    // A valid designator range never clears the subtitle's rejected statement.
+    it("holds a rejected subtitle beside a valid designator range", () =>
+      expectHeld(
+        alpha({
+          title: "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 7-9",
+          designator: "GN 1-3",
+        }),
+        NO_RANGE,
+      ));
+
+    // C66-R2-02: a list no range holds, in every place a title or designator writes one.
+    it.each([
+      { title: "Alpha VIZBIG Edition 1-3-5" },
+      { title: "Alpha [VIZBIG Edition Vols. 1-3-5]" },
+      { title: "Alpha [VIZBIG Edition Vols. 6-4]" },
+      { title: "Alpha VIZBIG Edition 6-4" },
+      { title: "Alpha [VIZBIG Edition] [6-4]" },
+      { title: "Alpha [VIZBIG Edition] (Vols. 6-4)" },
+      { title: "Alpha VIZBIG Edition 1: Includes Vols. 6-4" },
+      { title: "Alpha [VIZBIG Edition Vols. 1-80]" },
+      { title: "Alpha [VIZBIG Edition] [1-80]" },
+      { title: "Alpha [VIZBIG Edition Vols. 1.5-3.5]" },
+      { title: "Alpha VIZBIG Edition 1.5-3.5" },
+      { title: "Alpha [VIZBIG Edition]", designator: "GN 1-3-5" },
+      { title: "Alpha [VIZBIG Edition]", designator: "GN 6-4" },
+      { title: "Alpha [VIZBIG Edition]", designator: "GN 1-80" },
+      { title: "Alpha [VIZBIG Edition]", designator: "GN 1.5-3.5" },
+    ])("holds $title ($designator), never as a range or as Unmapped Packaging", (c) =>
+      expectHeld(alpha(c), NO_RANGE),
+    );
+
+    // C66-R2-03: a marked position in a tag is read as the title's own.
+    it.each([
+      "Alpha [VIZBIG Edition] (Vol. II)",
+      "Alpha [VIZBIG Edition] [Vol. II]",
+      "Alpha [VIZBIG Edition] (Book II)",
+      "Alpha [VIZBIG Edition] (GN II)",
+      "Alpha [VIZBIG Edition] 1 (Vol. II)",
+      // C66-R2-04: a number inside the line's bracket.
+      "Alpha [VIZBIG Edition Vol. 2]",
+      "Alpha [VIZBIG Edition 2]",
+      "Alpha [VIZBIG Edition II]",
+      "Alpha [VIZBIG Edition 2] 1",
+    ])("holds %s (GN 1), whose title numbers it 2", (title) =>
+      expectHeld(alpha({ title }), /name different line positions/),
+    );
+
+    // A marked position the grammar cannot read is no silence for GN 1 to fill.
+    it.each([
+      "Alpha [VIZBIG Edition] (Vol. ii)",
+      "Alpha [VIZBIG Edition] (Vol. two)",
+      "Alpha [VIZBIG Edition] (Vol. -2)",
+      "Alpha [VIZBIG Edition] (Vol. 2A)",
+      "Alpha [VIZBIG Edition Vol. ii]",
+      "Alpha VIZBIG Edition Two",
+    ])("holds %s (GN 1 and GN 2), whose position cannot be read", async (title) => {
+      await expectHeld(alpha({ title }), /name different line positions/);
+      await expectHeld(alpha({ title, designator: "GN 2" }), /name different line positions/);
+    });
+
+    // A number read as neither position nor coverage stands against both.
+    it.each(["Alpha [VIZBIG Edition] (Part 2)", "Alpha VIZBIG Edition 1: Arc 3"])(
+      "holds %s, a number it cannot place",
+      (title) => expectHeld(alpha({ title }), NO_RANGE),
+    );
+
+    it.each([
+      "Alpha [VIZBIG Edition] (Vol. II)",
+      "Alpha [VIZBIG Edition] [Vol. II]",
+      "Alpha [VIZBIG Edition] (Book II)",
+      "Alpha [VIZBIG Edition] (Vol. 2)",
+      "Alpha [VIZBIG Edition] II",
+      "Alpha [VIZBIG Edition Vol. 2]",
+      "Alpha [VIZBIG Edition 2]",
+      "Alpha [VIZBIG Edition II]",
+      // A reissue tag is no position.
+      "Alpha [VIZBIG Edition] [2nd Edition]",
+    ])("places %s (GN 2) as VIZBIG Edition 2 on Volumes 4-6", (title) =>
+      expectCreated(alpha({ title, designator: "GN 2" }), "VIZBIG Edition", ["4", "5", "6"], "2"),
+    );
+
+    // A designator's range is coverage, so a tag's position never conflicts with it;
+    // and a tag's list is coverage, never a position.
+    it("places a tag's position beside a GN range, and a tag's list as coverage", async () => {
+      await expectCreated(
+        alpha({ title: "Alpha [VIZBIG Edition] (Vol. II)", designator: "GN 4-6" }),
+        "VIZBIG Edition",
+        ["4", "5", "6"],
+        "2",
+      );
+      await expectCreated(
+        alpha({ title: "Alpha [VIZBIG Edition] (Vols. 4-6)" }),
+        "VIZBIG Edition",
+        ["4", "5", "6"],
+        "1",
+      );
+    });
+
+    // The bracket's own words with no number in them stay the line's name.
+    it("keeps a bracket's wordy line name", () =>
+      expectCreated(
+        alpha({ title: "Alpha [Side Story VIZBIG Edition]" }),
+        "Side Story VIZBIG Edition",
+        ["1", "2", "3"],
+        "1",
+      ));
+  });
+
+  // A stored range from an older reader that Coverage cannot list is a
+  // statement no range holds, never silence: never Unmapped Packaging.
+  it.each([
+    { from: "6", to: "4" },
+    { from: "1", to: "80" },
+    { from: "1.5", to: "3.5" },
+  ])("holds a stored range $from-$to Coverage cannot list", (coverRange) =>
+    expectHeld(
+      { series: "Alpha", title: "Alpha [VIZBIG Edition]", held: true, stored: { coverRange } },
+      NO_RANGE,
+    ),
+  );
+
+  // Unknown implied size is the one thing Bootstrap Mode leaves unmapped.
+  it("creates a line of unknown size, stating no coverage, as Unmapped Packaging", () =>
+    expectCreated(
+      { series: "Alpha", title: "Alpha [Library Edition]", held: true },
+      "Library Edition",
+      "unmapped",
+      "1",
     ));
 });
 

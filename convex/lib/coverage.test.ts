@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseBookTitle } from "./bookTitle";
-import { coverageFromLine, coverageFromText, inferCoverage } from "./coverage";
+import { coverageFromLine, coverageFromText, inferCoverage, statementCoverage } from "./coverage";
 import { cleanBlurb } from "./text";
 
 // The packagings most cases read against: a 3-in-1 line at positions 1 and 2
@@ -48,6 +48,52 @@ describe("coverageFromText — explicit lists (B18)", () => {
     expect(coverageFromText("Collects Berserk Volumes 40, 42, and the Guidebook.")).toBeNull();
     expect(coverageFromText("Collects volumes 1, 2, and 3.")).toEqual({ from: "1", to: "3" });
     expect(coverageFromText("Collects volume 5 in hardcover.")).toEqual({ from: "5", to: "5" });
+  });
+});
+
+// A title's statement is evidence: read to its end, or no range at all.
+describe("statementCoverage — a title's own statement, read whole", () => {
+  it("is silent on text with no collect-verb", () => {
+    for (const text of ["Wano", "Vols. 4-6", "The Collector's Pick"]) {
+      expect(statementCoverage(text), text).toBeUndefined();
+    }
+  });
+
+  it("reads one verb and one list that reads one way", () => {
+    for (const [text, from, to] of [
+      ["Includes Vols. 4-6", "4", "6"],
+      ["Includes Vols. 1-3 plus 4-6", "1", "6"],
+      ["Collects Volumes 1, 2 & 3", "1", "3"],
+      ["Contains Vol. 4", "4", "4"],
+      ["Including volumes one through three", "1", "3"],
+    ] as const) {
+      expect(statementCoverage(text), text).toEqual({ from, to });
+    }
+  });
+
+  it("rejects a statement read only in part, with a gap, or two ways", () => {
+    for (const text of [
+      "Includes Vols. 1-3 plus 7-9",
+      "Includes Vols. 1-3 plus #7-9",
+      "Includes Vols. 1-3 along with 7-9",
+      "Includes Vols. 1-3 plus 4-6 in one book",
+      "Includes Vols. 4-6 and Volume 7 of Beta",
+      "Includes Vols. 1-3. Contains Vols. 4-6.",
+      "Includes Vols. 1-3 / Vols. 4-6",
+      "Includes Vols. 1-3-5",
+      "Includes Vols. 6-4",
+      "Includes Vols. 1.5-3.5",
+      "Includes Vols. 1-80",
+      "Includes Vols. 4",
+      "Includes a bonus story",
+    ]) {
+      expect(statementCoverage(text), text).toBeNull();
+    }
+    // The blurb reader takes the first statement alone; a title's never does.
+    expect(coverageFromText("Includes Vols. 1-3. Contains Vols. 4-6.")).toEqual({
+      from: "1",
+      to: "3",
+    });
   });
 });
 

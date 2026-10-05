@@ -296,6 +296,31 @@ export function coverageFromText(text: string | undefined): CoverRange | null {
   return blurbCoverage(text, null) ?? null;
 }
 
+/** A title statement read whole: one collect-verb, one Volume list, nothing after it. */
+const WHOLE_STATEMENT = new RegExp(
+  String.raw`^(?:${VERB.source})\s+(?:the\s+)?vol(?:ume)?(s)?\.?\s*(${LIST})\s*\.?$`,
+  "i",
+);
+
+/**
+ * A title's own coverage statement ("Includes Vols. 1-3 plus 4-6") read
+ * whole by the blurb grammar: undefined when the text has no collect-verb;
+ * the range when it is one verb and one Volume list that reads one way and
+ * holds no gap; null otherwise. A title's statement is evidence, so one
+ * read only in part is no range: "plus 7-9" leaves a gap, "1-3 / 4-6"
+ * reads two ways, "4-6 and Volume 7 of Beta" or a second sentence says more
+ * than the list. Unlike a blurb, the first list does not decide alone. ANN
+ * reads a line title's subtitle and tags with it (lib/ann.ts).
+ */
+export function statementCoverage(text: string): CoverRange | null | undefined {
+  const sentence = plain(text).trim();
+  if (!new RegExp(VERB.source, "i").test(sentence)) return undefined;
+  const whole = WHOLE_STATEMENT.exec(sentence);
+  if (!whole) return null;
+  const found = readings(items(whole[2]!), "", whole[1] !== undefined);
+  return found.length === 1 ? found[0] : null;
+}
+
 /**
  * Volumes per book when the line NAME implies it, per the publishers' own
  * descriptions: every book of these lines collects that count except, at

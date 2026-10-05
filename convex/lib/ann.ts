@@ -29,12 +29,14 @@ import {
   type CoverRange,
   coverRangeValidator,
   EDITION_LINE_NAME,
-  type Packaging,
   parseBookTitle,
+  rangeLabels,
   type Stated,
   statedList,
+  tidyLineName,
   WHOLE_VOLUME_LIST,
 } from "./bookTitle";
+import { statementCoverage } from "./coverage";
 import { datePartsValidator, type DateParts } from "./dates";
 import { toIsbn13 } from "./isbn";
 import {
@@ -85,14 +87,17 @@ const annReleaseValidator = v.object({
   coverRange: v.optional(coverRangeValidator),
   /**
    * The designator lists Volumes no range holds: a gap ("GN 1, 3", "GN 1-3,
-   * 5"), a numbered extra ("GN 1-2 + 3"), a backwards range, a dash chain, or
-   * text the list grammar does not read. Multi-volume with no label and no
-   * range, and never sized from the line's name: the page pass holds it. A
-   * packaged line's title statement no range holds ("VIZBIG Edition [1, 3]",
-   * "[1 and Vol. 3]", "[VIZBIG Edition Vols. 1, 3]", "Includes Vols. 1 &
-   * 3"), or one that differs from the designator's list or another of the
-   * title's ("Alpha [4-6]" at GN 1-3), sets it too (packagingOf), so a
-   * decision reading the stored line keeps the rejection.
+   * 5"), a numbered extra ("GN 1-2 + 3"), a backwards range, a dash chain, a
+   * range Coverage cannot list ("GN 10.5-11", "GN 1-80"), or text the list
+   * grammar does not read. Multi-volume with no label and no range, and
+   * never sized from the line's name: the page pass holds it. A packaged
+   * line's title statement no range holds ("VIZBIG Edition [1, 3]", "[1 and
+   * Vol. 3]", "[VIZBIG Edition Vols. 1, 3]", "Includes Vols. 1 & 3",
+   * "Includes Vols. 1-3 plus 7-9", "VIZBIG Edition 1-3-5"), one that differs
+   * from the designator's list or another of the title's ("Alpha [4-6]" at
+   * GN 1-3), or a number in its line's segment read as neither position
+   * nor coverage sets it too (packagingOf), so a decision reading the
+   * stored line keeps the rejection.
    * The same flag as a title's (lib/bookTitle.ts packagingValidator).
    */
   coverageGapped: v.optional(v.literal(true)),
@@ -271,16 +276,186 @@ function addedLineNames(title: string, names: readonly string[]) {
   return best;
 }
 
-/** What may follow a line's name: a position, a subtitle after a separator, bracket tags. */
-const LINE_TAIL =
-  /^\s*(?:(?:[Vv]ols?\.?|[Vv]olumes?|[Bb]ook|#)\s*)?(?:\d+(?:\.\d+)?|[IVXLC]+\b)?\s*(?:[-–—:,]\s*\S.*|(?:[([][^()[\]]*[)\]]\s*)*)$/;
-/** The position right after a line's name: "VIZBIG Edition 2", "[Omnibus] 33", "Vol. 1", "] II". */
-const TAIL_POSITION = /^\s*(?:(?:[Vv]ols?\.?|[Vv]olumes?|[Bb]ook|#)\s*)?(\d+(?:\.\d+)?|[IVXLC]+\b)/;
-/** A list going on after that number ("1-3", "1, 3", "1 & Vol. 3"): coverage, not a position. */
-const LIST_GOES_ON = /^\s*(?:[-–—&,+]|and\b)\s*(?:[Vv]ol(?:ume)?s?\.?\s*|#)?\d/;
-/** A marked number in a bracket tag after the line ("(GN 12)", "[Vol. 3]"): a position, a list aside. */
-const TAG_NUMBER =
-  /[([][^()[\]]*?(?:\b(?:vols?\.?|volumes?|gn|book)|#)\s*(\d+(?:\.\d+)?)(?![\d.]|\s*(?:[-–—&,+]|and\b))[^()[\]]*[)\]]/gi;
+// ---------- a line's own statements ----------
+//
+// Everything a line's segment says beside its name, read whole: the text in
+// the name's bracket after the name ("[VIZBIG Edition Vols. 4-6]"), then
+// after the name or its bracket a designation ("2", "II", "1-3", "Vol. 2"),
+// bracket tags ("(GN 12)", "[Hardcover]") and a subtitle after a separator
+// ("33 - Wano", "1: Includes Vols. 4-6"). Each part is one of:
+//
+// - a position: one number after the name or a marker ("2", "] II", "(Vol.
+//   II)", "[Book 3]"). Digits and upper-case Roman numerals are read; a
+//   marked one the grammar cannot read ("(Vol. ii)", "(Vol. two)", "(Vol.
+//   -2)", "(Vol. 2A)") is a position nobody may supply instead;
+// - a coverage statement: a Volume list, read whole (`wholeList`), or a
+//   collect-verb statement, read whole (lib/coverage.ts statementCoverage);
+// - a reissue or binding tag ("[2nd Edition]", "(Hardcover)"), or words
+//   with no number in them: nothing about the book's place;
+// - anything else with a number in it ("(Part 2)", "1: Arc 3"): read as
+//   neither, so it stands against any position and any coverage.
+//
+// Positions and coverage are separate: a list is never a position, and an
+// N-in-1 name's count is the line's, never the book's.
+
+/** What a line's segment states beside its name. */
+type Tail = {
+  /** Every position it states, canonical ("II" → "2"). */
+  positions: string[];
+  /** Every coverage statement: a range, or null for one no range holds. */
+  statements: Stated[];
+  /** A position it states that the grammar cannot read: no other may stand in for it. */
+  positionUnread: boolean;
+};
+
+const MARK = String.raw`(?:vol(?:ume)?(s)?\.?|book|gn|#)`;
+const JOIN = String.raw`\s*(?:[-–—~,&+]|\band\b|\bplus\b)\s*`;
+/** One designation: an optional marker, then one number or numeral, or a list of them. */
+const DESIGNATION = new RegExp(
+  String.raw`^(?:${MARK}\s*)?(-?[\p{L}\p{N}.]+(?:${JOIN}(?:(?:vol(?:ume)?s?\.?|#)\s*)?[\p{L}\p{N}.]+)*)$`,
+  "iu",
+);
+/** Between a list's items, a repeated marker included: "1 & Vol. 3", "#1-#3". */
+const LIST_JOIN = new RegExp(`${JOIN}(?:(?:vol(?:ume)?s?\\.?|#)\\s*)?`, "i");
+/** Where a subtitle starts: a colon or semicolon, or a dash or comma before a word ("33 - Wano"). */
+const SUBTITLE = /\s*[:;]\s*|\s+[-–—](?!\s*[\d#])\s+|\s*,(?!\s*(?:[\d#&]|and\b|vol))\s*/i;
+/** A reissue or anniversary tag: "[2nd Edition]", "(3rd Printing)". */
+const REISSUE =
+  /^(?:the\s+)?\d+(?:st|nd|rd|th)\s+(?:edition|printing|anniversary(?:\s+edition)?)$/i;
+/** A marker before a word: "Vol. two", "Book ii". */
+const MARKED_WORD = /\b(?:vols?|volumes?|book|gn)\b\.?\s*(\p{L}+)/giu;
+
+/** A token a designation may hold: digits, a Roman numeral in either case, a number word. */
+function numberLike(token: string): boolean {
+  return /^\d/.test(token) || /^[ivxlc]+$/i.test(token) || /^\d+$/.test(canonicalLabel(token));
+}
+
+/** A position the grammar reads: digits, or an upper-case Roman numeral ("II" → "2"). Null for any other. */
+function readPosition(token: string): string | null {
+  if (/^\d+(?:\.\d+)?$/.test(token)) return canonicalLabel(token);
+  const roman = /^[IVXLC]+$/.test(token) ? canonicalLabel(token) : "";
+  return /^\d+$/.test(roman) ? roman : null;
+}
+
+/** Whether text carries a number the line's grammar must read: a digit, "#", a Roman numeral, a marked number word. */
+function numeric(text: string): boolean {
+  return (
+    /\d|#|\b[IVXLC]{2,}\b/.test(text) ||
+    [...text.matchAll(MARKED_WORD)].some((m) => numberLike(m[1]!))
+  );
+}
+
+/**
+ * An explicit Volume list read whole, the same for a designator, a title's
+ * list and a line's statement: its range when its items run in order with
+ * no gap and Coverage can list them; null when no range holds it as
+ * written: a gap, a dash chain ("1-3-5"), a number below the one before it
+ * ("6-4"), a fraction ("1.5-3.5"), more Volumes than one book holds
+ * ("1-80"), or text the list grammar does not read ("1 & Two").
+ */
+function wholeList(text: string): CoverRange | null {
+  const list = text.replace(/(?:vol(?:ume)?s?\.?|#)\s*/gi, "").trim();
+  if (!WHOLE_VOLUME_LIST.test(list)) return null;
+  const range = statedList(list);
+  const numbers = (list.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
+  const ordered = numbers.every((n, i) => i === 0 || n >= numbers[i - 1]!);
+  return range && ordered && rangeLabels(range).length > 0 ? range : null;
+}
+
+/**
+ * One designation, judged: a position (or an unread one), a list's
+ * statement, or null when the text is no designation (a word that is no
+ * number: "Club", "Hardcover"). `bare`: no marker before it.
+ */
+function designation(
+  text: string,
+): { bare: boolean; position: string | null } | { bare: boolean; list: Stated } | null {
+  const m = DESIGNATION.exec(text.trim());
+  if (!m) return null;
+  const items = m[2]!.replace(/^-/, "").split(LIST_JOIN);
+  if (!items.every(numberLike)) return null;
+  const bare = m[0] === m[2];
+  if (items.length > 1) return { bare, list: wholeList(m[2]!) };
+  // "Vols. 4": a list marker that lists one Volume reads no list.
+  if (m[1] !== undefined) return { bare, list: null };
+  return { bare, position: readPosition(m[2]!) };
+}
+
+/**
+ * Add one designation to the tail. Where it stands decides a bare number:
+ * after the name it is a position, alone in a tag a list no range holds
+ * ("[7]"), in a subtitle a number read as neither.
+ */
+function addDesignation(
+  tail: Tail,
+  read: NonNullable<ReturnType<typeof designation>>,
+  where: "lead" | "tag" | "subtitle",
+) {
+  if ("list" in read) {
+    tail.statements.push(read.list);
+  } else if (read.bare && where === "tag") {
+    tail.statements.push(null);
+  } else if (read.bare && where === "subtitle") {
+    tail.statements.push(null);
+    tail.positionUnread = true;
+  } else if (read.position === null) {
+    tail.positionUnread = true;
+  } else {
+    tail.positions.push(read.position);
+  }
+}
+
+/** A tag or a subtitle: a statement, a designation, a reissue or plain words, else a number read as neither. */
+function readPart(text: string, where: "tag" | "subtitle", tail: Tail) {
+  const part = text.trim();
+  if (part === "" || (where === "tag" && REISSUE.test(part))) return;
+  const said = statementCoverage(part);
+  if (said !== undefined) {
+    tail.statements.push(said);
+    return;
+  }
+  const read = designation(part);
+  if (read !== null) {
+    addDesignation(tail, read, where);
+  } else if (numeric(part)) {
+    tail.statements.push(null);
+    tail.positionUnread = true;
+  }
+}
+
+/**
+ * Read what follows a line's name into `tail`, whole: bracket tags
+ * anywhere, then a designation or a statement, then a subtitle after a
+ * separator. False when words follow the name that no position, tag or
+ * subtitle explains ("Alpha Omnibus Club", "VIZBIG Edition 2 Hardcover"):
+ * its segmentation is unclear.
+ */
+function readTail(text: string, tail: Tail): boolean {
+  const tags: string[] = [];
+  const rest = text.replace(/[([]([^()[\]]*)[)\]]/g, (_, inner: string) => {
+    tags.push(inner);
+    return " ";
+  });
+  if (/[()[\]]/.test(rest)) return false;
+  for (const tag of tags) readPart(tag, "tag", tail);
+  const cut = SUBTITLE.exec(rest);
+  const lead = (cut ? rest.slice(0, cut.index) : rest).replace(/^[\s,]+/, "").trim();
+  if (lead !== "") {
+    const said = statementCoverage(lead);
+    const read = said === undefined ? designation(lead) : null;
+    if (said !== undefined) tail.statements.push(said);
+    else if (read !== null) addDesignation(tail, read, "lead");
+    else return false;
+  }
+  if (cut) readPart(rest.slice(cut.index + cut[0].length), "subtitle", tail);
+  return true;
+}
+
+/** The one position a tail states, or null for none, an unread one, or two that differ. */
+function tailPosition(tail: Tail): string | null {
+  const [first] = tail.positions;
+  return !tail.positionUnread && new Set(tail.positions).size === 1 ? first! : null;
+}
 
 /** The open bracket enclosing `index`, or -1. */
 function enclosingBracket(text: string, index: number): number {
@@ -311,15 +486,17 @@ function enclosingBracket(text: string, index: number): number {
  *   stated Volume list go ("One Piece - [Omnibus] 33 - Wano" is One Piece;
  *   "Rurouni Kenshin - VIZBIG Edition [13-15]" is Rurouni Kenshin).
  *   `lineName` is the name as written, its article aside; `position` the
- *   number or Roman numeral right after the name or its bracket, canonical
- *   ("[VIZBIG Edition] II" → "2"), null when none is written or the number
- *   opens a list ("VIZBIG Edition 1-3"); `tail` the title from the line's
+ *   one position the segment states, canonical ("[VIZBIG Edition] II",
+ *   "[VIZBIG Edition Vol. 2]" and "[VIZBIG Edition] (Book II)" → "2"),
+ *   null when it states none, states two that differ, or states one the
+ *   grammar cannot read ("(Vol. ii)"); a list ("VIZBIG Edition 1-3") is
+ *   coverage, never a position. `tail` is the title from the line's
  *   segment on.
  * - `ambiguous`: it names two lines beyond the work's own name
  *   ("Makunouchi Deluxe [VIZBIG Edition]" with no name to own "Deluxe"),
  *   no work before its line, an unclosed bracket around it, or more words
- *   after it than a position and subtitle explain ("Alpha Omnibus Club").
- *   Nothing may be placed by it.
+ *   after it than a position, tags and a subtitle explain ("Alpha Omnibus
+ *   Club"). Nothing may be placed by it.
  *
  * This is segmentation only: `line` says nothing of the book's coverage
  * or whether its position is right, and `single` does not make a book one
@@ -334,14 +511,18 @@ export type AnnLineTitle =
 
 /** `readAnnLineTitle`'s reading with the parts `packagingOf` reads further. */
 type Segmented = {
-  /** The trailing Volume statement the line's title states ("13-15"), or null. */
-  listed: string | null;
+  /** What the title states beside the work: the list ending it ("[13-15]") and the line's segment. */
+  facts: Tail;
+  /** The statements of the list ending the title alone. */
+  listed: Stated[];
 } & (
   | { kind: "single"; work: string }
   | {
       kind: "line";
       work: string;
       lineName: string;
+      /** The line's name, tidied as the shared parser names lines ("Ultimate Edition"). */
+      name: string;
       position: string | null;
       tail: string;
       /** The text inside the bracket holding the line's name, or null when unbracketed. */
@@ -359,50 +540,68 @@ function segmentTitle(title: string, names: readonly string[], packaged: boolean
     ending !== null && !names.some((name) => titleVolumeList(name)?.list === ending.list)
       ? ending
       : null;
-  const listed = stating?.list ?? null;
+  const facts: Tail = { positions: [], statements: [], positionUnread: false };
+  if (stating !== null) readPart(stating.list, "tag", facts);
+  const listed = [...facts.statements];
   const text = stating?.rest ?? title;
   const added = addedLineNames(text, names);
   const [hit] = added;
-  if (hit === undefined) return { kind: "single", work: packaged ? text : title, listed };
+  if (hit === undefined) return { kind: "single", work: packaged ? text : title, facts, listed };
   if (added.length > 1) {
-    return { kind: "ambiguous", reason: "names more than one Edition Line", listed };
+    return { kind: "ambiguous", reason: "names more than one Edition Line", facts, listed };
   }
   let start = hit.start;
   let end = hit.end;
+  let nameStart = hit.name;
+  let nameEnd = hit.end;
   const open = enclosingBracket(text, hit.start);
+  const unclear = {
+    kind: "ambiguous",
+    reason: "goes on after its Edition Line in words no position explains",
+    facts,
+    listed,
+  } as const;
   if (open !== -1) {
     const close = text.indexOf(text[open] === "[" ? "]" : ")", hit.end);
     if (close === -1)
-      return { kind: "ambiguous", reason: "leaves its Edition Line's bracket open", listed };
+      return { kind: "ambiguous", reason: "leaves its Edition Line's bracket open", facts, listed };
     start = open;
     end = close + 1;
+    // The bracket's own words before the name belong to it ("[Side Story
+    // VIZBIG Edition]"), and so do words after it with no number in them;
+    // a number or a statement there is the book's ("[VIZBIG Edition Vol.
+    // 2]", "[VIZBIG Edition Vols. 4-6]"), never the line's name.
+    if (numeric(text.slice(open + 1, hit.start))) {
+      facts.statements.push(null);
+      facts.positionUnread = true;
+    } else {
+      nameStart = open + 1;
+    }
+    const inside = text.slice(hit.end, close);
+    const states =
+      numeric(inside) || designation(inside) !== null || statementCoverage(inside) !== undefined;
+    if (!states) nameEnd = close;
+    else if (!readTail(inside, facts)) return unclear;
   }
   const work = text
     .slice(0, start)
     .replace(/(?:\s*[,:;]|\s+[-–—])+\s*$/, "")
     .trim();
   if (work === "") {
-    return { kind: "ambiguous", reason: "names no work before its Edition Line", listed };
+    return { kind: "ambiguous", reason: "names no work before its Edition Line", facts, listed };
   }
   const after = text.slice(end);
-  if (!LINE_TAIL.test(after)) {
-    return {
-      kind: "ambiguous",
-      reason: "goes on after its Edition Line in words no position explains",
-      listed,
-    };
-  }
-  const number = TAIL_POSITION.exec(after);
-  const position =
-    number && !LIST_GOES_ON.test(after.slice(number[0].length)) ? canonicalLabel(number[1]!) : null;
+  if (!readTail(after, facts)) return unclear;
   return {
     kind: "line",
     work,
     lineName: text.slice(hit.name, hit.end),
-    position,
+    name: tidyLineName(text.slice(nameStart, nameEnd)),
+    position: tailPosition(facts),
     tail: text.slice(start),
     bracket: open !== -1 ? text.slice(open + 1, end - 1) : null,
     after,
+    facts,
     listed,
   };
 }
@@ -444,21 +643,6 @@ export function titleVolumeList(title: string): { rest: string; list: string } |
 const WORK_STAND_IN = "Work";
 
 /**
- * Words in a line's segment that state coverage: a list of numbers ("1 &
- * 3", "4-6") or a collect verb ("Includes"). One the shared parser reads
- * as no statement was never read, so it stands against any range.
- */
-const STATEMENT_WORDS =
-  /\d\s*(?:[-–—&,+]|\band\b)\s*(?:vol(?:ume)?s?\.?\s*)?#?\d|\b(?:includ|contain|collect)(?:e|es|ed|ing|s)?\b/i;
-
-/** What the shared parser's packaging states of coverage: nothing, a range, or a rejection. */
-function statedBy(packaging: Packaging | null): Stated {
-  if (packaging === null) return undefined;
-  if (packaging.coverageGapped) return null;
-  return packaging.coverRange ?? undefined;
-}
-
-/**
  * Everything one ANN line's title and designator say about its packaging,
  * read together (`packagingOf`). `stated` is their agreed coverage in the
  * shared parser's three states (lib/bookTitle.ts agreed).
@@ -467,26 +651,32 @@ function readPackaging(line: PackagingInput, names: readonly string[]) {
   const packaged = line.multi || line.editionLineHint;
   const read = segmentTitle(line.title, names, packaged);
   // The designator's statement, with any title list it already agreed with
-  // (splitReleaseTitle stores both as one): a rejection stays rejected.
-  let stated: Stated = line.coverageGapped ? null : line.coverRange;
-  if (read.listed !== null) stated = agreed(stated, readCoverage(read.listed).coverRange ?? null);
-  let box = parseBookTitle(line.title).isBox;
+  // (splitReleaseTitle stores both as one): a rejection stays rejected, and
+  // so does a stored range Coverage cannot list ("6-4", "1-80"), never
+  // silence.
+  let stated: Stated = line.coverageGapped
+    ? null
+    : line.coverRange && wholeList(`${line.coverRange.from}-${line.coverRange.to}`);
+  // The shared parser only says whether the line's segment is a box set.
+  const pieces =
+    read.kind !== "line"
+      ? []
+      : read.bracket !== null
+        ? [`[${read.bracket}]`, `${read.lineName}${read.after}`]
+        : [read.tail];
+  const box =
+    parseBookTitle(line.title).isBox ||
+    pieces.some((piece) => parseBookTitle(`${WORK_STAND_IN} ${piece}`).isBox);
+  // A box set's segment is the bundle's name ("[Box Set - Part 1]", "[35th
+  // Anniversary Box Set]"), never placed by: only its designator and a
+  // list ending its title state what it holds.
+  for (const statement of box ? read.listed : read.facts.statements) {
+    stated = agreed(stated, statement);
+  }
   let name: string | null = null;
   if (read.kind === "line") {
-    // The parser reads the segment with a stand-in for the work: the
-    // bracket holding the name ("[VIZBIG Edition Vols. 1, 3]") and what
-    // follows it ("VIZBIG Edition 1: Includes Vols. 4-6"), or the
-    // unbracketed segment whole. Each statement it reads is the title's;
-    // statement words in a piece it reads nothing in were never read.
-    const pieces =
-      read.bracket !== null ? [`[${read.bracket}]`, `${read.lineName}${read.after}`] : [read.tail];
-    const parsed = pieces.map((piece) => parseBookTitle(`${WORK_STAND_IN} ${piece}`));
-    pieces.forEach((piece, i) => {
-      const said = statedBy(parsed[i]!.packaging);
-      stated = agreed(stated, said === undefined && STATEMENT_WORDS.test(piece) ? null : said);
-    });
-    box ||= parsed.some((reading) => reading.isBox);
-    name = parsed[0]!.packaging?.lineName ?? read.lineName;
+    // The name is the recognized line's alone, never a number beside it.
+    name = read.name;
   } else if (read.kind === "single") {
     // No line beyond the work's name: a vocabulary word the parser finds is
     // the name's own ("Makunouchi Deluxe (GN 1-3)" is an Omnibus); another
@@ -495,17 +685,15 @@ function readPackaging(line: PackagingInput, names: readonly string[]) {
     const tag = parseBookTitle(line.title).packaging?.lineName ?? null;
     name = (tag !== null && !namesEditionLine(tag) ? tag : null) ?? (line.multi ? "Omnibus" : null);
   }
-  // The title's positions: after the line's name, and in a tag after it
-  // ("Skip Beat! [Omnibus] (GN 12)"); then a single designator's label.
-  // Two that differ say one of them misnumbers the book.
+  // Every position the title states ("VIZBIG Edition 2", "[VIZBIG Edition
+  // Vol. 2]", "Skip Beat! [Omnibus] (GN 12)"), then a single designator's
+  // label. Two that differ say one of them misnumbers the book; one the
+  // grammar cannot read ("(Vol. ii)") leaves the book's place unknown.
   const positions = [
-    ...(read.kind === "line" ? [read.position] : []),
-    ...(read.kind === "line" ? [...read.after.matchAll(TAG_NUMBER)] : []).map((m) =>
-      canonicalLabel(m[1]!),
-    ),
-    !line.multi && line.label !== undefined ? canonicalLabel(line.label) : null,
-  ].filter((position) => position !== null);
-  const positionConflict = new Set(positions).size > 1;
+    ...read.facts.positions,
+    ...(!line.multi && line.label !== undefined ? [canonicalLabel(line.label)] : []),
+  ];
+  const positionConflict = read.facts.positionUnread || new Set(positions).size > 1;
   return { read, name, box, stated, positionConflict, position: positions[0] ?? null };
 }
 
@@ -521,26 +709,42 @@ type PackagingInput = Pick<
  * - `title`: the work segmentation (`readAnnLineTitle` with the line's
  *   `multi || editionLineHint` as `packaged`).
  * - `line`: its Edition Line, null exactly when `title` is ambiguous (no
- *   line is guessed then). `name` is the shared parser's tidy name of the
- *   recognized segment ("Ultimate Edition" for "- The Ultimate Edition"),
- *   else the name as written; an Omnibus for a multi-volume designator
- *   under a title adding no line. `position`: the title's own after the
- *   line's name ("VIZBIG Edition 2", "[VIZBIG Edition] II" → "2") or in a
- *   tag after it ("[Omnibus] (GN 12)"), else a single designator's label;
- *   null when none, or when they differ.
+ *   line is guessed then). `name` is the recognized line's name, tidied as
+ *   the shared parser names lines ("Ultimate Edition" for "- The Ultimate
+ *   Edition"), with any words its bracket adds that hold no number ("[Side
+ *   Story VIZBIG Edition]"); a number or statement beside it is never part
+ *   of it ("[VIZBIG Edition Vol. 2]" is VIZBIG Edition). An Omnibus for a
+ *   multi-volume designator under a title adding no line. `position`: the
+ *   one position the title and a single designator's label agree on
+ *   ("VIZBIG Edition 2", "[VIZBIG Edition Vol. 2]", "[VIZBIG Edition] II",
+ *   "(Book II)", "[Omnibus] (GN 12)" and "GN 2" all say "2"); null when
+ *   none is stated, and whenever `positionConflict` is set.
  * - `coverRange`: the Volumes every statement agrees on, or null. The
  *   statements are the designator's range ("GN 4-6", stored with any title
- *   list it agreed with), the ANN list ending the title ("[13-15]"), and
- *   what the shared parser reads in the line's segment: a bracket's own
- *   list ("[VIZBIG Edition Vols. 4-6]"), a subtitle ("1: Includes Vols.
- *   4-6"), a phrase's list.
- * - `coverageGapped`: a statement no range holds (stored rejection
- *   included), statements that disagree, or a list in the segment the
- *   parser leaves unread. Never sized from the line's name then.
+ *   list it agreed with), the list ending the title ("[13-15]"), and every
+ *   statement in the line's segment: a list in its bracket ("[VIZBIG
+ *   Edition Vols. 4-6]"), after its name ("VIZBIG Edition 1-3"), in a tag
+ *   ("(Vols. 4-6)"), or a collect statement ("1: Includes Vols. 1-3 plus
+ *   4-6" is 1–6), each read whole. Non-null only for a range Coverage can
+ *   list (lib/bookTitle.ts rangeLabels), so it never stands for a list read
+ *   in part.
+ * - `coverageGapped`: some statement no range holds (a gap, a dash chain,
+ *   a backwards, fractional or oversized range, a statement read only in
+ *   part, a stored rejection or a stored range Coverage cannot list),
+ *   statements that disagree, or a number in the segment read as neither
+ *   position nor coverage ("(Part 2)"). Never sized from the line's name
+ *   then.
  * - `positionConflict`: the title's positions and the designator's label
- *   do not all agree ("VIZBIG Edition 2" at "GN 1", "[VIZBIG Edition] (GN
- *   5)" at "GN 1"). A designator's range is coverage, never a conflicting
- *   position.
+ *   do not all agree ("VIZBIG Edition 2" at "GN 1", "[VIZBIG Edition] (Vol.
+ *   II)" at "GN 1"), or the title states a position the grammar cannot
+ *   read ("(Vol. ii)", "(Vol. two)", "(Vol. -2)", "VIZBIG Edition Two"), or
+ *   a number read as neither. A designator's range is coverage, never a
+ *   conflicting position, and so is any list in the title.
+ *
+ * Every number the segment holds is read as one of these or held: a
+ * reissue or binding tag ("[2nd Edition]", "(Hardcover)") and words with
+ * no number are the only text it passes over. `kind: "line"` remains
+ * segmentation; only these fields speak of contents and place.
  *
  * Null for a box set (a bundle, never a line), for a line that is not
  * packaging by its stored flags or its title, and for one whose title adds
@@ -615,14 +819,15 @@ const SINGLE = /^(\d+(?:\.\d+)?)[a-z]?$/i;
 /**
  * What a designator says after its marker, qualifier and total are taken
  * off. No number ("GN", "GN A") is an unnumbered book; one number a label.
- * Anything else is a list, read whole by the shared grammar
- * (lib/bookTitle.ts statedList): a range or contiguous list ("97-99", "1, 2,
- * 3", "1 & 2") is multi-volume with that range. One no range holds is
+ * Anything else is a list, read whole (`wholeList`, the rule every list a
+ * line states is read by): a range or contiguous list ("97-99", "1, 2, 3",
+ * "1 & 2") is multi-volume with that range. One no range holds is
  * multi-volume with `coverageGapped` and neither label nor range: a gap
- * ("1, 3", "1, 2, and 4"), a numbered extra ("1-2 + 3"), a dash chain, a
- * number smaller than the one before it ("3-1", "1-5, 6-2"), or text the
- * grammar does not read ("3 Part 1-2", "1 and Vol. 3"). Its first numbers
- * are never read as a shorter list or a label.
+ * ("1, 3", "1, 2, and 4", "1 and Vol. 3"), a numbered extra ("1-2 + 3"), a
+ * dash chain, a number smaller than the one before it ("3-1", "1-5, 6-2"),
+ * a fraction or more Volumes than Coverage lists ("1.5-3.5", "1-80"), or
+ * text the grammar does not read ("3 Part 1-2"). Its first numbers are
+ * never read as a shorter list or a label.
  */
 function readCoverage(
   afterMarker: string,
@@ -631,10 +836,8 @@ function readCoverage(
   if (!/\d/.test(text)) return { label: undefined, multi: false };
   const single = SINGLE.exec(text)?.[1];
   if (single !== undefined) return { label: single, multi: false };
-  const range = WHOLE_VOLUME_LIST.test(text) ? statedList(text) : null;
-  const numbers = (text.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
-  const ordered = numbers.every((n, i) => i === 0 || n >= numbers[i - 1]!);
-  return range && ordered
+  const range = wholeList(text);
+  return range
     ? { label: undefined, multi: true, coverRange: range }
     : { label: undefined, multi: true, coverageGapped: true };
 }

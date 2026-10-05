@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { splitReleaseTitle } from "./lib/ann";
 import { recordUnplaced } from "./lib/observations";
 import { parseDumpLine } from "./lib/openLibrary";
 import { reconcileFields } from "./lib/reconcile";
@@ -570,8 +571,22 @@ describe("a book read with today's parser", () => {
 describe("an ANN book's line, read against its held Series", () => {
   type Entry = { title: string; linkedTo?: string } | null;
 
-  /** One ANN line held as packaging under Series `series`, with its manga entry `entry`. */
-  async function heldAnn(series: string, title: string, entry: Entry) {
+  /**
+   * One ANN line held as packaging under Series `series`, with its manga
+   * entry `entry`. With `designator` the snapshot is the mirror's own
+   * reading of "title (designator)", or (`stale`) that reading without its
+   * title's stored coverage; without it, a GN 2 line flagged packaging.
+   */
+  async function heldAnn(
+    series: string,
+    title: string,
+    entry: Entry,
+    release?: { designator: string; stale?: boolean },
+  ) {
+    const split = release ? splitReleaseTitle(`${title} (${release.designator})`, series) : null;
+    if (release && split === null) throw new Error(`No designator in ${title}`);
+    const { coverRange: _range, coverageGapped: _gapped, ...facts } = split ?? {};
+    const read = split === null ? { label: "2", multi: false } : release?.stale ? facts : split;
     const t = makeT();
     await seedRegistry(t);
     await seedTeam(t, [alice, bob, carol, dave]);
@@ -599,9 +614,8 @@ describe("an ANN book's line, read against its held Series", () => {
           mangaId: "88",
           url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=5000",
           title,
-          label: "2",
-          multi: false,
           format: "physical",
+          ...read,
           editionLineHint: true,
           isbn13: "9781421599991",
           page: { status: "ok", fetchedAt: 1, distributor: "VIZ Media", isbn13: "9781421599991" },
@@ -641,6 +655,63 @@ describe("an ANN book's line, read against its held Series", () => {
       line: { name: "VIZBIG Edition", position: "2", created: true },
       coverage: { kind: "pending" },
       suggestion: null,
+    });
+  });
+
+  // The Editor sees what the page pass reads: every statement read whole,
+  // a number beside the line's name the book's, never the line's name.
+  describe.each([false, true])("source facts (stale snapshot: %s)", (stale) => {
+    const alpha = (title: string, designator: string) =>
+      heldAnn("Alpha", title, { title: "Alpha" }, { designator, stale });
+
+    it("shows no range for a subtitle whose second range leaves a gap", async () => {
+      const { view } = await alpha("Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 7-9", "GN 1");
+      expect(view?.book).toMatchObject({
+        statedRange: null,
+        line: { name: "VIZBIG Edition", position: "1" },
+      });
+    });
+
+    it("shows the whole range a subtitle states", async () => {
+      for (const title of [
+        "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 4-6",
+        "Alpha [VIZBIG Edition] 1: Includes Vols. 1-3 plus 4-6",
+      ]) {
+        const { view } = await alpha(title, "GN 1");
+        expect(view?.book?.statedRange, title).toEqual({ from: "1", to: "6" });
+      }
+    });
+
+    it.each(["Alpha VIZBIG Edition 1-3-5", "Alpha [VIZBIG Edition Vols. 6-4]"])(
+      "shows no range for %s",
+      async (title) => {
+        const { view } = await alpha(title, "GN 1");
+        expect(view?.book?.statedRange).toBeNull();
+      },
+    );
+
+    it.each([
+      "Alpha [VIZBIG Edition] (Vol. II)",
+      "Alpha [VIZBIG Edition Vol. 2]",
+      "Alpha [VIZBIG Edition 2]",
+    ])("prefills VIZBIG Edition and no position for %s at GN 1, and 2 at GN 2", async (title) => {
+      const conflict = await alpha(title, "GN 1");
+      expect(conflict.created).toEqual(["VIZBIG Edition"]);
+      expect(conflict.view).toMatchObject({
+        book: { line: { name: "VIZBIG Edition", position: null } },
+        line: { name: "VIZBIG Edition", position: null, created: true },
+      });
+      const agreeing = await alpha(title, "GN 2");
+      expect(agreeing.created).toEqual(["VIZBIG Edition"]);
+      expect(agreeing.view).toMatchObject({
+        book: { line: { name: "VIZBIG Edition", position: "2" } },
+        line: { name: "VIZBIG Edition", position: "2", created: true },
+      });
+    });
+
+    it("prefills no position the title states in a way it cannot read", async () => {
+      const { view } = await alpha("Alpha [VIZBIG Edition] (Vol. ii)", "GN 2");
+      expect(view?.book?.line).toEqual({ name: "VIZBIG Edition", position: null });
     });
   });
 

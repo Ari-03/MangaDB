@@ -1527,6 +1527,17 @@ export const applyReleasePage = internalMutation({
       // a book may hold more (lib/coverage.ts coverageFromLine).
       const range = stated ?? coverageFromLine(name, position, { lastVolume, lastPosition });
       const labels = range ? rangeLabels(range) : [];
+      // Only an unknown size leaves a book unmapped. A stated range
+      // Coverage cannot list ("6-4", "1-80", "1.5-3.5") is a statement no
+      // range holds, never silence. packagingOf already rejects one, stored
+      // or read; this keeps the rule if a reader ever lets one through.
+      if (stated !== undefined && labels.length === 0) {
+        return await hold(
+          "packaging",
+          `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose stated Volumes ${stated.from}–${stated.to} no Coverage lists — an Editor maps it.`,
+          series._id,
+        );
+      }
       // Leaf boundary holds for packaging too: every collected Volume must
       // already exist under the Series (the backbone the mirror built).
       const covered = labels.filter((label) =>

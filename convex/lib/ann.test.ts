@@ -179,12 +179,10 @@ describe("splitReleaseTitle", () => {
     expect(coverage("Alpha (GN 1 & 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
     expect(coverage("Alpha (GN 1 and 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
     expect(coverage("Alpha (GN 1-3, 4-6)")).toEqual([undefined, true, range("1", "6"), undefined]);
-    expect(coverage("Alpha (GN 10.5-11)")).toEqual([
-      undefined,
-      true,
-      range("10.5", "11"),
-      undefined,
-    ]);
+    // A range Coverage cannot list (a fraction, more than one book holds)
+    // is a statement no range holds, never one to leave unmapped.
+    expect(coverage("Alpha (GN 10.5-11)")).toEqual([undefined, true, undefined, true]);
+    expect(coverage("Alpha (GN 1-80)")).toEqual([undefined, true, undefined, true]);
     // The shared grammar's em dash is a range too.
     expect(coverage("Alpha (GN 1—3)")).toEqual([undefined, true, range("1", "3"), undefined]);
     // The release page's "of N" total, if a line ever carries it, is not a Volume.
@@ -627,9 +625,17 @@ describe("readAnnLineTitle — a packaged line's work", () => {
     ).toMatchObject({ kind: "line", work: "The Omnibus Club", lineName: "Colossal Edition" });
   });
 
-  it("reads the position written right after the line's name, canonical", () => {
+  it("reads the one position the line's segment states, canonical", () => {
     for (const [title, position] of [
       ["Alpha VIZBIG Edition 2", "2"],
+      // Inside the line's bracket, or marked in a tag after it.
+      ["Alpha [VIZBIG Edition Vol. 2]", "2"],
+      ["Alpha [VIZBIG Edition II]", "2"],
+      ["Alpha [VIZBIG Edition] (Book II)", "2"],
+      ["Alpha [VIZBIG Edition] 2 (Vol. 2)", "2"],
+      // Two that differ, or one it cannot read: none.
+      ["Alpha [VIZBIG Edition 2] 1", null],
+      ["Alpha [VIZBIG Edition] (Vol. ii)", null],
       ["Alpha [VIZBIG Edition] 2", "2"],
       ["Alpha [VIZBIG Edition] II", "2"],
       ["Alpha VIZBIG Edition II", "2"],
@@ -645,6 +651,10 @@ describe("readAnnLineTitle — a packaged line's work", () => {
     ] as const) {
       expect(readAnnLineTitle(title), title).toMatchObject({ kind: "line", position });
     }
+    expect(readAnnLineTitle("Alpha [VIZBIG Edition Vol. 2]")).toMatchObject({
+      work: "Alpha",
+      lineName: "VIZBIG Edition",
+    });
   });
 
   it("reads a title naming no line beyond the work's own as wholly the work", () => {
@@ -761,6 +771,8 @@ describe("packagingOf — every fact a packaged line's title and designator stat
       ["Alpha [VIZBIG Edition] 1: Includes Vols. 4-6", { from: "4", to: "6" }],
       ["Alpha [VIZBIG Edition] (Vols. 4-6)", { from: "4", to: "6" }],
       ["Alpha 3-in-1 Edition Vols. 1-3", { from: "1", to: "3" }],
+      // A tag's whole list, as the list ending a title is read.
+      ["Alpha - VIZBIG Edition [4-6] [Hardcover]", { from: "4", to: "6" }],
       // No statement: nothing, so the line's size may size it.
       ["Alpha [VIZBIG Edition]", null],
     ] as const) {
@@ -786,9 +798,8 @@ describe("packagingOf — every fact a packaged line's title and designator stat
       ["Alpha VIZBIG Edition 1: Includes Vols. 4-6", "GN 1-3"],
       ["Alpha [4-6]", "GN 1-3"],
       ["Alpha [1, 3]", "GN 1-3"],
-      // A list the parser leaves unread in the line's segment.
+      // A tag's list with a gap.
       ["Alpha - VIZBIG Edition [1, 3] [Hardcover]", "GN 1-3"],
-      ["Alpha - VIZBIG Edition [4-6] [Hardcover]", "GN 1"],
     ] as const) {
       for (const stored of [line(title, designator), stale(title, designator)]) {
         expect(packagingOf(stored, ["Alpha"]), `${title} (${designator})`).toMatchObject({
@@ -868,6 +879,206 @@ describe("packagingOf — every fact a packaged line's title and designator stat
       line: null,
     });
     expect(packagingOf(line("Alpha Box Set", "GN 1-3"), ["Alpha"])).toBeNull();
+  });
+});
+
+describe("packagingOf — every statement in a line's segment, read whole", () => {
+  const read = (title: string, designator = "GN 1") => {
+    const split = splitReleaseTitle(`${title} (${designator})`, "Alpha");
+    if (split === null) throw new Error(`No designator in ${title}`);
+    return { fresh: packagingOf(split, ["Alpha"]), stored: split };
+  };
+  const cover = (range: { from: string; to: string } | null) =>
+    range === null ? "rejected" : `${range.from}-${range.to}`;
+
+  // One list, written in each place a line's title states coverage, reads
+  // the same everywhere: a range only when every item runs in order with no
+  // gap and Coverage can list it.
+  const PLACES = [
+    (list: string) => `Alpha [VIZBIG Edition Vols. ${list}]`,
+    (list: string) => `Alpha VIZBIG Edition ${list}`,
+    (list: string) => `Alpha [VIZBIG Edition] (Vols. ${list})`,
+    (list: string) => `Alpha [VIZBIG Edition] [${list}]`,
+    (list: string) => `Alpha VIZBIG Edition 1: Includes Vols. ${list}`,
+    (list: string) => `Alpha [VIZBIG Edition] (Contains Vols. ${list})`,
+  ];
+  it.each([
+    ["4-6", "4-6"],
+    ["1-3, 4-6", "1-6"],
+    ["2-4, 5", "2-5"],
+    ["1, 3", "rejected"],
+    ["1 & 3", "rejected"],
+    ["1-3, 7-9", "rejected"],
+    ["1-3-5", "rejected"],
+    ["6-4", "rejected"],
+    ["1-3, 6-4", "rejected"],
+    ["1.5-3.5", "rejected"],
+    ["1-80", "rejected"],
+  ])("reads the list %s as %s wherever the title writes it", (list, expected) => {
+    for (const place of PLACES) {
+      const title = place(list);
+      const { fresh, stored } = read(title);
+      expect(fresh, title).toMatchObject({
+        coverageGapped: expected === "rejected",
+        positionConflict: false,
+        line: { name: "VIZBIG Edition", position: "1" },
+      });
+      expect(cover(fresh!.coverRange), title).toBe(expected);
+      // The snapshot keeps the same reading, a rejection included.
+      expect(stored.coverageGapped === true ? "rejected" : cover(stored.coverRange!), title).toBe(
+        expected,
+      );
+    }
+  });
+
+  // A second statement appended to any first one is never dropped: one that
+  // agrees keeps the range, one that differs, skips a Volume or reads no
+  // range rejects it. The designator is one more statement.
+  const BASES = [
+    "Alpha [VIZBIG Edition Vols. 4-6]",
+    "Alpha VIZBIG Edition 4-6",
+    "Alpha [VIZBIG Edition] (Vols. 4-6)",
+    "Alpha VIZBIG Edition 1: Includes Vols. 4-6",
+    "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 4-6",
+  ];
+  const SECOND = [
+    (list: string) => ` (Vols. ${list})`,
+    (list: string) => ` [${list}]`,
+    (list: string) => ` (Includes Vols. ${list})`,
+  ];
+  it.each([
+    ["4-6", true],
+    ["1-3", false],
+    ["4, 6", false],
+    ["4-6-8", false],
+    ["6-4", false],
+    ["4.5-6", false],
+    ["1-80", false],
+  ])("keeps a second statement %s beside the first (agrees: %s)", (list, agrees) => {
+    for (const base of BASES) {
+      const first = read(base).fresh!.coverRange!;
+      for (const second of SECOND) {
+        const title = `${base}${second(list)}`;
+        const same = agrees && first.from === "4";
+        const { fresh } = read(title);
+        expect(fresh?.coverageGapped, title).toBe(!same);
+        expect(fresh?.coverRange, title).toEqual(same ? first : null);
+      }
+    }
+  });
+
+  it("reads the designator as one more statement beside the title's", () => {
+    for (const base of BASES.slice(0, 3)) {
+      expect(read(base, "GN 4-6").fresh?.coverRange, base).toEqual({ from: "4", to: "6" });
+      expect(read(base, "GN 1-3").fresh?.coverageGapped, base).toBe(true);
+      expect(read(base, "GN 1, 3").stored.coverageGapped, base).toBe(true);
+    }
+  });
+
+  // Every position the title states, in any spelling the grammar reads, must
+  // agree with the others and with a single designator's label; a range
+  // designator is coverage. One it cannot read is never filled in.
+  const POSITIONED = [
+    "Alpha VIZBIG Edition 2",
+    "Alpha VIZBIG Edition Vol. 2",
+    "Alpha [VIZBIG Edition] II",
+    "Alpha [VIZBIG Edition Vol. 2]",
+    "Alpha [VIZBIG Edition II]",
+    "Alpha [VIZBIG Edition] (Vol. 2)",
+    "Alpha [VIZBIG Edition] [Book II]",
+    "Alpha [VIZBIG Edition] (GN 2)",
+    "Alpha [VIZBIG Edition Book II]",
+  ];
+  it.each([
+    [" (Vol. 2)", "GN 2", "2"],
+    [" (Book II)", "GN 2", "2"],
+    ["", "GN 4-6", "2"],
+    [" (Vol. II)", "GN 4-6", "2"],
+    [" (Vol. 3)", "GN 2", null],
+    ["", "GN 1", null],
+    [" (Vol. II)", "GN 1", null],
+    [" (Vol. ii)", "GN 2", null],
+    [" (Vol. two)", "GN 2", null],
+    [" (Vol. -2)", "GN 2", null],
+    [" (Vol. 2A)", "GN 2", null],
+  ] as const)("reads a position with%s at %s as %s", (second, designator, position) => {
+    for (const base of POSITIONED) {
+      const title = `${base}${second}`;
+      const { fresh } = read(title, designator);
+      expect(fresh, title).toMatchObject({
+        positionConflict: position === null,
+        line: { name: "VIZBIG Edition", position },
+      });
+    }
+  });
+
+  it("keeps a number beside the line's name out of the name, and words without one in it", () => {
+    for (const [title, name] of [
+      ["Alpha [VIZBIG Edition Vol. 2]", "VIZBIG Edition"],
+      ["Alpha [VIZBIG Edition 2]", "VIZBIG Edition"],
+      ["Alpha [VIZBIG Edition I]", "VIZBIG Edition"],
+      ["Alpha [VIZBIG Edition Two]", "VIZBIG Edition"],
+      ["Alpha [VIZBIG Edition Vols. 1-3]", "VIZBIG Edition"],
+      ["Alpha [VIZBIG Edition Includes Vols. 1-3 plus 4-6]", "VIZBIG Edition"],
+      ["Alpha [Side Story VIZBIG Edition]", "Side Story VIZBIG Edition"],
+      ["Alpha [VIZBIG Edition Hardcover]", "VIZBIG Edition"],
+      ["Alpha [3-in-1 Edition] 2", "3-in-1 Edition"],
+    ] as const) {
+      expect(read(title, "GN 2").fresh?.line?.name, title).toBe(name);
+    }
+    // An n-in-1 name's count is the line's: the book is 2, nothing conflicts.
+    // A lone numeral in the bracket is the book's position.
+    expect(read("Alpha [VIZBIG Edition I]", "GN 1").fresh?.line).toEqual({
+      name: "VIZBIG Edition",
+      position: "1",
+    });
+    expect(read("Alpha [VIZBIG Edition I]", "GN 2").fresh?.positionConflict).toBe(true);
+    expect(read("Alpha [3-in-1 Edition] 2", "GN 2").fresh).toMatchObject({
+      line: { position: "2" },
+      positionConflict: false,
+      coverRange: null,
+      coverageGapped: false,
+    });
+  });
+
+  it("passes over a reissue or binding tag, and holds a number it cannot place", () => {
+    for (const title of [
+      "Alpha [VIZBIG Edition] [2nd Edition]",
+      "Alpha [VIZBIG Edition] (Hardcover)",
+      "Alpha [VIZBIG Edition] [Side Story]",
+      "One Piece - [Omnibus] 33 - Wano",
+    ]) {
+      expect(read(title, "GN 2").fresh, title).toMatchObject({
+        coverageGapped: false,
+        positionConflict: title.startsWith("One Piece"),
+      });
+    }
+    for (const title of [
+      "Alpha [VIZBIG Edition] (Part 2)",
+      "Alpha VIZBIG Edition 1: Arc 3",
+      "Alpha [VIZBIG Edition] (Vol. 2 / 4)",
+      "Alpha [2 VIZBIG Edition]",
+    ]) {
+      expect(read(title).fresh, title).toMatchObject({
+        coverRange: null,
+        coverageGapped: true,
+        positionConflict: true,
+      });
+    }
+  });
+
+  // A box set's name is the bundle's ("[Box Set - Part 1]"): nothing in it is
+  // read as the book's, and its designator's range is stored as it reads.
+  it("reads a box set's designator alone", () => {
+    for (const title of [
+      "The Quintessential Quintuplets - [Box Set - Part 1]",
+      "Akira [35th Anniversary Box Set]",
+    ]) {
+      const { fresh, stored } = read(title, "GN 1-7");
+      expect(fresh, title).toBeNull();
+      expect(stored, title).toMatchObject({ coverRange: { from: "1", to: "7" } });
+      expect(stored.coverageGapped, title).toBeUndefined();
+    }
   });
 });
 

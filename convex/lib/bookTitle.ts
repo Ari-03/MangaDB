@@ -482,8 +482,11 @@ function peelInnerNovelGroups(text: string, peel: Peeled): string {
   });
 }
 
-/** "Hardcover Omnibus" → "Omnibus"; "Manga Box Set" → "Box Set". */
-function tidyLineName(text: string): string {
+/**
+ * "Hardcover Omnibus" → "Omnibus"; "Manga Box Set" → "Box Set". ANN names a
+ * line from its title's segment the same way (lib/ann.ts).
+ */
+export function tidyLineName(text: string): string {
   const cleaned = text
     .replace(/^the\s+/i, "")
     .replace(/^complete\s+(?=(?:manga\s+)?box\s+set)/i, "")
