@@ -14,11 +14,15 @@ import { bundlePath, editionPath } from "~/lib/slug";
  * query (`catalogPages.isbnLookup`). Search (`/search`) 302s recognized
  * ISBNs here, so this route owns resolution.
  *
- * The redirect is permanent because the target is a record identity, not a
- * query: an ISBN names exactly one Release (or Bundle) forever, and merges
- * already resolve to the survivor before the redirect is issued. Unknown or
- * invalid ISBNs 404.
+ * The redirect keeps the specified 301 (the ISBN's page is its Edition's or
+ * Bundle's, and merges resolve to the survivor before it is issued), but it
+ * is sent `Cache-Control: no-store`: which record an ISBN lands on can
+ * change with a merge, a Split, a corrected ISBN or a recorded printing, so
+ * no browser or cache may keep the answer. Unknown or invalid ISBNs 404.
  */
+// A 301 is cacheable by default (RFC 9110 §15.4.2); no-store forbids it.
+const uncached = { "Cache-Control": "no-store" };
+
 export const Route = createFileRoute("/isbn/$isbn")({
   loader: async ({ params }) => {
     const isbn = normalizeIsbn(params.isbn);
@@ -29,11 +33,13 @@ export const Route = createFileRoute("/isbn/$isbn")({
       throw redirect({
         href: `${editionPath(target.edition.publicId, target.edition.title)}#${target.anchor}`,
         statusCode: 301,
+        headers: uncached,
       });
     }
     throw redirect({
       href: bundlePath(target.bundle.publicId, target.bundle.name),
       statusCode: 301,
+      headers: uncached,
     });
   },
   component: () => null,

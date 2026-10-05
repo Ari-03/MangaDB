@@ -27,7 +27,10 @@ one of the Release's Other Printings (an older or later printing by the
 same publisher, [imports](imports.md#other-printings)) lands on the same
 row, so a reader who scans an old copy finds the book. A box-set ISBN
 goes to its Bundle page, and a Release match wins a conflict. Unknown or
-checksum-invalid ISBNs 404, as does a hidden Release's printing.
+checksum-invalid ISBNs 404, as does a hidden Release's printing. The 301
+is sent with `Cache-Control: no-store`, because the row an ISBN lands on
+can move (a merge, a Split, a corrected ISBN, a recorded printing); a
+response cached before that header shipped cannot be recalled.
 
 ## Release calendar
 
