@@ -52,6 +52,7 @@ import {
 } from "./lib/pipeline";
 import type { PrhTitleSnapshot } from "./lib/prh";
 import { checkOpCount, planCreateOps, unjoinable, type CreatePlan } from "./lib/proposalCreates";
+import { printingReleases } from "./lib/releaseIsbns";
 import { requireDataTeam } from "./lib/roles";
 import { isMangaBook, type BookSnapshot } from "./lib/sevenSeas";
 import type { YenTitleSnapshot } from "./lib/yenPress";
@@ -312,6 +313,7 @@ async function placeable(
     return no("A box set is a Release Bundle, which a Proposal cannot create.");
   }
   const { isbn13, isbn10 } = facts;
+  // A Release's own ISBN, or one of its Other Printings'.
   const holders = [
     ...(isbn13 !== undefined
       ? await ctx.db
@@ -325,8 +327,10 @@ async function placeable(
           .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))
           .collect()
       : []),
+    ...(isbn13 !== undefined ? await printingReleases(ctx, isbn13) : []),
+    ...(isbn10 !== undefined ? await printingReleases(ctx, isbn10) : []),
   ];
-  if (holders.some((release) => release.status === "active")) {
+  if (holders.some((release) => release?.status === "active")) {
     return no(
       `ISBN ${isbn13 ?? isbn10} is already on an active Release: link or correct that Release instead.`,
     );

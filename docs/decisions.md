@@ -80,6 +80,37 @@ Mode would leave its books out of the catalog until a person looked; and
 treating disjoint ISBNs as no evidence, which would link namesakes by
 title alone.
 
+## Other printings keep their barcodes, recorded by decision
+
+An older or later printing of a Release by the same publisher keeps its
+ISBN in `releaseIsbns`, so a reader who scans an old copy lands on the
+Release, and the book leaves the Held Books list (the owner decided
+2026-10-05). The Release keeps its own ISBN and facts. A row per ISBN,
+not an array on the Release, because Convex indexes no array, and both
+`/isbn/{isbn}` and the matching ladder look a printing up by ISBN.
+
+A person, or an agent whose decision a reviewer checked, decides each
+one, and no importer records one on its own (decided after review,
+2026-10-05). A wrong printing is worse than a held book: a light novel
+taken for the manga of its name sends a reader who scans the novel to the
+manga, and a first edition collected differently gets filed under a
+Volume number it does not hold. Two automatic rules were built and
+measured on the staging holds. A first, loose rule cleared about 250
+holds, and review found light novels, ebooks, parts, hardcovers and
+differently collected first editions among them. A strict rule cleared
+13 of the 874 books the held-books report marked "another printing years
+apart", and a second review still did not pass it. A rule that safe saves
+little over judging those books one at a time, so the decided path
+(`printings:recordDecidedInternal`) is the only one. It checks the
+invariants that keep the data consistent (the Release's Series, its
+publisher, a physical book, an ISBN no other Release holds), not whether
+the two books are the same.
+
+Ruled out: a Release per printing, which splits one book's owners,
+ratings and dates across rows; recording every same-slot ISBN, which
+takes ebook ISBNs filed as print and same-named novels; and an automatic
+rule, for the reasons above.
+
 ## Cover art sources
 
 Covers come from Penguin Random House's distribution CDN first and the

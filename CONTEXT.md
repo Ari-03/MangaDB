@@ -34,8 +34,12 @@ The publisher-facing designation shown for a Volume, such as "7.5," "Side Story,
 An optional edition-independent summary of a Volume's content, curated by Editors. When absent, the Volume's page borrows the representative Release Description (ranked as for an Edition Description, except that Editions from a Publisher still publishing come before a defunct one's, after any Human Override) among the Editions that cover that Volume alone and completely and belong to no Edition Line, naming the Edition it came from, and otherwise shows its Series' synopsis labelled as being about the series; an omnibus, a split part, or a line's packaging never lends its blurb.
 
 **Release**:
-A specific purchasable publication of an Edition — one Format, Binding where applicable, one language, and optional ISBN-10 and ISBN-13 identifiers. An unchanged reprint or the same digital publication sold by another retailer retains its Release identity; a change to those characteristics creates another Release.
+A specific purchasable publication of an Edition — one Format, Binding where applicable, one language, and optional ISBN-10 and ISBN-13 identifiers. An unchanged physical reprint retains its Release identity, even under another ISBN (an Other Printing); the same digital publication sold by another retailer also retains its Release identity. A change to those characteristics creates another Release.
 _Avoid_: edition, printing
+
+**Other Printing**:
+An earlier or later printing of a physical Release by its Publisher under another ISBN, with the same content, Format and Binding, such as Seven Seas' 2012 "A Certain Scientific Railgun" Volume 5 beside its 2023 reprint. Its ISBN finds the Release and is listed on its row, but it is not a Release of its own. The Release keeps its own ISBN, date, price, description and cover, and a source's record of the other printing never changes them. No import records one on its own: a person, or an agent whose decision a reviewer checked, decides each from evidence, and until then the book stays a Held Book.
+_Avoid_: reprint Release, alternate ISBN
 
 **Release Description**:
 The publisher-provided descriptive text for a specific Release, such as a back-cover blurb, stored per Release. It describes that edition of the content and may differ between Releases covering the same Volume. Pages do not print it per Release; they show the Edition Description.

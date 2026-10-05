@@ -3,7 +3,8 @@
 // (a rename at the source is then a field conflict, never a failed match);
 // this module resolves everything below it, strongest first:
 //
-//   ② ISBN-13 exact, with a title-similarity sanity check
+//   ② ISBN-13 exact (a Release's own, or one of its Other Printings), with a
+//     title-similarity sanity check
 //   ③ publisher + normalized series title + volume label + format, onto an
 //     ordinary whole-Volume Edition, Binding and language not contradicting —
 //     auto ONLY with exactly one candidate and no override/lock
@@ -22,6 +23,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isNovelTitle } from "./bookTitle";
 import { coveringOf, releasesOf } from "./editionRows";
 import { factualOverrides } from "./moderationFields";
+import { printingReleases } from "./releaseIsbns";
 import { decodeEntities } from "./text";
 
 // ---------- pure text rules ----------
@@ -167,7 +169,8 @@ export async function survivorOf<T extends "series" | "volumes" | "releases">(
 }
 
 /**
- * Every Release row carrying this ISBN-13, each merged one answered by its
+ * Every Release carrying this ISBN-13 as its own or as one of its Other
+ * Printings (lib/releaseIsbns.ts), each merged one answered by its
  * survivor (null where the merge chain dead-ends). Survivors can repeat.
  */
 export async function isbnHolders(
@@ -178,7 +181,8 @@ export async function isbnHolders(
     .query("releases")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
     .collect();
-  return await Promise.all(rows.map((row) => survivorOf<"releases">(ctx, row)));
+  const printed = await printingReleases(ctx, isbn13);
+  return await Promise.all([...rows, ...printed].map((row) => survivorOf<"releases">(ctx, row)));
 }
 
 /**
@@ -276,6 +280,7 @@ const EVIDENCE_VOLUMES = 150;
  * title alone links Doubt to Doubt!!, E'S to ES, and Citrus to Citrus+ (an
  * alt title); once linked, the source builds its Volumes and credits there.
  *   "same"          — one of the work's ISBNs is already a Release of the Series
+ *                     (its own ISBN or another printing's)
  *   "different"     — both sides know their creators (ANN person ids) and
  *                     share none
  *   "disjointBooks" — both hold ISBNs in a common format and share none (a
@@ -296,7 +301,13 @@ export async function workMatch(
       .query("releases")
       .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
       .collect();
-    if (releases.some((r) => r.status === "active" && r.seriesIds.includes(seriesId))) {
+    // Another printing of one of its books is its book too.
+    const printed = await printingReleases(ctx, isbn13);
+    if (
+      [...releases, ...printed].some(
+        (r) => r?.status === "active" && r.seriesIds.includes(seriesId),
+      )
+    ) {
       return "same";
     }
   }

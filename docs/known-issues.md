@@ -480,6 +480,13 @@ is fixed.
   ended at 30 minutes leaves those undone until the next rebuild. Making
   those phases steps of the same continuation, with the budget checked
   between them, is the fix.
+- **Nothing takes back an Other Printing recorded in error.** No page or
+  command removes a `releaseIsbns` row, and its observation stays linked
+  to the Release, so its ISBN keeps finding that Release. To undo one by
+  hand, delete the row and clear the `recordRef` and `printingIsbn13` of
+  every observation linked through it (the row's `observationId` names the
+  first). The next import run holds that book again. The `otherPrinting`
+  Revision stays in the Release's history.
 
 ## Review queue
 

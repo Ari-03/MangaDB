@@ -12,6 +12,7 @@ import { followMerges } from "../merges";
 import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
+import { printingReleases } from "../releaseIsbns";
 import { seriesSearchText } from "../searchMatch";
 import {
   OWNERSHIP,
@@ -1283,6 +1284,16 @@ async function updateFields(
         patch.coverImage = undefined;
         break;
       case "format":
+        if (change.after === "digital") {
+          const printing = await ctx.db
+            .query("releaseIsbns")
+            .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+            .first();
+          if (printing !== null)
+            skip(
+              `The Release has other printings (ISBN ${printing.isbn13}), and only a physical Release has other printings. Keep its format physical.`,
+            );
+        }
         patch.format = change.after;
         // Binding describes physical construction only (glossary: Binding).
         if (change.after === "digital" && release.binding !== undefined) patch.binding = undefined;
@@ -1298,6 +1309,14 @@ async function updateFields(
       .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
       .first();
     if (clash && clash._id !== release._id) skip(`ISBN ${isbn13} already on another release`);
+  }
+  // An ISBN another Release was also printed under is that Release's too.
+  for (const isbn of [patch.isbn13, patch.isbn10]) {
+    if (typeof isbn !== "string") continue;
+    const printed = (await printingReleases(ctx, isbn)).find(
+      (holder) => holder !== null && holder._id !== release._id,
+    );
+    if (printed) skip(`ISBN ${isbn} is another printing of another release`);
   }
   if (release.format === "digital" && patch.binding !== undefined)
     skip("binding on a digital release");
@@ -2061,6 +2080,9 @@ async function createRelease(
       .first();
     if (clash10) skip(`ISBN-10 ${isbn10} already exists`);
   }
+  if ((await printingReleases(ctx, entry.isbn13)).some((holder) => holder !== null)) {
+    skip(`ISBN ${entry.isbn13} is another printing of an existing release`);
+  }
   const bundle = await ctx.db
     .query("releaseBundles")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
@@ -2194,12 +2216,19 @@ async function releaseBundle(
     .collect();
   let firstVolume: Id<"volumes"> | null = null;
   for (const planned of entry.members) {
-    const hits = (
-      await ctx.db
+    // The Release with that ISBN, as its own or as one of its other printings'.
+    const holders = [
+      ...(await ctx.db
         .query("releases")
         .withIndex("by_isbn13", (q) => q.eq("isbn13", planned.isbn13))
-        .collect()
-    ).filter((r) => r.status === "active");
+        .collect()),
+      ...(await printingReleases(ctx, planned.isbn13)),
+    ];
+    const hits = [
+      ...new Map(
+        holders.flatMap((r) => (r !== null && r.status === "active" ? [[r._id, r] as const] : [])),
+      ).values(),
+    ];
     const member = hits[0];
     if (!member || hits.length > 1)
       return skip(`member ${planned.isbn13}: ${hits.length} active releases`);

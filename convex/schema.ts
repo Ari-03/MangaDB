@@ -633,6 +633,27 @@ export default defineSchema({
     // Who shows a stored cover, so replacing one never strands a sharer.
     .index("by_cover", ["coverImage.storageId"]),
 
+  // Other Printings (CONTEXT.md): the ISBNs a Release was also printed
+  // under, an older or later printing by its Publisher with the same
+  // content, Format and Binding. The Release's own `isbn13` stays its
+  // printing; a row here only finds it (lib/releaseIsbns.ts) and is shown
+  // on its row. One is recorded by decision (printings.ts, with evidence a
+  // person or reviewed agent weighed), never by an importer on its own,
+  // and no record of the printing writes its date, price or blurb onto the
+  // Release. A row follows its Release on a merge and comes back on Split.
+  // An ISBN-10 is looked up by its ISBN-13.
+  releaseIsbns: defineTable({
+    releaseId: v.id("releases"),
+    isbn13: v.string(),
+    pubDate: v.optional(partialDate),
+    // Why it was decided another printing, and the source record it came from.
+    reason: v.string(),
+    sourceKey: v.string(),
+    observationId: v.optional(v.id("sourceObservations")),
+  })
+    .index("by_isbn13", ["isbn13"])
+    .index("by_release", ["releaseId"]),
+
   releaseVariants: defineTable({
     ...canonical("releaseVariants"),
     releaseId: v.id("releases"),
@@ -718,6 +739,11 @@ export default defineSchema({
     // reconciliation's dedup anchor: one open queue item per observation,
     // and a rejected one never re-queues until the snapshot changes.
     queuedProposalId: v.optional(v.id("proposals")),
+    // Set while it is linked to a Release as the record of one of that
+    // Release's Other Printings (lib/observations.ts linkObservation): the
+    // printing's ISBN. Reconciliation offers the Release nothing from it,
+    // whatever its snapshot later says.
+    printingIsbn13: v.optional(v.string()),
   })
     .index("by_source_record", ["sourceKey", "sourceRecordId"])
     .index("by_record", ["recordRef.type", "recordRef.id"])

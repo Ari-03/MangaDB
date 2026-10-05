@@ -8,7 +8,8 @@ import { bundlePath, editionPath } from "~/lib/slug";
 /**
  * `/isbn/{isbn}` (spec §11): the ISBN entry point. A valid
  * ISBN-10/13 (separators tolerated) 301s to the owning Edition page anchored
- * at the matching Release row; a box-set ISBN 301s to its Bundle page. A
+ * at the matching Release row, whether it is the Release's own ISBN or one
+ * of its Other Printings'; a box-set ISBN 301s to its Bundle page. A
  * Release match wins any conflict — the resolution order lives in the Convex
  * query (`catalogPages.isbnLookup`). Search (`/search`) 302s recognized
  * ISBNs here, so this route owns resolution.

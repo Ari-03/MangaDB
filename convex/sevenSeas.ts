@@ -50,6 +50,7 @@ import {
   type BundleReconcile,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
+import { printingIsbnOf } from "./lib/releaseIsbns";
 import {
   BOOK_PAGE_VERSION,
   bookSnapshotValidator,
@@ -521,6 +522,11 @@ export const applyBook = internalMutation({
       if (!release || release.status !== "active" || release.locked) {
         return { status: "recordOnly", changed: false };
       }
+      // A record of one of the Release's Other Printings offers it nothing,
+      // its art included (lib/releaseIsbns.ts).
+      if (observation.printingIsbn13 !== undefined) {
+        return { status: "recordOnly", changed: false, releaseId: release._id };
+      }
       // An unchanged snapshot is done unless its art moved to a new URL.
       // An unchanged listing still reconciles once while it carries a blurb
       // the Release lacks (descriptions predate their import, so the first
@@ -698,11 +704,13 @@ export const applyBook = internalMutation({
         citation,
         now,
       });
+      // Linked through one of its Other Printings, the book's art is that printing's.
+      const printing = (await printingIsbnOf(ctx, release._id, snapshot.isbn13)) !== undefined;
       return {
         status: "linked",
         changed: true,
         releaseId: release._id,
-        cover: coverRequest(release, snapshot.coverUrl),
+        cover: printing ? undefined : coverRequest(release, snapshot.coverUrl),
       };
     }
 

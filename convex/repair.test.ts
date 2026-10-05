@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { RepairEntry } from "./lib/repair/entries";
 import { canonicalLabel, labelNumber, sameLabel } from "./lib/repair/audit";
@@ -333,6 +333,59 @@ describe("field repairs and scope", () => {
     expect((await run(t, [entry(null)]))[0]?.status).toBe("alreadyApplied");
   });
 
+  it("never gives a Release an ISBN another Release was also printed under", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    // 9781591160342 is another printing of the Release on Volume 2.
+    await t.run(async (ctx) => {
+      const other = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === "9780000000028",
+      )!;
+      await ctx.db.insert("releaseIsbns", {
+        releaseId: other._id,
+        isbn13: "9781591160342",
+        reason: "Another printing: published 2002, the Release 2007.",
+        sourceKey: "ann",
+      });
+    });
+    const assign = (field: "isbn13" | "isbn10", after: string): RepairEntry => ({
+      kind: "updateFields",
+      key: `assign-${field}`,
+      reason: "isbn",
+      table: "releases",
+      id: s.r1.releaseId,
+      changes: [{ field, before: field === "isbn13" ? "9780000000011" : null, after }],
+      evidenceObservationId: null,
+    });
+    expect((await run(t, [assign("isbn13", "9781591160342")]))[0]).toMatchObject({
+      status: "skipped",
+      reason: expect.stringContaining("another printing"),
+    });
+    expect((await run(t, [assign("isbn10", "1591160340")]))[0]).toMatchObject({
+      status: "skipped",
+      reason: expect.stringContaining("another printing"),
+    });
+    const create: RepairEntry = {
+      kind: "createRelease",
+      key: "printing",
+      reason: "missing release",
+      isbn13: "9781591160342",
+      isbn10: null,
+      format: "physical",
+      binding: null,
+      pubDate: null,
+      price: null,
+      publisherId: s.publisherId,
+      coverage: [{ volumeId: s.v3, extent: "complete" }],
+      line: null,
+      sources: [],
+    };
+    expect((await run(t, [create]))[0]).toMatchObject({
+      status: "skipped",
+      reason: expect.stringContaining("another printing"),
+    });
+  });
+
   it("turns a print-labelled ebook digital and drops its binding", async () => {
     const t = makeT();
     const s = await seed(t);
@@ -351,6 +404,53 @@ describe("field repairs and scope", () => {
     expect(release?.format).toBe("digital");
     expect(release?.binding).toBeUndefined();
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  it("refuses to make a Release digital while it has other printings, without changing fields or audit history", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(s.r1.releaseId, { binding: "paperback" });
+      await ctx.db.insert("releaseIsbns", {
+        releaseId: s.r1.releaseId,
+        isbn13: "9781591160342",
+        reason: "An earlier physical printing.",
+        sourceKey: "ann",
+      });
+    });
+    const snapshot = () =>
+      t.run(async (ctx) => ({
+        release: await ctx.db.get(s.r1.releaseId),
+        printings: await ctx.db.query("releaseIsbns").collect(),
+        revisions: await ctx.db.query("revisions").collect(),
+        proposals: await ctx.db.query("proposals").collect(),
+      }));
+    const before = await snapshot();
+    const entry: RepairEntry = {
+      kind: "updateFields",
+      key: "f-printings",
+      reason: "ebook recorded as print",
+      table: "releases",
+      id: s.r1.releaseId,
+      changes: [
+        { field: "format", before: "physical", after: "digital" },
+        { field: "isbn10", before: null, after: "0000000019" },
+      ],
+      evidenceObservationId: null,
+    };
+    for (const dryRun of [true, false]) {
+      expect((await run(t, [entry], dryRun))[0]).toMatchObject({
+        status: "skipped",
+        reason: expect.stringMatching(
+          /ISBN 9781591160342.*only a physical Release has other printings/,
+        ),
+      });
+      expect(await snapshot()).toEqual(before);
+      expect(await t.query(api.catalogPages.isbnLookup, { isbn: "9781591160342" })).toMatchObject({
+        kind: "release",
+        anchor: "9780000000011",
+      });
+    }
   });
 
   it("clears a recorded placeholder cover", async () => {

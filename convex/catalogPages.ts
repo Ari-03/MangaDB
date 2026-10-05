@@ -21,6 +21,7 @@ import { representativeDescription } from "./lib/descriptions";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
+import { otherPrintingsOf, printingReleases } from "./lib/releaseIsbns";
 import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
@@ -150,12 +151,17 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
 
 /**
  * One Release row as the Edition and Volume pages render it: publication
- * facts with both ISBNs, Variants beneath their Release, and containing
- * Bundles cross-linked (spec §2/§10). `anchor` is the row's fragment on the
- * Edition page — ISBN when present, else document ID (spec §8). No Release
+ * facts with both ISBNs, the ISBNs of its Other Printings (oldest first,
+ * with their year), Variants beneath their Release, and containing Bundles
+ * cross-linked (spec §2/§10). `anchor` is the row's fragment on the Edition
+ * page — ISBN when present, else document ID (spec §8). No Release
  * Description: the page shows one resolved description instead.
  */
 async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
+  const otherPrintings = (await otherPrintingsOf(ctx, release._id))
+    .filter((row) => row.isbn13 !== release.isbn13)
+    .map((row) => ({ isbn13: row.isbn13, year: row.pubDate?.year ?? null }));
+
   const variants = (
     await ctx.db
       .query("releaseVariants")
@@ -184,6 +190,7 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     language: release.language,
     isbn13: release.isbn13 ?? null,
     isbn10: release.isbn10 ?? null,
+    otherPrintings,
     pubDate: release.pubDate ?? null,
     price: release.price ?? null,
     coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
@@ -559,17 +566,20 @@ export const bundlePage = query({
 /**
  * Resolve a normalized ISBN (separators stripped, checksum-verified by the
  * route) to its 301 target (spec §11): a Release match wins any conflict and
- * redirects to the owning Edition anchored at the matching Release row; a
- * box-set ISBN redirects to its Bundle page. Merged records resolve to their
- * survivor — the anchor is the surviving Release's — and hidden records
- * never match. Null means no active match: the route 404s.
+ * redirects to the owning Edition anchored at the matching Release row; an
+ * Other Printing's ISBN (lib/releaseIsbns.ts) finds its Release the same
+ * way, after the Releases' own ISBNs; a box-set ISBN redirects to its Bundle
+ * page. Merged records resolve to their survivor — the anchor is the
+ * surviving Release's — and hidden records never match, so a hidden
+ * Release's printings find nothing either. Null means no active match: the
+ * route 404s.
  */
 export const isbnLookup = query({
   args: { isbn: v.string() },
   handler: async (ctx, { isbn }) => {
     const is13 = isbn.length === 13;
 
-    const releaseDocs = is13
+    const ownDocs = is13
       ? await ctx.db
           .query("releases")
           .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn))
@@ -578,6 +588,7 @@ export const isbnLookup = query({
           .query("releases")
           .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn))
           .collect();
+    const releaseDocs = [...ownDocs, ...(await printingReleases(ctx, isbn))];
     for (const doc of releaseDocs) {
       const release = await followMerges(ctx, "releases", doc);
       if (!release) continue;

@@ -589,8 +589,11 @@ export function possiblyFuture(
  * op the reviewer approves (confirmed cancellation) or rejects (keep the
  * release). Past-dated linked records are untouched, unlinked observations
  * queue nothing, and withdrawal itself never writes a canonical field —
- * absence is not evidence (spec §6). The observation's queuedProposalId
- * dedups: one open queue item per observation.
+ * absence is not evidence (spec §6). A record linked as one of the
+ * Release's Other Printings (its `printingIsbn13` mark) says nothing about
+ * the Release's own printing, so its withdrawal queues nothing either. The
+ * observation's queuedProposalId dedups: one open queue item per
+ * observation.
  */
 async function queueWithdrawalReview(
   ctx: MutationCtx,
@@ -599,6 +602,7 @@ async function queueWithdrawalReview(
   observation: Doc<"sourceObservations">,
 ): Promise<boolean> {
   if (observation.recordRef?.type !== "release") return false;
+  if (observation.printingIsbn13 !== undefined) return false;
   const release = await ctx.db.get(observation.recordRef.id);
   if (!release || release.status !== "active" || release.locked) return false;
   if (!release.pubDate || !possiblyFuture(release.pubDate, Date.now())) {

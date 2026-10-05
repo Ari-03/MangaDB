@@ -283,6 +283,52 @@ links to.
    parser drops or one no longer in the hosted dump, so a hold on such an
    edition stays ([known issues](known-issues.md#catalog-and-imports)).
 
+## Recording decided other printings
+
+No importer records an Other Printing: ANN's page pass and Open Library
+hold such a book under `isbn` ([imports](imports.md#other-printings)).
+For a held book that a Data Team member, or an agent whose decision a
+reviewer checked, has judged another printing of a Release, the operator
+records it:
+
+```sh
+npx convex run printings:recordDecidedInternal '{"observationId": "<held record>",
+  "releaseId": "<Release it is a printing of>",
+  "reason": "VIZ 2002 first printing of vol 1; same contents as the 2007 Release",
+  "evidenceUrl": "https://…"}'
+```
+
+It is for decisions made one book at a time with their evidence, never
+for a bulk guess. It writes the `releaseIsbns` row, the record's link and
+`printingIsbn13` mark (which take it off the Held Books list), and an
+approved Proposal with an `otherPrinting` Revision on the Release that
+carries the reason and cites `evidenceUrl` (else the record's own URL).
+The `observationId` is the held record's (`/mod/imports` shows the source
+record; its observation is the one the hold row names), and the
+`releaseId` the Release whose slot it is held for.
+
+It checks the invariants, not whether the books are the same, and answers
+`{"status": "refused", "reason": "…"}` instead of throwing when one
+fails, so a script can log it and go on:
+
+- the reason is not empty;
+- the record is not withdrawn or already linked, and does not call the
+  book digital (its format, Binding, ANN designator or title);
+- it gives a valid ISBN-13 that no active Release has as its own (ISBN-13
+  or ISBN-10) and no other Release has as a printing;
+- the Release is active, unlocked and physical;
+- the book is held under one of the Release's Series, each followed
+  through merges;
+- the publisher the record names is the Release's, followed through
+  merges. The name is ANN's distributor, the first name in Open Library's
+  list that resolves, the PRH or Yen Press imprint, or Seven Seas for its
+  own feed. A name that resolves to no publisher row is refused. Kodansha's
+  records name none, since its feed also lists Vertical's books.
+
+A success answers `{"status": "recorded", "isbn13": "…"}`. Nothing takes
+one back yet ([known issues](known-issues.md#catalog-and-imports)), so
+record only what the evidence settles.
+
 ## Account deletion
 
 A user's request (`users.deleteAccount`) sets `deletingSince` on their

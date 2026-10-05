@@ -334,8 +334,9 @@
   color: var(--text-mute);
 }
 
-/* Variants and bundles belong to the Release above them, so they hang off it
-   rather than starting a row of their own. */
+/* Other printings, variants and bundles belong to the Release above them, so
+   they hang off it rather than starting a row of their own. */
+.release-row .release-printings,
 .release-row .release-variants,
 .release-row .release-bundles {
   margin-top: 9px;
@@ -343,6 +344,9 @@
   border-left: 2px solid var(--line-strong);
   font-size: 0.82rem;
   color: var(--text-mute);
+}
+.release-row .release-printings {
+  font-variant-numeric: tabular-nums;
 }
 .release-row .release-bundles a {
   color: var(--accent);
