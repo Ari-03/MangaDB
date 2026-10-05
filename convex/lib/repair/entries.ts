@@ -93,7 +93,11 @@ export const restoreRecordEntry = v.object({
   releaseIds: v.array(v.id("releases")),
 });
 
-/** Clear a Source Observation's link to a record it does not describe. */
+/**
+ * Clear a Source Observation's link to a record it does not describe, with
+ * its Other Printing mark; on an observation already unlinked, clear only a
+ * mark left behind.
+ */
 export const unlinkObservationEntry = v.object({
   kind: v.literal("unlinkObservation"),
   ...base,

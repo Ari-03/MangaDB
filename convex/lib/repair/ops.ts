@@ -545,12 +545,20 @@ async function unlinkObservation(
   const observation = await ctx.db.get(entry.observationId);
   if (!observation) return skip("observation missing");
   const ref = observation.recordRef;
-  if (!ref) return already;
+  if (!ref) {
+    // An Other Printing's mark (`printingIsbn13`) belongs to a link; one
+    // left on an unlinked record is cleared, and nothing else changes.
+    if (observation.printingIsbn13 === undefined) return already;
+    await ctx.db.patch(observation._id, { printingIsbn13: undefined });
+    audit.note(`cleared printing mark ${observation.printingIsbn13} of an unlinked observation`);
+    return applied;
+  }
   if (ref.type !== entry.recordType || ref.id !== entry.recordId) {
     return skip(`observation now links ${ref.type} ${ref.id}`);
   }
   await audit.meta();
-  await ctx.db.patch(observation._id, { recordRef: undefined });
+  // The printing mark goes with the link (lib/observations.ts linkObservation).
+  await ctx.db.patch(observation._id, { recordRef: undefined, printingIsbn13: undefined });
   const source = `${observation.sourceKey} ${observation.sourceRecordId}`;
   audit.op({ kind: "update", ref, changes: [{ field: "sourceObservation", before: source }] });
   await audit.revise(ref, [{ field: "sourceObservation", before: source }]);

@@ -10,6 +10,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { RepairEntry } from "./lib/repair/entries";
 import { canonicalLabel, labelNumber, sameLabel } from "./lib/repair/audit";
+import { recordUnplaced } from "./lib/observations";
 import { clusterKey } from "./lib/repair/metrics";
 import {
   insertCoverage,
@@ -564,6 +565,76 @@ describe("field repairs and scope", () => {
     expect(state.series?.status).toBe("hidden");
     expect(state.volume?.status).toBe("hidden");
     expect(state.observation?.recordRef).toBeUndefined();
+  });
+
+  it("clears an Other Printing's mark with the link, and a mark left on an unlinked observation", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    const { linked, orphan } = await t.run(async (ctx) => {
+      const printing = { recordRef: undefined, printingIsbn13: "9781591160342" };
+      const linked = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL1M",
+        ...printing,
+        recordRef: { type: "release", id: s.r1.releaseId },
+      });
+      const orphan = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL2M",
+        ...printing,
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(orphan))!,
+        {
+          kind: "isbn",
+          reason: "Volume 1 already has a physical Kodansha Release.",
+          seriesId: s.base,
+        },
+        Date.now(),
+      );
+      return { linked, orphan };
+    });
+    const entry = (key: string, observationId: Id<"sourceObservations">): RepairEntry => ({
+      kind: "unlinkObservation",
+      key,
+      reason: "not this book",
+      observationId,
+      recordType: "release",
+      recordId: s.r1.releaseId,
+    });
+    const state = () =>
+      t.run(async (ctx) => ({
+        linked: await ctx.db.get(linked),
+        orphan: await ctx.db.get(orphan),
+        holds: await ctx.db.query("placementHolds").collect(),
+        proposals: (await ctx.db.query("proposals").collect()).length,
+        revisions: (await ctx.db.query("revisions").collect()).length,
+      }));
+    const before = await state();
+    expect(
+      (await run(t, [entry("l", linked), entry("o", orphan)], true)).map((o) => o.status),
+    ).toEqual(["applied", "applied"]);
+    expect(await state()).toEqual(before);
+
+    const out = await run(t, [entry("l", linked), entry("o", orphan)]);
+    expect(out.map((o) => o.status)).toEqual(["applied", "applied"]);
+    expect(out[1]?.notes).toEqual([
+      "cleared printing mark 9781591160342 of an unlinked observation",
+    ]);
+    const after = await state();
+    expect(after.linked?.recordRef).toBeUndefined();
+    expect(after.linked?.printingIsbn13).toBeUndefined();
+    expect(after.orphan?.printingIsbn13).toBeUndefined();
+    // The orphan's hold stays, and only the linked observation's unlink is audited.
+    expect(after.holds).toEqual(before.holds);
+    expect(after.holds).toEqual([expect.objectContaining({ observationId: orphan, kind: "isbn" })]);
+    expect(after.proposals).toBe(before.proposals + 1);
+    expect(after.revisions).toBe(before.revisions + 1);
+    expect((await run(t, [entry("l", linked), entry("o", orphan)])).map((o) => o.status)).toEqual([
+      "alreadyApplied",
+      "alreadyApplied",
+    ]);
   });
 
   it("normalizes labels and settles positions to the volume number", async () => {

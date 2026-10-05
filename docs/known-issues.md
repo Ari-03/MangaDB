@@ -483,10 +483,12 @@ is fixed.
 - **Nothing takes back an Other Printing recorded in error.** No page or
   command removes a `releaseIsbns` row, and its observation stays linked
   to the Release, so its ISBN keeps finding that Release. To undo one by
-  hand, delete the row and clear the `recordRef` and `printingIsbn13` of
-  every observation linked through it (the row's `observationId` names the
-  first). The next import run holds that book again. The `otherPrinting`
-  Revision stays in the Release's history.
+  hand, delete the row and unlink every observation linked through it (the
+  row's `observationId` names the first) with the repair entry
+  `unlinkObservation`, which clears its `printingIsbn13` mark with the link
+  (and a mark left on an observation already unlinked). The book is held
+  again when its source next places it. The `otherPrinting` Revision stays
+  in the Release's history.
 
 ## Review queue
 
