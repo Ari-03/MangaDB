@@ -305,7 +305,12 @@ active Volume or fills a gap below it. Every placement shows a caution to
 check that the book is the manga, not a novel of the same title, and that
 its number is its Volume number. A book number on a line is a position in
 the line, so "Vagabond Definitive Edition, Vol. 4" never becomes Volume 4,
-and the line's name never sizes the range. A range that would need more
+and the line's name never sizes the range. An ANN book's line is read as
+the page pass reads it, against the title of the Series it is held under
+and its manga entry's, so a missing, renamed or relinked entry never makes
+"Makunouchi Deluxe [VIZBIG Edition]" a Deluxe book under Makunouchi
+Deluxe; a title still unclear ("Alpha [VIZBIG Edition] [Omnibus]") leaves
+the line unselected for the member to name. A range that would need more
 than 25 ops is refused, as any Proposal over the cap is.
 
 Only `convex/placement.ts` writes a placement: `saveDraft` refuses a
@@ -532,20 +537,38 @@ parser's (`EDITION_LINE_NAME` in `convex/lib/bookTitle.ts`). A line word
 the manga entry's own title accounts for is the work's, not a line:
 "Makunouchi Deluxe (GN 2)" is a Volume, while "Makunouchi Deluxe [VIZBIG
 Edition] (GN 1)" and "The Omnibus Club [Colossal Edition] (GN 1)" are
-VIZBIG and Colossal books (`readAnnLineTitle` in `convex/lib/ann.ts`). The
-designator's number is then the book's position in its line, never a
-Volume, and the line adds no Volume to the backbone: "Vagabond [VIZBIG
-Edition] (GN 1)" is VIZBIG Edition 1, which the line's size places on
-Volumes 1–3.
+VIZBIG and Colossal books (`readAnnLineTitle` in `convex/lib/ann.ts`). An
+article before the line's name is the line's: "Dark Metro - The Ultimate
+Edition" is Dark Metro's Ultimate Edition, while "The Dark Metro" keeps its
+own. The line adds no Volume to the backbone. Its book's position is the
+number or Roman numeral the title writes right after the line's name
+("Alpha VIZBIG Edition 2", "Alpha [VIZBIG Edition] II", "One Piece -
+[Omnibus] 33 - Wano"), else the designator's single number: "Vagabond
+[VIZBIG Edition] (GN 1)" is VIZBIG Edition 1, which the line's size places
+on Volumes 1–3. A designator's range is the book's coverage, never its
+position. A title and designator that number the book differently
+("Alpha VIZBIG Edition 2 (GN 1)") hold it. A line the title names stays
+that line even where the general parser reads no position for it.
 
 What the book collects comes from its explicit coverage first, else from
-its line's size. A Volume statement in brackets at the end of such a title
-is the book's coverage, read as a designator's list is: "Rurouni Kenshin -
-VIZBIG Edition [13-15] (GN 5)" is VIZBIG Edition 5 covering 13–15. One the
-list grammar does not read as a range ("[1, 3]", "[1 and Vol. 3]"), or that
-differs from the designator's own list ("[1, 3]" beside "(GN 1-3)"), holds
-the line as a gapped designator does, and is never replaced by the line's
-size. A valid explicit range places its book wherever it falls, a shorter
+its line's size (`packagingOf` in `convex/lib/ann.ts` reads every
+statement together). The statements are the designator's list, a Volume
+statement in brackets at the end of the title ("Rurouni Kenshin - VIZBIG
+Edition [13-15] (GN 5)" is VIZBIG Edition 5 covering 13–15), and what the
+shared title parser reads in the line's own segment: a list inside its tag
+("Alpha [VIZBIG Edition Vols. 4-6] (GN 1)") or a subtitle ("Alpha VIZBIG
+Edition 1: Includes Vols. 4-6 (GN 1)"), both VIZBIG Edition 1 covering 4–6.
+A plain multi-volume line's own bracketed range is coverage too: "Alpha
+[1-3] (GN 1-3)" is an Omnibus covering 1–3, unless the Series' or entry's
+own name ends in that bracket. One the list grammar does not read as a
+range ("[1, 3]", "[1 and Vol. 3]", "[VIZBIG Edition Vols. 1, 3]",
+"Includes Vols. 1 & 3"), one left unread in the line's segment, or two
+that differ ("[4-6]" or "Includes Vols. 4-6" beside "(GN 1-3)"), holds the
+line as a gapped designator does, whatever other statement is valid, and
+is never replaced by the line's size. The mirror stores that rejection in
+the line's `coverageGapped`, and the page pass reads the title again, so
+a line stored before reads the same. A valid explicit range places its
+book wherever it falls, a shorter
 last book included ("[7-8]" as the last book of a Series ending at 8). An
 "n-in-1" name states its size and keeps it to the end. Coverage inferred
 only from a size the name implies (VIZBIG 3, Colossal 5 and the other
@@ -577,6 +600,8 @@ Some packaging is held as `packaging` for an Editor, never placed:
   entry's own ("Makunouchi Deluxe [VIZBIG Edition]" in an entry of another
   name), no work before the line's name, or words after it that no
   position or subtitle explains.
+- A line whose title and designator name different positions, or whose
+  statements of coverage no range holds or disagree (above).
 - A line's last book by ANN's count ("(GN 9 / 9)") whose stated range
   ends before the Series' highest Volume, since the last book takes what
   is left ("Rurouni Kenshin - VIZBIG Edition [25-27]" collects 25–28). A

@@ -24,7 +24,6 @@ import {
   insertVolume,
   seedCatalog,
 } from "./test.factories";
-import { packagingOf } from "./ann";
 import { splitReleaseTitle } from "./lib/ann";
 import { linkObservation } from "./lib/observations";
 import { drain, expectStampedAtHandOff, makeT, seedRegistry, type TestT } from "./test.helpers";
@@ -1818,6 +1817,12 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
     designator?: string;
     distributor?: string;
     bootstrap?: boolean;
+    /**
+     * Store the line as a snapshot written before its title's own
+     * statements were read: the designator's flags only, so the page
+     * pass's fresh reading alone must hold or size it.
+     */
+    stale?: boolean;
   };
 
   /** One line through applyReleasePage, and every row it could have written. */
@@ -1826,8 +1831,11 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
     await seedRegistry(t, c.bootstrap ?? true);
     const entry = c.entry ?? c.series;
     const designator = c.designator ?? "GN 1";
-    const parsed = splitReleaseTitle(`${c.title} (${designator})`, entry);
-    if (parsed === null) throw new Error(`No ANN designator in ${c.title}`);
+    const split = c.stale
+      ? splitReleaseTitle(`${entry} (${designator})`, entry)
+      : splitReleaseTitle(`${c.title} (${designator})`, entry);
+    if (split === null) throw new Error(`No ANN designator in ${c.title}`);
+    const parsed = c.stale ? { ...split, title: c.title, editionLineHint: true } : split;
     const { seriesId, observationId } = await t.run(async (ctx) => {
       await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
       const seriesId = await insertSeries(ctx, { title: c.series });
@@ -1897,8 +1905,16 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
     expect(rows.covered).toEqual([]);
   }
 
-  /** A new Edition Line member on the given Volumes ("unmapped" for none). */
-  async function expectCreated(c: Case, line: string, covered: string[] | "unmapped") {
+  /**
+   * A new Edition Line member on the given Volumes ("unmapped" for none),
+   * at `position` in its line when given (null: none).
+   */
+  async function expectCreated(
+    c: Case,
+    line: string,
+    covered: string[] | "unmapped",
+    position?: string | null,
+  ) {
     const { result, rows } = await place(c);
     expect(result.status).toBe("created");
     expect(rows.holds).toEqual([]);
@@ -1913,6 +1929,7 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
       expect(rows.editions[0]?.coverageUnmapped).toBeUndefined();
       expect(rows.covered).toEqual(covered);
     }
+    if (position !== undefined) expect(rows.editions[0]?.linePosition ?? null).toBe(position);
   }
 
   const ANOTHER_WORK = /titled for another work/;
@@ -2093,6 +2110,152 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
       "unmapped",
     ));
 
+  // Coverage the title states inside its line's tag or subtitle is the
+  // book's own statement: a gap or a disagreement holds it, a range places
+  // it on exactly those Volumes, never on the line's implied size. Each
+  // runs on a fresh snapshot and on one stored before the title's
+  // statements were read, so the page pass's own reading is proved too.
+  const NO_RANGE = /no range holds/;
+  describe.each([false, true])("the title's own coverage (stale snapshot: %s)", (stale) => {
+    it.each([
+      { title: "Alpha [VIZBIG Edition Vols. 1, 3]", designator: "GN 1" },
+      { title: "Alpha VIZBIG Edition 1: Includes Vols. 1 & 3", designator: "GN 1" },
+      // A designator's valid range never clears the title's rejected list.
+      { title: "Alpha [VIZBIG Edition Vols. 1, 3]", designator: "GN 1-3" },
+      // Two ranges that differ: neither places it.
+      { title: "Alpha [VIZBIG Edition Vols. 4-6]", designator: "GN 1-3" },
+      { title: "Alpha VIZBIG Edition 1: Includes Vols. 4-6", designator: "GN 1-3" },
+    ])("holds $title ($designator)", (c) => expectHeld({ series: "Alpha", ...c, stale }, NO_RANGE));
+
+    it.each([
+      { title: "Alpha [VIZBIG Edition Vols. 4-6]", designator: "GN 1", position: "1" },
+      { title: "Alpha VIZBIG Edition 1: Includes Vols. 4-6", designator: "GN 1", position: "1" },
+      { title: "Alpha [VIZBIG Edition] 1: Includes Vols. 4-6", designator: "GN 1", position: "1" },
+      // The same range stated twice.
+      { title: "Alpha [VIZBIG Edition Vols. 4-6]", designator: "GN 4-6", position: null },
+    ])("places $title ($designator) on Volumes 4-6 exactly", ({ position, ...c }) =>
+      expectCreated({ series: "Alpha", ...c, stale }, "VIZBIG Edition", ["4", "5", "6"], position),
+    );
+  });
+
+  it("sizes a title stating no coverage by its line's name", () =>
+    expectCreated(
+      { series: "Alpha", title: "Alpha [VIZBIG Edition]", designator: "GN 2" },
+      "VIZBIG Edition",
+      ["4", "5", "6"],
+      "2",
+    ));
+
+  // The position written after the line's name is the book's; the
+  // designator's label stands in only where the title writes none, and two
+  // that differ hold it. A designator's range is coverage, not a position.
+  it.each([
+    { title: "Alpha VIZBIG Edition 2", designator: "GN 4-6" },
+    { title: "Alpha [VIZBIG Edition] II", designator: "GN 4-6" },
+    { title: "Alpha [VIZBIG Edition] II", designator: "GN 2" },
+    { title: "Alpha VIZBIG Edition 2", designator: "GN 2" },
+  ])("places $title ($designator) at VIZBIG position 2 on Volumes 4-6", (c) =>
+    expectCreated({ series: "Alpha", ...c }, "VIZBIG Edition", ["4", "5", "6"], "2"),
+  );
+
+  it.each([
+    { title: "Alpha VIZBIG Edition 2", designator: "GN 1" },
+    { title: "Alpha [VIZBIG Edition] 2", designator: "GN 1" },
+    { title: "Alpha [VIZBIG Edition] II", designator: "GN 1" },
+    { title: "Alpha [VIZBIG Edition] (GN 5)", designator: "GN 1" },
+  ])("holds $title ($designator), whose title and designator number it differently", (c) =>
+    expectHeld({ series: "Alpha", ...c }, /name different line positions/),
+  );
+
+  it("keeps One Piece's bracketed position and subtitle", () =>
+    expectCreated(
+      {
+        series: "One Piece",
+        title: "One Piece - [Omnibus] 33 - Wano",
+        volumes: 99,
+        designator: "GN 97-99",
+      },
+      "Omnibus",
+      ["97", "98", "99"],
+      "33",
+    ));
+
+  // A line's own article ("- The Ultimate Edition") is the line's, never
+  // the work's; a work whose own name starts with "The" keeps it.
+  it.each(["Dark Metro - The Ultimate Edition", "Dark Metro - [The Ultimate Edition]"])(
+    "places %s under Dark Metro",
+    async (title) => {
+      await expectCreated(
+        { series: "Dark Metro", title, designator: "GN 1" },
+        "Ultimate Edition",
+        "unmapped",
+        "1",
+      );
+      await expectCreated(
+        { series: "Dark Metro", title, designator: "GN 1-3" },
+        "Ultimate Edition",
+        ["1", "2", "3"],
+        null,
+      );
+    },
+  );
+
+  it("keeps a work's own leading The", async () => {
+    await expectCreated(
+      { series: "The Dark Metro", title: "The Dark Metro - The Ultimate Edition" },
+      "Ultimate Edition",
+      "unmapped",
+      "1",
+    );
+    await expectHeld(
+      { series: "Dark Metro", title: "The Dark Metro - The Ultimate Edition" },
+      ANOTHER_WORK,
+    );
+  });
+
+  // A plain multi-volume designator is packaging, so the title's range
+  // repeating it is coverage, not the work's name; one that disagrees or
+  // skips a Volume holds, fresh or stale.
+  it("places a bare range its title repeats as an Omnibus", () =>
+    expectCreated(
+      { series: "Alpha", title: "Alpha [1-3]", designator: "GN 1-3" },
+      "Omnibus",
+      ["1", "2", "3"],
+      null,
+    ));
+
+  it.each([
+    { title: "Alpha [1, 3]", stale: false },
+    { title: "Alpha [1, 3]", stale: true },
+    { title: "Alpha [4-6]", stale: false },
+    { title: "Alpha [4-6]", stale: true },
+  ])("holds $title (GN 1-3), stale snapshot $stale", (c) =>
+    expectHeld({ series: "Alpha", designator: "GN 1-3", ...c }, NO_RANGE),
+  );
+
+  it("keeps a numeric bracket a work's own name ends in", async () => {
+    await expectCreated(
+      { series: "Number [9]", title: "Number [9]", designator: "GN 1-3" },
+      "Omnibus",
+      ["1", "2", "3"],
+    );
+    const { result, rows } = await place({
+      series: "Number [9]",
+      title: "Number [9]",
+      designator: "GN 2",
+    });
+    expect(result.status).toBe("created");
+    expect(rows.lines).toEqual([]);
+    expect(rows.covered).toEqual(["2"]);
+  });
+
+  it("makes a plain range under a work whose name carries a line word an Omnibus", () =>
+    expectCreated(
+      { series: "Makunouchi Deluxe", title: "Makunouchi Deluxe", designator: "GN 1-3" },
+      "Omnibus",
+      ["1", "2", "3"],
+    ));
+
   it("holds a placeable line for review in steady state", () =>
     expectHeld(
       {
@@ -2105,50 +2268,6 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
       /VIZBIG Edition 1: steady state leaves Edition Line creation to review/,
       false,
     ));
-});
-
-describe("packagingOf — the line a packaged title names", () => {
-  const line = (title: string, multi = false) => ({
-    title,
-    label: "1",
-    multi,
-    ...(multi ? { coverRange: { from: "1", to: "3" } } : {}),
-  });
-
-  it("reads the line from the title's own line name, the work's words aside", () => {
-    expect(packagingOf(line("Makunouchi Deluxe [VIZBIG Edition]"), ["Makunouchi Deluxe"])).toEqual({
-      name: "VIZBIG Edition",
-      position: "1",
-    });
-    expect(packagingOf(line("The Omnibus Club [Colossal Edition]"), ["The Omnibus Club"])).toEqual({
-      name: "Colossal Edition",
-      position: "1",
-    });
-    // A range under a name with a line word is an Omnibus, not that word's line.
-    expect(packagingOf(line("Makunouchi Deluxe", true), ["Makunouchi Deluxe"])).toEqual({
-      name: "Omnibus",
-      position: "1",
-    });
-    expect(packagingOf(line("Makunouchi Deluxe", false), ["Makunouchi Deluxe"])).toBeNull();
-  });
-
-  it("keeps the parser's reading of the lines it already read", () => {
-    for (const [title, name, position] of [
-      ["Naruto [3-in-1 Edition]", "3-in-1 Edition", "1"],
-      ["One Piece - [Omnibus] 33 - Wano", "Omnibus", "33"],
-      ["Rurouni Kenshin - VIZBIG Edition [13-15]", "VIZBIG Edition", "1"],
-      ["Vagabond - Definitive Edition [Hardcover]", "Definitive Edition", "1"],
-      ["Summer Ghost: The Complete Manga Collection", "Complete Collection", "1"],
-      ["Kingdom Hearts II [VIZBIG Edition]", "VIZBIG Edition", "1"],
-    ] as const) {
-      expect(packagingOf(line(title)), title).toEqual({ name, position });
-    }
-    // An anniversary tag on a range stays the parser's line name.
-    expect(packagingOf(line("NANA - [25th Anniversary Edition]", true), ["NANA"])).toEqual({
-      name: "25th Anniversary Edition",
-      position: "1",
-    });
-  });
 });
 
 // The mirror links a single line to a Volume's ISBN-less Release by its

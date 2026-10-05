@@ -33,7 +33,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import {
   lineOutOfScope,
-  packagingOf,
   pageDescriptionText,
   SOURCE_KEY as ANN,
   type AnnReleaseSnapshot,
@@ -46,7 +45,7 @@ import { resolveBaseSeries } from "./lib/catalogTitle";
 import type { DateParts } from "./lib/dates";
 import { fail } from "./lib/errors";
 import type { KodanshaSnapshot } from "./lib/kodansha";
-import type { AnnMangaSnapshot } from "./lib/ann";
+import { packagingOf, type AnnMangaSnapshot } from "./lib/ann";
 import { getObservation, holdOf, type HoldKind } from "./lib/observations";
 import type { OlEditionSnapshot } from "./lib/openLibrary";
 import {
@@ -132,10 +131,16 @@ function titleReading(
 /** A label that names one numbered Volume ("4", "7.5"): no words, no range. */
 const PLAIN_LABEL = /^\d+(?:\.\d+)?$/;
 
-/** Read the observation's snapshot, or null for a shape no adapter here writes. */
+/**
+ * Read the observation's snapshot, or null for a shape no adapter here
+ * writes. `heldSeriesTitle`, the title of the Series the book is held under
+ * (already validated by its caller), is the work's own name where a title
+ * reading needs one.
+ */
 async function bookFacts(
   ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
+  heldSeriesTitle: string | null,
 ): Promise<BookFacts | null> {
   const snapshot: HeldSnapshot | null = observation.snapshot ?? null;
   switch (snapshot?.kind) {
@@ -170,12 +175,18 @@ async function bookFacts(
       const read = titleReading(snapshot.title, {
         multi: snapshot.multi || snapshot.editionLineHint,
       });
-      // The entry's title keeps its own name's line words ("Makunouchi
-      // Deluxe") from naming the book's line.
+      // The held Series' title, as the page pass reads it, and the entry's
+      // keep the work's own line words ("Makunouchi Deluxe") from naming the
+      // book's line, whether the entry is missing, renamed or relinked. A
+      // title still unclear ("Alpha [VIZBIG Edition] [Omnibus]") leaves
+      // the line for the member to choose (lib/ann.ts packagingOf).
       const entry = read.packaged
         ? await getObservation(ctx, ANN, `manga:${snapshot.mangaId}`)
         : null;
       const entryTitle = (entry?.snapshot as AnnMangaSnapshot | undefined)?.title;
+      const packaging = read.packaged
+        ? packagingOf(snapshot, [heldSeriesTitle ?? "", entryTitle ?? ""])
+        : null;
       return {
         title: snapshot.title,
         url: snapshot.url,
@@ -183,8 +194,9 @@ async function bookFacts(
         isbn10: page?.isbn10,
         label: read.packaged ? null : (snapshot.label ?? null),
         ...read,
-        line: read.packaged ? packagingOf(snapshot, entryTitle ? [entryTitle] : []) : null,
-        statedRange: snapshot.coverRange ?? read.statedRange,
+        line: packaging?.line ?? null,
+        statedRange:
+          packaging !== null ? packaging.coverRange : (snapshot.coverRange ?? read.statedRange),
         publisherNames: page?.distributor !== undefined ? [page.distributor] : [],
         format: snapshot.format,
         pubDate: page?.date ?? snapshot.date,
@@ -318,7 +330,7 @@ async function placeable(
   if (series.status !== "active")
     return no(`The Series it names, "${series.title}", is ${series.status}.`);
   if (series.locked) return no(`The Series it names, "${series.title}", is locked.`);
-  const facts = await bookFacts(ctx, observation);
+  const facts = await bookFacts(ctx, observation, series.title);
   if (facts === null) return no("Prepare placement cannot read this source's records.");
   if (facts.outOfScope !== null) return no(facts.outOfScope);
   if (facts.isBox) {
@@ -672,7 +684,9 @@ export async function placementView(ctx: QueryCtx, ops: Doc<"proposalVersions">[
   const placed = placedBy(ops);
   if (placed === null) return null;
   const observation = await ctx.db.get(placed.observationId);
-  const facts = observation !== null ? await bookFacts(ctx, observation) : null;
+  const held = await ctx.db.get(placed.seriesId);
+  const facts =
+    observation !== null ? await bookFacts(ctx, observation, held?.title ?? null) : null;
   const created = new Map<string, string | null>();
   // The Series the ops create under: their Volumes' and line's.
   const under: unknown[] = [];

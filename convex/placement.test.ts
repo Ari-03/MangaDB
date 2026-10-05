@@ -562,6 +562,104 @@ describe("a book read with today's parser", () => {
   });
 });
 
+// The Draft's line comes from the title read against the Series the book
+// is held under, which the hold already vouches for, and the entry's
+// title where there is one: missing, renamed or relinked, the entry never
+// makes "Makunouchi Deluxe [VIZBIG Edition]" a Deluxe book. A title still
+// unclear leaves the line for the member to choose.
+describe("an ANN book's line, read against its held Series", () => {
+  type Entry = { title: string; linkedTo?: string } | null;
+
+  /** One ANN line held as packaging under Series `series`, with its manga entry `entry`. */
+  async function heldAnn(series: string, title: string, entry: Entry) {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, bob, carol, dave]);
+    const observationId = await t.run(async (ctx) => {
+      await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { title: series });
+      if (entry !== null) {
+        const other =
+          entry.linkedTo !== undefined
+            ? await insertSeries(ctx, { title: entry.linkedTo })
+            : undefined;
+        await insertObservation(ctx, {
+          sourceKey: "ann",
+          sourceRecordId: "manga:88",
+          ...(other !== undefined ? { recordRef: { type: "series" as const, id: other } } : {}),
+          snapshot: { title: entry.title },
+        });
+      }
+      const id = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:5000",
+        snapshot: {
+          kind: "annRelease",
+          annId: "5000",
+          mangaId: "88",
+          url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=5000",
+          title,
+          label: "2",
+          multi: false,
+          format: "physical",
+          editionLineHint: true,
+          isbn13: "9781421599991",
+          page: { status: "ok", fetchedAt: 1, distributor: "VIZ Media", isbn13: "9781421599991" },
+        },
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(id))!,
+        { kind: "packaging", reason: "Packaging needs review.", seriesId },
+        Date.now(),
+      );
+      return id;
+    });
+    const proposalId = await prepare(t, observationId);
+    const proposal = await t.run((ctx) => ctx.db.get(proposalId));
+    const created = (proposal?.draft?.ops ?? []).flatMap((op) =>
+      op.kind === "create" && op.table === "editionLines" ? [op.fields?.name] : [],
+    );
+    return { created, view: (await detail(t, proposalId))!.placement };
+  }
+
+  it.each<{ why: string; entry: Entry }>([
+    { why: "entry present", entry: { title: "Makunouchi Deluxe" } },
+    { why: "entry absent", entry: null },
+    { why: "entry renamed", entry: { title: "A different entry title" } },
+    { why: "entry relinked", entry: { title: "Makunouchi", linkedTo: "Makunouchi" } },
+    { why: "entry contradicting", entry: { title: "Makunouchi VIZBIG Edition" } },
+  ])("prefills VIZBIG position 2 under Makunouchi Deluxe: $why", async ({ entry }) => {
+    const { created, view } = await heldAnn(
+      "Makunouchi Deluxe",
+      "Makunouchi Deluxe [VIZBIG Edition]",
+      entry,
+    );
+    expect(created).toEqual(["VIZBIG Edition"]);
+    expect(view).toMatchObject({
+      book: { label: null, line: { name: "VIZBIG Edition", position: "2" } },
+      line: { name: "VIZBIG Edition", position: "2", created: true },
+      coverage: { kind: "pending" },
+      suggestion: null,
+    });
+  });
+
+  it.each([
+    // Two lines the title adds: neither is guessed.
+    { series: "Alpha", title: "Alpha [VIZBIG Edition] [Omnibus]" },
+    { series: "Makunouchi", title: "Makunouchi Deluxe [VIZBIG Edition]" },
+  ])("leaves the line of $title under $series unselected", async ({ series, title }) => {
+    const { created, view } = await heldAnn(series, title, null);
+    expect(created).toEqual([]);
+    expect(view).toMatchObject({
+      book: { label: null, line: null },
+      line: null,
+      coverage: { kind: "pending" },
+      suggestion: null,
+    });
+  });
+});
+
 describe("books it does not prepare", () => {
   /** Hold an observation of `snapshot` as `kind` under `seriesId`, as an importer would. */
   async function holdBook(

@@ -308,9 +308,10 @@ const CONJUNCTION_BEFORE = /(?:^|\s)(?:and|&|or|vs\.?|with|the|a)$/i;
  * gapped list, a statement that reads two ways). The same three states as a
  * blurb's reading (lib/coverage.ts blurbCoverage). Silence and a rejected
  * statement are different facts, so these values meet only in `agreed`,
- * never through `??`.
+ * never through `??`. ANN reconciles its title's and designator's statements
+ * by the same rule (lib/ann.ts packagingOf).
  */
-type Stated = CoverRange | null | undefined;
+export type Stated = CoverRange | null | undefined;
 
 /**
  * Everything a title states about its coverage, as one reading. A bracket
@@ -322,7 +323,7 @@ type Stated = CoverRange | null | undefined;
  * 1-3)") contradict each other, so neither is taken. Picking one would be a
  * guess.
  */
-function agreed(a: Stated, b: Stated): Stated {
+export function agreed(a: Stated, b: Stated): Stated {
   if (a === undefined) return b;
   if (b === undefined) return a;
   return a !== null && b !== null && a.from === b.from && a.to === b.to ? a : null;

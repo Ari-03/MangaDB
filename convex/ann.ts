@@ -66,13 +66,11 @@ import {
   annMangaValidator,
   annReleasePageValidator,
   cleanAnnDescription,
-  namesEditionLine,
+  packagingOf,
   parseApiResponse,
   parseReleasePage,
   parseReport,
-  readAnnLineTitle,
   releaseUrl,
-  titleVolumeList,
   toSnapshot,
   type AnnMangaSnapshot,
 } from "./lib/ann";
@@ -90,7 +88,7 @@ import {
   stampHandOff,
   stopAtGate,
 } from "./lib/importRuns";
-import { canonicalLabel, isNovelTitle, parseBookTitle, rangeLabels } from "./lib/bookTitle";
+import { canonicalLabel, isNovelTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import {
@@ -985,61 +983,6 @@ export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
   return null;
 }
 
-/**
- * ANN's packaged line titles come in three shapes: "Naruto [3-in-1 Edition]"
- * (the designator number is the line position), "One Piece - [Omnibus] 33 -
- * Wano" (the position follows the tag; the designator holds the volume
- * range) and "Rurouni Kenshin - VIZBIG Edition [13-15]" (an untagged line
- * name, its covered Volumes in brackets, the position in the designator).
- * All yield the line name and position; a bare "(GN 1-3)" range with no tag
- * is an Omnibus. Box sets are bundles, never lines: null.
- *
- * `names`, the work's known titles, keep a line word of the work's own
- * name from naming its line: "Makunouchi Deluxe [VIZBIG Edition]" is a
- * VIZBIG book, and "Makunouchi Deluxe (GN 1-3)" an Omnibus. The line is
- * read from the title's own line name on (lib/ann.ts readAnnLineTitle),
- * the work's name standing aside.
- */
-export function packagingOf(
-  line: {
-    title: string;
-    label?: string;
-    multi: boolean;
-    coverRange?: { from: string; to: string };
-  },
-  names: readonly string[] = [],
-): { name: string; position: string | null } | null {
-  const read = readAnnLineTitle(line.title, { names });
-  const { parsed, tagPosition } = readLineTitle(
-    read.kind === "line" ? `${WORK_STAND_IN} ${read.tail}` : line.title,
-  );
-  if (parsed.isBox) return null;
-  const parsedName = parsed.packaging?.lineName ?? null;
-  const ownWord = read.kind === "single" && parsedName !== null && namesEditionLine(parsedName);
-  const name = (ownWord ? null : parsedName) ?? (line.multi && line.coverRange ? "Omnibus" : null);
-  if (name === null) return null;
-  const position = tagPosition ?? line.label ?? null;
-  return { name, position: position === null ? null : canonicalLabel(position) };
-}
-
-/** A plain word standing in for a work's name, so the parser reads only the line after it. */
-const WORK_STAND_IN = "Work";
-
-/**
- * A packaged line title read by the shared parser (`packagingOf`): the tag
- * beside the work's name ("One Piece [Omnibus]"), and a position after the
- * tag. The bracketed Volume statement is coverage (lib/ann.ts
- * splitReleaseTitle), never a tag.
- */
-function readLineTitle(raw: string) {
-  const title = titleVolumeList(raw)?.rest ?? raw;
-  const tagged = /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(
-    title,
-  );
-  const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : title;
-  return { parsed: parseBookTitle(probe), tagPosition: tagged?.[3] };
-}
-
 /** Whether a line needs (another) page fetch, per its stored fetch state. */
 function needsFetch(page: PageState | undefined, now: number): boolean {
   if (page === undefined) return true;
@@ -1472,15 +1415,18 @@ export const applyReleasePage = internalMutation({
     }
 
     // Packaging: an Edition Line member, never a Volume. A packaged line is
-    // placed below by the best signal it carries: its stated range, from the
-    // designator ("One Piece - [Omnibus] 33 - Wano (GN 97-99)" → volumes
-    // 97–99) or the title ("Rurouni Kenshin - VIZBIG Edition [13-15]"), else
-    // the line name's declared size (lib/coverage.ts: "[3-in-1 Edition]" or
-    // "[VIZBIG Edition]" at GN 5 → 13–15, an implied size like VIZBIG's only
-    // short of the line's end), else as Unmapped Packaging. A line titled
-    // for another work or for no clear one, or a last book stating less
-    // than the Series holds, is held. Box sets and variant covers still only
-    // link by ISBN. The work's known titles keep its own name's line words
+    // placed below by the best signal it carries: the coverage its title
+    // and designator agree on (lib/ann.ts packagingOf: "One Piece -
+    // [Omnibus] 33 - Wano (GN 97-99)" → volumes 97–99, "Rurouni Kenshin -
+    // VIZBIG Edition [13-15]", "Alpha VIZBIG Edition 1: Includes Vols.
+    // 4-6"), else the line name's declared size (lib/coverage.ts: "[3-in-1
+    // Edition]" or "[VIZBIG Edition]" at GN 5 → 13–15, an implied size like
+    // VIZBIG's only short of the line's end), else as Unmapped Packaging. A
+    // line titled for another work or for no clear one, one whose
+    // statements no range holds or disagree, one whose title and designator
+    // name different positions, or a last book stating less than the
+    // Series holds, is held. Box sets and variant covers still only link by
+    // ISBN. The work's known titles keep its own name's line words
     // ("Makunouchi Deluxe") from naming its line.
     const entryTitle = (mangaObs?.snapshot as AnnMangaSnapshot | undefined)?.title ?? "";
     const workNames = series ? [series.title, entryTitle] : [entryTitle];
@@ -1521,24 +1467,39 @@ export const applyReleasePage = internalMutation({
       // not Citrus, Kingdom Hearts II not Kingdom Hearts. The entry's title
       // proves nothing more: its Series link may be an old one, and where
       // it is the Series' title by the same rule it adds no spelling.
-      const read = readAnnLineTitle(line.title, {
-        names: workNames,
-        packaged: line.editionLineHint,
-      });
-      if (read.kind === "ambiguous") {
+      if (packaging.line === null) {
         return await hold(
           "packaging",
-          `"${line.title}" is packaging whose title ${read.reason}, so its work is unclear — an Editor places it.`,
+          `"${line.title}" is packaging whose title ${packaging.title.reason}, so its work is unclear — an Editor places it.`,
           series._id,
         );
       }
-      if (!sameWorkTitle(read.work, series.title)) {
+      if (!sameWorkTitle(packaging.title.work, series.title)) {
         return await hold(
           "packaging",
           `"${line.title}" is packaging titled for another work than Series ${series.publicId} ("${series.title}"), or a spelling of it this check cannot confirm: its Volume numbers may be that work's — an Editor places it.`,
           series._id,
         );
       }
+      // Coverage the title states in a way no range holds, or two
+      // statements that disagree ("[VIZBIG Edition Vols. 1, 3]", "[4-6]" at
+      // GN 1-3), is never sized from the line's name.
+      if (packaging.coverageGapped) {
+        return await hold(
+          "packaging",
+          `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose title and designator state Volumes no range holds, or state them two ways — an Editor maps it.`,
+          series._id,
+        );
+      }
+      // "Alpha VIZBIG Edition 2" at GN 1: one of them misnumbers the book.
+      if (packaging.positionConflict) {
+        return await hold(
+          "packaging",
+          `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose title and designator name different line positions — an Editor places it.`,
+          series._id,
+        );
+      }
+      const { name, position } = packaging.line;
       // The end of the Series and of the line: the Series' highest Volume,
       // and ANN's own count of the line's books ("GN 9 / 9").
       const lastVolume = Math.max(
@@ -1550,10 +1511,10 @@ export const applyReleasePage = internalMutation({
       // stated range stops short of the Series' last Volume misstates it
       // ("Rurouni Kenshin - VIZBIG Edition [25-27]", GN 9 / 9, collects
       // 25–28). Never extended: an Editor maps it.
-      const stated = line.coverRange;
+      const stated = packaging.coverRange ?? undefined;
       if (
         stated !== undefined &&
-        Number(packaging.position) === lastPosition &&
+        Number(position) === lastPosition &&
         Number(stated.to) < lastVolume
       ) {
         return await hold(
@@ -1564,9 +1525,7 @@ export const applyReleasePage = internalMutation({
       }
       // A size the line's name only implies stops short of both ends, where
       // a book may hold more (lib/coverage.ts coverageFromLine).
-      const range =
-        stated ??
-        coverageFromLine(packaging.name, packaging.position, { lastVolume, lastPosition });
+      const range = stated ?? coverageFromLine(name, position, { lastVolume, lastPosition });
       const labels = range ? rangeLabels(range) : [];
       // Leaf boundary holds for packaging too: every collected Volume must
       // already exist under the Series (the backbone the mirror built).
@@ -1576,7 +1535,7 @@ export const applyReleasePage = internalMutation({
       if (labels.length > 0 && covered.length !== labels.length) {
         return await hold(
           "volumeMissing",
-          `${packaging.name} ${packaging.position ?? ""} would cover Volumes ${range!.from}–${range!.to}, but the Series lacks ${labels.filter((l) => !covered.includes(l)).join(", ")}.`,
+          `${name} ${position ?? ""} would cover Volumes ${range!.from}–${range!.to}, but the Series lacks ${labels.filter((l) => !covered.includes(l)).join(", ")}.`,
           series._id,
         );
       }
@@ -1588,8 +1547,8 @@ export const applyReleasePage = internalMutation({
         return await hold(
           "packaging",
           unmapped
-            ? `${packaging.name} of unknown size: steady state leaves unmapped packaging to review.`
-            : `${packaging.name} ${packaging.position ?? ""}: steady state leaves Edition Line creation to review.`,
+            ? `${name} of unknown size: steady state leaves unmapped packaging to review.`
+            : `${name} ${position ?? ""}: steady state leaves Edition Line creation to review.`,
           series._id,
         );
       }
@@ -1602,7 +1561,7 @@ export const applyReleasePage = internalMutation({
         seriesId: series._id,
         seriesTitle: series.title,
         labels,
-        editionLine: { name: packaging.name, position: packaging.position },
+        editionLine: { name, position },
         ...(unmapped ? { coverageUnmapped: true as const } : {}),
         release: {
           format: line.format,
