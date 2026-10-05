@@ -30,6 +30,13 @@ export const olEditionValidator = v.object({
   /** The book title: OpenLibrary's title, joined with its subtitle when the
    * subtitle completes the volume title. */
   title: v.string(),
+  /**
+   * OpenLibrary's subtitle as given, when it is not joined into `title`:
+   * the parser read it beside the title ("Mashle" + "Vol. 3" is Vol. 3), so
+   * a later reading needs both. Snapshots stored before this field lack it;
+   * their seriesTitle and volumeLabel stand as first read.
+   */
+  subtitle: v.optional(v.string()),
   /** The base Series title (lib/bookTitle.ts), never the book title. */
   seriesTitle: v.string(),
   /** The single covered Volume; absent for oneshots and all packaging. */
@@ -254,6 +261,9 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     key,
     url: `https://openlibrary.org${key}`,
     title: bookTitle,
+    ...(subtitle !== undefined && subtitle.trim() !== "" && bookTitle === title
+      ? { subtitle }
+      : {}),
     ...parsedTitleFields(parsed),
     publishers,
     publishDate:

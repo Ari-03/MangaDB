@@ -100,16 +100,17 @@ const lineOf = (packaging: Packaging | null | undefined): Line | null =>
 
 /**
  * The book's shape read two ways: the flags its snapshot stored when it was
- * first parsed, and today's title parser over the stored title. Either
- * one's packaging or line counts, so a snapshot parsed before the parser
- * knew a line word ("Vagabond Definitive Edition, Vol. 4") reads as the
- * line book it is.
+ * first parsed, and today's title parser over the stored title, with the
+ * source's separate subtitle when it kept one (Open Library). Either one's
+ * packaging or line counts, so a snapshot parsed before the parser knew a
+ * line word ("Vagabond Definitive Edition, Vol. 4") reads as the line book
+ * it is.
  */
 function titleReading(
   title: string,
-  stored: { packaging?: Packaging; multi?: boolean; isBox?: boolean },
+  stored: { packaging?: Packaging; multi?: boolean; isBox?: boolean; subtitle?: string },
 ) {
-  const parsed = parseBookTitle(title);
+  const parsed = parseBookTitle(title, { subtitle: stored.subtitle });
   return {
     packaged:
       stored.multi === true ||
@@ -134,9 +135,12 @@ async function bookFacts(
   const snapshot: HeldSnapshot | null = observation.snapshot ?? null;
   switch (snapshot?.kind) {
     case "olEdition": {
+      // The label is the one stored at parse time, the subtitle's included:
+      // a legacy snapshot that lost its subtitle keeps the label it read.
       const read = titleReading(snapshot.title, {
         packaging: snapshot.packaging,
         multi: snapshot.multiVolume,
+        subtitle: snapshot.subtitle,
       });
       const elsewhere =
         snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;

@@ -342,6 +342,54 @@ describe("title + subtitle split across fields", () => {
   });
 });
 
+// H09: a subtitle the parser read beside the title is input any later
+// reading needs, so the snapshot keeps it; nothing else changes.
+describe("the subtitle kept on the snapshot", () => {
+  it("keeps a subtitle read beside the title", () => {
+    expect(titled("Mashle", "Vol. 3")).toMatchObject({
+      title: "Mashle",
+      subtitle: "Vol. 3",
+      seriesTitle: "Mashle",
+      volumeLabel: "3",
+    });
+    // Read beside a title that names its Volume, it is kept as given too.
+    expect(titled("Chainsaw Man, Vol. 22", "Something Sinister")).toMatchObject({
+      title: "Chainsaw Man, Vol. 22",
+      subtitle: "Something Sinister",
+      volumeLabel: "22",
+    });
+  });
+
+  it("never stores a subtitle already joined into the title, or a blank one", () => {
+    const joined = titled("Mashle", "Magic and Muscles, Vol. 3")!;
+    expect(joined.title).toBe("Mashle: Magic and Muscles, Vol. 3");
+    expect(Object.keys(joined)).not.toContain("subtitle");
+    for (const blank of ["", "  "]) {
+      expect(Object.keys(titled("Mashle", blank)!)).not.toContain("subtitle");
+    }
+  });
+
+  it("stores the same snapshot as before for an edition with no subtitle", () => {
+    const snapshot = parseEditionJson(EDITION)!;
+    expect(Object.keys(snapshot)).not.toContain("subtitle");
+    expect(snapshot).toEqual({
+      kind: "olEdition",
+      key: "/books/OL51694024M",
+      url: "https://openlibrary.org/books/OL51694024M",
+      title: "Chainsaw Man, Vol. 22",
+      seriesTitle: "Chainsaw Man",
+      volumeLabel: "22",
+      multiVolume: false,
+      publishers: ["VIZ Media LLC"],
+      publishDate: { year: 2026, month: 10, day: 13 },
+      isbn13: "9781974766512",
+      isbn10: "1974766519",
+      format: "physical",
+      binding: "paperback",
+    });
+  });
+});
+
 describe("toIsbn13", () => {
   it("accepts checksum-valid 13- and 10-character ISBNs and nothing else", () => {
     expect(toIsbn13("978-1-9747-6670-3")).toBe("9781974766703");

@@ -707,6 +707,20 @@ format). Only English editions enter: a non-English language, a
 non-English ISBN group (978-4 and the like), or no language and no
 English-market ISBN (978-0, 978-1, 979-8) is skipped, as are novels.
 
+The parser reads a subtitle beside the title ("Mashle" + "Vol. 3" is
+Vol. 3) or joins it into the title when that reading finds more
+("Mashle: Magic and Muscles, Vol. 3"). A subtitle it did not join is kept
+on the snapshot as `subtitle`, and Prepare placement reads it with the
+title. Snapshots stored before the field existed lack it; 74 held editions
+on staging are known to have lost one. For those, the stored
+`seriesTitle` and `volumeLabel` stay authoritative: placement and replays
+of stored editions use them and never re-read the bare title. A parser
+change that should reach new conclusions about stored editions needs fresh
+dump input, so run the sync again rather than reparsing snapshots. A
+filtered or incomplete dump withdraws nothing. An existing observation
+gains `subtitle` the next time a normal run sees its edition; editions
+with no subtitle, or a joined one, store the same snapshot as before.
+
 The raw editions dump is about 10 GB, so filter it offline (publisher
 allowlist, ISBN required) and host the result at any static URL:
 

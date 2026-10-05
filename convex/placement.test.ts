@@ -483,6 +483,78 @@ describe("a book read with today's parser", () => {
     });
   });
 
+  it("reads an Open Library book's kept subtitle: Vol. 2 of the Series it is held under", async () => {
+    const t = makeT();
+    const { aliceId } = await held(t);
+    stubDump([
+      {
+        ...book("/books/OL3M", "Alice in Borderland", "9781974728381"),
+        subtitle: "Vol. 2",
+      },
+    ]);
+    await t.action(internal.openLibrary.sync, {});
+    const observationId = (await heldList(t)).page.find(
+      (row) => row.sourceRecordId === "/books/OL3M",
+    )!.observationId;
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(observationId))!.snapshot).toMatchObject({
+        title: "Alice in Borderland",
+        subtitle: "Vol. 2",
+        volumeLabel: "2",
+      });
+      const hold = await ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", observationId))
+        .unique();
+      expect(hold).toMatchObject({ kind: "volumeMissing", seriesId: aliceId });
+    });
+    const placement = (await detail(t, await prepare(t, observationId)))!.placement;
+    expect(placement?.book).toMatchObject({ label: "2", line: null, statedRange: null });
+  });
+
+  /** Alice 1's snapshot as an earlier parse stored it: bare title "Alice in Borderland", read as Volume 1. */
+  const storeAlice1 = (t: TestT, alice1: Id<"sourceObservations">, subtitle?: string) =>
+    t.run(async (ctx) => {
+      const observation = (await ctx.db.get(alice1))!;
+      if (observation.snapshot?.kind !== "olEdition")
+        throw new Error("not an Open Library edition");
+      await ctx.db.patch(alice1, {
+        snapshot: {
+          ...observation.snapshot,
+          title: "Alice in Borderland",
+          seriesTitle: "Alice in Borderland",
+          volumeLabel: "1",
+          subtitle,
+        },
+      });
+    });
+
+  it("keeps a legacy Open Library snapshot's stored label when its subtitle was lost", async () => {
+    const t = makeT();
+    const { alice1 } = await held(t);
+    await storeAlice1(t, alice1);
+    const placement = (await detail(t, await prepare(t, alice1)))!.placement;
+    // The bare title names no Volume; the label it was read with stands.
+    expect(placement?.book).toMatchObject({
+      title: "Alice in Borderland",
+      label: "1",
+      line: null,
+      statedRange: null,
+    });
+  });
+
+  it("reads a kept subtitle that contradicts the stored label as packaging, never Volume 1", async () => {
+    const t = makeT();
+    const { alice1 } = await held(t);
+    await storeAlice1(t, alice1, "Includes Vols. 1-3");
+    const placement = (await detail(t, await prepare(t, alice1)))!.placement;
+    expect(placement?.book).toMatchObject({
+      label: null,
+      statedRange: { from: "1", to: "3" },
+    });
+    expect(placement?.suggestion).toBeNull();
+  });
+
   it("reads a legacy ANN line stored without its line flag as a line book", async () => {
     const t = makeT();
     const { vagabondId } = await held(t);

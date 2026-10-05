@@ -955,6 +955,57 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
   });
 });
 
+describe("openLibrary.sync — a subtitle read beside the title is kept (H09)", () => {
+  const MASHLE_3 = {
+    key: "/books/OL3M",
+    title: "Mashle",
+    subtitle: "Vol. 3",
+    publishers: ["VIZ Media"],
+    isbn_13: ["9781974736249"],
+    physical_format: "paperback",
+    languages: [{ key: "/languages/eng" }],
+  };
+
+  it("stores the subtitle, places the book as Vol. 3, and a repeat sighting changes nothing", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { seriesId, volume3 } = await t.run(async (ctx) => {
+      await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { publicId: 1, title: "Mashle" });
+      await insertVolume(ctx, { seriesId, position: 2 });
+      return { seriesId, volume3: await insertVolume(ctx, { seriesId, position: 3 }) };
+    });
+    stubDump([MASHLE_3]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+
+    const before = await t.run(async (ctx) => {
+      const [observation] = await ctx.db.query("sourceObservations").collect();
+      const [release] = await ctx.db.query("releases").collect();
+      const coverage = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", release!.editionId))
+        .collect();
+      expect(observation!.snapshot).toMatchObject({
+        title: "Mashle",
+        subtitle: "Vol. 3",
+        seriesTitle: "Mashle",
+        volumeLabel: "3",
+      });
+      expect(observation!.recordRef).toEqual({ type: "release", id: release!._id });
+      expect(release!).toMatchObject({ isbn13: "9781974736249", seriesIds: [seriesId] });
+      expect(coverage.map((row) => row.volumeId)).toEqual([volume3]);
+      return observation!;
+    });
+
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 0 });
+    await t.run(async (ctx) => {
+      const [observation] = await ctx.db.query("sourceObservations").collect();
+      expect(observation!.snapshot).toEqual(before.snapshot);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+});
+
 describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
   const proposalsInReview = (t: TestT) =>
     t.run(
