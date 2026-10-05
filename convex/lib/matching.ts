@@ -391,16 +391,19 @@ export async function workMatch(
 
 /**
  * Whether an Edition is an ordinary book of one whole Volume: its only
- * Volume Coverage row is complete and it belongs to no Edition Line. A
- * single-volume record keyed by label (rung ③, ANN's label and page
- * fallbacks) may link only onto such an Edition; a split part, an omnibus,
- * or a line's packaging of the same Volume is another book.
+ * Volume Coverage row is complete, it belongs to no Edition Line, and it is
+ * not Unmapped Packaging (whose rows, if any remain, are not its stated
+ * contents). A single-volume record keyed by label (rung ③, ANN's label and
+ * page fallbacks) may link only onto such an Edition, and only such an
+ * Edition takes a Volume's ordinary slot; a split part, an omnibus, or a
+ * line's packaging of the same Volume is another book. The label does not
+ * matter: a whole Volume 14.5 is as ordinary as a Volume 14.
  */
 export async function isWholeSingleVolume(
   ctx: QueryCtx | MutationCtx,
   edition: Doc<"editions">,
 ): Promise<boolean> {
-  if (edition.editionLineId !== undefined) return false;
+  if (edition.editionLineId !== undefined || edition.coverageUnmapped === true) return false;
   const coverage = await ctx.db
     .query("volumeCoverages")
     .withIndex("by_edition", (q) => q.eq("editionId", edition._id))

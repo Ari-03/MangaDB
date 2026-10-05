@@ -913,7 +913,10 @@ withdraws. An edition a person could place, with a known publisher and at
 least one active Series of its title, is a Held Book (`placeEdition`): its
 title names several Series, or names one whose Volume is missing, whose
 Series is locked, or whose Volume already has that publisher's Release in
-its format; its packaging cannot be mapped; or the matching ladder flagged
+its format on a whole single-Volume Edition (an omnibus, a line's book, a
+partial or an Unmapped Packaging Edition covering the Volume leaves that
+slot free, so the book gets its own Edition); its packaging cannot be
+mapped; or the matching ladder flagged
 it (`isbn` for its ISBN or a taken slot, `series` for a same-titled
 Series), in which case the flag also stays on the observation as a `match`
 note. So is an edition with a known publisher whose title names no active

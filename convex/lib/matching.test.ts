@@ -320,6 +320,14 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     });
   });
 
+  it("never auto-links onto Unmapped Packaging that kept a complete coverage row (HB-13)", async () => {
+    // The flag says no source stated what the Edition collects, so a row
+    // left on it is no proof it is the ordinary Volume 1.
+    const t = makeT();
+    const unmapped = await buildCatalog(t, { edition: { coverageUnmapped: true } });
+    expect(await match(t, fact(unmapped.publisherId))).toMatchObject({ kind: "review", rung: 4 });
+  });
+
   it("a hardcover or another language is another Release, never the paperback (B14)", async () => {
     const t = makeT();
     const paperback = await buildCatalog(t, { release: { binding: "paperback" } });

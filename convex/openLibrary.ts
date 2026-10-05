@@ -60,7 +60,13 @@ import {
 } from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { coveringOf, releasesOf } from "./lib/editionRows";
-import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
+import {
+  isbnHolders,
+  isWholeSingleVolume,
+  labelsEqual,
+  matchRelease,
+  type ReleaseFact,
+} from "./lib/matching";
 import {
   clearHold,
   getObservation,
@@ -316,7 +322,13 @@ export const sync = internalAction({
 export const REBINDER =
   /^(?:turtleback|perfection learning|selbite|paw prints|demco|topeka bindery|san val|bound to stay bound|findaway|library binding)\b/i;
 
-/** An active Release of this format under the Volume from this publisher. */
+/**
+ * The Volume's ordinary slot for this publisher and format: an active
+ * Release of that format on one of the publisher's whole single-Volume
+ * Editions (isWholeSingleVolume). An omnibus, a line's book, a partial or
+ * an unmapped Edition covering the Volume is another book and leaves the
+ * slot free, as ANN's and the catalog feeds' slots do.
+ */
 async function sameFormatRelease(
   ctx: MutationCtx,
   volumeId: Id<"volumes">,
@@ -327,6 +339,7 @@ async function sameFormatRelease(
   for (const coverage of coverages) {
     const edition = await ctx.db.get(coverage.editionId);
     if (!edition || edition.status !== "active" || edition.publisherId !== publisherId) continue;
+    if (!(await isWholeSingleVolume(ctx, edition))) continue;
     const releases = await releasesOf(ctx, edition._id);
     const hit = releases.find((r) => r.status === "active" && r.format === format);
     if (hit) return hit;
@@ -525,7 +538,8 @@ export async function placeEdition(
   // already linked a same-format sibling without an ISBN unless its known
   // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
   // reprint, a library binding, a hardcover, or an OL duplicate. Never a
-  // second Release; the record is held.
+  // second Release; the record is held. Packaging that also covers the
+  // Volume (a VIZBIG, a line's book) is not that slot (sameFormatRelease).
   const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
   if (sibling) {
     return {

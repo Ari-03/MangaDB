@@ -1090,7 +1090,9 @@ export const joinableEdition = (edition: Doc<"editions">) =>
 /**
  * Every Edition, in any state, by this publisher covering exactly these
  * volumes (complete, in order) in the same Edition Line at the same
- * position — or outside any line when the new Release has none.
+ * position — or outside any line when the new Release has none. Unmapped
+ * Packaging is never one, even with a coverage row left on it: it joins
+ * only its line position's siblings (unmappedSiblings).
  */
 export async function siblingEditions(
   ctx: QueryCtx,
@@ -1102,7 +1104,7 @@ export async function siblingEditions(
   const siblings = [];
   for (const coverage of await coveringOf(ctx, volumeIds[0]!)) {
     const edition = await ctx.db.get(coverage.editionId);
-    if (!edition || edition.publisherId !== publisherId) continue;
+    if (!edition || edition.publisherId !== publisherId || edition.coverageUnmapped) continue;
     if ((edition.editionLineId ?? null) !== (line?.id ?? null)) continue;
     if (line !== null && (edition.linePosition ?? null) !== line.position) continue;
     const rows = await coverageOf(ctx, edition._id);
