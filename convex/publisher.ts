@@ -221,20 +221,19 @@ const EDITION_RELEASE_CAP = 50;
 type BoardRow = { release: Doc<"releases">; series: Array<Doc<"series">> };
 
 /**
- * One month's visible Canonical Releases grouped by Publisher, in window
- * (date) order. Same window and visibility as the Releases browser
- * (monthBrowse + joinBrowseRows): active Releases dated inside the month
- * (`fromSort` is its yyyymm00 key), whose Edition is active and which keep
- * at least one active Series, each with those Series; books of a Mature
- * Series only with `showMature`. Lookups go through the caller's `cache`,
+ * One month's Canonical Releases the board can show, in window (date)
+ * order. Same window and visibility as the Releases browser (monthBrowse +
+ * joinBrowseRows): active Releases dated inside the month (`fromSort` is
+ * its yyyymm00 key), whose Edition is active and which keep at least one
+ * active Series, each with those Series. Mature Series are still in; each
+ * view filters them (`viewRows`). Lookups go through the caller's `cache`,
  * in parallel. A null month (malformed input) is an empty window.
  */
-async function visibleMonth(
+async function monthRows(
   ctx: QueryCtx,
   cache: BrowseCache,
   fromSort: number | null,
-  showMature: boolean,
-) {
+): Promise<BoardRow[]> {
   // yyyymm00 (month-precision) … yyyymm99 covers every day of the month.
   // Active rows only, off the status-led index like monthBrowse: hidden and
   // merged Releases neither cost reads nor push active ones past the cap.
@@ -258,13 +257,22 @@ async function visibleMonth(
       const series = (await Promise.all(release.seriesIds.map(cache.series))).flatMap((doc) =>
         doc?.status === "active" ? [doc] : [],
       );
-      if (!showMature && series.some((doc) => doc.mature)) return null;
       return series.length > 0 ? { release, series } : null;
     }),
   );
+  return rows.flatMap((row) => (row ? [row] : []));
+}
+
+/**
+ * A view's rows grouped by Publisher, in window order: without
+ * `showMature`, a book any of whose active Series is Mature is left out
+ * whole, crossovers included (lib/mature.ts). Fresh arrays, so a view never
+ * reorders the shared rows.
+ */
+function viewRows(rows: ReadonlyArray<BoardRow>, showMature: boolean) {
   const byPublisher = new Map<Id<"publishers">, Array<BoardRow>>();
   for (const row of rows) {
-    if (!row) continue;
+    if (!showMature && row.series.some((doc) => doc.mature)) continue;
     const list = byPublisher.get(row.release.publisherId);
     if (list) list.push(row);
     else byPublisher.set(row.release.publisherId, [row]);
@@ -273,54 +281,25 @@ async function visibleMonth(
 }
 
 /**
- * What each Publisher is releasing in one month, plus the A–Z directory of
- * every active Publisher: the Publishers board's data (`monthBoard` below).
- *
- * `board` has one entry per Publisher with visible Releases that month,
- * busiest first: counts by Format, distinct Series, how many of those are
- * new series (see `debutSeries`), last month's count for a delta, and a few
- * joined rows (joinBrowseRows) for the cover strip. Imprints are Publishers
- * of their own, so they get their own cards and name their parent. Every
- * lookup shares one memo cache (`browseCache`).
- *
- * `directory` lists every active Publisher A–Z with its month count;
- * imprints nest under an active parent (one level, spec'd on the schema),
- * defunct ones are flagged. A malformed month reads as an empty board.
- *
- * Without `showMature`, books of Mature Series and adult-only Publishers
- * are left out of every count, strip, and directory entry (lib/mature.ts).
- * Pass one `cache` to build both views of a month from the same reads, made
- * from the same bounded ctx (lib/boundedReads.ts) so its reads and the
- * board's own share one queue.
+ * The reads behind one month's board, shared by both of its views
+ * (`buildMonthBoard`): the Publisher list, this month's and last month's
+ * rows (`monthRows`), and the memoized debut and art lookups, which do not
+ * depend on the view and run only for the rows a view shows. Every read
+ * goes through one bounded ctx (lib/boundedReads.ts) and one memo cache
+ * (`browseCache`), so a busy month's joins wait their turn in one queue.
  */
-async function buildMonthBoard(
-  unbounded: QueryCtx,
-  year: number,
-  month: number,
-  showMature: boolean,
-  cache?: BrowseCache,
-) {
-  // A busy month's rows join at once; every read waits its turn in one queue.
+async function monthInputs(unbounded: QueryCtx, year: number, month: number) {
   const ctx = boundedReads(unbounded);
-  cache ??= browseCache(ctx);
+  const cache = browseCache(ctx);
   const fromSort = monthOk(year, month) ? year * 10000 + month * 100 : null;
   const previousSort =
     fromSort === null ? null : month === 1 ? fromSort - 10000 + 1100 : fromSort - 100;
 
   const [publisherDocs, current, previous] = await Promise.all([
     ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP),
-    visibleMonth(ctx, cache, fromSort, showMature),
-    visibleMonth(ctx, cache, previousSort, showMature),
+    monthRows(ctx, cache, fromSort),
+    monthRows(ctx, cache, previousSort),
   ]);
-  const active = new Map(
-    publisherDocs
-      .filter(
-        (doc) => doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
-      )
-      .map((doc) => [doc._id, doc]),
-  );
-  const parentOf = (doc: Doc<"publishers">) =>
-    doc.parentPublisherId ? (active.get(doc.parentPublisherId) ?? null) : null;
 
   // The Series an Edition debuts, or null. A debut is a standard Edition
   // (no Edition Line, so not a Deluxe Vol. 1 repackaging) whose coverage
@@ -364,6 +343,42 @@ async function buildMonthBoard(
     const cover = await cache.cover(release);
     return cover.coverUrl !== null || cover.coverIsbns.length > 0;
   };
+
+  return { ctx, cache, publisherDocs, current, previous, debutSeries, hasArt };
+}
+
+/**
+ * What each Publisher is releasing in one month, plus the A–Z directory of
+ * every active Publisher: the Publishers board's data (`monthBoard` below),
+ * built from the month's shared reads (`monthInputs`).
+ *
+ * `board` has one entry per Publisher with visible Releases that month,
+ * busiest first: counts by Format, distinct Series, how many of those are
+ * new series (see `debutSeries`), last month's count for a delta, and a few
+ * joined rows (joinBrowseRows) for the cover strip. Imprints are Publishers
+ * of their own, so they get their own cards and name their parent.
+ *
+ * `directory` lists every active Publisher A–Z with its month count;
+ * imprints nest under an active parent (one level, spec'd on the schema),
+ * defunct ones are flagged. A malformed month reads as an empty board.
+ *
+ * Without `showMature`, books of Mature Series and adult-only Publishers
+ * are left out of every count, strip, and directory entry (lib/mature.ts),
+ * this month's and last month's alike.
+ */
+async function buildMonthBoard(inputs: MonthInputs, showMature: boolean) {
+  const { ctx, cache, publisherDocs, debutSeries, hasArt } = inputs;
+  const current = viewRows(inputs.current, showMature);
+  const previous = viewRows(inputs.previous, showMature);
+  const active = new Map(
+    publisherDocs
+      .filter(
+        (doc) => doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+      )
+      .map((doc) => [doc._id, doc]),
+  );
+  const parentOf = (doc: Doc<"publishers">) =>
+    doc.parentPublisherId ? (active.get(doc.parentPublisherId) ?? null) : null;
 
   const cards = await Promise.all(
     [...current].map(async ([publisherId, rows]) => {
@@ -482,6 +497,7 @@ async function buildMonthBoard(
   return { board, directory };
 }
 
+type MonthInputs = Awaited<ReturnType<typeof monthInputs>>;
 type MonthBoard = Awaited<ReturnType<typeof buildMonthBoard>>;
 
 /** A real calendar month; anything else reads as an empty board. */
@@ -519,7 +535,7 @@ export const monthBoard = query({
       // as long as the version matches.
       if (stored?.version === BOARD_VERSION) return JSON.parse(stored.payload) as MonthBoard;
     }
-    return await buildMonthBoard(ctx, year, month, showMature);
+    return await buildMonthBoard(await monthInputs(ctx, year, month), showMature);
   },
 });
 
@@ -607,19 +623,16 @@ export const rebuildBoards = internalAction({
 
 /**
  * One month's board in both views, computed live from one shared set of
- * reads, bypassing the stored copies.
+ * reads (`monthInputs`: one scan each of the Publishers, this month and
+ * last month), bypassing the stored copies.
  */
 export const computeBoard = internalQuery({
   args: { year: v.number(), month: v.number() },
-  handler: async (
-    unbounded,
-    { year, month },
-  ): Promise<{ general: MonthBoard; mature: MonthBoard }> => {
-    const ctx = boundedReads(unbounded);
-    const cache = browseCache(ctx);
+  handler: async (ctx, { year, month }): Promise<{ general: MonthBoard; mature: MonthBoard }> => {
+    const inputs = await monthInputs(ctx, year, month);
     return {
-      general: await buildMonthBoard(ctx, year, month, false, cache),
-      mature: await buildMonthBoard(ctx, year, month, true, cache),
+      general: await buildMonthBoard(inputs, false),
+      mature: await buildMonthBoard(inputs, true),
     };
   },
 });
