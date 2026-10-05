@@ -233,6 +233,26 @@ approved Proposal, so the reason lands in public history.
   it is resolved. Hidden and merged records are locked by their status.
   Hide and merge refuse a locked record until it is unlocked.
 
+## Combining reading paths
+
+On a Series page, **Combine reading paths** opens the Reading paths section
+of its Manage page. A Moderator or Administrator can select two to eight
+standard publisher runs and show them as one shelf, in canonical volume
+order. Choose a lead publisher, review the volume and gap preview, give a
+reason, and confirm the change. Existing links to either run open the
+combined shelf. Omnibus and deluxe Edition Lines stay separate.
+
+This is a display choice for one Series. Editions, publisher attribution,
+Releases, ISBNs, collection entries, and reading progress keep their original
+identities. The personal library uses the same combined path. Runs with
+overlapping volume coverage cannot be combined; any overlap imported later
+remains visible on the shelf and in the moderator preview.
+
+Each save creates an approved Proposal and a public Revision on the Series.
+Competing changes to the grouping require reloading the choices. **Undo
+combination** restores the separate publisher shelves and records its own
+reason in history. A locked Series must be unlocked before either action.
+
 ## Packaging, bookless Series and held books
 
 `/mod/packaging` (`convex/packaging.ts`) lists Unmapped Packaging, which a

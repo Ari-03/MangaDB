@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { groupEditions, type GroupableEdition } from "./editionGroups";
+import {
+  findEditionGroup,
+  groupEditions,
+  previewCombinedPaths,
+  type GroupableEdition,
+} from "./editionGroups";
 
 const kodansha = { name: "Kodansha", slug: "kodansha" };
 const tokyopop = { name: "Tokyopop", slug: "tokyopop" };
@@ -52,5 +57,69 @@ describe("groupEditions", () => {
       book({ lineName: "Deluxe", linePosition: "9", at: [25, 26, 27] }),
     ]);
     expect(groups[0]?.books.map((b) => b.linePosition)).toEqual(["9", "10"]);
+  });
+
+  it("combines the 100 Girlfriends imprint split without changing the books", () => {
+    const sevenSeas = { name: "Seven Seas Entertainment", slug: "seven-seas" };
+    const ghostShip = { name: "Ghost Ship", slug: "ghost-ship" };
+    const books = Array.from({ length: 22 }, (_, i) =>
+      book({
+        at: [i + 1],
+        publisher: i < 11 || i === 15 ? sevenSeas : ghostShip,
+      }),
+    );
+    const line = book({
+      publisher: sevenSeas,
+      lineName: "Omnibus",
+      linePosition: "1",
+      at: [1, 2, 3],
+    });
+    const groups = groupEditions([...books.reverse(), line], {
+      publishers: [sevenSeas, ghostShip],
+      aliases: [sevenSeas.slug, ghostShip.slug],
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.key).toBe("seven-seas");
+    expect(groups[0]?.books.map((b) => b.coverage[0]?.position)).toEqual(
+      Array.from({ length: 22 }, (_, i) => i + 1),
+    );
+    expect(groups[0]?.books[11]?.publisher).toBe(ghostShip);
+    expect(groups[0]?.books[15]?.publisher).toBe(sevenSeas);
+    expect(groups[1]?.key).toBe("seven-seas-omnibus");
+    expect(findEditionGroup(groups, "ghost-ship")).toBe(groups[0]);
+    expect(findEditionGroup(groups, "absent")).toBeUndefined();
+  });
+
+  it("names all combined publishers when another standard run exists", () => {
+    const third = { name: "Third Press", slug: "third" };
+    const groups = groupEditions(
+      [
+        book({ publisher: kodansha, at: [1] }),
+        book({ publisher: tokyopop, at: [2] }),
+        book({ publisher: third, at: [3] }),
+      ],
+      { publishers: [kodansha, tokyopop], aliases: ["kodansha", "tokyopop"] },
+    );
+    expect(groups.map((group) => group.name)).toEqual([
+      "Kodansha & Tokyopop edition",
+      "Third Press edition",
+    ]);
+  });
+
+  it("previews real gaps and overlap without losing duplicate books", () => {
+    const preview = previewCombinedPaths(
+      [
+        {
+          publisher: { id: "a" },
+          books: [{ coverage: [{ volumePublicId: 1 }] }, { coverage: [{ volumePublicId: 3 }] }],
+        },
+        { publisher: { id: "b" }, books: [{ coverage: [{ volumePublicId: 3 }] }] },
+      ],
+      ["a", "b"],
+      [1, 2, 3].map((position) => ({ publicId: position, position, label: String(position) })),
+    );
+    expect(preview.bookCount).toBe(3);
+    expect(preview.gaps.map((volume) => volume.label)).toEqual(["2"]);
+    expect(preview.overlaps.map((volume) => volume.label)).toEqual(["3"]);
   });
 });

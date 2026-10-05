@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
+import { findEditionGroup } from "../../convex/lib/editionGroups";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type SeriesPageData } from "~/lib/catalogData";
 import { CommentsSection } from "~/lib/comments";
@@ -156,9 +157,7 @@ function SeriesPage() {
     : [];
   // One path needs no picker; with several, the reader picks one.
   const selected =
-    editionGroups.length === 1
-      ? editionGroups[0]
-      : editionGroups.find((group) => group.key === editionKey);
+    editionGroups.length === 1 ? editionGroups[0] : findEditionGroup(editionGroups, editionKey);
 
   return (
     <main className="series-page">
@@ -336,7 +335,9 @@ function SeriesPage() {
               {editionGroups.length > 1 ? selected.name : "Reading path"}
             </h2>
             <p className="section-note">
-              {selected.publisher ? `${selected.publisher.name} · ` : ""}
+              {selected.publishers.length > 0
+                ? `${selected.publishers.map((publisher) => publisher.name).join(" · ")} · `
+                : ""}
               {plural(selected.books.length, "book", "books")}
               {selected.kind === "line" ? " in the publisher's own numbering" : " in reading order"}
             </p>
@@ -435,7 +436,9 @@ function EditionPicker({
             <span className="edition-card-body">
               <span className="edition-card-name">{group.name}</span>
               {group.publisher ? (
-                <span className="edition-card-meta">{group.publisher.name}</span>
+                <span className="edition-card-meta">
+                  {group.publishers.map((publisher) => publisher.name).join(" · ")}
+                </span>
               ) : null}
               <span className="edition-card-meta">
                 {plural(group.books.length, "book", "books")}

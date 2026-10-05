@@ -504,6 +504,10 @@ export default defineSchema({
     // or an Editor supplies one.
     synopsis: v.optional(v.string()),
     sourceStatus: v.optional(sourceStatus),
+    // A moderator can combine up to eight publishers' standard runs into
+    // one reading path. The first publisher supplies its key; source books
+    // retain their publishers. Only readingPaths.setCombinedPath writes this.
+    combinedPathPublisherIds: v.optional(v.array(v.id("publishers"))),
     // Bookless Series (CONTEXT.md): active, but no Edition covers any of its
     // Volumes and no Edition Line member exists — a backbone a source built
     // whose books never attached. Derived by the Series library rebuild

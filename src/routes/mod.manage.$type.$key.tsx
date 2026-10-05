@@ -9,6 +9,7 @@ import type { RecordType } from "../../convex/lib/moderationFields";
 import { isRecordType } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
 import { ModGate } from "~/lib/moderation";
+import { CombinedReadingPathPanel } from "~/lib/combinedReadingPath";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 
 /**
@@ -277,6 +278,10 @@ function ModManagePanel({ type, manageKey }: { type: RecordType; manageKey: stri
       </p>
 
       <ImpactPreview impact={form.impact} title={`"${form.title}"`} />
+
+      {type === "series" && form.status === "active" ? (
+        <CombinedReadingPathPanel seriesPublicId={Number(manageKey)} />
+      ) : null}
 
       {form.status === "active" && !form.locked ? (
         <>
