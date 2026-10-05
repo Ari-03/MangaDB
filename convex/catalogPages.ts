@@ -21,7 +21,7 @@ import { representativeDescription } from "./lib/descriptions";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
-import { otherPrintingsOf, primaryIsbnsOf, printingReleases } from "./lib/releaseIsbns";
+import { otherPrintingsOf, printingReleases } from "./lib/releaseIsbns";
 import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
@@ -151,17 +151,19 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
 
 /**
  * One Release row as the Edition and Volume pages render it: publication
- * facts with both ISBNs, the ISBNs of its Other Printings (oldest first,
- * with their year), Variants beneath their Release, and containing Bundles
+ * facts with both ISBNs, the ISBNs of its Other Printings (the first
+ * recorded, oldest first, with their year; `morePrintings` when others may
+ * remain unshown), Variants beneath their Release, and containing Bundles
  * cross-linked (spec §2/§10). `anchor` is the row's fragment on the Edition
  * page — ISBN when present, else document ID (spec §8). No Release
  * Description: the page shows one resolved description instead.
  */
 async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
-  const own = primaryIsbnsOf(release);
-  const otherPrintings = (await otherPrintingsOf(ctx, release._id))
-    .filter((row) => !own.has(row.isbn13))
-    .map((row) => ({ isbn13: row.isbn13, year: row.pubDate?.year ?? null }));
+  const printed = await otherPrintingsOf(ctx, release);
+  const otherPrintings = printed.printings.map((row) => ({
+    isbn13: row.isbn13,
+    year: row.pubDate?.year ?? null,
+  }));
 
   const variants = (
     await ctx.db
@@ -192,6 +194,7 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     isbn13: release.isbn13 ?? null,
     isbn10: release.isbn10 ?? null,
     otherPrintings,
+    morePrintings: printed.more,
     pubDate: release.pubDate ?? null,
     price: release.price ?? null,
     coverUrl: await coverUrl(ctx, release.coverImage?.storageId),

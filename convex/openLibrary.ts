@@ -682,6 +682,7 @@ export const applyEdition = internalMutation({
       tagBootstrapUnreviewed: false,
       now,
     });
+    if (creation.blocked !== undefined) return { status: "recordOnly", changed: true };
     return { status: "created", changed: true, releaseId: creation.releaseId };
   },
 });

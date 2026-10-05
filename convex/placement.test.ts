@@ -688,6 +688,41 @@ describe("books it does not prepare", () => {
   });
 });
 
+describe("a printing's ISBN", () => {
+  it("never places a book whose ISBN a hidden Release has as another printing", async () => {
+    const t = makeT();
+    const { aliceId, alice1 } = await held(t);
+    const hidden = await t.run(async (ctx) => {
+      const publisherId = (await ctx.db.query("publishers").first())!._id;
+      const volumeId = await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
+      const hidden = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [aliceId],
+        isbn13: "9781974700011",
+        status: "hidden",
+      });
+      await ctx.db.insert("releaseIsbns", {
+        releaseId: hidden,
+        isbn13: "9781974728374",
+        reason: "Another printing.",
+        sourceKey: "openlibrary",
+      });
+      return hidden;
+    });
+    const result = await signedIn(t, carol).mutation(api.placement.preparePlacement, {
+      observationId: alice1,
+    });
+    expect(result).toEqual({
+      status: "unavailable",
+      reason: expect.stringContaining(`ISBN 9781974728374 belongs to hidden Release ${hidden}`),
+    });
+    expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toEqual([]);
+  });
+});
+
 describe("one live Draft per book", () => {
   it("opens the author's Draft on a repeat and a replay, and anyone's once it is in review", async () => {
     const t = makeT();

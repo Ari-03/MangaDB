@@ -14,7 +14,7 @@ import {
   insertApprovedProposal,
   insertFirstVersion,
   resolveEditTarget,
-  revisionsOf,
+  latestRevisionOf,
   type RecordRef,
 } from "./moderation";
 import {
@@ -109,7 +109,7 @@ async function beginOperation(
   if (!args.confirmImpact) {
     fail("confirmRequired", "Review the impact preview and confirm the operation explicitly.");
   }
-  const baseOf = async (ref: RecordRef) => (await revisionsOf(ctx, ref))[0]?._id;
+  const baseOf = async (ref: RecordRef) => (await latestRevisionOf(ctx, ref))?._id;
   const storedOp = await op(baseOf);
 
   const author = {

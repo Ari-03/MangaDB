@@ -17,11 +17,11 @@ import {
   insertVolume,
 } from "../test.factories";
 import { makeT } from "../test.helpers";
-import { upsertObservation } from "./observations";
+import { holdOf, upsertObservation } from "./observations";
 import {
   type CreationArgs,
   createCanonicalRecords,
-  createReleaseBundle,
+  createReleaseBundle as createOrHoldBundle,
   ensurePublisher,
   findPublisherByName,
   queueCreationProposal,
@@ -38,12 +38,15 @@ const CITATION = {
 /** The fields every creation case shares: PRH as the source, the test citation, untagged, at time 1. */
 type Shared = "sourceKey" | "citation" | "importComment" | "tagBootstrapUnreviewed" | "now";
 
-/** createCanonicalRecords with the shared fields defaulted; a case overrides the source or the tag. */
-const create = (
+/**
+ * createCanonicalRecords with the shared fields defaulted; a case overrides
+ * the source or the tag. These cases always create (or find a hidden Series).
+ */
+const create = async (
   ctx: MutationCtx,
   args: Omit<CreationArgs, Shared> & Partial<Pick<CreationArgs, Shared>>,
-) =>
-  createCanonicalRecords(ctx, {
+) => {
+  const result = await createCanonicalRecords(ctx, {
     sourceKey: "prh",
     citation: CITATION,
     importComment: "test",
@@ -51,6 +54,16 @@ const create = (
     now: 1,
     ...args,
   });
+  if (result.seriesId === null) throw new Error(`not created: ${result.blocked}`);
+  return { ...result, seriesId: result.seriesId };
+};
+
+/** createReleaseBundle for the cases below, none of which is held. */
+const createReleaseBundle = async (...args: Parameters<typeof createOrHoldBundle>) => {
+  const result = await createOrHoldBundle(...args);
+  if ("held" in result) throw new Error(`held: ${result.held}`);
+  return result;
+};
 
 async function observation(ctx: MutationCtx, sourceRecordId: string) {
   const { observation } = await upsertObservation(ctx, {
@@ -528,6 +541,36 @@ describe("createReleaseBundle", () => {
       });
       expect(again).toMatchObject({ created: false, bundleId: first.bundleId });
       expect(await ctx.db.query("releaseBundles").collect()).toHaveLength(1);
+    });
+  });
+});
+
+describe("createReleaseBundle — a printing's ISBN", () => {
+  it("holds a box whose ISBN is a Release's other printing, creating nothing", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const kodansha = await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", ["1"]);
+      const editionId = await insertEdition(ctx, { publisherId: kodansha });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId: kodansha,
+        seriesIds: [seriesId],
+      });
+      await ctx.db.insert("releaseIsbns", {
+        releaseId,
+        isbn13: "9798888772584",
+        reason: "Another printing.",
+        sourceKey: "ann",
+      });
+      const obs = await observation(ctx, "box");
+      expect(
+        await createOrHoldBundle(ctx, { ...fireForceBox(seriesId, ["1"]), observation: obs }),
+      ).toEqual({
+        held: expect.stringContaining(`ISBN 9798888772584 belongs to Release ${releaseId}`),
+      });
+      expect(await ctx.db.query("releaseBundles").collect()).toEqual([]);
+      expect(await holdOf(ctx, obs._id)).toMatchObject({ kind: "isbn", seriesId });
     });
   });
 });

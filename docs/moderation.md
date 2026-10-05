@@ -154,10 +154,17 @@ approved Proposal, so the reason lands in public history.
   but keeps its ID, history and every tracking reference. A hidden
   Release's Other Printings find nothing on `/isbn/{isbn}` either, and an
   import treats their ISBNs as the hidden Release's. **Restore** brings it
-  back. Restore never undoes a merge.
+  back. Restore never undoes a merge, and refuses a Release whose ISBNs are
+  someone else's now: an ISBN with Other Printings may have no other owner,
+  active or hidden, and no Bundle; any other ISBN no other active Release.
+  A Release with more than 100 printings is left to an administrator. A
+  Bundle whose ISBN is now a printing is refused too. Merge or correct the
+  other record first.
 - **Merge** moves everything from the loser to a survivor: observations,
   relationships, child records, a Release's Other Printings (an ISBN the
-  survivor already carries stays the survivor's), user tracking (the
+  survivor already carries as its ISBN-13 or a printing stays the
+  survivor's; one it has only as its ISBN-10 moves, so the ISBN-13 still
+  finds it; at most 100 printings per Release), user tracking (the
   survivor's row wins where a user tracked both), ratings, reviews,
   favorites and comments.
   The loser keeps its ID and points at the survivor, so its URLs 301.
@@ -175,7 +182,27 @@ approved Proposal, so the reason lands in public history.
 - **Split** is the only way back from a merge. Every merge stores a
   `mergeManifests` row with each moved reference and removed row. Split
   replays it backwards, skipping references changed since, and reactivates
-  the loser.
+  the loser. A Release's Split decides its Other Printings first, writing
+  nothing until each one has an answer: a printing row returns to the
+  loser when nobody but the loser would claim its ISBN, stays with the
+  survivor when the survivor claims it now (it took the ISBN as its own, or
+  the merge found it a duplicate), and the Split is refused when anyone
+  else claims it, when an ISBN coming back with the loser (its own, or that
+  of a Release merged into it) would collide with a survivor's row, or when
+  a claim cannot be followed. Records of a printing go where the printing
+  goes, including records linked to the survivor since the merge, with
+  their mark and maturity as a link gives them; a record the survivor
+  keeps keeps its mark. A record that was unlinked or relinked by an
+  audited decision since the merge (a repair unlink, a reviewed link that
+  was not the record's first) refuses the Split, naming the Revision,
+  because nothing can tell that link from the merge's. Both Revisions list
+  each printing (`otherPrintings`: restored or kept on the survivor) and
+  each record (`sourceObservations`: from, to, mark before and after). A
+  Release Split decides at most 40 ISBNs, reads at most 400 of the
+  survivor's records and Revisions since the merge, moves at most 100
+  records, replays at most 4,000 manifest entries, keeps each audit under
+  64 KiB, and checks before each read and before writing that the
+  transaction has room left; past any of these it refuses with the count.
 - **Lock** closes an active record to edits during a dispute; unlock when
   it is resolved. Hidden and merged records are locked by their status.
   Hide and merge refuse a locked record until it is unlocked.

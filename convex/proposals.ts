@@ -42,6 +42,7 @@ import {
   type IsbnUpdate,
 } from "./lib/proposalCreates";
 import { fail } from "./lib/errors";
+import { printedIsbnRefusal } from "./lib/releaseIsbns";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
@@ -222,7 +223,16 @@ async function buildDraftOps(ctx: MutationCtx, submitted: OpInput[]): Promise<St
 async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
   const isbnUpdates: IsbnUpdate[] = [];
   for (const op of ops) {
-    if (op.kind !== "update" || op.ref.type !== "release") continue;
+    if (op.kind !== "update") continue;
+    // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
+    if (op.ref.type === "releaseBundle") {
+      const isbns = op.changes.flatMap(({ field, after }) =>
+        (field === "isbn13" || field === "isbn10") && typeof after === "string" ? [after] : [],
+      );
+      const printed = await printedIsbnRefusal(ctx, isbns);
+      if (printed !== null) fail("invalidField", `${printed} Correct that first.`);
+    }
+    if (op.ref.type !== "release") continue;
     for (const { field, after } of op.changes) {
       if (field !== "isbn13" && field !== "isbn10") continue;
       isbnUpdates.push({

@@ -103,8 +103,21 @@ apart", and a second review still did not pass it. A rule that safe saves
 little over judging those books one at a time, so the decided path
 (`printings:recordDecidedInternal`) is the only one. It checks the
 invariants that keep the data consistent (the Release's Series, its
-publisher, a physical book, an ISBN no other Release holds), not whether
-the two books are the same.
+publisher, a physical book, an ISBN no other Release holds), and refuses a
+record whose own statements contradict the decision (another work, more
+than one Volume, a novel, statements that disagree), not whether the two
+books are the same.
+
+An ISBN with a printing row has one owner (decided after review,
+2026-10-05): every current claim on it, the Releases' own ISBNs, printing
+rows and Bundles' ISBNs, merges followed and hidden Releases included,
+reaches one Release, which may hold it both as its own and as a row after
+a promotion. Every write that adds or keeps such a claim reads all of them
+and refuses when it cannot, rather than trusting the first it finds; a
+Split decides every printing it touches before writing, and refuses a case
+it cannot resolve rather than take an ISBN from a third owner. The rule
+covers current rows only. A historical reservation would need an ISBN
+ledger, and ISBNs without rows keep the older active-only rule.
 
 Ruled out: a Release per printing, which splits one book's owners,
 ratings and dates across rows; recording every same-slot ISBN, which

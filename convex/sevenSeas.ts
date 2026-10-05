@@ -297,7 +297,8 @@ export const sync = internalAction({
  * whether the book page is worth fetching. When it is not, `cover` is art
  * the linked Release still lacks from the snapshot's cover URL (a download
  * that failed after the book applied), for the action to retry without the
- * page, and `replay` is a stored snapshot for the action to apply again
+ * page; a record of one of the Release's Other Printings asks for neither
+ * art nor its blurb. `replay` is a stored snapshot for the action to apply again
  * without the page (an unplaced book an older planner judged). `review` is
  * why a linked box its stored snapshot could not fill went to review.
  */
@@ -359,6 +360,9 @@ export const noteListing = internalMutation({
         },
       };
     }
+    // A record of one of the Release's Other Printings offers it no art and
+    // no blurb (applyBook says the same once its page is read).
+    if (obs.printingIsbn13 !== undefined) return { needsDetail: false };
     const release = obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
@@ -378,7 +382,7 @@ export const noteListing = internalMutation({
     // hold yet; applyBook's rung ① serves only active, unlocked Releases.
     const cover =
       release !== null && release.status === "active" && !release.locked
-        ? coverRequest(release, stored?.coverUrl)
+        ? coverRequest(release, stored?.coverUrl, obs._id)
         : undefined;
     return cover ? { needsDetail: false, cover } : { needsDetail: false };
   },
@@ -536,7 +540,7 @@ export const applyBook = internalMutation({
         snapshot.description !== undefined &&
         snapshot.description !== release.description &&
         (await blurbOutranked(ctx, release, SOURCE_KEY));
-      const cover = coverRequest(release, snapshot.coverUrl);
+      const cover = coverRequest(release, snapshot.coverUrl, observation._id);
       if (!changed && !blurbPending && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
@@ -661,6 +665,7 @@ export const applyBook = internalMutation({
         tagBootstrapUnreviewed: true,
         now,
       });
+      if ("held" in bundle) return { status: "recordOnly", changed: true, reason: bundle.held };
       if (bundle.conflict !== undefined) {
         return { status: "needsReview", changed: true, reason: bundle.conflict };
       }
@@ -710,7 +715,7 @@ export const applyBook = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        cover: printing ? undefined : coverRequest(release, snapshot.coverUrl),
+        cover: printing ? undefined : coverRequest(release, snapshot.coverUrl, observation._id),
       };
     }
 
@@ -747,6 +752,9 @@ export const applyBook = internalMutation({
     // A created Release's art is the action's to store.
     if (result.status !== "created" || result.releaseId === undefined) return result;
     const created = await ctx.db.get(result.releaseId);
-    return { ...result, cover: created ? coverRequest(created, snapshot.coverUrl) : undefined };
+    return {
+      ...result,
+      cover: created ? coverRequest(created, snapshot.coverUrl, observation._id) : undefined,
+    };
   },
 });

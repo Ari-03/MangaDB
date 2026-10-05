@@ -29,6 +29,7 @@ import {
   displayInfo,
   getCanonical,
   insertRevision,
+  latestRevisionOf,
   revisionsOf,
   type CatalogDoc,
   type RecordRef,
@@ -43,7 +44,23 @@ import {
 } from "./ratings";
 import { coverageOf, coveringOf, editionSeriesIds, releasesOf } from "./editionRows";
 import { fail } from "./errors";
-import { isbn13To10 } from "./isbn";
+import { toIsbn13 } from "./isbn";
+import { applyMatureEvidence } from "./mature";
+import {
+  budgetShortfall,
+  CLAIM_SCAN,
+  claimResolver,
+  isbnClaims,
+  MAX_DOCUMENT_BYTES,
+  primaryIsbnsOf,
+  printedClaimRefusal,
+  printingLinkAudit,
+  recordName,
+  sizeOf,
+  type Budget,
+  type ClaimResolver,
+  type IsbnClaims,
+} from "./releaseIsbns";
 import { sameValue } from "./values";
 
 // ---------- revision plumbing ----------
@@ -60,14 +77,18 @@ export type OpMeta = {
 
 type Change = { field: string; before?: unknown; after?: unknown };
 
-/** Append the next immutable Revision to one record's history. */
+/**
+ * Append the next immutable Revision to one record's history. Reads only
+ * the newest one, so an operation's reads stay bounded however long the
+ * record's history is.
+ */
 async function recordRevision(
   ctx: MutationCtx,
   ref: RecordRef,
   changes: Change[],
   meta: OpMeta,
 ): Promise<Id<"revisions">> {
-  const latest = (await revisionsOf(ctx, ref))[0];
+  const latest = await latestRevisionOf(ctx, ref);
   return (await insertRevision(ctx, ref, latest, changes, meta)).revisionId;
 }
 
@@ -115,8 +136,64 @@ export const applyHide = toggleOp({
   change: { field: "status", before: "active", after: "hidden" },
 });
 
-/** Restore reactivates a hidden record. It never reverses a merge (Split does). */
-export const applyRestore = toggleOp({
+// A hidden Release's Other Printings Restore reads whole; past this many it refuses.
+export const RELEASE_PRINTINGS_READ = 100;
+
+/**
+ * Why Restore may not reactivate this hidden record, or null. A Release's
+ * ISBNs (its own ISBN-13 and ISBN-10, and its printings) must still be its
+ * own: an ISBN with other printings may have no other owner, active or
+ * hidden, and no Bundle (lib/releaseIsbns.ts printedClaimRefusal); any
+ * other ISBN no other active Release (two active owners would split its
+ * lookups). A Bundle's ISBN may be no Release's printing. Shared by
+ * applyRestore and the data repair, which reports it as its skip.
+ */
+export async function restoreRefusal(ctx: QueryCtx, ref: RecordRef): Promise<string | null> {
+  const resolver = claimResolver(ctx);
+  if (ref.type === "releaseBundle") {
+    const bundle = await ctx.db.get(ref.id);
+    if (bundle?.status !== "hidden") return null;
+    for (const isbn of [bundle.isbn13, bundle.isbn10]) {
+      const claims = isbn === undefined ? null : await isbnClaims(ctx, isbn, { resolver });
+      if (claims?.printed) {
+        return `ISBN ${claims.isbn13} is now another printing of a Release, and an ISBN with other printings is a Release's only: correct it before restoring the Bundle.`;
+      }
+    }
+    return null;
+  }
+  if (ref.type !== "release") return null;
+  const release = await ctx.db.get(ref.id);
+  if (release?.status !== "hidden") return null;
+  const rows = await ctx.db
+    .query("releaseIsbns")
+    .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+    .take(RELEASE_PRINTINGS_READ + 1);
+  if (rows.length > RELEASE_PRINTINGS_READ) {
+    return `The Release has more than ${RELEASE_PRINTINGS_READ} other printings, more than Restore checks: an administrator restores it.`;
+  }
+  const isbns = new Set([
+    ...primaryIsbnsOf(release),
+    ...rows.flatMap((row) => toIsbn13(row.isbn13) ?? []),
+  ]);
+  for (const isbn of isbns) {
+    const claims = await isbnClaims(ctx, isbn, { resolver });
+    if (claims === null) continue;
+    const why = claims.printed
+      ? printedClaimRefusal(claims, release._id)
+      : [...claims.owners.values()].some(
+            (owner) =>
+              owner.kind === "release" &&
+              owner.doc._id !== release._id &&
+              owner.doc.status === "active",
+          )
+        ? `ISBN ${isbn} now belongs to another active Release.`
+        : null;
+    if (why !== null) return `${why} Merge or correct it before restoring this Release.`;
+  }
+  return null;
+}
+
+const restoreToggle = toggleOp({
   refuse: (doc, type) => {
     if (doc.status === "merged") {
       fail("badState", "A merged record is reversed only by an explicit Split — Restore cannot.");
@@ -128,6 +205,21 @@ export const applyRestore = toggleOp({
   patch: { status: "active" },
   change: { field: "status", before: "hidden", after: "active" },
 });
+
+/**
+ * Restore reactivates a hidden record. It never reverses a merge (Split
+ * does), and refuses a record whose ISBNs another record now holds
+ * (restoreRefusal).
+ */
+export async function applyRestore(
+  ctx: MutationCtx,
+  ref: RecordRef,
+  meta: OpMeta,
+): Promise<Id<"revisions">[]> {
+  const refusal = await restoreRefusal(ctx, ref);
+  if (refusal !== null) fail("badState", refusal);
+  return await restoreToggle(ctx, ref, meta);
+}
 
 /** A Moderator's temporary lock on an active record (disputes, spec §5). */
 export const applyLock = toggleOp({
@@ -1480,20 +1572,26 @@ async function transferReferences(
       }
 
       // Other Printings follow their Release, so their ISBNs find the
-      // survivor. An ISBN the survivor already carries, as its own or as a
-      // printing, keeps the survivor's and the loser's row is removed.
+      // survivor. An ISBN the survivor already carries as its own ISBN-13
+      // or as a printing keeps the survivor's, and the loser's row is
+      // removed. One it carries only as its ISBN-10 keeps the moved row:
+      // the ISBN-13 lookup reads Releases' `isbn13` and rows only
+      // (catalogPages.isbnLookup), so the row is how that spelling still
+      // finds it. releaseMergeRefusal has already bounded both lists.
       const printingsOf = (releaseId: Id<"releases">) =>
         ctx.db
           .query("releaseIsbns")
           .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
-          .collect();
+          .take(RELEASE_PRINTINGS_READ);
+      const ownIsbn13 = toIsbn13((survivorDoc as Doc<"releases">).isbn13);
       const survivorIsbns = new Set([
-        (survivorDoc as Doc<"releases">).isbn13,
-        ...(await printingsOf(survivorId)).map((row) => row.isbn13),
+        ...(ownIsbn13 !== undefined ? [ownIsbn13] : []),
+        ...(await printingsOf(survivorId)).map((row) => toIsbn13(row.isbn13) ?? row.isbn13),
       ]);
       for (const row of await printingsOf(loserId)) {
-        if (survivorIsbns.has(row.isbn13)) await removeRow(ctx, log, "releaseIsbns", row);
-        else await repoint(ctx, log, "releaseIsbns", row, { releaseId: survivorId });
+        if (survivorIsbns.has(toIsbn13(row.isbn13) ?? row.isbn13)) {
+          await removeRow(ctx, log, "releaseIsbns", row);
+        } else await repoint(ctx, log, "releaseIsbns", row, { releaseId: survivorId });
       }
 
       // A cross-Series merge files the loser's tracking under the survivor's
@@ -1721,7 +1819,8 @@ export async function variantMergeRefusal(
 
 /**
  * Why merging Release `loserId` into `survivorId` is refused, or null. The
- * loser's Other Printings move to the survivor (transferReferences), and
+ * loser's Other Printings move to the survivor (transferReferences), which
+ * reads both Releases' lists whole, up to RELEASE_PRINTINGS_READ each; and
  * only a physical Release has other printings (printings.ts), so a loser
  * with printing rows merges only into a physical survivor. applyMerge
  * refuses with this before writing anything; the merge form shows it
@@ -1732,6 +1831,15 @@ export async function releaseMergeRefusal(
   survivorId: Id<"releases">,
   loserId: Id<"releases">,
 ): Promise<string | null> {
+  for (const releaseId of [survivorId, loserId]) {
+    const rows = await ctx.db
+      .query("releaseIsbns")
+      .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
+      .take(RELEASE_PRINTINGS_READ + 1);
+    if (rows.length > RELEASE_PRINTINGS_READ) {
+      return `A Release in this merge has more than ${RELEASE_PRINTINGS_READ} other printings, more than a merge moves at once: an administrator merges it.`;
+    }
+  }
   const survivor = await ctx.db.get(survivorId);
   if (survivor === null || survivor.format === "physical") return null;
   const printing = await ctx.db
@@ -2184,46 +2292,513 @@ async function keepSplitVisibility(
   }
 }
 
-/** A printing stays where it is if another owner has claimed its ISBN since the merge. */
-async function canRestorePrinting(
-  ctx: MutationCtx,
-  row: Pick<Doc<"releaseIsbns">, "isbn13" | "releaseId">,
-  movedRowId?: Id<"releaseIsbns">,
-): Promise<boolean> {
-  const ownedElsewhere = (release: Doc<"releases">) =>
-    release.status === "active" && release._id !== row.releaseId;
-  for await (const release of ctx.db
-    .query("releases")
-    .withIndex("by_isbn13", (q) => q.eq("isbn13", row.isbn13))) {
-    if (ownedElsewhere(release)) return false;
+// ---------- Split keeps Other Printings and their records together ----------
+
+const MiB = 1 << 20;
+
+/**
+ * How much a Release Split decides about Other Printings in its one
+ * transaction (planPrintingSplit). Past any bound it refuses with the
+ * count, writing nothing: it never splits part of a merge.
+ */
+export const SPLIT_LIMITS = {
+  /** ISBNs whose owner the Split decides (manifest rows, both Releases' rows, the loser's own). */
+  isbns: 40,
+  /** Records of printings it moves back to the loser. */
+  moves: 100,
+  /** Records of the survivor, and Revisions since the merge, it reads. */
+  scan: 400,
+  /** Manifest entries it replays. */
+  entries: 4000,
+  /** Serialized bytes of the printing audit on each of its Revisions. */
+  auditBytes: 64 * 1024,
+} as const;
+
+/**
+ * What a Release Split keeps in hand for work it cannot count before
+ * writing: re-deriving the touched Editions' Release Series and pass
+ * Series, Tracking Visibility, rating recounts, its two Revisions and a
+ * Series' maturity. Every check before a read or a write leaves this much.
+ */
+const SPLIT_RESERVE = {
+  bytesRead: 4 * MiB,
+  bytesWritten: 2 * MiB,
+  databaseQueries: 1000,
+  documentsRead: 4000,
+  documentsWritten: 2000,
+  functionsScheduled: 50,
+  scheduledFunctionArgsBytes: 256 * 1024,
+} satisfies Budget;
+
+/** Before each further read: room for the largest document, and the reserve. */
+const NEXT_READ: Budget = {
+  ...SPLIT_RESERVE,
+  bytesRead: MAX_DOCUMENT_BYTES + SPLIT_RESERVE.bytesRead,
+  documentsRead: 1 + SPLIT_RESERVE.documentsRead,
+  databaseQueries: 1 + SPLIT_RESERVE.databaseQueries,
+};
+
+/** Refuse a Split whose next step `need`s more than the transaction has left. */
+async function splitRoom(ctx: MutationCtx, need: Budget, step: string): Promise<void> {
+  const short = budgetShortfall(await ctx.meta.getTransactionMetrics(), need);
+  if (short.length > 0) {
+    fail(
+      "badSplit",
+      `This Split needs more than one transaction allows ${step} (${short.join(", ")}); nothing was split. An administrator splits it.`,
+    );
   }
-  const isbn10 = isbn13To10(row.isbn13);
-  if (isbn10 !== undefined) {
-    for await (const release of ctx.db
-      .query("releases")
-      .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))) {
-      if (ownedElsewhere(release)) return false;
+}
+
+/**
+ * The rows a Split's replay reads, each once, and keeps current as it
+ * patches them: planning, sizing and the replay share one read per row.
+ */
+function splitRows(ctx: MutationCtx) {
+  const rows = new Map<string, Record<string, unknown> | null>();
+  return {
+    async get(table: string, docId: string): Promise<Record<string, unknown> | null> {
+      if (!rows.has(docId)) {
+        const id = ctx.db.normalizeId(table as TableNames, docId);
+        rows.set(docId, id ? ((await ctx.db.get(id)) as Record<string, unknown> | null) : null);
+      }
+      return rows.get(docId) ?? null;
+    },
+    set(docId: string, field: string, value: unknown) {
+      const row = rows.get(docId);
+      if (row) rows.set(docId, { ...row, [field]: value });
+    },
+    deleted(docId: string) {
+      rows.set(docId, null);
+    },
+  };
+}
+type SplitRows = ReturnType<typeof splitRows>;
+
+/**
+ * What a Release Split's replay will write besides its printing decisions,
+ * read before it writes anything: every row a manifest repoints (each read
+ * once, kept in `rows` for the replay), within NEXT_READ of the budget per
+ * read. Returns the planned writes, counted and sized as stored.
+ */
+async function replayWork(
+  ctx: MutationCtx,
+  manifests: Array<Doc<"mergeManifests">>,
+  rows: SplitRows,
+) {
+  let entries = 0;
+  const work = { documents: 0, bytes: 0 };
+  for (const manifest of manifests) {
+    entries += manifest.repointed.length + manifest.removed.length + manifest.inserted.length;
+    if (entries > SPLIT_LIMITS.entries) {
+      fail(
+        "badSplit",
+        `This merge moved more than ${SPLIT_LIMITS.entries} rows, more than a Split replays at once; nothing was split. An administrator splits it.`,
+      );
+    }
+    work.documents += manifest.inserted.length + manifest.removed.length + 1;
+    work.bytes += sizeOf(manifest) + manifest.removed.reduce((n, row) => n + sizeOf(row.doc), 0);
+    for (const entry of manifest.repointed) {
+      await splitRoom(ctx, NEXT_READ, "to read what the merge moved");
+      const row = await rows.get(entry.table, entry.docId);
+      if (row === null || !sameValue(row[entry.field], entry.after)) continue;
+      work.documents += 1;
+      work.bytes += sizeOf(row);
     }
   }
-  for await (const printing of ctx.db
-    .query("releaseIsbns")
-    .withIndex("by_isbn13", (q) => q.eq("isbn13", row.isbn13))) {
-    if (printing._id !== movedRowId && printing.releaseId !== row.releaseId) return false;
+  return work;
+}
+
+/** A printing ISBN's place in a Split's audit. */
+type PrintingOutcome = { isbn13: string; outcome: "restored" | "keptOnSurvivor"; reason: string };
+/** A record of a printing in a Split's audit; a mark of null is none. */
+type RecordOutcome =
+  | { record: string; from: string; to: string; markBefore: string; markAfter: string | null }
+  | { record: string; stays: string; mark: string };
+
+/** What a Release Split does with Other Printings, decided before it writes. */
+type PrintingSplit = {
+  /** `releaseIsbns` rows the replay points back at the loser. */
+  returning: Set<string>;
+  /** Removed rows the replay reinserts, as `{manifestId}:{index}`. */
+  reinserting: Set<string>;
+  /** Marked records in the manifests: replayed (with this mark), or left where they are. */
+  records: Map<string, { replay: boolean; mark: string | null }>;
+  /** Records linked to the survivor since the merge that go back with their printing. */
+  moves: Array<{ observation: Doc<"sourceObservations">; mark: string | null }>;
+  /** ISBNs with printings whose ownership the Split changes: asserted after it writes. */
+  isbns: string[];
+  audit: { printings: PrintingOutcome[]; records: RecordOutcome[] };
+  /** The writes beyond the manifests' replay. */
+  work: { documents: number; bytes: number };
+};
+
+/** Canonical owners of a claim set, and whether any claim is unresolved or a Bundle's. */
+function ownerIds(claims: IsbnClaims): { ids: Set<string>; clean: boolean } {
+  const owners = [...claims.owners.values()];
+  return {
+    ids: new Set(owners.map((owner) => owner.doc._id as string)),
+    clean: claims.unresolved.length === 0 && owners.every((owner) => owner.kind === "release"),
+  };
+}
+
+/** Does a Revision value name record `name`: exactly, or as the start of a printing link's audit? */
+const namesRecord = (value: unknown, name: string) =>
+  typeof value === "string" && (value === name || value.startsWith(`${name} — `));
+
+/**
+ * Decide, before a Release Split writes anything, what becomes of every
+ * Other Printing and marked record the merge moved, so that each printing
+ * ISBN ends with one owner and each record of one with that owner:
+ *
+ * - The ISBNs in play: rows the merge moved (still where it left them) or
+ *   removed as duplicates, the loser's own ISBNs, and every current row of
+ *   the loser and the survivor (and of the survivor's survivor, after a
+ *   later merge). Each is read whole (isbnClaims) as things stand and as
+ *   they will once the loser is active again (the `terminal` resolver: a
+ *   Release merged into the loser is the loser's again).
+ * - A moved or removed row returns to the loser when nothing else would
+ *   claim its ISBN but the loser; stays on the survivor when the survivor
+ *   claims it now (it took the ISBN as its own, or the merge found it a
+ *   duplicate); and the Split is refused when anyone else does, when a
+ *   claim cannot be followed, or a Bundle claims it.
+ * - Every ISBN whose owners change and that still has a printing row must
+ *   end with exactly one Release owner, or the Split is refused: no ISBN is
+ *   taken from a third owner, and a primary that comes back with the loser
+ *   (its own, or that of a Release merged into it) cannot collide with a
+ *   row on the survivor.
+ * - A marked record the merge moved goes back with its printing's owner,
+ *   stays on the survivor when that is the owner, replays as before when
+ *   nobody owns the ISBN; a record linked to the survivor since the merge
+ *   goes to the loser with its printing. Its mark is the printing's unless
+ *   the ISBN is the loser's own.
+ * - A record that moves must not have been unlinked or relinked by an
+ *   audited decision since the merge (repair's unlinkObservation, a
+ *   reviewed link): the link's value cannot say whether it is still the
+ *   merge's doing, so the Split is refused naming the Revision. A record's
+ *   first link as a printing's (lib/releaseIsbns.ts printingLinkAudit) is
+ *   not a relink.
+ *
+ * Refusals throw `badSplit` before any write. Reads stay within NEXT_READ.
+ */
+async function planPrintingSplit(
+  ctx: MutationCtx,
+  loser: Doc<"releases">,
+  manifests: Array<Doc<"mergeManifests">>,
+  rows: SplitRows,
+): Promise<PrintingSplit> {
+  const refuse = (why: string): never => fail("badSplit", `${why} Nothing was split.`);
+  const loserId = loser._id as string;
+  const storedSurvivor = manifests[0]!.survivorRef.id as Id<"releases">;
+  const normal = claimResolver(ctx);
+  const after: ClaimResolver = claimResolver(ctx, { terminal: loser._id });
+  const survivor = await normal.release(storedSurvivor);
+  const survivorId = "doc" in survivor ? (survivor.doc._id as string) : undefined;
+
+  // The manifests' printing rows and marked records, still where the merge left them.
+  const moved: Array<{ id: string; isbn13: string }> = [];
+  const removed: Array<{ key: string; isbn13: string }> = [];
+  const marked: Array<{ observation: Doc<"sourceObservations">; mark: string }> = [];
+  const manifestRecords = new Set<string>();
+  const isbnOf = (raw: unknown, what: string) =>
+    (typeof raw === "string" ? toIsbn13(raw) : undefined) ??
+    refuse(`${what} carries no valid ISBN (${String(raw)}): an administrator corrects it.`);
+  for (const manifest of manifests) {
+    manifest.removed.forEach((row, index) => {
+      if (row.table !== "releaseIsbns") return;
+      const doc = row.doc as Partial<Doc<"releaseIsbns">>;
+      removed.push({
+        key: `${manifest._id}:${index}`,
+        isbn13: isbnOf(doc.isbn13, "A removed printing row"),
+      });
+    });
+    for (const entry of manifest.repointed) {
+      if (entry.table === "sourceObservations") manifestRecords.add(entry.docId);
+      const row = await rows.get(entry.table, entry.docId);
+      if (row === null || !sameValue(row[entry.field], entry.after)) continue;
+      if (entry.table === "releaseIsbns" && entry.field === "releaseId") {
+        moved.push({ id: entry.docId, isbn13: isbnOf(row.isbn13, `Printing row ${entry.docId}`) });
+      } else if (entry.table === "sourceObservations" && entry.field === "recordRef") {
+        const observation = row as unknown as Doc<"sourceObservations">;
+        if (observation.printingIsbn13 === undefined) continue;
+        const mark = isbnOf(observation.printingIsbn13, `Record ${recordName(observation)}'s mark`);
+        marked.push({ observation, mark });
+      }
+    }
   }
-  return true;
+
+  // Every current row of the Releases in play.
+  const holders = [
+    ...new Set([loserId, storedSurvivor as string, ...(survivorId ? [survivorId] : [])]),
+  ];
+  const current: Array<Doc<"releaseIsbns">> = [];
+  for (const holder of holders) {
+    await splitRoom(ctx, NEXT_READ, "to read the Releases' printings");
+    const held = await ctx.db
+      .query("releaseIsbns")
+      .withIndex("by_release", (q) => q.eq("releaseId", holder as Id<"releases">))
+      .take(SPLIT_LIMITS.isbns + 1);
+    if (held.length > SPLIT_LIMITS.isbns) {
+      refuse(
+        `Release ${holder} has more than ${SPLIT_LIMITS.isbns} other printings, more than a Split decides at once.`,
+      );
+    }
+    current.push(...held);
+  }
+  const isbns = new Set([
+    ...moved.map((row) => row.isbn13),
+    ...removed.map((row) => row.isbn13),
+    ...primaryIsbnsOf(loser),
+    ...current.map((row) => isbnOf(row.isbn13, `Printing row ${row._id}`)),
+    ...marked.map((record) => record.mark),
+  ]);
+  if (isbns.size > SPLIT_LIMITS.isbns) {
+    refuse(`This Split would decide ${isbns.size} ISBNs, more than ${SPLIT_LIMITS.isbns} at once.`);
+  }
+
+  // Each ISBN's owners now and once the loser is active; where the moved rows go.
+  const movedIds = new Set(moved.map((row) => row.id));
+  const returns = new Map<string, boolean>();
+  const finalOwner = new Map<string, string | null>();
+  const asserted: string[] = [];
+  const printings: PrintingOutcome[] = [];
+  for (const isbn of isbns) {
+    await splitRoom(ctx, NEXT_READ, `to read who claims ISBN ${isbn}`);
+    const now = (await isbnClaims(ctx, isbn, { resolver: normal }))!;
+    const others = (await isbnClaims(ctx, isbn, {
+      resolver: after,
+      keep: (claim) =>
+        claim.on !== "release" || claim.rowId === undefined || !movedIds.has(claim.rowId),
+    }))!;
+    if (!now.complete || !others.complete) {
+      refuse(
+        `ISBN ${isbn} has more stored claims than a Split reads (over ${CLAIM_SCAN} per kind).`,
+      );
+    }
+    const ownMoved = moved.filter((row) => row.isbn13 === isbn).length;
+    const ownRemoved = removed.filter((row) => row.isbn13 === isbn).length;
+    const { ids, clean } = ownerIds(others);
+    const claimants = () =>
+      [...ids].map((id) => `Release ${id}`).join(", ") ||
+      others.unresolved.map((u) => u.reason).join("; ") ||
+      "nobody";
+    let back: boolean | undefined;
+    if (ownMoved + ownRemoved > 0) {
+      back =
+        clean && [...ids].every((id) => id === loserId)
+          ? true
+          : clean && survivorId !== undefined && ids.size === 1 && ids.has(survivorId)
+            ? false
+            : refuse(
+                `ISBN ${isbn} is now claimed by ${claimants()}: correct that before splitting.`,
+              );
+      returns.set(isbn, back);
+      printings.push({
+        isbn13: isbn,
+        outcome: back ? "restored" : "keptOnSurvivor",
+        reason: back
+          ? "Back with the Release it was recorded on."
+          : "The survivor claims this ISBN now (as its own, or the merge found it a duplicate).",
+      });
+    }
+    // Owners once the Split is written: the others, and the moved rows where they go.
+    const owners = new Set(ids);
+    if (back === true) owners.add(loserId);
+    if (back === false && ownMoved > 0 && survivorId !== undefined) owners.add(survivorId);
+    const rowsAfter =
+      [...others.owners.values()].reduce(
+        (n, owner) => n + owner.claims.filter((claim) => claim.via === "printing").length,
+        others.unresolved.filter(({ claim }) => claim.via === "printing").length,
+      ) + (back === true ? ownMoved + ownRemoved : ownMoved);
+    const before = ownerIds(now);
+    const changes =
+      ownMoved + ownRemoved > 0 ||
+      before.clean !== clean ||
+      before.ids.size !== ids.size ||
+      [...ids].some((id) => !before.ids.has(id));
+    if (changes && rowsAfter > 0) {
+      if (!clean || owners.size !== 1) {
+        refuse(
+          `ISBN ${isbn} would be claimed by ${[...owners].map((id) => `Release ${id}`).join(" and ") || claimants()} once the Release is split out, and an ISBN with other printings has one owner.`,
+        );
+      }
+      asserted.push(isbn);
+    }
+    finalOwner.set(
+      isbn,
+      owners.size === 1 ? [...owners][0]! : owners.size === 0 ? null : "several",
+    );
+  }
+
+  // The records of those printings.
+  const toLoser = (mark: string) => (primaryIsbnsOf(loser).has(mark) ? null : mark);
+  const records = new Map<string, { replay: boolean; mark: string | null }>();
+  const audit: RecordOutcome[] = [];
+  const moving: Array<{ observation: Doc<"sourceObservations">; mark: string; manifest: boolean }> =
+    [];
+  for (const { observation, mark } of marked) {
+    const owner = finalOwner.get(mark);
+    if (owner === loserId) {
+      records.set(observation._id, { replay: true, mark: toLoser(mark) });
+      moving.push({ observation, mark, manifest: true });
+    } else if (owner === survivorId) {
+      records.set(observation._id, { replay: false, mark });
+      audit.push({ record: recordName(observation), stays: storedSurvivor, mark });
+    } else if (owner === null) {
+      records.set(observation._id, { replay: true, mark });
+    } else {
+      refuse(
+        `Record ${recordName(observation)} is of ISBN ${mark}, which would have no one owner.`,
+      );
+    }
+  }
+  const moves: PrintingSplit["moves"] = [];
+  const returning = new Set([...returns].flatMap(([isbn, back]) => (back ? [isbn] : [])));
+  if (returning.size > 0) {
+    for (const holder of holders.filter((id) => id !== loserId)) {
+      let read = 0;
+      await splitRoom(ctx, NEXT_READ, "to read the survivor's records");
+      for await (const observation of ctx.db
+        .query("sourceObservations")
+        .withIndex("by_record", (q) =>
+          q.eq("recordRef.type", "release").eq("recordRef.id", holder as Id<"releases">),
+        )) {
+        if (++read > SPLIT_LIMITS.scan) {
+          refuse(
+            `Release ${holder} has more than ${SPLIT_LIMITS.scan} records, more than a Split reads for its printings.`,
+          );
+        }
+        const mark = toIsbn13(observation.printingIsbn13);
+        if (mark !== undefined && returning.has(mark) && !manifestRecords.has(observation._id)) {
+          moves.push({ observation, mark: toLoser(mark) });
+          moving.push({ observation, mark, manifest: false });
+        }
+        await splitRoom(ctx, NEXT_READ, "to read the survivor's records");
+      }
+    }
+  }
+  if (moving.length > SPLIT_LIMITS.moves) {
+    refuse(
+      `This Split would move ${moving.length} records of printings, more than ${SPLIT_LIMITS.moves} at once.`,
+    );
+  }
+
+  // No record that moves was relinked by an audited decision since the merge.
+  if (moving.length > 0) {
+    const cutoff = Math.min(...manifests.map((manifest) => manifest._creationTime));
+    const pending = new Map(
+      moving.map((item) => [recordName(item.observation), { ...item, firstLink: false }]),
+    );
+    const linkedTo = new Set(moving.map((item) => item.observation.recordRef?.id as string));
+    for (const holder of linkedTo) {
+      let read = 0;
+      await splitRoom(ctx, NEXT_READ, "to read the survivor's history since the merge");
+      for await (const revision of ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) =>
+          q.eq("ref.type", "release").eq("ref.id", holder as Id<"releases">),
+        )
+        .order("desc")) {
+        if (revision._creationTime < cutoff) break;
+        if (++read > SPLIT_LIMITS.scan) {
+          refuse(
+            `Release ${holder} has more than ${SPLIT_LIMITS.scan} Revisions since the merge, more than a Split reads.`,
+          );
+        }
+        for (const change of revision.changes) {
+          if (change.field !== "sourceObservation") continue;
+          for (const [name, item] of pending) {
+            if (!namesRecord(change.before, name) && !namesRecord(change.after, name)) continue;
+            const firstLink =
+              !item.manifest &&
+              !item.firstLink &&
+              change.before === undefined &&
+              change.after === printingLinkAudit(name, item.mark);
+            if (firstLink) {
+              item.firstLink = true;
+              continue;
+            }
+            refuse(
+              `Record ${name} was unlinked or relinked by Revision ${revision.seq} of Release ${holder} after the merge: decide it before splitting.`,
+            );
+          }
+        }
+        await splitRoom(ctx, NEXT_READ, "to read the survivor's history since the merge");
+      }
+    }
+  }
+
+  for (const { observation, mark } of moving) {
+    audit.push({
+      record: recordName(observation),
+      from: observation.recordRef?.id as string,
+      to: loserId,
+      markBefore: mark,
+      markAfter: toLoser(mark),
+    });
+  }
+  const plan: PrintingSplit = {
+    returning: new Set(
+      moved.filter((row) => returns.get(row.isbn13) === true).map((row) => row.id),
+    ),
+    reinserting: new Set(
+      removed.filter((row) => returns.get(row.isbn13) === true).map((row) => row.key),
+    ),
+    records,
+    moves,
+    isbns: asserted,
+    audit: { printings, records: audit },
+    work: {
+      documents: moves.length + records.size,
+      bytes: [...moving].reduce((n, item) => n + sizeOf(item.observation), 0),
+    },
+  };
+  if (sizeOf(plan.audit) > SPLIT_LIMITS.auditBytes) {
+    refuse(`This Split's printing audit would exceed ${SPLIT_LIMITS.auditBytes} bytes.`);
+  }
+  return plan;
+}
+
+/**
+ * After a Release Split's writes: every ISBN whose ownership it changed
+ * that still has a printing row has exactly one owner, a Release, read
+ * afresh with a new resolver. The plan already refused anything else, so
+ * this throws only if the writes did not do what was planned, and the
+ * whole Split is undone. ISBNs with no row left keep the older policy
+ * (lib/releaseIsbns.ts), so duplicate primaries a Split restores are not
+ * asserted here.
+ */
+async function assertPrintingOwners(ctx: MutationCtx, isbns: string[]): Promise<void> {
+  const resolver = claimResolver(ctx);
+  for (const isbn of isbns) {
+    const claims = await isbnClaims(ctx, isbn, { resolver });
+    if (claims === null || !claims.printed) continue;
+    const { ids, clean } = ownerIds(claims);
+    if (!claims.complete || !clean || ids.size !== 1) {
+      fail(
+        "badSplit",
+        `After this Split ISBN ${isbn} would not have one owner; nothing was split.`,
+      );
+    }
+  }
 }
 
 /**
  * Split, the only reversal of a mistaken merge: replay the merge's
  * manifests backward (delete what they inserted, reinsert what they removed
  * unless its User is gone, repoint every reference still where the merge
- * left it, skipping printings whose ISBN another owner now holds;
- * RETIRED_FIELDS are neither reinserted nor repointed) and
+ * left it; RETIRED_FIELDS are neither reinserted nor repointed) and
  * reactivate the loser. The touched Editions' Release Series are then
  * derived afresh from the restored links (recomputeReleaseDenorms).
  * No profile shows more afterwards than just before (keepSplitVisibility):
  * an override the merge narrowed stays narrow, as the User may have tracked
  * more under it in the meantime.
+ *
+ * A Release's Split decides its Other Printings and their records first
+ * (planPrintingSplit), within SPLIT_LIMITS and what the transaction has
+ * left: the replay follows those decisions, records that move get their
+ * mark and maturity as a link would give them once the loser is active,
+ * ownership is asserted afresh, and both Revisions list what happened to
+ * each printing (`otherPrintings`) and record (`sourceObservations`).
  */
 export async function applySplit(
   ctx: MutationCtx,
@@ -2245,6 +2820,25 @@ export async function applySplit(
   }
   const survivor = latest.survivorRef;
   const governed = await splitGovernance(ctx, ref, manifests);
+  const rows = splitRows(ctx);
+  let printing: PrintingSplit | null = null;
+  if (ref.type === "release") {
+    const replay = await replayWork(ctx, manifests, rows);
+    printing = await planPrintingSplit(ctx, doc as Doc<"releases">, manifests, rows);
+    const audits = 2 * sizeOf(printing.audit);
+    await splitRoom(
+      ctx,
+      {
+        ...SPLIT_RESERVE,
+        documentsWritten:
+          replay.documents + printing.work.documents + SPLIT_RESERVE.documentsWritten,
+        bytesWritten: replay.bytes + printing.work.bytes + audits + SPLIT_RESERVE.bytesWritten,
+        functionsScheduled:
+          printing.moves.length + printing.records.size + SPLIT_RESERVE.functionsScheduled,
+      },
+      "to write it",
+    );
+  }
 
   for (const manifest of manifests) {
     // State rows the merge synthesized (carryVisibility) wait until the
@@ -2257,37 +2851,31 @@ export async function applySplit(
       }
       const id = ctx.db.normalizeId(row.table as TableNames, row.docId);
       if (id && (await ctx.db.get(id))) await ctx.db.delete(id);
+      rows.deleted(row.docId);
     }
-    for (const row of manifest.removed) {
+    for (const [index, row] of manifest.removed.entries()) {
       if (!(await ownerExists(ctx, row.doc))) continue;
-      if (
-        row.table === "releaseIsbns" &&
-        !(await canRestorePrinting(ctx, row.doc as Doc<"releaseIsbns">))
-      )
+      // A printing row comes back only where planPrintingSplit says.
+      if (row.table === "releaseIsbns" && !printing?.reinserting.has(`${manifest._id}:${index}`)) {
         continue;
+      }
       await ctx.db.insert(row.table as TableNames, liveSnapshot(row.table, row.doc) as never);
     }
     for (const entry of [...manifest.repointed].reverse()) {
       if (entry.field === RETIRED_FIELDS[entry.table]) continue;
       const id = ctx.db.normalizeId(entry.table as TableNames, entry.docId);
       if (!id) continue;
-      const target = (await ctx.db.get(id)) as Record<string, unknown> | null;
+      const target = await rows.get(entry.table, entry.docId);
       if (!target) continue;
       if (!sameValue(target[entry.field], entry.after)) continue;
-      if (entry.table === "releaseIsbns" && entry.field === "releaseId") {
-        const releaseId =
-          typeof entry.before === "string" ? ctx.db.normalizeId("releases", entry.before) : null;
-        if (
-          releaseId === null ||
-          !(await canRestorePrinting(
-            ctx,
-            { ...(target as Doc<"releaseIsbns">), releaseId },
-            id as Id<"releaseIsbns">,
-          ))
-        )
-          continue;
-      }
-      await ctx.db.patch(id, { [entry.field]: entry.before } as never);
+      if (entry.table === "releaseIsbns" && !printing?.returning.has(entry.docId)) continue;
+      const record =
+        entry.table === "sourceObservations" ? printing?.records.get(entry.docId) : undefined;
+      if (record?.replay === false) continue;
+      const patch: Record<string, unknown> = { [entry.field]: entry.before };
+      if (record !== undefined) patch.printingIsbn13 = record.mark ?? undefined;
+      await ctx.db.patch(id, patch as never);
+      for (const [field, value] of Object.entries(patch)) rows.set(entry.docId, field, value);
     }
     // A synthesized state row goes once bare again (keepSplitVisibility
     // below puts back any override the Split may not drop). One the User
@@ -2305,11 +2893,19 @@ export async function applySplit(
         !state.readingVisibility
       ) {
         await ctx.db.delete(state._id);
+        rows.deleted(docId);
       }
     }
   }
 
   await ctx.db.patch(ref.id, { status: "active", mergedIntoId: undefined });
+  const linkedHere = { type: "release" as const, id: ref.id as Id<"releases"> };
+  for (const { observation, mark } of printing?.moves ?? []) {
+    await ctx.db.patch(observation._id, {
+      recordRef: linkedHere,
+      printingIsbn13: mark ?? undefined,
+    });
+  }
   // Release Series, and the Series their passes are filed under, are derived
   // from the links just restored; like every write a Split makes, the
   // re-derivation is final (a scratch log).
@@ -2319,6 +2915,19 @@ export async function applySplit(
   await keepSplitVisibility(ctx, governed);
   await recountMergedRatings(ctx, ref, survivor);
   for (const target of ratingTargetsIn(manifests)) await recountRatings(ctx, target);
+  if (printing !== null) {
+    // A record the Split moves is new evidence on the loser, as a link
+    // would make it, read once the loser's Series are its own again.
+    const moved = [
+      ...[...printing.records].flatMap(([id, { replay }]) => (replay ? [id] : [])),
+      ...printing.moves.map(({ observation }) => observation._id as string),
+    ];
+    for (const id of moved) {
+      const observation = await ctx.db.get(id as Id<"sourceObservations">);
+      if (observation?.recordRef?.id === ref.id) await applyMatureEvidence(ctx, observation);
+    }
+    await assertPrintingOwners(ctx, printing.isbns);
+  }
   const reversedAt = Date.now();
   for (const manifest of manifests) await ctx.db.patch(manifest._id, { reversedAt });
 
@@ -2327,6 +2936,14 @@ export async function applySplit(
     ? (await displayInfo(ctx, survivor.type, survivorDoc)).title
     : "(missing record)";
   const title = (await displayInfo(ctx, ref.type, doc)).title;
+  // What became of each printing and record, on both Revisions, when any.
+  const printingChanges: Change[] = [];
+  if (printing !== null && printing.audit.printings.length > 0) {
+    printingChanges.push({ field: "otherPrintings", after: printing.audit.printings });
+  }
+  if (printing !== null && printing.audit.records.length > 0) {
+    printingChanges.push({ field: "sourceObservations", after: printing.audit.records });
+  }
 
   const revisions = [
     await recordRevision(
@@ -2335,6 +2952,7 @@ export async function applySplit(
       [
         { field: "status", before: "merged", after: "active" },
         { field: "mergedInto", before: `${survivor.type} "${survivorTitle}"` },
+        ...printingChanges,
       ],
       meta,
     ),
@@ -2344,7 +2962,7 @@ export async function applySplit(
       await recordRevision(
         ctx,
         survivor,
-        [{ field: "splitOut", after: `${ref.type} "${title}"` }],
+        [{ field: "splitOut", after: `${ref.type} "${title}"` }, ...printingChanges],
         meta,
       ),
     );

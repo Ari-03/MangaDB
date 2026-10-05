@@ -324,9 +324,14 @@ export async function placeUnmatched(
     tagBootstrapUnreviewed: bootstrapping && gates.length > 0,
     now,
   });
-  // A Series an Editor hid: nothing was created, the reason is noted.
+  // A Series an Editor hid, or an ISBN another record owns as a printing:
+  // nothing was created, the reason is the book's hold.
   if (creation.blocked !== undefined) {
-    return { status: "recordOnly", changed: false, reason: "hidden series" };
+    return {
+      status: "recordOnly",
+      changed: creation.changed,
+      reason: creation.heldAs === "series" ? "hidden series" : creation.blocked,
+    };
   }
   return { status: "created", changed: true, releaseId: creation.releaseId };
 }

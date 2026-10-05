@@ -45,7 +45,7 @@ import { fail } from "./errors";
 import { labelsEqual } from "./matching";
 import { joinableEdition, siblingEditions, unmappedSiblings, volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
-import { printingReleases } from "./releaseIsbns";
+import { printedIsbnRefusal } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
 import { fieldDescriptor, normalizeFieldValue, type RecordType } from "./moderationFields";
 
@@ -503,9 +503,11 @@ type IsbnClaim = {
 /**
  * Release identity (CONTEXT.md): an ISBN names one Release. Checks the
  * proposal's final ISBN assignments — new Releases and updated ones alike —
- * against each other and against every active Release, an active Release's
- * Other Printings included (a Release may take one of its own printings'
- * ISBNs as its own). A holder whose same
+ * against each other and against every active Release; and an ISBN with
+ * Other Printings against every claim on it, hidden and merged ones
+ * included (a Release may take one of its own printings' ISBNs as its
+ * own). Approval runs this too, so a queued Proposal is checked against
+ * the catalog as it is then. A holder whose same
  * ISBN field this proposal rewrites no longer counts, so moving an ISBN off a
  * mis-keyed Release and onto the right one is allowed. A real duplicate is
  * resolved by merging or correcting the holder, never by a second holder.
@@ -558,14 +560,21 @@ async function checkIsbnAssignments(
           : `ISBN ${isbn} already belongs to another active Release — correct or merge that Release first.`,
       );
     }
-    const printed = (await printingReleases(ctx, isbn)).some(
-      (release) => release?.status === "active" && release._id !== claim.releaseId,
+    // An ISBN with other printings is one Release's alone, active or
+    // hidden (lib/releaseIsbns.ts): a Release may take its own printing's
+    // ISBN as its own, and no other claim may remain but a primary this
+    // proposal rewrites.
+    const printed = await printedIsbnRefusal(
+      ctx,
+      [isbn],
+      claim.releaseId,
+      (held) =>
+        held.on !== "release" ||
+        held.via === "printing" ||
+        !rewritten.has(`${held.via}:${held.storedId}`),
     );
-    if (printed) {
-      refuse(
-        claim.by === "create",
-        `ISBN ${isbn} is another printing of an active Release — correct or merge that Release instead.`,
-      );
+    if (printed !== null) {
+      refuse(claim.by === "create", `${printed} Correct or merge that Release instead.`);
     }
   }
 }

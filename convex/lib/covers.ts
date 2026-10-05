@@ -27,27 +27,37 @@ export async function coverUrl(
 
 /**
  * Art an apply mutation asks its action to store: the Release, its Edition,
- * and the URL the source names for it. The mutation decides the URL (a
- * Kodansha calendar item defers to the volume page's) so the action never
- * downloads one the Release already has.
+ * the URL the source names for it, and the source record that offers it.
+ * The mutation decides the URL (a Kodansha calendar item defers to the
+ * volume page's) so the action never downloads one the Release already
+ * has; `imports.attachCover` checks the record still offers it to that
+ * Release when the download lands.
  */
 export type CoverRequest = {
   releaseId: Id<"releases">;
   editionId: Id<"editions">;
   sourceUrl: string;
+  observationId: Id<"sourceObservations">;
 };
 
 /**
- * The cover to store on `release` from `coverUrl`, or undefined when there
- * is none to fetch or the Release's cover already came from that URL (art,
- * or a placeholder it recorded).
+ * The cover to store on `release` from `coverUrl`, offered by record
+ * `observationId`, or undefined when there is none to fetch or the
+ * Release's cover already came from that URL (art, or a placeholder it
+ * recorded).
  */
 export function coverRequest(
   release: Pick<Doc<"releases">, "_id" | "editionId" | "coverImage">,
   coverUrl: string | undefined,
+  observationId: Id<"sourceObservations">,
 ): CoverRequest | undefined {
   if (coverUrl === undefined || release.coverImage?.sourceUrl === coverUrl) return undefined;
-  return { releaseId: release._id, editionId: release.editionId, sourceUrl: coverUrl };
+  return {
+    releaseId: release._id,
+    editionId: release.editionId,
+    sourceUrl: coverUrl,
+    observationId,
+  };
 }
 
 /**
@@ -104,7 +114,8 @@ function rasterType(bytes: Uint8Array): string | null {
 /**
  * Download publisher art (Kodansha, Seven Seas) into file storage and attach
  * it to a Release through `imports.attachCover`, which keeps one blob per
- * Edition and URL. A cover this invocation already handled for the Edition
+ * Edition and URL, and attaches nothing (a `not attached` notice) unless the
+ * requesting record still offers that art to that Release. A cover this invocation already handled for the Edition
  * is not fetched again: callers charging downloads to a budget check
  * `stored.has(coverKey(cover))` first. A placeholder image (an SVG, or
  * under MIN_COVER_BYTES) is recorded on the Release without storing
@@ -144,13 +155,16 @@ export async function storeCover(
       held = await ctx.storage.store(new Blob([bytes], { type }));
     }
   }
-  const result: { held: Id<"_storage"> | "placeholder" | null; stale?: true } =
+  const result: { held: Id<"_storage"> | "placeholder" | null; stale?: true; refused?: string } =
     await ctx.runMutation(internal.imports.attachCover, {
       releaseId: args.releaseId,
+      editionId: args.editionId,
+      observationId: args.observationId,
       storageId: held === "placeholder" ? undefined : held,
       sourceUrl: args.sourceUrl,
       attribution: args.attribution,
     });
+  if (result.refused !== undefined) notice = `not attached (${result.refused})`;
   if (result.stale) {
     // An overlapping run replaced the blob this one remembered: forget it and fetch afresh.
     stored.delete(key);

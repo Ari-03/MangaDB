@@ -488,7 +488,39 @@ is fixed.
   `unlinkObservation`, which clears its `printingIsbn13` mark with the link
   (and a mark left on an observation already unlinked). The book is held
   again when its source next places it. The `otherPrinting` Revision stays
-  in the Release's history.
+  in the Release's history. Before any bulk run of printing decisions, the
+  held-book work needs an audited correction or a ledger of every decision
+  it makes, so each can be reversed.
+- **A packaged printing cannot be recorded yet.** `recordDecidedInternal`
+  refuses any record that reads as packaging (a multi-Volume designator, a
+  line name or packaging word in the title, any bracketed part such as
+  "[1st Ed]"), and any Release whose Edition is not one whole Volume, until
+  PR #66's line reader lets it compare line, position and coverage
+  ([operations](operations.md#recording-decided-other-printings)). A work
+  whose own name contains a packaging word ("Makunouchi Deluxe") is refused
+  the same way. These books stay held.
+- **An ISBN-10-only Release is not found by its ISBN-13.** `/isbn` reads a
+  13-digit ISBN against Releases' `isbn13` and printing rows only. A merge
+  keeps a moved printing row the survivor has only as its ISBN-10 so that
+  spelling still finds it; a Release with no such row stays unreachable by
+  its ISBN-13, as before #67.
+- **An ISBN with no printing row has no reservation once its last row
+  goes.** The one-owner rule covers ISBNs with a current printing row. A
+  row a merge removed as a duplicate, or one a correction deletes, leaves
+  its ISBN to the older rule (duplicate primaries refused against active
+  Releases only), so a hidden Release's former printing can be claimed.
+- **Printing bounds refuse rather than read further.** A merge refuses a
+  Release with more than 100 printings, Restore a Release with more than
+  100, a decision an ISBN with more than 20 stored claims of one kind, and
+  a Release Split past the bounds in
+  [moderation](moderation.md#hide-restore-merge-split-and-locks). An
+  administrator resolves those by hand.
+- **A cover request from an action started before covers named their
+  record attaches only to a matching unmarked offer.** `imports.attachCover`
+  without an `observationId` (a sync running across the deploy) needs an
+  unmarked record of the Release offering that art and none of another
+  printing, among at most 50 records; otherwise it refuses and the next run
+  retries.
 
 ## Review queue
 

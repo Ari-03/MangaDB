@@ -56,7 +56,7 @@ import {
   type CanonicalPublisher,
 } from "./publishers";
 import { insertSourceProposal, reconcileFields } from "./reconcile";
-import { printingReleases } from "./releaseIsbns";
+import { printedIsbnRefusal, printingReleases } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
 
 // ---------- dates & labels ----------
@@ -556,13 +556,18 @@ export async function isbnHeldElsewhere(
   now: number,
 ): Promise<boolean> {
   if (isbn13 === undefined) return false;
-  const holder = await isbnHolderBesides(ctx, release, isbn13);
-  if (holder === null) return false;
+  // An ISBN with Other Printings: every claim on it must be the linked
+  // Release's, read whole (lib/releaseIsbns.ts), even its own primary.
+  const printed = await printedIsbnRefusal(ctx, [isbn13], release._id);
+  const holder = printed === null ? await isbnHolderBesides(ctx, release, isbn13) : null;
+  const held =
+    printed ?? (holder !== null ? `ISBN ${isbn13} is already on Release ${holder._id}` : null);
+  if (held === null) return false;
   await recordIsbnConflict(
     ctx,
     observation,
     isbn13,
-    `ISBN ${isbn13} is already on Release ${holder._id}, not on the Release this record links (${release._id}); none of its facts are applied until an Editor resolves which book it is (a duplicate to merge, or another book).`,
+    `${held}, not on the Release this record links (${release._id}); none of its facts are applied until an Editor resolves which book it is (a duplicate to merge, or another book).`,
     now,
   );
   return true;
@@ -954,19 +959,30 @@ type CreatedRecord = {
   fields: Record<string, unknown>;
 };
 
-export type CreationResult = {
-  /** The Series the records went under — the hidden one when `blocked`. */
-  seriesId: Id<"series">;
-  volumeIds: Id<"volumes">[];
-  releaseId?: Id<"releases">;
-  /** False when everything already existed and nothing was written. */
-  changed: boolean;
-  /**
-   * Set when the record belongs to a Series an Editor hid: nothing was
-   * created and the reason sits on the observation as a placement note.
-   */
-  blocked?: string;
-};
+export type CreationResult =
+  | {
+      /** The Series the records went under. */
+      seriesId: Id<"series">;
+      volumeIds: Id<"volumes">[];
+      releaseId?: Id<"releases">;
+      /** False when everything already existed and nothing was written. */
+      changed: boolean;
+      blocked?: undefined;
+    }
+  | {
+      /** The hidden Series, or the Series the book is held under (null: a new one). */
+      seriesId: Id<"series"> | null;
+      volumeIds: [];
+      releaseId?: undefined;
+      changed: boolean;
+      /**
+       * Why nothing was created: the record belongs to a Series an Editor
+       * hid (`series`), or its ISBN has Other Printings another record owns
+       * (`isbn`, lib/releaseIsbns.ts). The reason is the record's hold.
+       */
+      blocked: string;
+      heldAs: "series" | "isbn";
+    };
 
 /**
  * Volume Position for a new Volume (spec §2): the volume number itself when
@@ -1271,9 +1287,26 @@ export async function createCanonicalRecords(
         volumeIds: [],
         changed: false,
         blocked: removed.reason,
+        heldAs: "series",
       };
     }
     if (removed?.kind === "merged") seriesId = removed.survivor._id;
+  }
+  // A new Release never takes an ISBN with Other Printings: that ISBN is its
+  // owner's alone, active or hidden, and a claim nobody can follow blocks it
+  // too (lib/releaseIsbns.ts). The book is held for an Editor instead.
+  if (args.release !== undefined) {
+    const printed = await printedIsbnRefusal(ctx, [args.release.isbn13, args.release.isbn10]);
+    if (printed !== null) {
+      const reason = `${printed} No Release was created for this record.`;
+      await recordUnplaced(
+        ctx,
+        args.observation,
+        { kind: "isbn", reason, ...(seriesId !== null ? { seriesId } : {}) },
+        now,
+      );
+      return { seriesId, volumeIds: [], changed: true, blocked: reason, heldAs: "isbn" };
+    }
   }
   if (seriesId === null) {
     const publicId = await allocatePublicId(ctx, "series");
@@ -1456,17 +1489,16 @@ export type BundleArgs = {
  * box imported before its books) with one importer-authored Revision —
  * unless the box names another Series or Format than the bundle's own
  * (`conflict`, left on the observation for review; `addLateBundleMembers`).
- * `members` counts the bundle's members from `labels` after the call.
+ * `members` counts the bundle's members from `labels` after the call. A box
+ * whose ISBN has Other Printings is `held` instead, creating nothing.
  */
 export async function createReleaseBundle(
   ctx: MutationCtx,
   args: BundleArgs,
-): Promise<{
-  bundleId: Id<"releaseBundles">;
-  members: number;
-  created: boolean;
-  conflict?: string;
-}> {
+): Promise<
+  | { bundleId: Id<"releaseBundles">; members: number; created: boolean; conflict?: string }
+  | { held: string }
+> {
   const existing =
     args.release.isbn13 !== undefined
       ? await ctx.db
@@ -1481,6 +1513,18 @@ export async function createReleaseBundle(
       format: args.release.format,
     });
     return { bundleId: existing._id, members: expected, created: false, conflict };
+  }
+  // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
+  const printed = await printedIsbnRefusal(ctx, [args.release.isbn13, args.release.isbn10]);
+  if (printed !== null) {
+    const reason = `${printed} No Release Bundle was created for this record.`;
+    await recordUnplaced(
+      ctx,
+      args.observation,
+      { kind: "isbn", reason, seriesId: args.seriesId },
+      args.now,
+    );
+    return { held: reason };
   }
 
   const created: CreatedRecord[] = [];

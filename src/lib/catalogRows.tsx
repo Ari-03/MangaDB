@@ -36,15 +36,39 @@ function FormatChip({ format }: { format: ReleaseRowData["format"] }) {
 }
 
 /**
+ * A Release row's Other Printings line, or null when it has none to show:
+ * each ISBN with its year, and, when the list is only the first recorded
+ * (catalogPages releaseRow `morePrintings`), that others may not be shown.
+ */
+export function otherPrintingsText(
+  release: Pick<ReleaseRowData, "otherPrintings" | "morePrintings">,
+): string | null {
+  const shown = release.otherPrintings.map((printing) =>
+    printing.year !== null
+      ? `ISBN ${printing.isbn13}, ${printing.year}`
+      : `ISBN ${printing.isbn13}`,
+  );
+  if (shown.length === 0) {
+    return release.morePrintings ? "Also printed under other ISBNs, not shown here." : null;
+  }
+  const more = release.morePrintings
+    ? ` (the first ${shown.length} recorded; others may not be shown)`
+    : "";
+  return `Also printed as ${shown.join("; ")}${more}`;
+}
+
+/**
  * A Release row, anchored by ISBN when present, else document ID (spec §8) —
  * the `/isbn/{isbn}` redirect lands on this fragment, which `:target`
  * highlights, for the Release's own ISBN and its Other Printings' alike.
- * The other printings' ISBNs are listed beneath its own, with their year;
+ * The other printings' ISBNs are listed beneath its own, with their year,
+ * the first recorded only and saying so when others may remain;
  * Variants render beneath their Release; containing Bundles link to their
  * Bundle pages. The signed-in collection and reading-pass controls sit in
  * the row's right-hand column and collapse it when signed out.
  */
 export function ReleaseRow({ release }: { release: ReleaseRowData }) {
+  const printings = otherPrintingsText(release);
   const date = formatPartialDate(release.pubDate);
   const price = formatPrice(release.price);
   // Binding describes physical construction only (glossary: Binding).
@@ -74,18 +98,7 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
             ) : null}
           </p>
         ) : null}
-        {release.otherPrintings.length > 0 ? (
-          <p className="release-printings">
-            Also printed as{" "}
-            {release.otherPrintings
-              .map((printing) =>
-                printing.year !== null
-                  ? `ISBN ${printing.isbn13}, ${printing.year}`
-                  : `ISBN ${printing.isbn13}`,
-              )
-              .join("; ")}
-          </p>
-        ) : null}
+        {printings !== null ? <p className="release-printings">{printings}</p> : null}
         {release.variants.length > 0 ? (
           <p className="release-variants">
             Cover variants: {release.variants.map((variant) => variant.name).join(", ")}

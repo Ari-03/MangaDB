@@ -385,8 +385,11 @@ differently from its first editions, and Open Library calls a 3-in-1 or a
 library rebind "Vol. N" ([decisions](decisions.md#other-printings-keep-their-barcodes-recorded-by-decision)).
 A person, or an agent whose decision a reviewer checked, decides each one
 with evidence, and the operator records it with
-`printings:recordDecidedInternal`, which checks only the invariants
-([operations](operations.md#recording-decided-other-printings)).
+`printings:recordDecidedInternal`, which refuses a record that does not
+read as one Volume of the Release's work, and an ISBN anyone else claims
+([operations](operations.md#recording-decided-other-printings)). A further
+held record of a recorded printing is linked the same way, with an audit
+of its own.
 
 Once recorded, the printing's ISBN, in any spelling (ISBN-10 or -13,
 hyphens), finds the Release on `/isbn/{isbn}`, on the matching ladder's
@@ -398,12 +401,23 @@ record as the printing's (`printingIsbn13` on the observation) unless the
 ISBN is the Release's own ISBN-13 or ISBN-10, and a marked
 record changes nothing on the Release, even after its snapshot drops or
 changes the ISBN. `reconcileFields` skips it, Seven Seas and Kodansha
-store no art from it, and its withdrawal queues no cancellation review. No
-Proposal or repair may give that ISBN to another Release, and Prepare
-placement refuses it. The Release's row on its Edition page lists its
-other printings. Hiding the Release hides them too. A Release merge
-carries them to the survivor, which must be physical, and Split brings
-them back ([moderation](moderation.md#hide-restore-merge-split-and-locks)).
+store no art from it (the Seven Seas listing asks it for neither art nor
+a blurb, and `imports.attachCover` lands a download only while the record
+that asked for it is still linked to that Release, unmarked, and still
+offers that art), and its withdrawal queues no cancellation review.
+
+An ISBN with a printing row belongs to that row's Release alone, active or
+hidden (`lib/releaseIsbns.ts`). No import creates a Release or a Release
+Bundle with it: the book is held under `isbn` naming the owner, as it is
+when a claim on it cannot be followed (a printing row of a Release that
+no longer exists, say). A linked record offering it to another Release
+gets an ISBN conflict instead of a reconcile. No Proposal (checked again
+on approval) or repair may give it to another Release or a Bundle, and
+Prepare placement refuses it. The Release's row on its Edition page lists
+the first 20 printings recorded, oldest first, and says when others may
+not be shown. Hiding the Release hides them too. A Release merge carries
+them to the survivor, which must be physical, and Split brings them back
+or refuses ([moderation](moderation.md#hide-restore-merge-split-and-locks)).
 Each recorded printing is an approved Proposal by its source, with a
 public Revision on the Release (`otherPrinting`) that carries the reason
 and cites the evidence. Nothing takes back a printing recorded in error

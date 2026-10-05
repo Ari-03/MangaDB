@@ -101,7 +101,9 @@ Omnibuses, split parts and Edition Line packaging never lend their blurb.
 
 **Edition page.** The book detail page. It shows one Edition Description
 in the header, then one row per Release with ISBN-13 and ISBN-10, date,
-price, its Other Printings ("Also printed as ISBN 9781935934783, 2012"),
+price, its Other Printings ("Also printed as ISBN 9781935934783, 2012";
+the first 20 recorded, sorted by date, saying so when others may not be
+shown),
 its Release Variants and the Bundles that contain it. Releases still
 store their own descriptions. The page picks one at query time
 (`convex/lib/descriptions.ts`): a Human Override first, then physical before

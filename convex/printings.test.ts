@@ -16,7 +16,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { matchRelease } from "./lib/matching";
 import { holdOf, linkObservation, recordUnplaced } from "./lib/observations";
-import { recordPrinting } from "./lib/printings";
+import { linkRecordedPrinting, recordPrinting } from "./lib/printings";
 import { reconcileFields } from "./lib/reconcile";
 import {
   observedIsbn13,
@@ -574,7 +574,7 @@ describe("printings.recordDecidedInternal", () => {
     const observationId = await insertObservation(ctx, {
       sourceKey: "ann",
       sourceRecordId: `release:${annId}`,
-      snapshot: annLine(annId, "Vagabond [1st Ed]", "1", isbn13, 2002, fields),
+      snapshot: annLine(annId, "Vagabond", "1", isbn13, 2002, { volume: "GN 1", ...fields }),
     });
     await recordUnplaced(
       ctx,
@@ -748,11 +748,11 @@ describe("printings.recordDecidedInternal", () => {
     expect(await refused(ids.ownIsbn, ids.releaseId)).toBe(
       `ISBN ${CURRENT} is the Release's own: a record of its own printing is linked to it, not recorded as another printing.`,
     );
-    expect(await refused(ids.tenHeld, ids.releaseId)).toBe(
-      "ISBN 9781591160496 is already an active Release's own.",
+    expect(await refused(ids.tenHeld, ids.releaseId)).toMatch(
+      /^ISBN 9781591160496 belongs to Release \S+ \(Release \S+'s isbn10\)\.$/,
     );
-    expect(await refused(ids.printed, ids.releaseId)).toBe(
-      "ISBN 9781421506555 is already another Release's printing.",
+    expect(await refused(ids.printed, ids.releaseId)).toMatch(
+      /^ISBN 9781421506555 belongs to Release \S+ \(a printing row of Release \S+\)\.$/,
     );
     for (const ebook of [ids.ebook, ids.ebookLabel]) {
       expect(await refused(ebook, ids.releaseId)).toBe("The record calls the book digital.");
@@ -851,7 +851,7 @@ describe("printings.recordDecidedInternal", () => {
     }
   });
 
-  it("refuses a second decision for a recorded printing, writing and linking nothing", async () => {
+  it("links a further record of a recorded printing, with an audit of its own", async () => {
     const t = makeT();
     await seedRegistry(t);
     const { releaseId, first, second, hyphenated } = await t.run(async (ctx) => {
@@ -864,35 +864,86 @@ describe("printings.recordDecidedInternal", () => {
       };
     });
     expect(await decide(t, first, releaseId)).toEqual({ status: "recorded", isbn13: OLDER });
-    const already = `ISBN ${OLDER} is already recorded as another printing of this Release. Nothing was recorded; this record stays held until a reviewed link links it.`;
-    for (const observationId of [second, hyphenated]) {
-      const before = await writes(t, observationId);
-      expect(before).toMatchObject({ rows: [OLDER], proposals: 1, revisions: 1 });
-      expect(before.observation?.recordRef).toBeUndefined();
-      expect(before.hold).not.toBeNull();
-      expect(await decide(t, observationId, releaseId)).toEqual({
-        status: "refused",
-        reason: already,
+    const before = await t.run((ctx) => ctx.db.get(releaseId));
+    for (const [n, observationId, annId] of [
+      [2, second, "5002"],
+      [3, hyphenated, "5003"],
+    ] as const) {
+      const result = await decide(
+        t,
+        observationId,
+        releaseId,
+        `Record ${annId} is the 2002 printing.`,
+      );
+      expect(result).toMatchObject({ status: "linked", isbn13: OLDER, releaseId });
+      const after = await writes(t, observationId);
+      // No second row; the record is linked and marked, its hold gone, and
+      // the decision has its own approved Proposal and Revision.
+      expect(after).toMatchObject({ rows: [OLDER], proposals: n, revisions: n, hold: null });
+      expect(after.observation).toMatchObject({
+        recordRef: { type: "release", id: releaseId },
+        printingIsbn13: OLDER,
       });
-      expect(await writes(t, observationId)).toEqual(before);
-    }
-
-    // The shared write refuses too, before writing or linking anything.
-    const before = await writes(t, second);
-    await t.run(async (ctx) => {
-      await expect(
-        recordPrinting(ctx, {
-          release: (await ctx.db.get(releaseId))!,
-          isbn13: OLDER,
-          reason: "A second record of the 2002 printing.",
+      await t.run(async (ctx) => {
+        const revision = await ctx.db
+          .query("revisions")
+          .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", releaseId))
+          .order("desc")
+          .first();
+        expect(revision).toMatchObject({
+          seq: n,
+          changes: [
+            {
+              field: "sourceObservation",
+              after: `ann release:${annId} — a record of Other Printing ISBN ${OLDER}`,
+            },
+          ],
+          comment: expect.stringContaining(`Record ${annId} is the 2002 printing.`),
+          citation: { url: "https://www.viz.com/vagabond" },
+        });
+        expect(
+          result.status === "linked" ? (await ctx.db.get(result.proposalId))?.state : null,
+        ).toBe("approved");
+        // A later sync of the record offers the Release nothing.
+        await reconcileFields(ctx, {
           sourceKey: "ann",
-          observationId: second,
-          citation: { sourceName: "ANN", url: "https://www.viz.com/vagabond" },
+          ref: { type: "release", id: releaseId },
+          doc: (await ctx.db.get(releaseId))!,
+          offered: { isbn13: OLDER, pubDate: year(2002, 6) },
+          observation: (await ctx.db.get(observationId))!,
+          citation: { sourceName: "ANN", url: "https://www.animenewsnetwork.com" },
           now: Date.now(),
-        }),
+        });
+      });
+    }
+    expect(await t.run((ctx) => ctx.db.get(releaseId))).toEqual(before);
+
+    // The shared writes refuse too, before writing or linking anything.
+    const third = await t.run(async (ctx) =>
+      holdLine(ctx, (await ctx.db.get(releaseId))!.seriesIds[0]!, "5004", OLDER),
+    );
+    const held = await writes(t, third);
+    await t.run(async (ctx) => {
+      const decision = {
+        release: (await ctx.db.get(releaseId))!,
+        isbn13: OLDER,
+        reason: "A further record of the 2002 printing.",
+        sourceKey: "ann",
+        citation: { sourceName: "ANN", url: "https://www.viz.com/vagabond" },
+        now: Date.now(),
+      };
+      await expect(
+        recordPrinting(ctx, { ...decision, observationId: third }),
+      ).rejects.toMatchObject({ data: { code: "conflict" } });
+      // Linking an already-linked record, or a printing the Release has no row for.
+      await expect(
+        linkRecordedPrinting(ctx, { ...decision, observationId: second }),
+      ).rejects.toMatchObject({ data: { code: "conflict" } });
+      await expect(
+        linkRecordedPrinting(ctx, { ...decision, isbn13: "9781569318546", observationId: third }),
       ).rejects.toMatchObject({ data: { code: "conflict" } });
     });
-    expect(await writes(t, second)).toEqual(before);
+    expect(await writes(t, third)).toEqual(held);
   });
 
   const viz = "https://www.viz.com/vagabond";
@@ -922,7 +973,7 @@ describe("printings.recordDecidedInternal", () => {
     const { releaseId, observationId } = await t.run(async (ctx) => {
       const { releaseId, seriesId } = await vagabond(ctx);
       const observationId = await holdLine(ctx, seriesId, "5001", OLDER);
-      const { url: _, ...snapshot } = annLine("5001", "Vagabond [1st Ed]", "1", OLDER, 2002);
+      const { url: _, ...snapshot } = annLine("5001", "Vagabond", "1", OLDER, 2002);
       await ctx.db.patch(observationId, {
         snapshot: recordUrl !== undefined ? { ...snapshot, url: recordUrl } : snapshot,
       });

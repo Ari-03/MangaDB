@@ -411,6 +411,7 @@ export async function applyCatalogTitle(
       tagBootstrapUnreviewed: true,
       now,
     });
+    if ("held" in bundle) return { status: "recordOnly", changed: true, reason: bundle.held };
     if (bundle.conflict !== undefined) {
       return { status: "needsReview", changed: true, reason: bundle.conflict };
     }

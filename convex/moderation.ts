@@ -58,6 +58,15 @@ export async function getCanonical(
   return await ctx.db.get(ref.id);
 }
 
+/** One record's newest Revision, read alone: its history can be long. */
+export async function latestRevisionOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
+  return await ctx.db
+    .query("revisions")
+    .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id))
+    .order("desc")
+    .first();
+}
+
 /** Revisions of one record, newest first (the by_record index ends on seq). */
 export async function revisionsOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
   return await ctx.db

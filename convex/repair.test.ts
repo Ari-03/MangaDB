@@ -316,6 +316,74 @@ describe("packaging", () => {
   });
 });
 
+describe("a box set never becomes a Bundle over a printing's ISBN", () => {
+  it("skips both box conversions while the ISBN is a printing, in either form, and converts once it is free", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    const box = s.omnibusRelease.releaseId;
+    // The box Release has only an ISBN-10, whose ISBN-13 is Volume 1's other printing.
+    const row = await t.run(async (ctx) => {
+      await ctx.db.patch(box, { isbn13: undefined, isbn10: "1591160340" });
+      return await ctx.db.insert("releaseIsbns", {
+        releaseId: s.r1.releaseId,
+        isbn13: "9781591160342",
+        reason: "Another printing.",
+        sourceKey: "ann",
+      });
+    });
+    const toBundle: RepairEntry = {
+      kind: "remodelEdition",
+      key: "b",
+      reason: "box set",
+      editionId: s.omnibusRelease.editionId,
+      volumeId: s.omnibusVol,
+      targetSeriesId: s.base,
+      line: null,
+      bundle: { name: "Noragami Box Set 1" },
+      groups: [
+        {
+          releaseIds: null,
+          coverage: ["1", "2"].map((label) => ({
+            label,
+            volumeId: null,
+            extent: "complete" as const,
+          })),
+          linePosition: null,
+        },
+      ],
+      retireVolumeIds: [s.omnibusVol],
+    };
+    const printed = expect.stringContaining("ISBN 9781591160342 belongs to Release");
+    expect((await run(t, [toBundle]))[0]).toMatchObject({ status: "skipped", reason: printed });
+    await t.run((ctx) => ctx.db.patch(box, { isbn13: "9781591160342" }));
+    const releaseBundle: RepairEntry = {
+      kind: "releaseBundle",
+      key: "rb",
+      reason: "box set",
+      bundleId: null,
+      box: { releaseId: box, name: "Noragami Box Set" },
+      members: [{ isbn13: "9780000000011", order: 1 }],
+      retireVolumeIds: [],
+    };
+    expect((await run(t, [releaseBundle]))[0]).toMatchObject({
+      status: "skipped",
+      reason: printed,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releaseBundles").collect()).toEqual([]);
+      expect((await ctx.db.get(box))?.status).toBe("active");
+    });
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(box, { isbn13: undefined });
+      await ctx.db.delete(row);
+    });
+    expect((await run(t, [toBundle]))[0]?.status).toBe("applied");
+    const bundles = await t.run((ctx) => ctx.db.query("releaseBundles").collect());
+    expect(bundles).toEqual([expect.objectContaining({ isbn10: "1591160340" })]);
+  });
+});
+
 describe("field repairs and scope", () => {
   it("applies expected-before changes, skips drift, and is idempotent", async () => {
     const t = makeT();
@@ -358,13 +426,14 @@ describe("field repairs and scope", () => {
       changes: [{ field, before: field === "isbn13" ? "9780000000011" : null, after }],
       evidenceObservationId: null,
     });
+    const owned = expect.stringContaining("ISBN 9781591160342 belongs to Release");
     expect((await run(t, [assign("isbn13", "9781591160342")]))[0]).toMatchObject({
       status: "skipped",
-      reason: expect.stringContaining("another printing"),
+      reason: owned,
     });
     expect((await run(t, [assign("isbn10", "1591160340")]))[0]).toMatchObject({
       status: "skipped",
-      reason: expect.stringContaining("another printing"),
+      reason: owned,
     });
     const create: RepairEntry = {
       kind: "createRelease",
@@ -381,10 +450,7 @@ describe("field repairs and scope", () => {
       line: null,
       sources: [],
     };
-    expect((await run(t, [create]))[0]).toMatchObject({
-      status: "skipped",
-      reason: expect.stringContaining("another printing"),
-    });
+    expect((await run(t, [create]))[0]).toMatchObject({ status: "skipped", reason: owned });
   });
 
   it("turns a print-labelled ebook digital and drops its binding", async () => {

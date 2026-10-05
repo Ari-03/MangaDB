@@ -463,13 +463,32 @@ describe("kodansha covers — stored once, kept current", () => {
     const old = print!.coverImage!.storageId!;
     const art = new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/webp" });
     const upload = () => t.run((ctx) => ctx.storage.store(art));
-    const attach = (releaseId: Id<"releases">, storageId: Id<"_storage">, sourceUrl: string) =>
-      t.mutation(internal.imports.attachCover, {
+    // The Release's own record offers `sourceUrl` (attachCover checks it does).
+    const attach = async (
+      releaseId: Id<"releases">,
+      storageId: Id<"_storage">,
+      sourceUrl: string,
+    ) => {
+      const observationId = await t.run(async (ctx) => {
+        const record = await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_record", (q) =>
+            q.eq("recordRef.type", "release").eq("recordRef.id", releaseId),
+          )
+          .first();
+        await ctx.db.patch(record!._id, {
+          snapshot: { ...(record!.snapshot as object), coverUrl: sourceUrl },
+        });
+        return record!._id;
+      });
+      return await t.mutation(internal.imports.attachCover, {
         releaseId,
+        observationId,
         storageId,
         sourceUrl,
         attribution: "Kodansha",
       });
+    };
     const exists = (id: Id<"_storage">) =>
       t.run(async (ctx) => (await ctx.storage.getUrl(id)) !== null);
 

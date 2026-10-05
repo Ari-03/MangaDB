@@ -640,8 +640,10 @@ export default defineSchema({
   // on its row. One is recorded by decision (printings.ts, with evidence a
   // person or reviewed agent weighed), never by an importer on its own,
   // and no record of the printing writes its date, price or blurb onto the
-  // Release. A row follows its Release on a merge and comes back on Split.
-  // An ISBN-10 is looked up by its ISBN-13.
+  // Release. A row follows its Release on a merge and comes back on Split
+  // unless the survivor claims the ISBN now. An ISBN with a row belongs to
+  // that row's Release alone (lib/releaseIsbns.ts). An ISBN-10 is looked
+  // up by its ISBN-13.
   releaseIsbns: defineTable({
     releaseId: v.id("releases"),
     isbn13: v.string(),

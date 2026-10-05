@@ -1522,6 +1522,9 @@ export const applyReleasePage = internalMutation({
         tagBootstrapUnreviewed: true,
         now,
       });
+      if (creation.blocked !== undefined) {
+        return { status: "recordOnly", changed: true, reason: creation.blocked };
+      }
       return { status: "created", changed: true, releaseId: creation.releaseId };
     }
     // Leaf boundary: the Volume must already exist under the Series.
@@ -1585,6 +1588,9 @@ export const applyReleasePage = internalMutation({
       tagBootstrapUnreviewed: false,
       now,
     });
+    if (creation.blocked !== undefined) {
+      return { status: "recordOnly", changed: true, reason: creation.blocked };
+    }
     return { status: "created", changed: true, releaseId: creation.releaseId };
 
     async function link(release: Doc<"releases">): Promise<PlaceResult> {

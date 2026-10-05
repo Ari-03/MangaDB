@@ -741,7 +741,7 @@ export const applyVolume = internalMutation({
         return { status: "recordOnly", changed: false, releaseId: release._id };
       }
       // An unchanged snapshot is done unless its art moved to a new URL.
-      const cover = coverRequest(release, snapshot.coverUrl);
+      const cover = coverRequest(release, snapshot.coverUrl, observation._id);
       if (!changed && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
@@ -885,7 +885,7 @@ export const applyVolume = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        cover: printing ? undefined : coverRequest(release, snapshot.coverUrl),
+        cover: printing ? undefined : coverRequest(release, snapshot.coverUrl, observation._id),
       };
     }
 
@@ -935,7 +935,10 @@ export const applyVolume = internalMutation({
     // A created Release's art is the action's to store.
     if (result.status !== "created" || result.releaseId === undefined) return result;
     const created = await ctx.db.get(result.releaseId);
-    return { ...result, cover: created ? coverRequest(created, snapshot.coverUrl) : undefined };
+    return {
+      ...result,
+      cover: created ? coverRequest(created, snapshot.coverUrl, observation._id) : undefined,
+    };
   },
 });
 

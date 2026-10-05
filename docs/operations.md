@@ -310,9 +310,10 @@ The `observationId` is the held record's (`/mod/imports` shows the source
 record; its observation is the one the hold row names), and the
 `releaseId` the Release whose slot it is held for.
 
-It checks the invariants, not whether the books are the same, and answers
-`{"status": "refused", "reason": "…"}` instead of throwing when one
-fails, so a script can log it and go on:
+It does not judge whether two books are the same; the person deciding
+does. It checks what the records state and who owns the ISBN, and answers
+`{"status": "refused", "reason": "…"}` instead of throwing when a check
+fails, so a script can log it and go on. The checks run in this order:
 
 - the reason is not empty;
 - the record is not withdrawn or already linked, and does not call the
@@ -328,24 +329,81 @@ fails, so a script can log it and go on:
   list that resolves, the PRH or Yen Press imprint, or Seven Seas for its
   own feed. A name that resolves to no publisher row is refused. Kodansha's
   records name none, since its feed also lists Vertical's books;
-- the ISBN is not the Release's own, as its ISBN-13 or its ISBN-10. A record
-  of the Release's own printing is linked, not recorded, and this check
-  comes first, even when a row from before a correction holds the ISBN
-  too;
-- no other active Release has the ISBN as its own (ISBN-13 or ISBN-10),
-  and no other Release has it as a printing;
-- the ISBN is not already a printing of this Release. A second record of
-  a recorded printing is refused rather than linked without an audit of
-  its own: it stays held, and linking it needs a reviewed link. No import
-  run is promised to link it, since each source rereads books on its own
-  schedule.
+- the contents. The record must read as one Volume of a work titled as one
+  of the Release's Series (case and spacing aside: "Citrus+" is not
+  "Citrus"). Every statement is read on its own: an ANN line's title, its
+  page's designator re-read with today's parser, the page's title and
+  manga entry, and the stored flags. Statements that disagree, or a
+  designator that no longer reads, are refused. So is a title ending in a
+  number with no "Vol." ("Kingdom Hearts II"), since the number may be the
+  work's own, and anything a source files as a novel, as another
+  language, or out of scope (a Seven Seas or Yen Press category, a stored
+  `outOfScope`). Anything that reads as packaging is refused for now: a
+  multi-Volume designator or stored range, a line name or packaging word
+  in the title, or any bracketed part ("[1st Ed]"). The Release's Edition
+  must collect exactly one whole Volume of one of its Series (a line member
+  with one Volume counts), and a Volume the record states must be that one;
+- ownership, every claim on the ISBN read whole (`lib/releaseIsbns.ts`
+  `isbnClaims`: Releases' ISBN-13 and ISBN-10, printing rows, and Release
+  Bundles' ISBNs, merges followed, hidden records included). The ISBN may
+  not be the Release's own, as its ISBN-13 or ISBN-10 or as the ISBN of a
+  Release merged into it: a record of its own printing is linked, not
+  recorded, and this comes first even when a row from before a promotion
+  also holds the ISBN. No other Release, active or hidden, and no Bundle
+  may claim it, and every claim must be readable (at most 20 of each kind)
+  and its merges followable (no missing record, no merge with no
+  survivor, no cycle, at most 8 merges).
 
-A refusal writes nothing. A success answers
-`{"status": "recorded", "isbn13": "…"}`. Nothing takes one back yet
-([known issues](known-issues.md#catalog-and-imports)), so record only
-what the evidence settles. The shared write (`lib/printings.ts`
-`recordPrinting`) throws a `conflict` for an ISBN already recorded on any
-Release, before it writes or links anything.
+A refusal writes nothing. A new printing answers
+`{"status": "recorded", "isbn13": "…"}`. A further record of a printing
+the Release already has answers `{"status": "linked", "isbn13": "…",
+"releaseId": "…", "proposalId": "…"}`: the record is linked and marked and
+its hold goes, with an approved Proposal and a `sourceObservation`
+Revision on the Release of its own, and no second row. Nothing takes either
+back yet ([known issues](known-issues.md#catalog-and-imports)), so record
+only what the evidence settles. The shared writes (`lib/printings.ts`
+`recordPrinting` and `linkRecordedPrinting`) throw a `conflict` before they
+write or link anything when the row already exists, or when there is no
+row of this Release to link to.
+
+With the fixed ANN line reader of PR #66 (`lib/ann.ts` `readAnnLineTitle`,
+`lib/matching.ts` `sameWorkTitle`), `printings.ts` `readAnnLine` is the one
+place to swap it in, so packaged printings can be compared by line,
+position and coverage instead of refused.
+
+### Checking printing consistency
+
+`printings:consistencyInternal` reads the whole catalog's printing claims,
+read-only, one native page at a time. Run both passes from a `null` cursor
+to the end, passing each answer's `continueCursor` back:
+
+```sh
+npx convex run printings:consistencyInternal \
+  '{"pass": "rows", "paginationOpts": {"numItems": 100, "cursor": null}}'
+npx convex run printings:consistencyInternal \
+  '{"pass": "observations", "paginationOpts": {"numItems": 100, "cursor": null}}'
+```
+
+A page inspects 1 to 100 items, and `maximumRowsRead` and
+`maximumBytesRead` work as in any native page. Each answer has
+`findings`, `scanned`, `inspected`, `isDone` and `continueCursor`. A
+finding's `severity` is:
+
+- `violation`: an ISBN with a printing row has more than one owner, a
+  Bundle owner, a claim whose merges cannot be followed, or a non-physical
+  owner; or a marked record's mark is no ISBN, its link cannot be followed,
+  or the one owner of its mark is not the Release it links (merges
+  followed: a link to a Release merged into the owner is fine);
+- `incomplete`: an ISBN had more claims than one read takes, or the page
+  read items it could not afford to inspect (it says how many; check that
+  page again with fewer items);
+- `diagnostic`: history, not corruption. A row's evidence record is gone,
+  unlinked, or now links another Release; a mark is on an unlinked record,
+  or nobody claims its ISBN any more.
+
+The catalog is checked only when both passes reach `isDone` with no
+`incomplete` finding, and clean when there is also no `violation`. It
+checks ownership and evidence, never whether two books are the same.
 
 ## Account deletion
 

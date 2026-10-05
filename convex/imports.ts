@@ -484,9 +484,68 @@ export const runScheduled = internalAction({
 
 // ---------- covers (spec §6) ----------
 
+// Records of one Release an old-shape cover attach reads to find the offer.
+const COVER_OFFER_SCAN = 50;
+
+/** A record's current cover offer: its snapshot's `coverUrl`, unless its source withdrew it. */
+function offersCover(observation: Doc<"sourceObservations">, sourceUrl: string): boolean {
+  const snapshot = observation.snapshot as { coverUrl?: unknown } | null;
+  return !observation.withdrawn && snapshot?.coverUrl === sourceUrl;
+}
+
+/**
+ * Why art from `sourceUrl` may not attach to `release`, or null: the
+ * request's record (`observationId`) must still exist, be linked to this
+ * very Release with no Other Printing mark, and still offer that URL, and
+ * the Release must still be in the request's Edition. A record of another
+ * printing never changes the Release's cover, and a request made before a
+ * link moved, a mark arrived, the art changed or the source withdrew the
+ * book attaches nothing. A request with no record (an action that started
+ * before requests named one) needs an unmarked record of the Release
+ * offering the URL and none of another printing offering it; past
+ * COVER_OFFER_SCAN records it is refused, never guessed.
+ */
+async function coverOfferRefusal(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+  args: {
+    editionId?: Id<"editions">;
+    observationId?: Id<"sourceObservations">;
+    sourceUrl: string;
+  },
+): Promise<string | null> {
+  if (args.editionId !== undefined && release.editionId !== args.editionId) {
+    return "the Release is in another Edition now";
+  }
+  if (args.observationId !== undefined) {
+    const observation = await ctx.db.get(args.observationId);
+    if (observation === null) return "its record is gone";
+    const ref = observation.recordRef;
+    if (ref?.type !== "release" || ref.id !== release._id)
+      return "its record links another record now";
+    if (observation.printingIsbn13 !== undefined) return "its record is another printing's";
+    if (!offersCover(observation, args.sourceUrl)) return "its record no longer offers that art";
+    return null;
+  }
+  const linked = await ctx.db
+    .query("sourceObservations")
+    .withIndex("by_record", (q) =>
+      q.eq("recordRef.type", "release").eq("recordRef.id", release._id),
+    )
+    .take(COVER_OFFER_SCAN + 1);
+  if (linked.length > COVER_OFFER_SCAN)
+    return "the request names no record, and the Release has too many to tell";
+  const offering = linked.filter((observation) => offersCover(observation, args.sourceUrl));
+  if (offering.some((observation) => observation.printingIsbn13 !== undefined)) {
+    return "a record of another printing offers that art";
+  }
+  return offering.length > 0 ? null : "no record of the Release offers that art";
+}
+
 /**
  * Attach a cover {storageId, sourceUrl, attribution} (spec §6), the one
- * attach path for publisher art (lib/covers.ts `storeCover`). Without a
+ * attach path for publisher art (lib/covers.ts `storeCover`), refused
+ * unless the requesting record still offers it (coverOfferRefusal). Without a
  * `storageId` the art at `sourceUrl` was a placeholder: the Release records
  * the URL, keeps any art it already shows, and is not fetched again until
  * the URL changes. Refused for a missing, inactive, or locked Release, one
@@ -503,6 +562,11 @@ export const runScheduled = internalAction({
 export const attachCover = internalMutation({
   args: {
     releaseId: v.id("releases"),
+    // The Edition and record the request was made for (lib/covers.ts
+    // CoverRequest). Optional only for an action that was already running
+    // when they were added; coverOfferRefusal holds those to more.
+    editionId: v.optional(v.id("editions")),
+    observationId: v.optional(v.id("sourceObservations")),
     storageId: v.optional(v.id("_storage")),
     sourceUrl: v.string(),
     attribution: v.string(),
@@ -510,7 +574,12 @@ export const attachCover = internalMutation({
   handler: async (
     ctx,
     args,
-  ): Promise<{ attached: boolean; held: Id<"_storage"> | "placeholder" | null; stale?: true }> => {
+  ): Promise<{
+    attached: boolean;
+    held: Id<"_storage"> | "placeholder" | null;
+    stale?: true;
+    refused?: string;
+  }> => {
     const incoming = args.storageId;
     // Shown by any Release but this one, or by a Bundle made from a Release.
     const shown = async (id: Id<"_storage">) => {
@@ -537,6 +606,15 @@ export const attachCover = internalMutation({
     if (!release) {
       await drop(incoming, undefined);
       return { attached: false, held: null };
+    }
+    // The art must still be its record's offer to this Release. A refused
+    // download is deleted only when nothing shows it: not this Release
+    // (an action's cache can hand back the very blob it shows), another
+    // Release, or a Bundle. `held: null` makes the action forget it.
+    const refused = await coverOfferRefusal(ctx, release, args);
+    if (refused !== null) {
+      await drop(incoming, release.coverImage?.storageId);
+      return { attached: false, held: null, refused };
     }
     const current = release.coverImage;
     const same = current !== undefined && current.sourceUrl === args.sourceUrl;

@@ -12,7 +12,7 @@ import { followMerges } from "../merges";
 import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
-import { printingReleases } from "../releaseIsbns";
+import { printedIsbnRefusal, printingReleases } from "../releaseIsbns";
 import { seriesSearchText } from "../searchMatch";
 import {
   OWNERSHIP,
@@ -25,6 +25,7 @@ import {
   carryEditionTracking,
   carryVisibility,
   editionGovernance,
+  restoreRefusal,
   type EditionGovernance,
   type OverrideSink,
 } from "../sensitiveOps";
@@ -160,6 +161,9 @@ async function restore(
 ) {
   if (doc.status === "active") return false;
   if (doc.locked) skip(`${ref.type} ${ref.id} is locked`);
+  // Restore's own check (its ISBNs still its own), reported as this entry's skip.
+  const refusal = await restoreRefusal(ctx, ref);
+  if (refusal !== null) skip(refusal);
   audit.op({ kind: "restore", ref });
   await applyRestore(ctx, ref, await audit.meta());
   return true;
@@ -1119,6 +1123,9 @@ async function toBundle(
   for (const box of boxes) {
     let bundle = await existingBundle(ctx, box, name, edition.publisherId);
     if (!bundle) {
+      // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
+      const printed = await printedIsbnRefusal(ctx, [box.isbn13, box.isbn10]);
+      if (printed !== null) skip(printed);
       await audit.meta();
       const fields = {
         status: "active" as const,
@@ -1318,14 +1325,9 @@ async function updateFields(
       .first();
     if (clash && clash._id !== release._id) skip(`ISBN ${isbn13} already on another release`);
   }
-  // An ISBN another Release was also printed under is that Release's too.
-  for (const isbn of [patch.isbn13, patch.isbn10]) {
-    if (typeof isbn !== "string") continue;
-    const printed = (await printingReleases(ctx, isbn)).find(
-      (holder) => holder !== null && holder._id !== release._id,
-    );
-    if (printed) skip(`ISBN ${isbn} is another printing of another release`);
-  }
+  // An ISBN with Other Printings is one Release's alone (lib/releaseIsbns.ts).
+  const printed = await printedIsbnRefusal(ctx, [patch.isbn13, patch.isbn10], release._id);
+  if (printed !== null) skip(printed);
   if (release.format === "digital" && patch.binding !== undefined)
     skip("binding on a digital release");
   await updateRecord(ctx, audit, { type: "release", id: release._id }, release, patch);
@@ -2088,9 +2090,8 @@ async function createRelease(
       .first();
     if (clash10) skip(`ISBN-10 ${isbn10} already exists`);
   }
-  if ((await printingReleases(ctx, entry.isbn13)).some((holder) => holder !== null)) {
-    skip(`ISBN ${entry.isbn13} is another printing of an existing release`);
-  }
+  const printed = await printedIsbnRefusal(ctx, [entry.isbn13, isbn10 ?? undefined]);
+  if (printed !== null) skip(printed);
   const bundle = await ctx.db
     .query("releaseBundles")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
@@ -2185,6 +2186,9 @@ async function releaseBundle(
       if (box.locked) skip("box-set release is locked");
       const edition = await ctx.db.get(box.editionId);
       if (!edition) return skip("box-set edition missing");
+      // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
+      const printed = await printedIsbnRefusal(ctx, [isbn13, box.isbn10]);
+      if (printed !== null) skip(printed);
       await audit.meta();
       const fields = {
         status: "active" as const,
