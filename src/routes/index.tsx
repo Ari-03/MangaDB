@@ -54,7 +54,7 @@ export const Route = createFileRoute("/")({
   // otherwise travel in the page's HTML (about 250 KB of it).
   loader: async () => {
     const month = currentMonth();
-    const [stats, series, releases, nextReleases] = await fetchHomeCatalog(
+    const [stats, series, releases, nextReleases, seriesFacets] = await fetchHomeCatalog(
       month,
       SERIES_SHELF_POOL,
     );
@@ -69,7 +69,7 @@ export const Route = createFileRoute("/")({
     );
     return {
       counts: {
-        series: stats.series.count,
+        series: seriesFacets.total,
         volumes: stats.volumes.count,
         publishers: stats.publishers.count,
       },
