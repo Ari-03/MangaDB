@@ -145,6 +145,31 @@ Rollup's `hoistTransitiveImports` (Rolldown does not support it), patching
 which the Convex client imports, or `useParams`, which TanStack does).
 Delete the pair once TanStack's preloads follow static imports.
 
+## Home jacket check: a budget, and unknown counts as art
+
+The home page asks R2 which shelf candidates have a jacket
+(`coversOnFile` in `src/server/covers.ts`) and waits at most 300 ms for
+the answers (2026-10-05). Before, it waited for every read with no
+deadline, so one stalled read held the whole page, and a read that threw
+counted as "no jacket": an R2 outage emptied the shelves and sent the
+warm-up to the upstreams for every book.
+
+Now each read's answer is kept as it lands. When the budget runs out, a
+candidate is kept off its shelf only if R2 said, in this request or
+recently enough for the isolate to remember, that its jacket is absent. A
+read that failed, is still out, or was never sent counts as art, as every
+ISBN does when no bucket is bound, so the book may show its cloth
+placeholder. No read starts after the budget. Reads still out are owned
+by `waitUntil` and remembered for the next request if they finish within
+the platform's limit; nothing promises they do. Only jackets known absent
+are warmed, at most 8 per call.
+
+300 ms is a starting value, not a measured one: a Worker has at most six
+requests waiting for headers at once, and a cold home page sends about
+fifty reads. Tune it from the `cov` span (docs/operations.md), minding
+that a `partial` check hides how long it would have taken. Counting an
+unknown as absent was ruled out: it empties the shelves in an outage.
+
 ## Staging
 
 One shared staging environment instead of a deployment per branch. The

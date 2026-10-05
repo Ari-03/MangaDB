@@ -70,8 +70,10 @@ export const Route = createFileRoute("/")({
     // read the same day the shelves were seated by, in SSR and hydration.
     const todaySort = todaySortKey();
     const pools = homePools(releases.releases, nextReleases.releases, todaySort);
-    // Which candidates have a jacket on file. A failed check is "unknown"
-    // (null): the shelves then seat any book with art to try, as before.
+    // Which candidates have a jacket on file. The store waits on R2 for at
+    // most its budget (server/covers.ts): a read that failed or did not answer
+    // in time comes back as unknown and counts as art. A failed call is null:
+    // the shelves then seat any book with art to try.
     const jackets = await fetchCoversOnFile({ data: homeQuestions(pools, series) }).catch(
       () => null,
     );

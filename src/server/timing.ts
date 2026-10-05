@@ -12,7 +12,10 @@
 //          returns is outside the span; a handshake redirect has no span.
 //   cat    The home page's catalog reads in the Worker (routes/index.tsx).
 //   cov    Which home candidates have a jacket on file (server/covers.ts), with
-//          its outcome; `covr2` is how many R2 heads that check sent.
+//          its outcome; `covr2` is how many R2 heads that check sent. It ends
+//          when the check answers: by its 300 ms budget, or as soon after as
+//          the Worker runs the timer. Reads still out then, and the check's
+//          warm-ups, are not in it.
 //
 // A Worker's clock advances only across I/O, so these are elapsed times as
 // that clock saw them: CPU time between I/O is not reliably in or out of a
@@ -26,8 +29,12 @@
 // reaches the browser bundle (`npm run build` checks: build/checkPreloads.ts).
 import { AsyncLocalStorage } from "node:async_hooks";
 
-/** What a cover check came to: every head answered, at least one threw, or no bucket bound. */
-export type CoverOutcome = "complete" | "failed" | "unbound";
+/**
+ * What a cover check came to: every read it needed answered; all answered but
+ * at least one threw; its budget ran out with reads still out or unsent
+ * (whether or not one threw); or no bucket bound.
+ */
+export type CoverOutcome = "complete" | "failed" | "partial" | "unbound";
 
 type Span =
   | { name: "app" | "auth" | "cat"; ms: number }

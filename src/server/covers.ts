@@ -430,7 +430,10 @@ function coverMissing(): Response {
 // know before it renders which of its books have a real jacket. R2 is that
 // record: only real art is ever stored there, so an object under an ISBN
 // means a jacket and its absence means cloth (or art nobody has asked for
-// yet, which the warm-up below goes and gets).
+// yet, which the warm-up below goes and gets). The page waits for R2 at most
+// CHECK_BUDGET_MS. A read that failed, or has not answered by then, is
+// unknown and counts as art, as every ISBN does when no bucket is bound: only
+// a jacket R2 says it lacks keeps a book off the shelf.
 
 /** Asked-about shelves and seats per call; the home page uses 4 and 15. */
 const MAX_SHELVES = 8;
@@ -438,6 +441,15 @@ const MAX_SEATS = 30;
 const MAX_CANDIDATES = 120;
 /** Absent jackets fetched in the background per call, so upstreams see a trickle. */
 const WARM_LIMIT = 8;
+/**
+ * How long a page waits for R2's answers, counted from before its first read.
+ * A Worker holds at most six requests waiting for headers at once and the
+ * home page's first reads number about fifty, so a cold isolate can queue.
+ * 300 ms is a starting budget, not a measured one; tune it from the `cov`
+ * spans (docs/operations.md), minding that a check cut off at the budget
+ * hides how long it would have taken.
+ */
+const CHECK_BUDGET_MS = 300;
 /** A stored jacket stays stored; an absent one may arrive within minutes. */
 const ON_FILE_TTL_MS = 24 * 60 * 60 * 1000;
 const ABSENT_TTL_MS = 5 * 60 * 1000;
@@ -446,26 +458,26 @@ const MEMO_MAX = 20_000;
 /** What this isolate last learned per ISBN, so a warm one rarely asks R2. */
 const onFileMemo = new Map<string, { onFile: boolean; expires: number }>();
 
-/** One `coversOnFile` call's R2 reads, for its Server-Timing span (server/timing.ts). */
-type CheckReads = { heads: number; failed: boolean };
+/** R2's answer for one ISBN: on file or not, or null when the read failed (unknown). */
+type Held = boolean | null;
+/** One shelf's question, bounded and checked (see coversOnFile). */
+type AskedShelf = { seats: number; candidates: ReadonlyArray<string | null> };
 
-/** Whether R2 holds a jacket for `isbn13`; a failed read is "no", unremembered. */
-async function jacketOnFile(
-  bucket: NonNullable<typeof env.COVERS>,
-  isbn13: string,
-  reads: CheckReads,
-): Promise<boolean> {
-  const now = Date.now();
+/** What this isolate remembers about `isbn13`'s jacket, while it is fresh. */
+function remembered(isbn13: string): boolean | undefined {
   const known = onFileMemo.get(isbn13);
-  if (known && known.expires > now) return known.onFile;
+  return known && known.expires > Date.now() ? known.onFile : undefined;
+}
+
+/** Ask R2 for `isbn13`'s jacket. An answer is remembered; a failed read is null, and is not. */
+async function headJacket(bucket: NonNullable<typeof env.COVERS>, isbn13: string): Promise<Held> {
+  const now = Date.now();
   let onFile: boolean;
   try {
-    reads.heads++;
     onFile = (await bucket.head(`${isbn13}.jpg`)) !== null;
   } catch (error) {
-    reads.failed = true;
     console.error("covers: R2 head failed", error);
-    return false;
+    return null;
   }
   if (onFileMemo.size >= MEMO_MAX) onFileMemo.clear();
   onFileMemo.set(isbn13, { onFile, expires: now + (onFile ? ON_FILE_TTL_MS : ABSENT_TTL_MS) });
@@ -473,19 +485,27 @@ async function jacketOnFile(
 }
 
 /**
- * The ISBNs among `shelves`' candidates whose jacket we hold, or null when
- * no bucket is bound and nothing can be said. Each shelf is walked in order
- * only until its seats are filled (a null candidate already shows publisher
- * art and takes a seat), so a full shelf costs about one R2 read per seat.
- * Jackets found absent are requested through `coverResponse` in the
- * background, a few per call: one that exists upstream is stored for the
- * next visitor, and a real miss is remembered at the edge for a day.
+ * The ISBNs among `shelves`' candidates that may stand on them: those whose
+ * jacket we hold, plus those R2 could not answer for in time (unknown counts
+ * as art), each shelf seated in its own order; or null when no bucket is
+ * bound and nothing can be said. A candidate is kept off only when R2 said,
+ * in this call or recently enough for the isolate to remember, that its
+ * jacket is absent. A shelf reads ahead only as far as its empty seats and an
+ * ISBN is read once per call, so a full shelf costs about one R2 read per
+ * seat. No read starts after the budget; reads still out then finish in the
+ * background and are remembered for the next request, if the platform lets
+ * them finish. Up to WARM_LIMIT jackets known absent are requested through
+ * `coverResponse` in the background: one that exists upstream is stored for
+ * the next visitor, and a real miss is remembered at the edge for a day.
  *
- * Input comes from the client on navigations, so it is bounded and every
- * candidate is checked to be an ISBN-13 before it becomes an R2 key.
+ * Input comes from the client on navigations, so it is bounded (a `need`
+ * that is not a finite number asks for no seats) and every candidate is
+ * checked to be an ISBN-13 before it becomes an R2 key.
  *
- * Records the Server-Timing `cov` span (complete, failed when a read threw,
- * unbound) and `covr2`, the R2 heads it sent; memo hits send none.
+ * Records the Server-Timing `cov` span (complete; failed when a read threw;
+ * partial when the budget ran out first, whatever else happened; unbound)
+ * and `covr2`, the R2 heads it sent; memo hits and an ISBN asked twice send
+ * none.
  */
 export async function coversOnFile(
   shelves: ReadonlyArray<CoverShelf>,
@@ -497,32 +517,104 @@ export async function coversOnFile(
     recordCoverCheck(performance.now() - started, "unbound", 0);
     return null;
   }
-  const reads: CheckReads = { heads: 0, failed: false };
-  const onFile = new Set<string>();
+  // Copied, so the caller changing its arrays later changes nothing here.
+  const asked: Array<AskedShelf> = shelves.slice(0, MAX_SHELVES).map(({ need, candidates }) => ({
+    seats: Number.isFinite(need) ? Math.min(MAX_SEATS, Math.max(0, Math.floor(need))) : 0,
+    candidates: candidates
+      .slice(0, MAX_CANDIDATES)
+      .filter((isbn) => isbn === null || (typeof isbn === "string" && ISBN13.test(isbn))),
+  }));
+  // Each answer is kept the moment it lands, whatever its neighbours do.
+  const answers = new Map<string, Held>();
+  // This call's reads, one per ISBN however many shelves list it. Never
+  // shared with another request: a Worker ties I/O to its request.
+  const reads = new Map<string, Promise<void>>();
+  let heads = 0;
+  // False once the budget is spent or the check is over: no read starts after.
+  let open = true;
+
+  /** What this call knows of `isbn13`: its own answer, else a fresh memo entry, kept as its own. */
+  const known = (isbn13: string): Held | undefined => {
+    if (!answers.has(isbn13)) {
+      const memo = remembered(isbn13);
+      if (memo !== undefined) answers.set(isbn13, memo);
+    }
+    return answers.get(isbn13);
+  };
+  /**
+   * A shelf's seats as far as is known: its candidates in order, skipping
+   * those known absent. Publisher art (null), a jacket on file, a failed read
+   * and a candidate not answered yet (being read, or not read at all) each
+   * take a seat. Only the candidates it passes are looked up in the memo.
+   */
+  const seatsSoFar = (shelf: AskedShelf): Array<string | null> => {
+    const taken: Array<string | null> = [];
+    for (const isbn of shelf.candidates) {
+      if (taken.length >= shelf.seats) break;
+      if (isbn === null || known(isbn) !== false) taken.push(isbn);
+    }
+    return taken;
+  };
+  const read = (isbn13: string): Promise<void> => {
+    let reading = reads.get(isbn13);
+    if (!reading) {
+      heads++;
+      reading = headJacket(bucket, isbn13).then((held) => {
+        answers.set(isbn13, held);
+      });
+      reads.set(isbn13, reading);
+    }
+    return reading;
+  };
+  /** Read a shelf's unanswered seats; any answer frees or fills its seat, so it reads on from there at once. */
+  const walk = async (shelf: AskedShelf): Promise<void> => {
+    while (open) {
+      const unanswered = seatsSoFar(shelf).filter(
+        (isbn): isbn is string => isbn !== null && !answers.has(isbn),
+      );
+      if (unanswered.length === 0) return;
+      await Promise.race(unanswered.map(read));
+    }
+  };
+
+  // Armed before the first read, and cleared on every way out below.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const spent = new Promise<false>((resolve) => {
+    timer = setTimeout(() => {
+      open = false;
+      resolve(false);
+    }, CHECK_BUDGET_MS);
+  });
+  let finished: boolean;
+  try {
+    finished = await Promise.race([Promise.all(asked.map(walk)).then(() => true), spent]);
+  } finally {
+    open = false;
+    clearTimeout(timer);
+    // With no read able to start, the set is final: own every read still
+    // out, its answer and memo write included, without waiting for it. A
+    // runtime that refuses fails the call (nothing is left to start a read).
+    if (reads.size > 0) inBackground("jacket check", Promise.all(reads.values()));
+  }
+
+  // Copied now: answers landing later change the memo, not this page.
+  const seated = new Set<string>();
+  for (const shelf of asked) {
+    for (const isbn of seatsSoFar(shelf)) if (isbn !== null) seated.add(isbn);
+  }
+  // Only what this call looked at, in shelf order: never every remembered absence.
   const absent = new Set<string>();
-  await Promise.all(
-    shelves.slice(0, MAX_SHELVES).map(async ({ need, candidates }) => {
-      const seats = Math.min(MAX_SEATS, Math.max(0, Math.floor(need)));
-      const asked = candidates
-        .slice(0, MAX_CANDIDATES)
-        .filter((isbn) => isbn === null || ISBN13.test(isbn));
-      let seated = 0;
-      let next = 0;
-      while (seated < seats && next < asked.length) {
-        // Never more reads at once than seats still empty.
-        const round = asked.slice(next, next + (seats - seated));
-        next += round.length;
-        const held = await Promise.all(
-          round.map((isbn) => (isbn === null ? true : jacketOnFile(bucket, isbn, reads))),
-        );
-        round.forEach((isbn, index) => {
-          if (held[index]) seated++;
-          if (isbn !== null) (held[index] ? onFile : absent).add(isbn);
-        });
-      }
-    }),
+  for (const shelf of asked) {
+    for (const isbn of shelf.candidates) {
+      if (isbn !== null && answers.get(isbn) === false) absent.add(isbn);
+    }
+  }
+  const failed = [...answers.values()].includes(null);
+  recordCoverCheck(
+    performance.now() - started,
+    finished ? (failed ? "failed" : "complete") : "partial",
+    heads,
   );
-  recordCoverCheck(performance.now() - started, reads.failed ? "failed" : "complete", reads.heads);
   for (const isbn13 of [...absent].slice(0, WARM_LIMIT)) {
     inBackground(
       "jacket warm-up",
@@ -534,5 +626,5 @@ export async function coversOnFile(
       }),
     );
   }
-  return [...onFile];
+  return [...seated];
 }
