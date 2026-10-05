@@ -38,6 +38,7 @@ import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const { values: args } = parseArgs({
@@ -75,7 +76,7 @@ const esbuild = tool("esbuild");
 const miniflare = tool("miniflare");
 const workerd = tool("workerd");
 const seroval = {
-  module: await import(require.resolve("seroval")),
+  module: await import(pathToFileURL(require.resolve("seroval")).href),
   version: tool("seroval").version,
 };
 const { Miniflare, convertV4MiniflareOptions } = miniflare.module;
