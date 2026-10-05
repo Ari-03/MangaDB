@@ -23,6 +23,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { holdKind, recordRef } from "../schema";
 import { applyMatureEvidence } from "./mature";
+import { observedIsbn13, printingIsbnOf } from "./releaseIsbns";
 import { sameValue } from "./values";
 
 export type HoldKind = Infer<typeof holdKind>;
@@ -317,7 +318,10 @@ export async function clearHold(
  * every importer and repair writes the link (a merge or Split repoints
  * links directly, lib/sensitiveOps.ts). A linked record is placed, so
  * its hold and `placement` note go (clearHold), and its Series becomes
- * mature at once if the link is 18+ evidence (applyMatureEvidence).
+ * mature at once if the link is 18+ evidence (applyMatureEvidence). A
+ * record of one of a Release's Other Printings, linked to that Release, is
+ * marked with the printing's ISBN (`printingIsbn13`); any other link
+ * clears the mark.
  */
 export async function linkObservation(
   ctx: MutationCtx,
@@ -327,5 +331,13 @@ export async function linkObservation(
   await ctx.db.patch(observationId, { recordRef: ref });
   await clearHold(ctx, observationId);
   const observation = await ctx.db.get(observationId);
-  if (observation) await applyMatureEvidence(ctx, observation);
+  if (!observation) return;
+  const printingIsbn13 =
+    ref.type === "release"
+      ? await printingIsbnOf(ctx, ref.id, observedIsbn13(observation.snapshot))
+      : undefined;
+  if (printingIsbn13 !== observation.printingIsbn13) {
+    await ctx.db.patch(observationId, { printingIsbn13 });
+  }
+  await applyMatureEvidence(ctx, { ...observation, printingIsbn13 });
 }

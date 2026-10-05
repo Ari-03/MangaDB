@@ -45,6 +45,7 @@ import { fail } from "./errors";
 import { labelsEqual } from "./matching";
 import { joinableEdition, siblingEditions, unmappedSiblings, volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
+import { printingReleases } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
 import { fieldDescriptor, normalizeFieldValue, type RecordType } from "./moderationFields";
 
@@ -488,13 +489,23 @@ export type IsbnUpdate = {
   isbn: string | undefined;
 };
 
-/** One ISBN a proposal's final state assigns, and the kind of op assigning it. */
-type IsbnClaim = { field: IsbnField; isbn: string; by: "create" | "update" };
+/**
+ * One ISBN a proposal's final state assigns, the kind of op assigning it,
+ * and for an update the Release it writes.
+ */
+type IsbnClaim = {
+  field: IsbnField;
+  isbn: string;
+  by: "create" | "update";
+  releaseId?: Id<"releases">;
+};
 
 /**
  * Release identity (CONTEXT.md): an ISBN names one Release. Checks the
  * proposal's final ISBN assignments — new Releases and updated ones alike —
- * against each other and against every active Release. A holder whose same
+ * against each other and against every active Release, an active Release's
+ * Other Printings included (a Release may take one of its own printings'
+ * ISBNs as its own). A holder whose same
  * ISBN field this proposal rewrites no longer counts, so moving an ISBN off a
  * mis-keyed Release and onto the right one is allowed. A real duplicate is
  * resolved by merging or correcting the holder, never by a second holder.
@@ -510,8 +521,8 @@ async function checkIsbnAssignments(
     fail(involvesCreate ? "invalidCreate" : "invalidField", message);
   const rewritten = new Set(updates.map((update) => `${update.field}:${update.releaseId}`));
   const claims = [
-    ...updates.flatMap(({ field, isbn }): IsbnClaim[] =>
-      isbn === undefined ? [] : [{ field, isbn, by: "update" }],
+    ...updates.flatMap(({ field, isbn, releaseId }): IsbnClaim[] =>
+      isbn === undefined ? [] : [{ field, isbn, by: "update", releaseId }],
     ),
     ...creates,
   ];
@@ -545,6 +556,15 @@ async function checkIsbnAssignments(
         claim.by === "create"
           ? `ISBN ${isbn} already belongs to an active Release — correct or merge that Release instead of creating another.`
           : `ISBN ${isbn} already belongs to another active Release — correct or merge that Release first.`,
+      );
+    }
+    const printed = (await printingReleases(ctx, isbn)).some(
+      (release) => release?.status === "active" && release._id !== claim.releaseId,
+    );
+    if (printed) {
+      refuse(
+        claim.by === "create",
+        `ISBN ${isbn} is another printing of an active Release — correct or merge that Release instead.`,
       );
     }
   }

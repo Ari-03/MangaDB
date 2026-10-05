@@ -19,7 +19,10 @@
 //
 // Source-agnostic: every adapter funnels linked updates through
 // reconcileFields, and every importer-authored Proposal is written by
-// insertSourceProposal.
+// insertSourceProposal. A record linked as one of a Release's Other
+// Printings (its `printingIsbn13` mark, lib/observations.ts
+// linkObservation) offers the Release nothing, whatever its snapshot later
+// says: its date, price, blurb and ISBN are that printing's.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
@@ -32,6 +35,7 @@ import {
   type FieldDecision,
   type Incumbent,
 } from "./authority";
+import { observedIsbn13, printingIsbnOf } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
 import { sameValue, valueHash } from "./values";
 
@@ -196,6 +200,14 @@ export async function reconcileFields(
     applied: [],
     queued: [],
   };
+  // The mark, or the printing's ISBN on a copy read before this mutation linked it.
+  if (
+    ref.type === "release" &&
+    (observation.printingIsbn13 !== undefined ||
+      (await printingIsbnOf(ctx, ref.id, observedIsbn13(observation.snapshot))) !== undefined)
+  ) {
+    return result;
+  }
 
   const registryCache = new Map<string, Doc<"approvedSources"> | null>();
   const registryRow = async (key: string) => {

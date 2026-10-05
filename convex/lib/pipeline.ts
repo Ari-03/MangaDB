@@ -56,6 +56,7 @@ import {
   type CanonicalPublisher,
 } from "./publishers";
 import { insertSourceProposal, reconcileFields } from "./reconcile";
+import { printingReleases } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
 
 // ---------- dates & labels ----------
@@ -497,9 +498,10 @@ export async function hiddenWorkTitled(
 const ISBN_HOLDERS_SCAN = 10;
 
 /**
- * The canonical Release other than `release` that holds `isbn13`: active or
- * hidden, a merged holder answered by its survivor. Null when `release`
- * holds it itself or nobody does.
+ * The canonical Release other than `release` that holds `isbn13`, as its
+ * own ISBN or one of its Other Printings: active or hidden, a merged
+ * holder answered by its survivor. Null when `release` holds it itself
+ * (another printing of it included) or nobody does.
  */
 export async function isbnHolderBesides(
   ctx: MutationCtx,
@@ -507,10 +509,13 @@ export async function isbnHolderBesides(
   isbn13: string,
 ): Promise<Doc<"releases"> | null> {
   if (release.isbn13 === isbn13) return null;
-  const holders = await ctx.db
-    .query("releases")
-    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-    .take(ISBN_HOLDERS_SCAN);
+  const holders = [
+    ...(await ctx.db
+      .query("releases")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .take(ISBN_HOLDERS_SCAN)),
+    ...(await printingReleases(ctx, isbn13)),
+  ];
   for (const holder of holders) {
     const owner = await survivorOf<"releases">(ctx, holder);
     if (owner !== null && owner._id !== release._id) return owner;

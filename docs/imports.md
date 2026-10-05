@@ -54,7 +54,8 @@ and write conflicts retry (`convex/lib/occ.ts`). The shared logic is in
 1. The stored source-id link on the observation. A rename at the source is
    then a field conflict, never a failed match.
 2. Exact ISBN-13, with a title-similarity check. A dissimilar title goes to
-   review.
+   review. The ISBN may be a Release's own or one of its Other Printings'
+   (below), so a later sync of an older printing links to its Release.
 3. Publisher, normalized Series title, volume label and format, against
    Editions covering exactly that Volume. Automatic only with exactly one
    candidate that has no Human Override and no lock. A candidate that
@@ -104,7 +105,8 @@ there. The reasons are in [decisions.md](decisions.md#disjoint-isbns-mean-anothe
 
 For each field, the incumbent is whoever wrote the latest Revision touching
 it. Both ranks come from the live registry, so a registry edit changes the
-next run.
+next run. A record of one of a Release's Other Printings is linked to it
+but offers it nothing (below).
 
 - Strictly higher authority updates automatically.
 - Equal authority queues a conflict Proposal, one open per observation.
@@ -234,7 +236,7 @@ review:
 | `volumeMissing` | The Volume it names does not exist under a known Series and Publisher | ANN's page pass, Open Library |
 | `packaging` | Packaging with no stated coverage or a Volume list no range holds, or a line member or box set steady state leaves to an Editor | Seven Seas, Kodansha, PRH and Yen Press, ANN's page pass, Open Library |
 | `series` | No single active Series: hidden, ambiguous, locked or not linked | every importer |
-| `isbn` | Its ISBN is on a hidden Release or another Series' Release, or its Volume already has the publisher's Release in that format | ANN's page pass, Open Library |
+| `isbn` | Its ISBN is on a hidden Release or another Series' Release, or its Volume already has the publisher's Release in that format, another printing of it included until a person records it ("Other printings" below) | ANN's page pass, Open Library |
 | `other` | ANN names no distributor, or one that resolves to no publisher row | ANN's page pass |
 
 A book no one can place, or that is out of scope, keeps its note for the
@@ -363,6 +365,45 @@ npx convex run imports:backfillHolds '{}'
 A page that fails (a transaction limit, say) ends the chain, and the
 error is in the function's logs. Rerun the command: it starts again from
 the first observation, and redoing the pages already done is harmless.
+
+### Other printings
+
+The catalog keeps one Release per Edition and format, and the Release
+carries one ISBN. Publishers often print the same book again under a new
+ISBN: Seven Seas reprinted its 2012 "A Certain Scientific Railgun" books
+in 2023. Such a book is an Other Printing of the Release. Its ISBN goes in
+`releaseIsbns` with its date, the reason it was decided and the record it
+came from, and its observation links to the Release. The Release keeps
+its own ISBN, date, price, blurb and cover.
+
+No importer records one. ANN's page pass and Open Library hold such a book
+under `isbn`, because its Volume already has the publisher's Release in
+that format, the same as any other book in a taken slot. The records alone
+cannot tell another printing from another book: a light novel shares the
+manga's name, Dark Horse's "Oh My Goddess! [2nd Ed]" books are collected
+differently from its first editions, and Open Library calls a 3-in-1 or a
+library rebind "Vol. N" ([decisions](decisions.md#other-printings-keep-their-barcodes-recorded-by-decision)).
+A person, or an agent whose decision a reviewer checked, decides each one
+with evidence, and the operator records it with
+`printings:recordDecidedInternal`, which checks only the invariants
+([operations](operations.md#recording-decided-other-printings)).
+
+Once recorded, the printing's ISBN finds the Release on `/isbn/{isbn}`, on
+the matching ladder's ISBN rung and on ANN's page pass, so a later sync of
+that book, from any source, links to the Release. Linking marks the record
+as the printing's (`printingIsbn13` on the observation), and a marked
+record changes nothing on the Release, even after its snapshot drops or
+changes the ISBN. `reconcileFields` skips it, Seven Seas and Kodansha
+store no art from it, and its withdrawal queues no cancellation review. No
+Proposal or repair may give that ISBN to another Release, and Prepare
+placement refuses it. The Release's row on its Edition page lists its
+other printings. Hiding the Release hides them too. A Release merge
+carries them to the survivor, which must be physical, and Split brings
+them back ([moderation](moderation.md#hide-restore-merge-split-and-locks)).
+Each recorded printing is an approved Proposal by its source, with a
+public Revision on the Release (`otherPrinting`) that carries the reason
+and cites the evidence. Nothing takes back a printing recorded in error
+yet ([known issues](known-issues.md#catalog-and-imports)).
 
 ## Descriptions
 

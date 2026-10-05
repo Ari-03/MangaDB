@@ -151,21 +151,27 @@ confirmation, checked again on the server. Each applies as an immediately
 approved Proposal, so the reason lands in public history.
 
 - **Hide** sets `status` to `hidden`. The record leaves public discovery
-  but keeps its ID, history and every tracking reference. **Restore**
-  brings it back. Restore never undoes a merge.
+  but keeps its ID, history and every tracking reference. A hidden
+  Release's Other Printings find nothing on `/isbn/{isbn}` either, and an
+  import treats their ISBNs as the hidden Release's. **Restore** brings it
+  back. Restore never undoes a merge.
 - **Merge** moves everything from the loser to a survivor: observations,
-  relationships, child records, user tracking (the survivor's row wins
-  where a user tracked both), ratings, reviews, favorites and comments.
+  relationships, child records, a Release's Other Printings (an ISBN the
+  survivor already carries stays the survivor's), user tracking (the
+  survivor's row wins where a user tracked both), ratings, reviews,
+  favorites and comments.
   The loser keeps its ID and points at the survivor, so its URLs 301.
-  Release Variants merge only within one Release, so merge the Releases
-  first. A variant merge moves at most 250 pins (Collection Entries and
+  A Release with Other Printings merges only into a physical Release,
+  since only a physical Release has them. Release Variants merge only
+  within one Release, so merge the Releases first. A variant merge moves at
+  most 250 pins (Collection Entries and
   Bundle Memberships naming the variant). Split puts every pin back in one
   transaction, which reads several index ranges per pin; 250 pins of Owned
   entries, of memberships of one-Release Bundles, or of both, can be split.
   A merge that moved a membership of a Bundle with very many owners or many
   Releases can still be too large to Split
   ([known issues](known-issues.md#catalog-and-imports)). The merge form
-  shows either refusal before you confirm.
+  shows any of these refusals before you confirm.
 - **Split** is the only way back from a merge. Every merge stores a
   `mergeManifests` row with each moved reference and removed row. Split
   replays it backwards, skipping references changed since, and reactivates
@@ -187,8 +193,9 @@ kind and source. Each row shows the source's own title, link and ISBN, the
 Series and label it proposes, the matched Series, and the reason. A book
 leaves the list when an importer links its observation, queues a creation
 Proposal for it (it is then in the review queue), or its source stops
-listing it. Books no one can place or that are out of scope are not
-listed. See [imports](imports.md#held-books) for the kinds.
+listing it, and when the operator records it as another printing of a
+Release ([operations](operations.md#recording-decided-other-printings)).
+Books no one can place or that are out of scope are not listed. See [imports](imports.md#held-books) for the kinds.
 
 "Prepare placement" on a row (`convex/placement.ts`) drafts a creation
 Proposal for the book under its Series, authored by you and citing the

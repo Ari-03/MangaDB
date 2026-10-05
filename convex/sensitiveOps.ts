@@ -20,6 +20,7 @@ import {
 import {
   applyMerge,
   impactOf,
+  releaseMergeRefusal,
   reversibleManifestOf,
   SINGLE_RECORD_OPS,
   variantMergeRefusal,
@@ -67,7 +68,9 @@ export const manageForm = query({
     const mergeRefusal =
       ref.type === "releaseVariant" && mergeFrom?.type === "releaseVariant"
         ? await variantMergeRefusal(ctx, ref.id, mergeFrom.id)
-        : null;
+        : ref.type === "release" && mergeFrom?.type === "release"
+          ? await releaseMergeRefusal(ctx, ref.id, mergeFrom.id)
+          : null;
 
     return {
       ref: { type, id: doc._id as string },

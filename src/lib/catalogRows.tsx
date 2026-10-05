@@ -38,9 +38,11 @@ function FormatChip({ format }: { format: ReleaseRowData["format"] }) {
 /**
  * A Release row, anchored by ISBN when present, else document ID (spec §8) —
  * the `/isbn/{isbn}` redirect lands on this fragment, which `:target`
- * highlights. Variants render beneath their Release; containing Bundles link
- * to their Bundle pages. The signed-in collection and reading-pass controls
- * sit in the row's right-hand column and collapse it when signed out.
+ * highlights, for the Release's own ISBN and its Other Printings' alike.
+ * The other printings' ISBNs are listed beneath its own, with their year;
+ * Variants render beneath their Release; containing Bundles link to their
+ * Bundle pages. The signed-in collection and reading-pass controls sit in
+ * the row's right-hand column and collapse it when signed out.
  */
 export function ReleaseRow({ release }: { release: ReleaseRowData }) {
   const date = formatPartialDate(release.pubDate);
@@ -70,6 +72,18 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
                 {release.isbn10}
               </span>
             ) : null}
+          </p>
+        ) : null}
+        {release.otherPrintings.length > 0 ? (
+          <p className="release-printings">
+            Also printed as{" "}
+            {release.otherPrintings
+              .map((printing) =>
+                printing.year !== null
+                  ? `ISBN ${printing.isbn13}, ${printing.year}`
+                  : `ISBN ${printing.isbn13}`,
+              )
+              .join("; ")}
           </p>
         ) : null}
         {release.variants.length > 0 ? (

@@ -43,6 +43,7 @@ import {
 } from "./ratings";
 import { coverageOf, coveringOf, editionSeriesIds, releasesOf } from "./editionRows";
 import { fail } from "./errors";
+import { isbn13To10 } from "./isbn";
 import { sameValue } from "./values";
 
 // ---------- revision plumbing ----------
@@ -1478,6 +1479,23 @@ async function transferReferences(
         await repoint(ctx, log, "releaseVariants", variant, { releaseId: survivorId });
       }
 
+      // Other Printings follow their Release, so their ISBNs find the
+      // survivor. An ISBN the survivor already carries, as its own or as a
+      // printing, keeps the survivor's and the loser's row is removed.
+      const printingsOf = (releaseId: Id<"releases">) =>
+        ctx.db
+          .query("releaseIsbns")
+          .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
+          .collect();
+      const survivorIsbns = new Set([
+        (survivorDoc as Doc<"releases">).isbn13,
+        ...(await printingsOf(survivorId)).map((row) => row.isbn13),
+      ]);
+      for (const row of await printingsOf(loserId)) {
+        if (survivorIsbns.has(row.isbn13)) await removeRow(ctx, log, "releaseIsbns", row);
+        else await repoint(ctx, log, "releaseIsbns", row, { releaseId: survivorId });
+      }
+
       // A cross-Series merge files the loser's tracking under the survivor's
       // Series, which absorb the Tracking Visibility of those it leaves
       // (carryVisibility): moved Owned entries and passes, and every owner
@@ -1701,6 +1719,33 @@ export async function variantMergeRefusal(
   return null;
 }
 
+/**
+ * Why merging Release `loserId` into `survivorId` is refused, or null. The
+ * loser's Other Printings move to the survivor (transferReferences), and
+ * only a physical Release has other printings (printings.ts), so a loser
+ * with printing rows merges only into a physical survivor. applyMerge
+ * refuses with this before writing anything; the merge form shows it
+ * instead of the merge.
+ */
+export async function releaseMergeRefusal(
+  ctx: QueryCtx,
+  survivorId: Id<"releases">,
+  loserId: Id<"releases">,
+): Promise<string | null> {
+  const survivor = await ctx.db.get(survivorId);
+  if (survivor === null || survivor.format === "physical") return null;
+  const printing = await ctx.db
+    .query("releaseIsbns")
+    .withIndex("by_release", (q) => q.eq("releaseId", loserId))
+    .first();
+  if (printing === null) return null;
+  return (
+    `The Release being merged has other printings (ISBN ${printing.isbn13}), which would move to ` +
+    `a ${survivor.format} Release, and only a physical Release has other printings. Merge it into ` +
+    "a physical Release."
+  );
+}
+
 // ---------- merge & split ----------
 
 /**
@@ -1735,6 +1780,10 @@ export async function applyMerge(
   }
   if (survivor.type === "releaseVariant" && loser.type === "releaseVariant") {
     const refusal = await variantMergeRefusal(ctx, survivor.id, loser.id);
+    if (refusal) fail("badMerge", refusal);
+  }
+  if (survivor.type === "release" && loser.type === "release") {
+    const refusal = await releaseMergeRefusal(ctx, survivor.id, loser.id);
     if (refusal) fail("badMerge", refusal);
   }
 
@@ -2135,11 +2184,41 @@ async function keepSplitVisibility(
   }
 }
 
+/** A printing stays where it is if another owner has claimed its ISBN since the merge. */
+async function canRestorePrinting(
+  ctx: MutationCtx,
+  row: Pick<Doc<"releaseIsbns">, "isbn13" | "releaseId">,
+  movedRowId?: Id<"releaseIsbns">,
+): Promise<boolean> {
+  const ownedElsewhere = (release: Doc<"releases">) =>
+    release.status === "active" && release._id !== row.releaseId;
+  for await (const release of ctx.db
+    .query("releases")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", row.isbn13))) {
+    if (ownedElsewhere(release)) return false;
+  }
+  const isbn10 = isbn13To10(row.isbn13);
+  if (isbn10 !== undefined) {
+    for await (const release of ctx.db
+      .query("releases")
+      .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))) {
+      if (ownedElsewhere(release)) return false;
+    }
+  }
+  for await (const printing of ctx.db
+    .query("releaseIsbns")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", row.isbn13))) {
+    if (printing._id !== movedRowId && printing.releaseId !== row.releaseId) return false;
+  }
+  return true;
+}
+
 /**
  * Split, the only reversal of a mistaken merge: replay the merge's
  * manifests backward (delete what they inserted, reinsert what they removed
  * unless its User is gone, repoint every reference still where the merge
- * left it; RETIRED_FIELDS are neither reinserted nor repointed) and
+ * left it, skipping printings whose ISBN another owner now holds;
+ * RETIRED_FIELDS are neither reinserted nor repointed) and
  * reactivate the loser. The touched Editions' Release Series are then
  * derived afresh from the restored links (recomputeReleaseDenorms).
  * No profile shows more afterwards than just before (keepSplitVisibility):
@@ -2181,6 +2260,11 @@ export async function applySplit(
     }
     for (const row of manifest.removed) {
       if (!(await ownerExists(ctx, row.doc))) continue;
+      if (
+        row.table === "releaseIsbns" &&
+        !(await canRestorePrinting(ctx, row.doc as Doc<"releaseIsbns">))
+      )
+        continue;
       await ctx.db.insert(row.table as TableNames, liveSnapshot(row.table, row.doc) as never);
     }
     for (const entry of [...manifest.repointed].reverse()) {
@@ -2190,6 +2274,19 @@ export async function applySplit(
       const target = (await ctx.db.get(id)) as Record<string, unknown> | null;
       if (!target) continue;
       if (!sameValue(target[entry.field], entry.after)) continue;
+      if (entry.table === "releaseIsbns" && entry.field === "releaseId") {
+        const releaseId =
+          typeof entry.before === "string" ? ctx.db.normalizeId("releases", entry.before) : null;
+        if (
+          releaseId === null ||
+          !(await canRestorePrinting(
+            ctx,
+            { ...(target as Doc<"releaseIsbns">), releaseId },
+            id as Id<"releaseIsbns">,
+          ))
+        )
+          continue;
+      }
       await ctx.db.patch(id, { [entry.field]: entry.before } as never);
     }
     // A synthesized state row goes once bare again (keepSplitVisibility
@@ -2432,6 +2529,10 @@ export async function impactOf(ctx: QueryCtx | MutationCtx, ref: RecordRef): Pro
     }
     case "release": {
       const id = ref.id;
+      await count(
+        "Other printings (ISBNs that also find it; they follow it on a merge)",
+        ctx.db.query("releaseIsbns").withIndex("by_release", (q) => q.eq("releaseId", id)),
+      );
       await count(
         "Variants",
         ctx.db.query("releaseVariants").withIndex("by_release", (q) => q.eq("releaseId", id)),

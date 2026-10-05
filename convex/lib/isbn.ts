@@ -15,6 +15,15 @@ export function isbn10To13(isbn10: string): string {
   return `${core}${(10 - (sum % 10)) % 10}`;
 }
 
+/** A 978 ISBN-13 → its ISBN-10; a 979 ISBN has none (undefined). */
+export function isbn13To10(isbn13: string): string | undefined {
+  if (!/^978\d{10}$/.test(isbn13)) return undefined;
+  const core = isbn13.slice(3, 12);
+  const sum = [...core].reduce((acc, d, i) => acc + Number(d) * (10 - i), 0);
+  const check = (11 - (sum % 11)) % 11;
+  return `${core}${check === 10 ? "X" : String(check)}`;
+}
+
 /**
  * Any ISBN spelling → a checksum-valid ISBN-13: a 13-digit form as is, a
  * 10-character form converted. Hyphens and spaces are ignored; anything
