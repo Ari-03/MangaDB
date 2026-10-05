@@ -591,15 +591,21 @@ describe("imports never create over a printing claim", () => {
     await t.run(async (ctx) => {
       const observation = (await ctx.db.get(linked))!;
       const release = (await ctx.db.get(observation.recordRef!.id as Id<"releases">))!;
-      expect(await isbnHeldElsewhere(ctx, observation, release, OLDER, 1)).toBe(true);
-      expect((await ctx.db.get(linked))?.conflicts).toEqual([
-        expect.objectContaining({
-          field: "isbn13",
-          offered: OLDER,
-          reason: expect.stringContaining("belongs to hidden Release"),
-        }),
-      ]);
-      expect(await isbnHeldElsewhere(ctx, observation, release, X, 1)).toBe(false);
+      // Offered as an ISBN-13, or only as an ISBN-10 (Open Library, PRH and Yen Press offer both).
+      for (const offered of [{ isbn13: OLDER }, { isbn10: OLDER_10 }]) {
+        await ctx.db.patch(linked, { conflicts: undefined });
+        expect(await isbnHeldElsewhere(ctx, observation, release, offered, 1)).toBe(true);
+        expect((await ctx.db.get(linked))?.conflicts).toEqual([
+          expect.objectContaining({
+            field: "isbn13",
+            offered: OLDER,
+            reason: expect.stringContaining("belongs to hidden Release"),
+          }),
+        ]);
+      }
+      expect(
+        await isbnHeldElsewhere(ctx, observation, release, { isbn13: X, isbn10: X_10 }, 1),
+      ).toBe(false);
     });
   });
 });

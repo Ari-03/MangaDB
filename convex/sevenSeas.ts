@@ -546,7 +546,7 @@ export const applyBook = internalMutation({
       }
       // An ISBN another Release holds is that book's: none of its facts
       // are reconciled onto this link until an Editor resolves the pair.
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      if (await isbnHeldElsewhere(ctx, observation, release, { isbn13: snapshot.isbn13 }, now)) {
         return {
           status: "needsReview",
           changed,

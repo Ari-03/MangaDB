@@ -603,7 +603,7 @@ export const applyEdition = internalMutation({
       if (!changed) return { status: "unchanged", changed: false };
       // An ISBN another Release holds is that book's: none of the record's
       // facts are filled onto this link; the pair stays on the observation.
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      if (await isbnHeldElsewhere(ctx, observation, release, snapshot, now)) {
         return { status: "recordOnly", changed: false, releaseId: release._id };
       }
       const result = await reconcileFields(ctx, {

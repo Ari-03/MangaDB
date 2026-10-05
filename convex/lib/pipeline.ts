@@ -57,6 +57,7 @@ import {
 } from "./publishers";
 import { insertSourceProposal, reconcileFields } from "./reconcile";
 import { printedIsbnRefusal, printingReleases } from "./releaseIsbns";
+import { toIsbn13 } from "./isbn";
 import { seriesSearchText } from "./searchMatch";
 
 // ---------- dates & labels ----------
@@ -545,28 +546,31 @@ export async function recordIsbnConflict(
  * names one Release (CONTEXT.md), so a snapshot offering an ISBN another
  * Release holds is that book's facts, not the linked Release's (a calendar
  * duplicate awaiting a merge, or a record an old crawl rewrote with another
- * Binding). The pair is recorded on the observation for an Editor and the
- * caller applies nothing; returns whether it did.
+ * Binding). An ISBN with Other Printings, offered as an ISBN-13 or an
+ * ISBN-10, must be the linked Release's alone, every claim on it read
+ * (lib/releaseIsbns.ts), even when it is that Release's own. The pair is
+ * recorded on the observation for an Editor and the caller applies
+ * nothing; returns whether it did.
  */
 export async function isbnHeldElsewhere(
   ctx: MutationCtx,
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
-  isbn13: string | undefined,
+  offered: { isbn13?: string; isbn10?: string },
   now: number,
 ): Promise<boolean> {
-  if (isbn13 === undefined) return false;
-  // An ISBN with Other Printings: every claim on it must be the linked
-  // Release's, read whole (lib/releaseIsbns.ts), even its own primary.
-  const printed = await printedIsbnRefusal(ctx, [isbn13], release._id);
-  const holder = printed === null ? await isbnHolderBesides(ctx, release, isbn13) : null;
+  const { isbn13, isbn10 } = offered;
+  const printed = await printedIsbnRefusal(ctx, [isbn13, isbn10], release._id);
+  const holder =
+    printed === null && isbn13 !== undefined ? await isbnHolderBesides(ctx, release, isbn13) : null;
   const held =
     printed ?? (holder !== null ? `ISBN ${isbn13} is already on Release ${holder._id}` : null);
-  if (held === null) return false;
+  const conflicting = isbn13 ?? toIsbn13(isbn10) ?? isbn10;
+  if (held === null || conflicting === undefined) return false;
   await recordIsbnConflict(
     ctx,
     observation,
-    isbn13,
+    conflicting,
     `${held}, not on the Release this record links (${release._id}); none of its facts are applied until an Editor resolves which book it is (a duplicate to merge, or another book).`,
     now,
   );

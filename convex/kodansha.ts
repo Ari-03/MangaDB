@@ -769,7 +769,7 @@ export const applyVolume = internalMutation({
       }
       // So is an ISBN another Release holds, whatever this link lacks: a
       // calendar duplicate awaiting a merge, or a legacy record's facts.
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      if (await isbnHeldElsewhere(ctx, observation, release, { isbn13: snapshot.isbn13 }, now)) {
         return {
           status: "needsReview",
           changed,

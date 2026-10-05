@@ -297,7 +297,7 @@ export async function applyCatalogTitle(
     if (!changed) return { status: "unchanged", changed: false };
     // An ISBN another Release holds is that book's: none of the record's
     // facts are reconciled onto this link until an Editor resolves the pair.
-    if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+    if (await isbnHeldElsewhere(ctx, observation, release, snapshot, now)) {
       return {
         status: "needsReview",
         changed,
