@@ -171,6 +171,7 @@ function PathShelfView({
               book={slot.book}
               seriesTitle={seriesTitle}
               showCoverage={group.kind === "line"}
+              showPublisher={group.publishers.length > 1}
               overlay={overlay}
               dimUnmarked={dimUnmarked}
               onPrompt={raise}
@@ -198,6 +199,7 @@ function BookShelfItem({
   book,
   seriesTitle,
   showCoverage,
+  showPublisher,
   overlay,
   dimUnmarked,
   onPrompt,
@@ -205,6 +207,7 @@ function BookShelfItem({
   book: Book;
   seriesTitle: string;
   showCoverage: boolean;
+  showPublisher: boolean;
   overlay: SeriesOverlay | null;
   dimUnmarked: boolean;
   onPrompt: (prompts: Partial<ShelfPromptState>) => void;
@@ -262,6 +265,9 @@ function BookShelfItem({
             </>
           ) : null}
         </div>
+        {showPublisher && book.publisher ? (
+          <div className="caption-meta">{book.publisher.name}</div>
+        ) : null}
       </div>
     </div>
   );

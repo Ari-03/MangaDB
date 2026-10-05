@@ -15,6 +15,7 @@ import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { groupEditions } from "./lib/editionGroups";
+import { pathCombination } from "./lib/pathCombination";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { canonicalPublisherFor } from "./lib/publishers";
 import { creditsFor } from "./people";
@@ -705,7 +706,7 @@ export const seriesPage = query({
 
     // The reading paths the page offers; the first path's first book fronts
     // the Series (its cover and social card).
-    const editionGroups = groupEditions(editions);
+    const editionGroups = groupEditions(editions, await pathCombination(ctx, series));
     const volumes = volumeDocs.map((volume) => ({
       publicId: volume.publicId,
       position: volume.position,

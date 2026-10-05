@@ -19,6 +19,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { findEditionGroup } from "../../convex/lib/editionGroups";
 import { track } from "~/lib/analytics";
 import { Cover } from "~/lib/cover";
 import { FollowPrompt, type FollowSuggestion } from "~/lib/follows";
@@ -422,7 +423,9 @@ function PathRow({
       <div className="lib-path-head">
         <span className="lib-path-name">{path.name}</span>
         <span className="lib-path-meta">
-          {path.publisher ? `${path.publisher.name} · ` : ""}
+          {path.publishers.length > 0
+            ? `${path.publishers.map((publisher) => publisher.name).join(" · ")} · `
+            : ""}
           {total !== null
             ? `${held} of ${plural(total, path.kind === "line" ? "book" : "volume", path.kind === "line" ? "books" : "volumes")} ${word}`
             : `${plural(held, "book", "books")} ${word}`}
@@ -536,7 +539,7 @@ function LibraryBookItem({
 function PathExpansion({ pathKey, seriesPublicId }: { pathKey: string; seriesPublicId: number }) {
   const page = useQuery(api.catalog.seriesPage, { publicId: seriesPublicId });
   if (page === undefined) return <p className="placeholder">Loading the run…</p>;
-  const group = page?.editionGroups.find((candidate) => candidate.key === pathKey);
+  const group = page ? findEditionGroup(page.editionGroups, pathKey) : undefined;
   if (!page || !group) {
     return <p className="placeholder">This run is no longer on file.</p>;
   }

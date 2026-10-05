@@ -111,10 +111,10 @@ function Home() {
     <main className="home">
       <section className={hero.length > 0 ? "hero" : "hero hero--solo"}>
         <div className="hero-copy">
-          <h1 className="hero-title">Know what lands on the shelf this week.</h1>
+          <h1 className="hero-title">A place on the internet for your manga shelf.</h1>
           <p className="hero-sub">
-            MangaDB tracks every English manga volume, every edition that collects it, and every
-            release date — so you always know what to buy next and what you already own.
+            Keep track of the volumes you own, the ones you want, and the ones you've read. Discover
+            upcoming English releases and see which volumes each edition collects.
           </p>
           <div className="hero-cta">
             <Link className="btn btn-primary" to="/releases">

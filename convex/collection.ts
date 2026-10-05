@@ -15,7 +15,8 @@ import { requireUser, viewerOrNull } from "./lib/auth";
 import { boundedReads } from "./lib/boundedReads";
 import { releaseCover, statsCoverIsbns } from "./lib/covers";
 import { coveringOf, releasesOf } from "./lib/editionRows";
-import { editionPathKey } from "./lib/editionGroups";
+import { combinedPathFor, editionPathKey, type PathCombination } from "./lib/editionGroups";
+import { pathCombination } from "./lib/pathCombination";
 import { releaseAnchor } from "./lib/titles";
 import { completelyCoveredVolumes, volumeProgressRow } from "./reading";
 
@@ -428,18 +429,26 @@ async function editionRead(
  * facts the shelf shows (title, line numbering, covered Volumes, cover) and
  * the reading-path key it belongs to on its Series page.
  */
-async function libraryBook(ctx: QueryCtx, userId: Id<"users">, release: Doc<"releases">) {
+async function libraryBook(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  release: Doc<"releases">,
+  combinationFor: (publicId: number) => Promise<PathCombination | undefined>,
+) {
   const edition = await getActive(ctx, "editions", release.editionId);
   if (!edition) return null;
   const { title, lineName, coverage, series } = await editionCoverage(ctx, edition);
   if (!series) return null; // nothing to shelve it under (no coverage and no line)
   const publisher = publisherLink(await ctx.db.get(edition.publisherId));
+  const combination = await combinationFor(series.publicId);
+  const combined = combinedPathFor({ publisher, lineName }, combination);
   return {
     series,
-    pathKey: editionPathKey({ publisher, lineName }),
+    pathKey: editionPathKey({ publisher, lineName }, combination),
     pathName: lineName ?? "Standard edition",
     pathKind: lineName === null ? ("standard" as const) : ("line" as const),
-    publisher,
+    publisher: combined?.publishers[0] ?? publisher,
+    publishers: combined?.publishers ?? (publisher ? [publisher] : []),
     editionLineId: edition.editionLineId ?? null,
     book: {
       releaseId: release._id,
@@ -500,6 +509,7 @@ export const myLibrary = query({
       name: string;
       kind: "standard" | "line";
       publisher: { name: string; slug: string } | null;
+      publishers: { name: string; slug: string }[];
       editionLineId: Id<"editionLines"> | null;
       books: LibraryBook[];
     };
@@ -510,6 +520,14 @@ export const myLibrary = query({
     };
     const shelves = new Map<number, SeriesShelf>();
     const bundles = [];
+    const combinations = new Map<number, PathCombination | undefined>();
+    const combinationFor = async (publicId: number) => {
+      if (!combinations.has(publicId)) {
+        const series = await resolveActiveSeries(ctx, publicId);
+        combinations.set(publicId, series ? await pathCombination(ctx, series) : undefined);
+      }
+      return combinations.get(publicId);
+    };
 
     const shelve = async (
       release: Doc<"releases">,
@@ -517,7 +535,7 @@ export const myLibrary = query({
       variantId: Id<"releaseVariants"> | undefined,
       via: LibraryBook["via"],
     ) => {
-      const joined = await libraryBook(ctx, user._id, release);
+      const joined = await libraryBook(ctx, user._id, release, combinationFor);
       if (!joined) return;
       const shelf = shelves.get(joined.series.publicId) ?? {
         seriesPublicId: joined.series.publicId,
@@ -530,6 +548,7 @@ export const myLibrary = query({
         name: joined.pathName,
         kind: joined.pathKind,
         publisher: joined.publisher,
+        publishers: joined.publishers,
         editionLineId: joined.editionLineId,
         books: [],
       };
@@ -623,6 +642,7 @@ export const myLibrary = query({
           name: path.name,
           kind: path.kind,
           publisher: path.publisher,
+          publishers: path.publishers,
           bookCount,
           books: path.books,
         });
