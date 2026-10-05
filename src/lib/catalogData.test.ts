@@ -44,6 +44,7 @@ describe("fetchHomeCatalog", () => {
       },
       { name: "releases:monthBrowse", args: { year: 2026, month: 12, showMature: false } },
       { name: "releases:monthBrowse", args: { year: 2027, month: 1, showMature: false } },
+      { name: "seriesBrowse:facets", args: { showMature: true } },
     ]);
   });
 
