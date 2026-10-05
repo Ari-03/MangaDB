@@ -124,6 +124,27 @@ decision changes if the
 dump grows until reading it up to a late link's first line takes much of
 that link's ten minutes, or if Open Library offers range requests.
 
+## Transitive module preloads
+
+Each route's `modulepreload` list covers every chunk its scripts import
+statically, at any depth (2026-10-05). TanStack Start lists a chunk and its
+direct imports only, so `value`, `validator` and `useParams`, two imports
+below the entry, were found only after their importers ran: one more round
+trip before hydration on every route, 49–128 ms in browser traces of
+staging and production. A Vite plugin pair (`build/transitivePreloads.ts`)
+shows TanStack's manifest capture the whole closure and gives every other
+hook Rolldown's own lists, so client files stay byte-identical; it fails
+the build if the hooks are reordered or a chunk changes in between.
+`build/checkPreloads.ts` checks every route's closure after each build.
+
+Ruled out: one `$initial` chunk group (any app change re-downloads about
+177 KB gzipped instead of about 54 KB), a vendor group (its hash still
+changes with app code, and it pulls feature chunks into every page),
+Rollup's `hoistTransitiveImports` (Rolldown does not support it), patching
+`node_modules`, and re-exports in app source (they cannot reach `value`,
+which the Convex client imports, or `useParams`, which TanStack does).
+Delete the pair once TanStack's preloads follow static imports.
+
 ## Staging
 
 One shared staging environment instead of a deployment per branch. The

@@ -23,7 +23,7 @@
 //
 // Server-only: import it from server modules, server-function handlers,
 // request middleware and createIsomorphicFn().server() only, so it never
-// reaches the browser bundle.
+// reaches the browser bundle (`npm run build` checks: build/checkPreloads.ts).
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /** What a cover check came to: every head answered, at least one threw, or no bucket bound. */
