@@ -283,6 +283,30 @@ links to.
    parser drops or one no longer in the hosted dump, so a hold on such an
    edition stays ([known issues](known-issues.md#catalog-and-imports)).
 
+## Reading Server-Timing
+
+App pages and server-function calls answer with a `Server-Timing` header
+(`src/server/timing.ts`). It holds span names, fixed outcome words and
+integers only:
+
+```
+curl -s -o /dev/null -D - https://mangadb-staging.mangadb.workers.dev/ | grep -i server-timing
+```
+
+| Span | What it covers |
+|---|---|
+| `app` | The Start handler, from the call until it returns its Response. Time before the Worker runs our code, the rest of a streaming body, and transfer are not in it. |
+| `auth` | Clerk's middleware, until it hands the request on. Absent when Clerk is not configured or answered with a handshake redirect. |
+| `cat` | The home page's catalog reads, on a server render. |
+| `cov` | The home jacket check: `complete`, `failed` (an R2 read threw), or `unbound` (no bucket). |
+| `covr2` | R2 heads that check sent; 0 when the isolate's memo answered. |
+
+A Worker's clock moves only across I/O, so spans are elapsed times as
+that clock saw them, not CPU. Render CPU is in Workers Observability. A
+slow first byte with a short `app` was spent outside the measured
+handler: before it (platform dispatch, a cold isolate) or in transfer.
+Cloudflare may add its own entries (`cfL4`, `cfExtPri`) to the header.
+
 ## Account deletion
 
 A user's request (`users.deleteAccount`) sets `deletingSince` on their

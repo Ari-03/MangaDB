@@ -42,6 +42,7 @@ import { env, waitUntil } from "cloudflare:workers";
 
 import type { CoverShelf } from "~/lib/homeShelves";
 import { readEdgeCache } from "~/server/edgeCache";
+import { recordCoverCheck } from "~/server/timing";
 
 const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
 const ISBN13 = /^97[89]\d{10}$/;
@@ -445,18 +446,24 @@ const MEMO_MAX = 20_000;
 /** What this isolate last learned per ISBN, so a warm one rarely asks R2. */
 const onFileMemo = new Map<string, { onFile: boolean; expires: number }>();
 
+/** One `coversOnFile` call's R2 reads, for its Server-Timing span (server/timing.ts). */
+type CheckReads = { heads: number; failed: boolean };
+
 /** Whether R2 holds a jacket for `isbn13`; a failed read is "no", unremembered. */
 async function jacketOnFile(
   bucket: NonNullable<typeof env.COVERS>,
   isbn13: string,
+  reads: CheckReads,
 ): Promise<boolean> {
   const now = Date.now();
   const known = onFileMemo.get(isbn13);
   if (known && known.expires > now) return known.onFile;
   let onFile: boolean;
   try {
+    reads.heads++;
     onFile = (await bucket.head(`${isbn13}.jpg`)) !== null;
   } catch (error) {
+    reads.failed = true;
     console.error("covers: R2 head failed", error);
     return false;
   }
@@ -476,13 +483,21 @@ async function jacketOnFile(
  *
  * Input comes from the client on navigations, so it is bounded and every
  * candidate is checked to be an ISBN-13 before it becomes an R2 key.
+ *
+ * Records the Server-Timing `cov` span (complete, failed when a read threw,
+ * unbound) and `covr2`, the R2 heads it sent; memo hits send none.
  */
 export async function coversOnFile(
   shelves: ReadonlyArray<CoverShelf>,
   origin: string,
 ): Promise<Array<string> | null> {
+  const started = performance.now();
   const bucket = env.COVERS;
-  if (!bucket) return null;
+  if (!bucket) {
+    recordCoverCheck(performance.now() - started, "unbound", 0);
+    return null;
+  }
+  const reads: CheckReads = { heads: 0, failed: false };
   const onFile = new Set<string>();
   const absent = new Set<string>();
   await Promise.all(
@@ -498,7 +513,7 @@ export async function coversOnFile(
         const round = asked.slice(next, next + (seats - seated));
         next += round.length;
         const held = await Promise.all(
-          round.map((isbn) => (isbn === null ? true : jacketOnFile(bucket, isbn))),
+          round.map((isbn) => (isbn === null ? true : jacketOnFile(bucket, isbn, reads))),
         );
         round.forEach((isbn, index) => {
           if (held[index]) seated++;
@@ -507,6 +522,7 @@ export async function coversOnFile(
       }
     }),
   );
+  recordCoverCheck(performance.now() - started, reads.failed ? "failed" : "complete", reads.heads);
   for (const isbn13 of [...absent].slice(0, WARM_LIMIT)) {
     inBackground(
       "jacket warm-up",

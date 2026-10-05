@@ -14,6 +14,7 @@ vi.mock("cloudflare:workers", () => ({
   waitUntil: (promise: Promise<unknown>) => void worker.background.push(promise),
 }));
 const { coverResponse, coversOnFile } = await import("./covers");
+const { timeRequest } = await import("./timing");
 
 // A real-sized jacket (JPEG magic + padding) and the no-art answers.
 const JACKET = new Uint8Array(20_000).fill(7);
@@ -793,5 +794,58 @@ describe("coversOnFile", () => {
     expect(await coversOnFile([shelf], ORIGIN)).toEqual([]);
     expect(await coversOnFile([shelf], ORIGIN)).toEqual([isbn(80)]);
     errors.mockRestore();
+  });
+
+  describe("Server-Timing", () => {
+    /** The cov and covr2 metrics a request running `ask` reports. */
+    const spans = async (ask: () => Promise<unknown>) => {
+      const response = await timeRequest(async () => {
+        await ask();
+        return new Response("ok");
+      });
+      return (response.headers.get("Server-Timing") ?? "")
+        .split(", ")
+        .filter((metric) => metric.startsWith("cov"))
+        .map((metric) => metric.replace(/;dur=[\d.]+/, ""));
+    };
+
+    test("counts the R2 heads actually sent, and none for what it remembers", async () => {
+      const covers = bucket([isbn(90), isbn(92)]);
+      worker.env.COVERS = covers;
+      upstreams = []; // the warm-ups of 91 and 93 find nothing
+      // A shelf of 2 over 4 candidates reads 90, 91, then 92; the second
+      // shelf repeats 90, which the memo now answers.
+      const shelves = [
+        { need: 2, candidates: [isbn(90), isbn(91), isbn(92), isbn(93)] },
+        { need: 1, candidates: [null] },
+      ];
+      expect(await spans(() => coversOnFile(shelves, ORIGIN))).toEqual([
+        'cov;desc="complete"',
+        'covr2;desc="3"',
+      ]);
+      expect(covers.head).toHaveBeenCalledTimes(3);
+      expect(await spans(() => coversOnFile(shelves, ORIGIN))).toEqual([
+        'cov;desc="complete"',
+        'covr2;desc="0"',
+      ]);
+      expect(covers.head).toHaveBeenCalledTimes(3);
+    });
+
+    test("a read that threw makes the check failed", async () => {
+      const covers = bucket([]);
+      covers.head.mockRejectedValueOnce(new Error("r2 down"));
+      worker.env.COVERS = covers;
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(
+        await spans(() => coversOnFile([{ need: 1, candidates: [isbn(95)] }], ORIGIN)),
+      ).toEqual(['cov;desc="failed"', 'covr2;desc="1"']);
+      errors.mockRestore();
+    });
+
+    test("no bucket is unbound, with no head count", async () => {
+      expect(
+        await spans(() => coversOnFile([{ need: 1, candidates: [isbn(97)] }], ORIGIN)),
+      ).toEqual(['cov;desc="unbound"']);
+    });
   });
 });
