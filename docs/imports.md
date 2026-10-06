@@ -719,8 +719,17 @@ from the bare title. A parser change that should reach new conclusions
 about stored editions needs fresh
 dump input, so run the sync again rather than reparsing snapshots. A
 filtered or incomplete dump withdraws nothing. An existing observation
-gains `subtitle` the next time a normal run sees its edition; editions
-with no subtitle, or a joined one, store the same snapshot as before.
+gains `subtitle` the next time a normal run sees its edition. Fresh nonblank
+`physical_format` is also kept verbatim as optional `physicalFormat`.
+Known hardback, hardbound, hard cover, paperback and softcover/back/bound
+aliases normalize to the existing Binding values. Conflicting Binding
+tokens leave that normalized field unknown, while the retained raw field
+lets printing review reject the conflict. Digital format still takes
+priority, and its raw evidence survives. No missing historical field is
+invented; only normal fresh input can supply it. These optional snapshot
+fields need no table/index/backfill or parser-version change. Existing
+internal applyEdition calls without them remain valid; deployment and live
+function-manifest verification belong to the integration rollout.
 
 The raw editions dump is about 10 GB, so filter it offline (publisher
 allowlist, ISBN required) and host the result at any static URL:

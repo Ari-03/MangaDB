@@ -14,6 +14,7 @@
 // title/publisher keys matching needs.
 
 import { v, type Infer } from "convex/values";
+import { bindingFacts } from "./bookFacts";
 import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
 import { parsedTitleFields } from "./catalogTitle";
 import { calendarDay, datePartsValidator, monthFromAbbreviation, type DateParts } from "./dates";
@@ -59,6 +60,8 @@ export const olEditionValidator = v.object({
   isbn10: v.optional(v.string()),
   format: v.union(v.literal("physical"), v.literal("digital")),
   binding: v.optional(v.string()),
+  /** Fresh physical_format verbatim, so normalization cannot hide a second known fact. */
+  physicalFormat: v.optional(v.string()),
   /** The edition's blurb, cleaned to one paragraph. */
   description: v.optional(v.string()),
 });
@@ -220,19 +223,15 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   // Manga-only scope: novels, merchandise, samplers, other-language editions.
   if (outOfScopeReason(`${title}${subtitle ? ` (${subtitle})` : ""}`) !== null) return null;
 
-  const physicalFormat =
-    typeof edition.physical_format === "string" ? edition.physical_format.trim() : "";
+  const rawPhysicalFormat =
+    typeof edition.physical_format === "string" ? edition.physical_format : "";
+  const physicalFormat = rawPhysicalFormat.trim();
   // Audio metadata often lives only in physical_format, not the title.
   // An audiobook must never become a physical manga Release.
   if (/audio|cassette|mp3/i.test(physicalFormat)) return null;
   const digital = DIGITAL_FORMAT.test(physicalFormat);
-  const binding = !digital
-    ? /hardcover/i.test(physicalFormat)
-      ? "hardcover"
-      : /paperback/i.test(physicalFormat)
-        ? "paperback"
-        : undefined
-    : undefined;
+  const bindings = new Set(bindingFacts(physicalFormat));
+  const binding = !digital && bindings.size === 1 ? [...bindings][0] : undefined;
 
   // OpenLibrary often splits a volume title across title + subtitle
   // ("Mashle" + "Magic and Muscles, Vol. 3", "Kingdom" + "Hearts II"). A
@@ -271,6 +270,7 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     ...isbns,
     format: digital ? "digital" : "physical",
     binding,
+    ...(physicalFormat !== "" ? { physicalFormat: rawPhysicalFormat } : {}),
     description: descriptionOf(edition.description),
   };
 }

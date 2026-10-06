@@ -21,6 +21,7 @@ import { type AnnReleaseSnapshot, lineOutOfScope, packagingOf } from "./ann";
 import { getSourceByKey } from "./importSources";
 import { splitReleaseTitle } from "./lib/ann";
 import { nestedLimits, platformStop } from "./lib/bounded";
+import { bindingFacts, bookFacts } from "./lib/bookFacts";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
 import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
 import { labelsEqual } from "./lib/matching";
@@ -56,6 +57,7 @@ type SnapshotFacts = {
   subtitle?: unknown;
   format?: unknown;
   binding?: unknown;
+  physicalFormat?: unknown;
   imprint?: unknown;
   publishers?: unknown;
   category?: unknown;
@@ -85,17 +87,20 @@ function observedDate(s: SnapshotFacts) {
   });
 }
 
-// An ebook as the sources write it: ANN's "eBook 3" designator, Open
-// Library's "Kindle Edition" or "ebook" format, or a title/subtitle
-// stating "(Digital Edition)", "(Digital)" or just "Digital".
-const DIGITAL_TEXT =
-  /\be-?books?\b|\bkindle\b|\bdigital (?:edition|version)\b|(?:^|[([])\s*digital\s*(?:$|[)\]])/i;
-
-/** The record calls the book digital: its format, binding, designator, title or subtitle. */
-function saysDigital(s: SnapshotFacts): boolean {
+/** Dedicated format fields and independently scoped technical title clauses. */
+function saysDigital(s: SnapshotFacts, names: readonly string[]): boolean {
   if (s?.format === "digital") return true;
-  return [s?.binding, s?.title, s?.subtitle, s?.page?.volume, s?.page?.title].some(
-    (text) => typeof text === "string" && DIGITAL_TEXT.test(text),
+  if (
+    [s?.binding, s?.physicalFormat, s?.page?.volume].some(
+      (text) =>
+        typeof text === "string" &&
+        /\be-?books?\b|\bkindle\b|\belectronic\b|\bdigital\b/i.test(text),
+    )
+  )
+    return true;
+  return (
+    [s?.title, s?.page?.title].some((text) => bookFacts(text, names).digital) ||
+    bookFacts(s?.subtitle).digital
   );
 }
 
@@ -265,7 +270,7 @@ type BookReading = {
    * states no Volume anywhere is unknown, never the Release's Volume.
    */
   needsLabel: boolean;
-  /** Its Binding when it says plainly (knownBinding); undefined is unknown. */
+  /** Its agreed known Binding; undefined is unknown. */
   binding: Binding | undefined;
   /** Why it reads as more (or other) than one Volume: any one refuses for now. */
   packaging: string[];
@@ -281,24 +286,12 @@ const BRACKETED = /\[[^\]]*\]/;
 /** The two Bindings a record or Release can state plainly. */
 type Binding = "hardcover" | "paperback";
 
-/**
- * A stated Binding read plainly (the sources and Releases write
- * "hardcover" and "paperback"; "hardback", "softcover" and the like count
- * too), else undefined: unknown, left to the reviewer, never a mismatch.
- */
-function knownBinding(value: unknown): Binding | undefined {
-  if (typeof value !== "string") return undefined;
-  if (/\bhard ?(?:cover|back|bound)\b/i.test(value)) return "hardcover";
-  if (/\b(?:paper ?back|soft ?(?:cover|back|bound))\b/i.test(value)) return "paperback";
-  return undefined;
-}
-
 /** The Binding statements among a title's peeled format tags ("Hardcover", "Trade Paperback"). */
 const titleBindings = (where: string, formatTags: string[]) =>
   formatTags.map((tag) => ({ where: `${where}'s tag "${tag}"`, text: tag }));
 
 /**
- * Every Binding a record states plainly (knownBinding), each with where it
+ * Every Binding a record states plainly, each with where it
  * says so: all of them must agree, and the reading takes their one
  * Binding. A record stating none leaves it unknown.
  */
@@ -307,8 +300,7 @@ function agreedBinding(
   statements: Array<{ where: string; text: unknown }>,
 ): void {
   const stated = statements.flatMap(({ where, text }) => {
-    const binding = knownBinding(text);
-    return binding === undefined ? [] : [{ where, binding }];
+    return bindingFacts(text).map((binding) => ({ where, binding }));
   });
   const [first, ...others] = stated;
   if (first === undefined) return;
@@ -365,7 +357,11 @@ function agreedLabel(
  * (lib/ann.ts readAnnLineTitle and lib/matching.ts sameWorkTitle), this is
  * the one place that reading replaces the work and packaging read here.
  */
-function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
+function readAnnLine(
+  line: AnnReleaseSnapshot,
+  entryName: string,
+  names: readonly string[],
+): BookReading {
   const reading: BookReading = {
     work: line.title,
     label: undefined,
@@ -429,7 +425,14 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
   // read whole when the parser would take a number off it ("Kingdom
   // Hearts II"): ANN's designator, not the title, numbers the book.
   const parsed = parseBookTitle(line.title);
+  const titleFacts = bookFacts(line.title, names);
+  labels.push(...titleFacts.labels.map((label) => ({ where: `its title "${line.title}"`, label })));
+  reading.packaging.push(...titleFacts.packaging);
+  reading.unreadable.push(...titleFacts.unreadable);
   const bindings = titleBindings(`its title "${line.title}"`, parsed.formatTags);
+  bindings.push(
+    ...titleFacts.bindings.map((text) => ({ where: `its title "${line.title}"`, text })),
+  );
   if (parsed.isNovel) reading.scope.push("its title marks a novel");
   if (parsed.packaging !== null || parsed.isBox) {
     reading.packaging.push(`its title "${line.title}"`);
@@ -444,6 +447,15 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
     const split = splitReleaseTitle(page.title, entryName);
     const pageTitle = split?.title ?? page.title;
     const pageParsed = parseBookTitle(pageTitle);
+    const pageFacts = bookFacts(page.title, names);
+    labels.push(
+      ...pageFacts.labels.map((label) => ({ where: `ANN's page title "${page.title}"`, label })),
+    );
+    bindings.push(
+      ...pageFacts.bindings.map((text) => ({ where: `ANN's page title "${page.title}"`, text })),
+    );
+    reading.packaging.push(...pageFacts.packaging);
+    reading.unreadable.push(...pageFacts.unreadable);
     const pageBare = pageParsed.bareNumber || pageParsed.bareRoman;
     const pageWork = pageBare ? pageTitle : pageParsed.seriesTitle;
     if (workKey(pageWork) !== workKey(reading.work)) {
@@ -481,22 +493,24 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
  * keep (Open Library's subtitle "Vol. 1" under the title "Vagabond"): it
  * stands, and is checked against the Release like any other. An explicit
  * title or retained subtitle stating another Volume contradicts it.
- * A Binding is stated by the stored
- * field or by a format tag the parser peels off a title's end. A retained
+ * A Binding is stated by a dedicated
+ * field, a peeled format tag, or an explicit technical clause. A retained
  * subtitle is read separately for explicit Volume, Binding, packaging and
- * scope facts, so a main-title label cannot hide a contrary subtitle. Its
+ * scope facts, so a preferred label cannot hide any later technical clause. Its
  * prose is never appended to work identity here; the producer already
  * retains joined work names in `title`. Legacy missing subtitles supply no
  * new facts, and their stored Volume continues to stand.
  */
-function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): BookReading {
+function readTitledRecord(
+  sourceKey: string,
+  title: string,
+  s: SnapshotFacts,
+  names: readonly string[],
+): BookReading {
   const parsed = parseBookTitle(title);
   const subtitle = nonEmpty(s?.subtitle) ? s.subtitle.trim() : "";
-  // The neutral work prefix lets the shared parser read a standalone
-  // "Vol. 2" or "Volumes 1-2" without any main-title designation winning.
-  // Only explicit facts count: provisional bare numerals and the parsed
-  // subtitle work text never select the work or Volume.
-  const subtitleParsed = subtitle === "" ? null : parseBookTitle(`Book, ${subtitle}`);
+  const titleFacts = bookFacts(title, names);
+  const subtitleFacts = bookFacts(subtitle);
   const reading: BookReading = {
     work: parsed.seriesTitle,
     label: undefined,
@@ -508,34 +522,21 @@ function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): B
   };
   agreedBinding(reading, [
     { where: "its stored binding", text: s?.binding },
+    { where: "its physical format", text: s?.physicalFormat },
     ...titleBindings(`its title "${title}"`, parsed.formatTags),
-    ...titleBindings(`its subtitle "${subtitle}"`, subtitleParsed?.formatTags ?? []),
-    // A subtitle consisting only of a Binding is itself an explicit fact.
-    ...(/^(?:hard ?(?:cover|back|bound)|(?:trade )?paper ?back|soft ?(?:cover|back|bound))$/i.test(
-      subtitle,
-    )
-      ? [{ where: `its subtitle "${subtitle}"`, text: subtitle }]
-      : []),
+    ...titleFacts.bindings.map((text) => ({ where: `its title "${title}"`, text })),
+    ...subtitleFacts.bindings.map((text) => ({ where: `its subtitle "${subtitle}"`, text })),
   ]);
   agreedLabel(reading, [
     { where: `its title "${title}"`, label: parsed.volumeLabel },
     { where: "its stored reading", label: nonEmpty(s?.volumeLabel) ? s.volumeLabel : undefined },
-    {
-      where: `its subtitle "${subtitle}"`,
-      label:
-        subtitleParsed?.bareNumber || subtitleParsed?.bareRoman
-          ? undefined
-          : subtitleParsed?.volumeLabel,
-    },
+    ...titleFacts.labels.map((label) => ({ where: `its title "${title}"`, label })),
+    ...subtitleFacts.labels.map((label) => ({ where: `its subtitle "${subtitle}"`, label })),
   ]);
+  reading.unreadable.push(...titleFacts.unreadable, ...subtitleFacts.unreadable);
+  reading.packaging.push(...titleFacts.packaging, ...subtitleFacts.packaging);
   if (parsed.packaging !== null || parsed.isBox) reading.packaging.push(`its title "${title}"`);
-  if (
-    (subtitleParsed !== null && subtitleParsed.packaging !== null) ||
-    subtitleParsed?.isBox ||
-    BRACKETED.test(subtitle)
-  ) {
-    reading.packaging.push(`its subtitle "${subtitle}"`);
-  }
+  if (BRACKETED.test(subtitle)) reading.packaging.push(`its subtitle "${subtitle}"`);
   if (subtitle !== "") {
     const scope = outOfScopeReason(subtitle);
     if (scope !== null) reading.scope.push(`its subtitle reads ${scope}`);
@@ -600,9 +601,13 @@ async function contentRefusal(
       )
       .unique();
     const entryTitle = (entry?.snapshot as { title?: unknown } | undefined)?.title;
-    reading = readAnnLine(line, nonEmpty(entryTitle) && ownWork(entryTitle) ? entryTitle : "");
+    reading = readAnnLine(
+      line,
+      nonEmpty(entryTitle) && ownWork(entryTitle) ? entryTitle : "",
+      seriesTitles,
+    );
   } else {
-    reading = readTitledRecord(observation.sourceKey, title, s);
+    reading = readTitledRecord(observation.sourceKey, title, s, seriesTitles);
   }
   if (BRACKETED.test(title)) reading.packaging.push(`the bracketed part of "${title}"`);
   if (isNovelTitle(title)) reading.scope.push("its title marks a novel");
@@ -624,7 +629,10 @@ async function contentRefusal(
   if (reading.label === undefined && reading.needsLabel) {
     return "The record states no Volume anywhere (its line, designator, title or page), and its source numbers every book: which Volume it is is unknown.";
   }
-  const target = knownBinding(release.binding);
+  const targets = new Set(bindingFacts(release.binding));
+  if (targets.size > 1)
+    return "The Release states conflicting Binding facts (hardcover and paperback).";
+  const target = [...targets][0];
   if (reading.binding !== undefined && target !== undefined && reading.binding !== target) {
     return `The record is a ${reading.binding} book; the Release is ${target}. Another Binding is another Release, not another printing of this one.`;
   }
@@ -741,7 +749,6 @@ export const decideInternal = internalMutation({
     const decided = decidedIsbn13(snapshot);
     if ("refusal" in decided) return refuse(decided.refusal);
     const { isbn13 } = decided;
-    if (saysDigital(snapshot)) return refuse("The record calls the book digital.");
     const citation = decidedCitationUrl(evidenceUrl, snapshot);
     if ("refusal" in citation) return refuse(citation.refusal);
 
@@ -752,6 +759,14 @@ export const decideInternal = internalMutation({
     if (release.format !== "physical") return refuse("The Release is not physical.");
     const work = await releaseSeries(ctx, release);
     if ("refusal" in work) return refuse(work.refusal);
+    if (
+      saysDigital(
+        snapshot,
+        work.series.map((one) => one.title),
+      )
+    ) {
+      return refuse("The record calls the book digital.");
+    }
     const slot = await slotRefusal(ctx, observation, release, work.series, snapshot);
     if (slot !== null) return refuse(slot);
     const content = await contentRefusal(ctx, observation, release, work.series);

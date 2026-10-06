@@ -369,7 +369,7 @@ describe("the subtitle kept on the snapshot", () => {
     }
   });
 
-  it("stores the same snapshot as before for an edition with no subtitle", () => {
+  it("preserves normalized fields and retains the fresh physical format without a subtitle", () => {
     const snapshot = parseEditionJson(EDITION)!;
     expect(Object.keys(snapshot)).not.toContain("subtitle");
     expect(snapshot).toEqual({
@@ -386,6 +386,7 @@ describe("the subtitle kept on the snapshot", () => {
       isbn10: "1974766519",
       format: "physical",
       binding: "paperback",
+      physicalFormat: "paperback",
     });
   });
 });

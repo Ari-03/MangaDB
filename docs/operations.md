@@ -351,18 +351,28 @@ order:
   like any other. A retained Open Library subtitle is read separately for
   explicit Volume, Binding, format, packaging and scope facts; every fact
   must agree with the main title, stored fields and target. Main-title
-  precedence cannot erase a subtitle counterfact. Subtitle prose alone
-  does not change work identity; a joined work name stays in the producer's
+  precedence cannot erase a subtitle counterfact. The decision reader also
+  reads later technical clauses in joined or main titles, including
+  includes/collects/contains statements and repeated Volume designations.
+  Distinct contents, conflicting labels and explicit unreadable Volume
+  statements refuse on the single-Volume path. Technical clauses start at
+  punctuation/wrappers or another designation; ordinary display prose and
+  words inside the authentic work name are not format facts. Subtitle prose
+  alone does not change work identity; a joined work name stays in the producer's
   title. Legacy snapshots with a lost subtitle supply no invented facts. A
   title ending in a number with no "Vol." ("Kingdom Hearts II") is
   refused, since the number may be the work's own, and so is anything a
   source files as a novel, as another language, or out of scope (a Seven
   Seas or Yen Press category, a stored `outOfScope`). A Binding the record
-  states plainly (hardcover, paperback), in a stored field or as a format
-  tag ending its title ("Vagabond, Vol. 1 (Hardcover)"), that is not the
-  Release's is refused: another Binding is another Release. Statements
-  that disagree are refused as unreadable. A Binding either side leaves
-  unstated is left to the person deciding. Anything that reads as
+  states plainly, including hardback/hardbound and softcover/back/bound,
+  in a dedicated field, an independent clause or a format tag ending its
+  title ("Vagabond, Vol. 1 (Hardcover)"), that is not the Release's is refused: another Binding is another Release. Statements
+  that disagree are refused as unreadable, including opposite tokens in one
+  field or clause. Retained raw physical-format text is checked beside its
+  normalized Binding. Explicit digital format clauses, including Digital
+  Download/Edition/Version, ebook and Kindle, refuse against a physical
+  target. Conflicting known target Bindings also refuse. A Binding either
+  side leaves unstated is left to the person deciding. Anything that reads as
   packaging is refused for now: a multi-Volume designator or stored range,
   a line name or packaging word in the title, or any bracketed part ("[1st
   Ed]"). The Release's Edition must collect exactly one whole Volume (a
