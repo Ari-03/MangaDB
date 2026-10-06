@@ -1132,6 +1132,7 @@ async function repairState(t: TestT) {
       "releases",
       "editions",
       "volumes",
+      "volumeCoverages",
       "releaseBundles",
       "bundleMemberships",
       "bundleConversions",
@@ -1914,7 +1915,7 @@ it("R3 a genuinely unstated box range requires exact contents review without ove
 });
 
 it.each(["heldBooks", "printings"] as const)(
-  "packaged Hardcover identity is enforced through %s and matching Hardcover still links",
+  "packaged binding and covered work are enforced through %s and matching contents still link",
   async (route) => {
     const t = makeT({ transactionLimits: true });
     await admin(t);
@@ -1932,8 +1933,10 @@ it.each(["heldBooks", "printings"] as const)(
         name: "Deluxe Edition",
       });
       const editionId = await insertEdition(ctx, { publisherId, editionLineId });
+      const volumeIds: Id<"volumes">[] = [];
       for (let n = 1; n <= 2; n++) {
         const volumeId = await insertVolume(ctx, { seriesId, label: String(n), position: n });
+        volumeIds.push(volumeId);
         await ctx.db.insert("volumeCoverages", {
           editionId,
           volumeId,
@@ -1967,7 +1970,7 @@ it.each(["heldBooks", "printings"] as const)(
         seriesId,
         heldAt: 10,
       });
-      return { releaseId, observationId };
+      return { releaseId, observationId, seriesId, editionId, volumeIds };
     });
     const args = {
       observationId: s.observationId,
@@ -1977,11 +1980,12 @@ it.each(["heldBooks", "printings"] as const)(
       await refusedLink(t, args, /binding/i);
     } else {
       const before = await repairState(t);
-      const preview = await t.query(internal.printings.linkHeldStateInternal, s);
+      const oldArgs = { observationId: s.observationId, releaseId: s.releaseId };
+      const preview = await t.query(internal.printings.linkHeldStateInternal, oldArgs);
       expect(preview.refusal).toMatch(/binding/i);
       expect(preview.guard).not.toBeNull();
       const result = await t.mutation(internal.printings.linkHeldInternal, {
-        ...s,
+        ...oldArgs,
         actor: "ari",
         expected: preview.guard!,
         reason,
@@ -1991,6 +1995,71 @@ it.each(["heldBooks", "printings"] as const)(
       expect(await repairState(t)).toEqual(before);
     }
     await t.run((ctx) => ctx.db.patch(s.releaseId, { binding: "hardcover" }));
+    const foreign = await t.run(async (ctx) => {
+      const seriesId = await insertSeries(ctx, { title: "Fire Force" });
+      const volumeId = await insertVolume(ctx, { seriesId, label: "2", position: 2 });
+      return { seriesId, volumeId };
+    });
+    // Supported coverage repair can preserve labels while changing the actual work.
+    const remapped = await t.mutation(internal.repair.runBatch, {
+      actor: "ari",
+      dryRun: false,
+      entries: [
+        {
+          kind: "setCoverage",
+          key: "lovecraft-wrong-covered-work",
+          reason,
+          editionId: s.editionId,
+          before: s.volumeIds,
+          coverage: [
+            { seriesId: s.seriesId, label: "1", extent: "complete" },
+            { seriesId: foreign.seriesId, label: "2", extent: "complete" },
+          ],
+          line: null,
+          retireVolumeIds: [],
+        },
+      ],
+    });
+    expect(remapped[0]!.status).toBe("applied");
+    if (route === "heldBooks") {
+      await refusedLink(t, args, /another work/i);
+    } else {
+      const before = await repairState(t);
+      const oldArgs = { observationId: s.observationId, releaseId: s.releaseId };
+      const preview = await t.query(internal.printings.linkHeldStateInternal, oldArgs);
+      expect(preview.refusal).toMatch(/another work/i);
+      const result = await t.mutation(internal.printings.linkHeldInternal, {
+        ...oldArgs,
+        actor: "ari",
+        expected: preview.guard!,
+        reason,
+        evidenceUrls: [lovecraftRecord.url],
+      });
+      expect(result.status).toBe("refused");
+      expect(await repairState(t)).toEqual(before);
+    }
+    const restored = await t.mutation(internal.repair.runBatch, {
+      actor: "ari",
+      dryRun: false,
+      entries: [
+        {
+          kind: "setCoverage",
+          key: "lovecraft-correct-covered-work",
+          reason,
+          editionId: s.editionId,
+          before: [s.volumeIds[0]!, foreign.volumeId],
+          coverage: s.volumeIds.map((_, i) => ({
+            seriesId: s.seriesId,
+            label: String(i + 1),
+            extent: "complete" as const,
+          })),
+          line: null,
+          retireVolumeIds: [],
+        },
+      ],
+    });
+    expect(restored[0]!.status).toBe("applied");
+    const proposalsBeforeLink = await t.run((ctx) => ctx.db.query("proposals").collect());
     if (route === "heldBooks") {
       const preview = await t.query(internal.heldBooks.previewInternal, args);
       expect(preview.refusal).toBeNull();
@@ -2007,12 +2076,13 @@ it.each(["heldBooks", "printings"] as const)(
         ).status,
       ).toBe("applied");
     } else {
-      const preview = await t.query(internal.printings.linkHeldStateInternal, s);
+      const oldArgs = { observationId: s.observationId, releaseId: s.releaseId };
+      const preview = await t.query(internal.printings.linkHeldStateInternal, oldArgs);
       expect(preview.refusal).toBeNull();
       expect(
         (
           await t.mutation(internal.printings.linkHeldInternal, {
-            ...s,
+            ...oldArgs,
             actor: "ari",
             expected: preview.guard!,
             reason,
@@ -2029,7 +2099,9 @@ it.each(["heldBooks", "printings"] as const)(
       expect(await ctx.db.query("placementHolds").collect()).toHaveLength(0);
       expect((await ctx.db.get(s.releaseId))?.binding).toBe("hardcover");
       expect(await ctx.db.query("heldRepairLedger").collect()).toHaveLength(1);
-      expect(await ctx.db.query("proposals").collect()).toHaveLength(1);
+      expect(await ctx.db.query("proposals").collect()).toHaveLength(
+        proposalsBeforeLink.length + 1,
+      );
     });
   },
 );

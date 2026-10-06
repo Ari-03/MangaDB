@@ -595,6 +595,8 @@ async function sourceContentsMatch(
   routed: Awaited<ReturnType<typeof reviewedRouting>>,
 ) {
   const actual = contents.flatMap((content) => content.contents);
+  if (actual.some((content) => content.work._id !== series._id))
+    return refuse("Complete canonical contents belong to another work.");
   const proof = state.reviewed;
   const s = state.observation.snapshot as {
     title?: string;
