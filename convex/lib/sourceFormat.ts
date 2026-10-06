@@ -312,7 +312,7 @@ function literalJson(excerpt: string): unknown {
  * the fields its own metadata attaches to that SKU. A novel, another ISBN on
  * the page or a related product never qualifies.
  */
-function distributorRefusal(p: DistributorEvidence, s: OlEditionSnapshot): string | null {
+export function distributorRefusal(p: DistributorEvidence, s: OlEditionSnapshot): string | null {
   const sections = p.distributor === "bookwalker" ? [p.product, p.breadcrumbs] : [p.mediaItems];
   if (sections.some((one) => utf8Bytes(one.excerpt) > 8 * 1024))
     return "Distributor evidence section exceeds 8 KiB.";
@@ -386,6 +386,10 @@ function distributorRefusal(p: DistributorEvidence, s: OlEditionSnapshot): strin
       ? formats.filter((format) => at(format, "id") === "ebook-overdrive")
       : [];
     const ebookIds = at(ebook[0], "identifiers");
+    // Series metadata is optional: the title below must name the Volume anyway.
+    // Absent, it proves nothing; present, its reading order must agree.
+    const series = at(item, "detailedSeries");
+    const order = at(series, "readingOrder");
     if (
       !items ||
       typeof items !== "object" ||
@@ -406,10 +410,10 @@ function distributorRefusal(p: DistributorEvidence, s: OlEditionSnapshot): strin
       !Array.isArray(bisac) ||
       bisac.length === 0 ||
       !bisac.every((code) => typeof code === "string" && /^CGN004\d{3}$/.test(code)) ||
-      typeof at(item, "detailedSeries", "readingOrder") !== "string" ||
-      !labelsEqual(String(at(item, "detailedSeries", "readingOrder")), s.volumeLabel ?? null)
+      (series !== undefined &&
+        (typeof order !== "string" || !labelsEqual(order, s.volumeLabel ?? null)))
     )
-      return "Distributor subjects must file this SKU as manga in its Volume's reading order.";
+      return "Distributor subjects must file this SKU as manga, in its Volume's reading order when stated.";
   }
 
   const slug =
@@ -505,7 +509,7 @@ function shopifyRefusal(p: ShopifyEvidence, s: OlEditionSnapshot): string | null
     return "Store tags must state the reviewed file format, imprint and publication date.";
   if (
     !tags.some((tag) => /^(?:bic|bisac)\b/i.test(tag) && /\bmanga\b/i.test(tag)) ||
-    tags.some((tag) => /\b(?:light )?novels?\b/i.test(tag) && !/graphic novels?/i.test(tag))
+    tags.some((tag) => /\b(?:light )?novels?\b/i.test(tag) && !/graphic[ -]novels?/i.test(tag))
   )
     return "Store subjects must file this SKU as manga.";
 

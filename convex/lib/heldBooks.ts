@@ -17,7 +17,7 @@ import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
 import { bindingFacts, bookFacts, takesFormatSlot } from "./bookFacts";
 import { labelsEqual, sameWorkTitle, type TitleScan } from "./matching";
-import { type AnnWorkContext, declaredWorkNames } from "./declaredWork";
+import { type WorkContext, declaredWorkNames } from "./declaredWork";
 import { holdOf } from "./observations";
 import type { OlEditionSnapshot } from "./openLibrary";
 import { findPublisherByName, siblingEditions } from "./pipeline";
@@ -286,11 +286,24 @@ export async function sourceSeries(
   return { series: await r.active(parent.recordRef.id), placement: null, parent };
 }
 
+/**
+ * Declared names of a non-ANN source's independently resolved Series (Open
+ * Library title resolution or Kodansha parent), never the ISBN holder's.
+ */
+function declaredWorkContext(
+  state: Awaited<ReturnType<typeof heldState>>,
+  series: Doc<"series">,
+): WorkContext | undefined {
+  if (state.observation.sourceKey === "ann" || state.source.series?._id !== series._id)
+    return undefined;
+  return { seriesId: series._id, names: declaredWorkNames(state.source.series), parentTitle: null };
+}
+
 /** Names belong to the verified current survivor, never the ISBN holder or parent aliases. */
 function annWorkContext(
   state: Awaited<ReturnType<typeof heldState>>,
   series: Doc<"series">,
-): AnnWorkContext | undefined {
+): WorkContext | undefined {
   if (
     state.observation.sourceKey !== "ann" ||
     !state.source.parent ||
@@ -368,7 +381,9 @@ export async function contentMatch(
   };
   if (s.format !== target.release.format) return refuse("Source and target formats disagree.");
   const selected = target.series.find((one) => one._id === state.source.series?._id);
-  const context = selected ? annWorkContext(state, selected) : undefined;
+  const context = selected
+    ? (annWorkContext(state, selected) ?? declaredWorkContext(state, selected))
+    : undefined;
   const ordinary = await contentRefusal(ctx, observation, target.release, target.series, context);
   if (!ordinary) return;
   if (observation.sourceKey !== "ann") return refuse(ordinary);

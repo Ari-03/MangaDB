@@ -24,6 +24,7 @@ import { nonAnnAliasCases } from "./test.heldNonAnnAliases";
 import { annContentFacts } from "./lib/ann";
 import { parseEditionJson } from "./lib/openLibrary";
 import {
+  distributorRefusal,
   projectSourceFormat,
   reviewedFormatRefusal,
   type ReviewedFormat,
@@ -32,6 +33,7 @@ import { valueHash } from "./lib/values";
 import {
   distributorFormatEvidence,
   gachaPhysicalGraph,
+  missingOrderEvidence,
   sourceFormatEvidence,
 } from "./test.sourceFormats";
 import { placementChanged, placementView } from "./placement";
@@ -262,6 +264,50 @@ describe("reviewed non-ANN canonical work aliases", () => {
       reviewed: { ...args.reviewed, sourceTitle: title },
     });
     expect(wrongPart.refusal).toMatch(/parent Series disagrees/);
+  });
+
+  it("links real Inu-Yasha Vol. 7 by exact ISBN through the independently resolved Series' declared name", async () => {
+    const row = nonAnnAliasCases.find((one) => one.source.title === "Inu-Yasha, Vol. 7")!;
+    const t = makeT();
+    const s = await nonAnnAlias(t, row);
+    const args = {
+      observationId: s.observationId,
+      target: { type: "release" as const, id: s.releaseId },
+    };
+    const preview = await t.query(internal.heldBooks.previewInternal, args);
+    expect(preview.refusal).toBeNull();
+
+    // Without the declaration the source no longer resolves to the Series.
+    await t.run((ctx) => ctx.db.patch(s.seriesId, { altTitles: [] }));
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toMatch(
+      /not the Release's Series/,
+    );
+    await t.run((ctx) => ctx.db.patch(s.seriesId, { altTitles: row.series.altTitles }));
+
+    // The declared name never excuses another Volume.
+    await t.run((ctx) =>
+      ctx.db.patch(s.observationId, {
+        snapshot: { ...row.source, title: "Inu-Yasha, Vol. 8", volumeLabel: "8" },
+      }),
+    );
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).not.toBeNull();
+    await t.run((ctx) => ctx.db.patch(s.observationId, { snapshot: row.source }));
+
+    const applied = await t.mutation(internal.heldBooks.executeInternal, {
+      ...args,
+      actor: "ari",
+      expected: preview.expected!,
+      operation: "link",
+      reason,
+      evidenceUrls: [row.source.url],
+    });
+    expect(applied.status).toBe("applied");
+    await t.run(async (ctx) => {
+      const observation = (await ctx.db.get(s.observationId))!;
+      expect(observation.snapshot).toEqual(row.source);
+      expect(observation.recordRef).toEqual({ type: "release", id: s.releaseId });
+      expect(await ctx.db.get(s.holdId)).toBeNull();
+    });
   });
 });
 
@@ -2781,6 +2827,35 @@ describe("reviewed OL inferred physical-to-digital workflows", () => {
         publisher: { ...spear.reviewed.publisher, isbn13: hina.reviewed.isbn13 },
       }),
     ).toMatch(/exact ISBN/);
+  });
+  it("accepts an own OverDrive SKU without series metadata, where its title names the Volume", async () => {
+    const { snapshot, publisher } = missingOrderEvidence;
+    expect(await sha(publisher.mediaItems.excerpt)).toBe(publisher.mediaItems.sectionSha256);
+    expect(publisher.mediaItems.excerpt).not.toContain("detailedSeries");
+    expect(distributorRefusal(publisher, snapshot)).toBeNull();
+    // Another Volume's record is still refused by the title.
+    expect(
+      distributorRefusal(publisher, {
+        ...snapshot,
+        title: "Hinamatsuri Volume 17",
+        volumeLabel: "17",
+      }),
+    ).toMatch(/work and Volume/);
+    // Stated series metadata must agree: Tendo's real Volume 1 order contradicts it.
+    const tendo = distributorFormatEvidence[3].reviewed.publisher;
+    if (tendo.distributor !== "overdrive") throw new Error("Tendo is OverDrive.");
+    const order = /"detailedSeries":\{[^}]*\}/.exec(tendo.mediaItems.excerpt)![0];
+    const stated = publisher.mediaItems.excerpt.replace(
+      '"sampleIsODR":true',
+      `${order},"sampleIsODR":true`,
+    );
+    expect(stated).not.toBe(publisher.mediaItems.excerpt);
+    expect(
+      distributorRefusal(
+        { ...publisher, mediaItems: { ...publisher.mediaItems, excerpt: stated } },
+        snapshot,
+      ),
+    ).toMatch(/reading order/);
   });
   it("audits correction without changing raw facts or the hold, retains equal refetch/backfill, then creates a distinct digital Release", async () => {
     const t = makeT();

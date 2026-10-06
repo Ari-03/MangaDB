@@ -1,4 +1,4 @@
-// Saved public bytes for two held Tokyopop PDFs, captured 2026-10-06: the
+// Saved public bytes for held Tokyopop PDFs, captured 2026-10-06: the
 // Open Library edition JSON and the product object Tokyopop's own Shopify
 // store returns for each exact PDF SKU, sliced from its products.json page
 // (status 200, 542344 bytes) at the recorded byte range. Source:
@@ -55,6 +55,36 @@ export const tokyopopPdfEvidence = [
       digitalFileFormat: "pdf" as const,
       imprint: "TOKYOPOP",
       publishDate: { year: 2020, month: 4, day: 10 },
+    },
+  },
+  {
+    wire: '{"type": {"key": "/type/edition"}, "authors": [{"key": "/authors/OL5486386A"}, {"key": "/authors/OL744088A"}], "isbn_13": ["9781427864529"], "languages": [{"key": "/languages/eng"}], "pagination": "192", "publish_date": "2020", "publishers": ["TOKYOPOP, Incorporated"], "source_records": ["bwb:9781427864529"], "title": "I Luv Halloween, Volume 1", "full_title": "I Luv Halloween, Volume 1", "works": [{"key": "/works/OL35766056W"}], "key": "/books/OL49269695M", "latest_revision": 1, "revision": 1, "created": {"type": "/type/datetime", "value": "2023-08-17T03:46:31.210724"}, "last_modified": {"type": "/type/datetime", "value": "2023-08-17T03:46:31.210724"}}',
+    olUrl: "https://openlibrary.org/books/OL49269695M.json",
+    olFetchedAt: 1791322334612,
+    olBodySha256: "fddb61f81706a7769ec4d7e1801a5e10f9f60410ae4a76afaf04520fe1d99899",
+    product: {
+      kind: "publisherOwnShopifySkuEbook",
+      isbn13: "9781427864529",
+      sku: "9781427864529",
+      url: "https://tokyopop.com/products.json?limit=250&page=5",
+      httpStatus: 200,
+      fetchedAt: 1791309620894,
+      bodySha256: "b48306099b18e70192098d34e8c25c8f201f343870577803ee58fb9b04c0fdfa",
+      bodyBytes: 525960,
+      product: {
+        sectionSha256: "fee05225ed17551d256ebe4cd7ac3d97be9fcb95f72889f561ea0b9870cb972c",
+        byteStart: 263453,
+        byteEndExclusive: 265863,
+        excerpt:
+          '{"id":7611340521659,"title":"I Luv Halloween, Volume 1","handle":"9781427864529_i-luv-halloween-volume-1","body_html":"\\u003cdiv\\u003eHalloween has always been and always will be about one thing: getting the best CANDY. And, some fiendish friends excel at tricks if they don\'t get the right treats. When these gremlins receive a frickin\' apple at their first house of the night, they plan deadly revenge on the offending fruit-favoring old-timer. Join the misadventures of a group of particularly disturbing trick-or-treaters as they go about their macabre business on Halloween night.  Believing that the apples they received at their first house of the night are the cause of the bad candy they\'ve been receiving, the kids plot deadly revenge on the old lady who handed out the cursed fruit.                                                                                                             Colored by Michael Kellaher, Kyle Foster and Glasshouse Graphics.  \\u003c\\/div\\u003e","published_at":"2022-08-10T15:11:13-07:00","created_at":"2022-08-10T15:11:16-07:00","updated_at":"2026-10-06T11:00:21-07:00","vendor":"Keith Giffen","product_type":"eBook","tags":["bic FXA:Fiction \\u0026 related items \\/ Graphic novels: Manga","bisac:COMICS \\u0026 GRAPHIC NOVELS \\/ General","contributor:Benjamin Roman","contributor:Glasshouse Graphics","contributor:Keith Giffen","contributor:Kyle Foster","contributor:Michael Kellaher","format-detail:PDF","format:eBook","imprint:TOKYOPOP Classics","price:7.99","publication-date:2020-04-14","publisher:TOKYOPOP","series:i-luv-halloween-graphic-novel","type:Nonfiction"],"variants":[{"id":43222341025979,"title":"Default Title","option1":"Default Title","option2":null,"option3":null,"sku":"9781427864529","requires_shipping":false,"taxable":true,"featured_image":null,"available":true,"price":"7.99","grams":0,"compare_at_price":null,"position":1,"product_id":7611340521659,"created_at":"2022-08-10T15:11:17-07:00","updated_at":"2026-10-06T11:00:21-07:00"}],"images":[{"id":34575606874299,"created_at":"2023-06-18T19:53:44-07:00","position":1,"updated_at":"2026-04-10T14:57:12-07:00","product_id":7611340521659,"variant_ids":[],"src":"https:\\/\\/cdn.shopify.com\\/s\\/files\\/1\\/0599\\/7114\\/1819\\/products\\/9781427864529_51691942-d8e8-4965-9306-6b0062457336.jpg?v=1775858232","width":432,"height":648}],"options":[{"name":"Title","position":1,"values":["Default Title"]}]}',
+      },
+      digitalFileFormat: "pdf",
+      imprint: "TOKYOPOP Classics",
+      publishDate: {
+        year: 2020,
+        month: 4,
+        day: 14,
+      },
     },
   },
 ] as const;

@@ -25,7 +25,7 @@ import { makeT, type TestT } from "./test.helpers";
 import { insertBook } from "./test.moderation";
 import { dramaconEpubPrhFormat, tokyopopPdfEvidence } from "./test.tokyopopDigital";
 
-const [dramacon, darkMetro] = tokyopopPdfEvidence;
+const [dramacon, darkMetro, halloween] = tokyopopPdfEvidence;
 type Evidence = (typeof tokyopopPdfEvidence)[number];
 
 const sha = async (text: string) =>
@@ -200,6 +200,17 @@ const run = (t: TestT, entries: RepairEntry[]) =>
   t.mutation(internal.repair.runBatch, { entries, dryRun: false, actor: "ari" });
 
 describe("Tokyopop store-product PDFs", () => {
+  it("accepts I Luv Halloween's real graphic-novel series tag as manga", async () => {
+    expect(await sha(halloween.wire)).toBe(halloween.olBodySha256);
+    expect(await sha(halloween.product.product.excerpt)).toBe(
+      halloween.product.product.sectionSha256,
+    );
+    expect(JSON.parse(halloween.product.product.excerpt).tags).toContain(
+      "series:i-luv-halloween-graphic-novel",
+    );
+    expect(refusalFor(halloween, reviewedFor(halloween))).toBeNull();
+  });
+
   it("checks the saved bytes and refuses another SKU's product, imprint or file format", async () => {
     for (const row of tokyopopPdfEvidence) {
       expect(await sha(row.wire)).toBe(row.olBodySha256);

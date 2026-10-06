@@ -1,3 +1,5 @@
+import type { OlEditionSnapshot } from "./lib/openLibrary";
+
 // Saved public OL bodies and exact publisher sections, captured 2026-10-06.
 // Source: source-format-guard-plan-r1 and format-slot-evidence-r1 review artifacts.
 // No live IDs; graph dependencies are remapped by the workflow factory.
@@ -483,3 +485,44 @@ export const distributorFormatEvidence = [
     },
   },
 ] as const;
+
+// One Peace's own OverDrive SKU for Hinamatsuri Volume 16, whose metadata has no
+// detailedSeries, captured 2026-10-06 with its full body retained
+// (r13 onepeace-sku-index, od-sku-9099449.body). The snapshot is the held OL
+// record's stored normalized source (r11 one-peace-2).
+const missingOrderSnapshot: OlEditionSnapshot = {
+  format: "physical",
+  isbn13: "9781642732269",
+  key: "/books/OL38904571M",
+  kind: "olEdition",
+  multiVolume: false,
+  publishDate: {
+    year: 2022,
+  },
+  publishers: ["One Peace Books, Incorporated"],
+  seriesTitle: "Hinamatsuri",
+  title: "Hinamatsuri Volume 16",
+  url: "https://openlibrary.org/books/OL38904571M",
+  volumeLabel: "16",
+};
+export const missingOrderEvidence = {
+  snapshot: missingOrderSnapshot,
+  publisher: {
+    kind: "primaryDigitalDistributorOwnSku",
+    distributor: "overdrive",
+    isbn13: "9781642732269",
+    sku: "9099449",
+    url: "https://freelibrary.overdrive.com/media/9099449",
+    httpStatus: 200,
+    fetchedAt: 1791325092815,
+    bodySha256: "5eaec170ad2807df0932ac70dc66846efae115d86010bd8a4cb495b5886f2b47",
+    bodyBytes: 113351,
+    mediaItems: {
+      sectionSha256: "193fcac9248fb30e60927c421bf59c054b81aa6810483237fe3f5b7c70a7182a",
+      byteStart: 5716,
+      byteEndExclusive: 11179,
+      excerpt:
+        '{"9099449":{"reserveId":"6ae3f3b0-26ea-45e1-9d52-24980bd5089c","subjects":[{"id":"12","name":"Comic and Graphic Books"},{"id":"24","name":"Fantasy"},{"id":"123","name":"Humor (Fiction)"},{"id":"127","name":"Young Adult Fiction"}],"bisacCodes":["CGN004250","CGN004290"],"bisac":[{"code":"CGN004250","description":"Comics & Graphic Novels / Manga / Humorous"},{"code":"CGN004290","description":"Comics & Graphic Novels / Manga / Supernatural"}],"levels":[],"creators":[{"id":1835231,"name":"Masao Ohtake","role":"Author","sortName":"Ohtake, Masao","roleDiscipline":"Text","intelligenceType":"Unknown"}],"languages":[{"id":"en","name":"English"}],"isBundledChild":false,"ratings":{"maturityLevel":{"id":"youngadult","name":"Young adult"},"naughtyScore":{"id":"YoungAdult","name":"Young adult"}},"constraints":{"isDisneyEulaRequired":false},"reviewCounts":{"premium":0,"publisherSupplier":0},"isAvailable":true,"isPreReleaseTitle":false,"estimatedReleaseDate":"2022-08-16T04:00:00Z","sample":{"href":"https://samples.overdrive.com/?crid=6ae3f3b0-26ea-45e1-9d52-24980bd5089c&.epub-sample.overdrive.com"},"publisher":{"id":"269108","name":"One Peace Ebooks"},"description":"<p>apan is on the edge of a new era, and Nitta the Monster has one final piece of business to take care of: making amends with Anzu.\\nHe can\'t stop thinking about the countless evenings he\'s enjoyed at the cart over a steaming bowl of ramen, and he\'s prepared to do whatever it takes to reclaim that tiny taste of how great fatherhood can be.\\nMeanwhile, the hilarious confrontations continue, this time with Hina vs. Haru, Mika Nitta vs. the Teihen High Karate Club, and Mao vs. the entire Way of the Supreme Fist.\\nPrepare for showdowns galore in this action-packed new volume of Hinamatsuri!","availableCopies":1,"ownedCopies":1,"luckyDayAvailableCopies":0,"luckyDayOwnedCopies":0,"holdsCount":0,"holdsRatio":0,"estimatedWaitDays":14,"isFastlane":false,"availabilityType":"normal","isRecommendableToLibrary":true,"isOwned":true,"isHoldable":true,"isAdvantageFiltered":false,"isRestricted":false,"visitorEligible":false,"juvenileEligible":false,"youngAdultEligible":false,"contentAccessLevels":0,"classifications":{},"type":{"id":"ebook","name":"eBook"},"covers":{"cover150Wide":{"href":"https://img3.od-cdn.com/ImageType-150/2320-1/{6AE3F3B0-26EA-45E1-9D52-24980BD5089C}IMG150.JPG","height":200,"width":150,"primaryColor":{"hex":"#F9E4A3","rgb":{"red":249,"green":228,"blue":163}},"isPlaceholderImage":false},"cover300Wide":{"href":"https://img1.od-cdn.com/ImageType-400/2320-1/{6AE3F3B0-26EA-45E1-9D52-24980BD5089C}IMG400.JPG","height":400,"width":300,"primaryColor":{"hex":"#F8E098","rgb":{"red":248,"green":224,"blue":152}},"isPlaceholderImage":false},"cover510Wide":{"href":"https://img2.od-cdn.com/ImageType-100/2320-1/{6AE3F3B0-26EA-45E1-9D52-24980BD5089C}IMG100.JPG","height":680,"width":510,"primaryColor":{"hex":"#F6DE96","rgb":{"red":246,"green":222,"blue":150}},"isPlaceholderImage":false}},"id":"9099449","firstCreatorName":"Masao Ohtake","firstCreatorId":1835231,"firstCreatorSortName":"Ohtake, Masao","title":"Hinamatsuri Volume 16","sortTitle":"Hinamatsuri Volume 16","starRating":5,"starRatingCount":1,"publishDate":"2022-08-16T00:00:00Z","publishDateText":"08/16/2022","dateContentReceivedUTC":"2022-07-01T17:23:58Z","formats":[{"identifiers":[{"type":"ASIN","value":"B0FVB5T5YF"}],"rights":[{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-1","valueText":"Kindle 1","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-2","valueText":"Kindle 2","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-dx","valueText":"Kindle DX","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-keyboard","valueText":"Kindle Keyboard","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-4","valueText":"Kindle 4","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-touch","valueText":"Kindle Touch","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-5","valueText":"Kindle 5","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-paperwhite","valueText":"Kindle Paperwhite","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-7","valueText":"Kindle 7","drmType":"Light"},{"type":"UnsupportedKindleDevice","typeText":"Unsupported kindle device","value":"kindle-voyage","valueText":"Kindle Voyage","drmType":"Light"}],"onSaleDateUtc":"2022-08-16T04:00:00+00:00","hasAudioSynchronizedText":false,"isBundleParent":false,"bundledContent":[],"fulfillmentType":"kindle","id":"ebook-kindle","name":"Kindle Book"},{"identifiers":[{"type":"ISBN","value":"9781642732269"}],"rights":[],"onSaleDateUtc":"2022-08-16T04:00:00+00:00","hasAudioSynchronizedText":false,"isBundleParent":false,"isbn":"9781642732269","bundledContent":[],"sample":{"href":"https://samples.overdrive.com/?crid=6ae3f3b0-26ea-45e1-9d52-24980bd5089c&.epub-sample.overdrive.com"},"fulfillmentType":"bifocal","id":"ebook-overdrive","name":"OverDrive Read"}],"publisherAccount":{"accessId":0,"id":"6076","name":"SCB Distributors"},"sampleIsODR":true}}',
+    },
+  },
+} as const;

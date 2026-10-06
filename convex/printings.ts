@@ -29,7 +29,7 @@ import { bindingFacts, bookFacts } from "./lib/bookFacts";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
 import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
 import { labelsEqual, sameWorkTitle } from "./lib/matching";
-import type { AnnWorkContext } from "./lib/declaredWork";
+import type { WorkContext } from "./lib/declaredWork";
 import { canonicalRecord, mergeSurvivor } from "./lib/merges";
 import { holdOf } from "./lib/observations";
 import { findPublisherByName, toPartialDate } from "./lib/pipeline";
@@ -368,7 +368,7 @@ function readAnnLine(
   line: AnnReleaseSnapshot,
   entryName: string,
   names: readonly string[],
-  annContext?: AnnWorkContext,
+  annContext?: WorkContext,
 ): BookReading {
   const reading: BookReading = {
     work: line.title,
@@ -590,7 +590,7 @@ export async function readObservationBook(
   observation: Doc<"sourceObservations">,
   series: Array<Doc<"series">>,
   workTitles: readonly string[] = series.map((one) => one.title),
-  annContext?: AnnWorkContext,
+  annContext?: WorkContext,
 ): Promise<BookReading> {
   const projection = projectSourceFormat(observation);
   const s = (
@@ -651,24 +651,23 @@ export async function readObservationBook(
  * Series by ID (a Series merely titled the same is another work). An
  * Edition Line member with only that Volume counts. Packaging is refused
  * whole for now: a packaged printing waits until its line, position and
- * coverage can be compared with the Edition's.
+ * coverage can be compared with the Edition's. A held caller that resolved
+ * the source to one of those Series independently supplies workContext, and
+ * the record may then name that Series by any of its current declared names.
  */
 export async function contentRefusal(
   ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
   series: Array<Doc<"series">>,
-  annContext?: AnnWorkContext,
+  workContext?: WorkContext,
 ): Promise<string | null> {
   const projection = projectSourceFormat(observation);
   if (projection.status === "stale") return projection.reason;
   const title = (projection.snapshot as SnapshotFacts)?.title;
   if (typeof title !== "string" || title.trim() === "")
     return "The record gives no title to read the book from.";
-  const context =
-    observation.sourceKey === "ann" && series.some((one) => one._id === annContext?.seriesId)
-      ? annContext
-      : undefined;
+  const context = series.some((one) => one._id === workContext?.seriesId) ? workContext : undefined;
   const seriesTitles = context?.names ?? series.map((one) => one.title);
   const ownWork = (work: string) => seriesTitles.some((t) => sameWorkTitle(t, work));
   const reading = await readObservationBook(ctx, observation, series, seriesTitles, context);
