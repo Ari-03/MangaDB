@@ -1,8 +1,15 @@
+import {
+  projectSourceFormat,
+  reviewedFormatRefusal,
+  utf8Bytes,
+  type ReviewedFormat,
+} from "./sourceFormat";
+import { resolveBaseSeries } from "./catalogTitle";
 import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { type AnnReleaseSnapshot, lineOutOfScope } from "../ann";
-import { placeEdition } from "../openLibrary";
+import { placeEdition, REBINDER } from "../openLibrary";
 import { contentRefusal, readObservationBook, readTitledRecord } from "../printings";
 import { annContentFacts, annLinePackaged, packagingOf, readAnnLineTitle } from "./ann";
 import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
@@ -93,6 +100,46 @@ export function reader(ctx: QueryCtx) {
 }
 export type Reader = ReturnType<typeof reader>;
 
+/** Capture resolver dependencies, including rejected candidates and merge/redirect hops.
+ * A resolver's ordinary scan cap cannot certify a complete correction guard.
+ */
+function correctionResolverContext(ctx: QueryCtx, r: Reader): QueryCtx {
+  const wrap = <T extends object>(target: T): T =>
+    new Proxy(target, {
+      get(on, prop) {
+        const value: unknown = Reflect.get(on, prop, on);
+        if (typeof value !== "function") return value;
+        if (prop === "collect") return () => r.many(on as AsyncIterable<unknown>);
+        if (prop === "take")
+          return async (requested: number) => {
+            await r.room();
+            const cap = Math.min(requested, MAX_JOIN);
+            const result: unknown = await value.call(on, cap + 1);
+            if (!Array.isArray(result) || result.length > cap)
+              return refuse("Resolver candidates exceed the complete bounded scan; incomplete.");
+            r.facts.push(result);
+            await r.room();
+            return result;
+          };
+        if (prop === "get" || prop === "unique" || prop === "first" || prop === "next")
+          return async (...args: unknown[]) => {
+            await r.room();
+            const result: unknown = await value.apply(on, args);
+            r.facts.push(result);
+            await r.room();
+            return result;
+          };
+        return (...args: unknown[]) => {
+          const result: unknown = value.apply(on, args);
+          return result !== null && typeof result === "object" && !(result instanceof Promise)
+            ? wrap(result)
+            : result;
+        };
+      },
+    });
+  return { ...ctx, db: wrap(ctx.db) };
+}
+
 /** Scan one Series under the transaction budget, retaining only requested labels.
  * Long works do not become ineligible merely because unrelated Volumes exceed a join limit.
  */
@@ -130,7 +177,9 @@ export async function sourceSeries(
     url?: string;
   };
   if (observation.sourceKey === "openlibrary") {
-    const placement = await placeEdition(ctx, observation.snapshot as OlEditionSnapshot);
+    const projection = projectSourceFormat(observation);
+    if (projection.status === "stale") return refuse(projection.reason);
+    const placement = await placeEdition(ctx, projection.snapshot as OlEditionSnapshot);
     if (placement.kind === "create")
       return { series: await r.active(placement.series._id), placement, parent: null };
     if (placement.kind === "hold" && placement.hold.seriesId)
@@ -249,7 +298,7 @@ export async function contentMatch(
   target: Contents,
 ) {
   const observation = state.observation;
-  const s = observation.snapshot as {
+  const s = state.effective.snapshot as {
     title?: string;
     format?: string;
     publishers?: string[];
@@ -362,6 +411,8 @@ export async function heldState(
   const observation = await r.read(observationId);
   if (!observation || nonJsonPath(observation.snapshot))
     return refuse("Missing or non-JSON source snapshot.");
+  const effective = projectSourceFormat(observation);
+  if (effective.status === "stale") return refuse(effective.reason);
   const hold = await holdOf(ctx, observationId);
   r.facts.push(hold);
   const proposal = observation.queuedProposalId ? await r.read(observation.queuedProposalId) : null;
@@ -480,6 +531,7 @@ export async function heldState(
     proposal?.state !== "inReview";
   return {
     observation,
+    effective,
     hold,
     proposal,
     source,
@@ -536,7 +588,7 @@ export async function publisherMatch(
 export async function bundleEnvelope(ctx: QueryCtx, state: Awaited<ReturnType<typeof heldState>>) {
   const bundle = state.bundle ?? refuse("No Bundle.");
   const publisher = await state.r.active(bundle.publisherId);
-  const format = (state.observation.snapshot as { format?: string }).format;
+  const format = (state.effective.snapshot as { format?: string }).format;
   if (bundle.format !== format) return refuse("Bundle and source formats differ.");
   if (state.reviewed) {
     if (state.reviewed.publisherId !== publisher._id)
@@ -625,7 +677,7 @@ async function sourceContentsMatch(
   if (actual.some((content) => content.work._id !== series._id))
     return refuse("Complete canonical contents belong to another work.");
   const proof = state.reviewed;
-  const s = state.observation.snapshot as {
+  const s = state.effective.snapshot as {
     title?: string;
     subtitle?: string;
     seriesTitle?: string;
@@ -703,7 +755,7 @@ async function sourceContentsMatch(
     const reading = readTitledRecord(
       state.observation.sourceKey,
       title,
-      state.observation.snapshot as Parameters<typeof readTitledRecord>[2],
+      state.effective.snapshot as Parameters<typeof readTitledRecord>[2],
       [series.title],
     );
     if (
@@ -874,4 +926,92 @@ export async function reviewedRouting(
   )
     return refuse("Known source work or independent Volume/page facts contradict Part routing.");
   return { sourceWork: source.sourceWork, rootWork: source.root };
+}
+
+/** Decision-only guard. Placement/coverage is evaluated later by the normal held preview. */
+export async function sourceFormatState(
+  ctx: QueryCtx,
+  observationId: Id<"sourceObservations">,
+  reviewed: ReviewedFormat,
+) {
+  const r = reader(ctx);
+  const resolutionCtx = correctionResolverContext(ctx, r);
+  const observation = await r.read(observationId);
+  if (!observation) return refuse("Missing source observation.");
+  const refusal = reviewedFormatRefusal(observation, reviewed);
+  if (refusal) return refuse(refusal);
+  const effective = projectSourceFormat(observation);
+  if (effective.status === "stale") return refuse(effective.reason);
+  if (observation.reviewedSourceFormat) {
+    const {
+      proposalId: _proposalId,
+      decidedAt: _decidedAt,
+      invalidatedAt: _invalidatedAt,
+      ...previous
+    } = observation.reviewedSourceFormat;
+    if (valueHash(previous) !== valueHash(reviewed))
+      return refuse("A different reviewed Format decision already exists.");
+  }
+  const hold = await holdOf(ctx, observationId);
+  r.facts.push(hold);
+  const proposal = observation.queuedProposalId ? await r.read(observation.queuedProposalId) : null;
+  const versions = proposal
+    ? await r.many(
+        ctx.db
+          .query("proposalVersions")
+          .withIndex("by_proposal", (q) =>
+            q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+          ),
+      )
+    : [];
+  r.facts.push(proposal?.draft ?? null, versions);
+  if (observation.withdrawn || observation.recordRef || !hold || proposal?.state === "inReview")
+    return refuse("Correction requires a held, present, unlinked source outside any review.");
+  const scope = await scopeState(ctx, reviewed.isbn13);
+  const scopeSources = await r.many(
+    ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q.eq("sourceKey", "yenpress").eq("sourceRecordId", reviewed.isbn13),
+      ),
+  );
+  r.facts.push(scope);
+  const scoped = await isbnScope(ctx, reviewed.isbn13);
+  if (scoped) return refuse(scoped);
+  const snapshot = observation.snapshot as OlEditionSnapshot;
+  if (snapshot.publishers.some((name) => REBINDER.test(name)))
+    return refuse("Library rebinder metadata cannot establish the publisher's ebook.");
+  await r.room();
+  const work = await resolveBaseSeries(resolutionCtx, snapshot);
+  r.facts.push(work, scopeSources);
+  await r.room();
+  if (work.candidates.length !== 1 || !hold.seriesId)
+    return refuse("Independent source work or held Series is unresolved or ambiguous.");
+  const series = await r.active(work.candidates[0]!._id);
+  const heldSeries = await r.active(hold.seriesId);
+  if (series._id !== heldSeries._id)
+    return refuse("Independent source work disagrees with held Series.");
+  const publishers = [];
+  for (const name of snapshot.publishers) {
+    await r.room();
+    publishers.push({ name, publisher: await findPublisherByName(resolutionCtx, name) });
+    await r.room();
+  }
+  r.facts.push(publishers);
+  const publisherIds = new Set(
+    publishers.flatMap((one) => (one.publisher ? [one.publisher._id] : [])),
+  );
+  if (publisherIds.size !== 1) return refuse("Source publisher is unresolved or ambiguous.");
+  const publisher = await r.active([...publisherIds][0]!);
+  const claims = await isbnClaims(resolutionCtx, reviewed.isbn13, {
+    resolver: claimResolver(resolutionCtx, { room: r.room }),
+    room: r.room,
+  });
+  if (!claims?.complete || claims.unresolved.length)
+    return refuse("ISBN claims incomplete or unresolved.");
+  r.facts.push([...claims.owners.values()]);
+  const proposedSnapshot = { ...snapshot, format: "digital" as const };
+  const expected = valueHash({ observationId, reviewed, proposedSnapshot, facts: r.facts });
+  if (utf8Bytes(expected) > MAX_GUARD_BYTES) return refuse("Guard exceeds 256 KiB.");
+  return { observation, hold, expected, proposedSnapshot, series, publisher, r };
 }

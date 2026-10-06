@@ -940,6 +940,8 @@ export const backfillHolds = internalMutation({
       .query("sourceObservations")
       .paginate({ numItems: BACKFILL_PAGE, cursor: args.cursor ?? null });
     for (const observation of page) {
+      // A reviewed Format requires a fresh guarded disposition, including after drift.
+      if (observation.reviewedSourceFormat) continue;
       if (observation.withdrawn) continue;
       const note = observation.conflicts?.find((c) => c.field === "placement");
       if (observation.recordRef !== undefined) {

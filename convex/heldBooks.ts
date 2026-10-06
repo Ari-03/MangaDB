@@ -1,3 +1,5 @@
+import { sourceFormatState } from "./lib/heldBooks";
+import { reviewedFormatValidator, utf8Bytes, formatContext } from "./lib/sourceFormat";
 import { convertedClaim } from "./lib/heldRepair";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
@@ -122,6 +124,7 @@ export const previewInternal = internalQuery({
       }
       return {
         expected: state.expected,
+        sourceFormat: formatContext(state.observation),
         refusal,
         isbn13: state.isbn13,
         hold: state.hold,
@@ -135,8 +138,10 @@ export const previewInternal = internalQuery({
         classification: refusal ? "blocked" : args.target ? "linkReady" : "needsDisposition",
       };
     } catch (error) {
+      const observation = await ctx.db.get(args.observationId);
       return {
         expected: null,
+        sourceFormat: observation ? formatContext(observation) : null,
         refusal:
           error instanceof ConvexError
             ? String(
@@ -207,6 +212,7 @@ async function audit(
   observationId: Id<"sourceObservations">,
   reason: string,
   urls: string[],
+  note?: string,
 ) {
   const author = { kind: "user" as const, userId: actor.userId, roleAtAuthorship: actor.role };
   const proposalId = await insertApprovedProposal(ctx, author, actor.userId);
@@ -214,6 +220,7 @@ async function audit(
     ops: [],
     evidence: [
       { kind: "observation", observationId },
+      ...(note ? [{ kind: "note" as const, text: note }] : []),
       ...urls.map((url) => ({ kind: "url" as const, url })),
     ],
     changeComment: reason,
@@ -349,6 +356,7 @@ export const applyInternal = internalMutation({
           const result = await ctx.runMutation(internal.openLibrary.applyStoredInternal, {
             observationId: args.observationId,
             expectedSnapshot: valueHash(state.observation.snapshot),
+            expectedDecision: valueHash(state.observation.reviewedSourceFormat ?? null),
           });
           releaseId = result.releaseId;
         } else if (state.observation.sourceKey === "ann") {
@@ -414,6 +422,122 @@ export const applyInternal = internalMutation({
   },
 });
 
+const sourceFormatArgs = {
+  observationId: v.id("sourceObservations"),
+  reviewed: reviewedFormatValidator,
+};
+export const previewSourceFormatInternal = internalQuery({
+  args: sourceFormatArgs,
+  handler: async (ctx, args) => {
+    try {
+      const state = await sourceFormatState(ctx, args.observationId, args.reviewed);
+      return {
+        expected: state.expected,
+        correctionReady: true,
+        placementNeedsFreshPreview: true,
+        refusal: null,
+        rawSnapshot: state.observation.snapshot,
+        proposedSnapshot: state.proposedSnapshot,
+        reviewed: args.reviewed,
+        sourceFormat: formatContext(state.observation),
+        sourceSeriesId: state.series._id,
+        publisherId: state.publisher._id,
+      };
+    } catch (error) {
+      return {
+        expected: null,
+        correctionReady: false,
+        placementNeedsFreshPreview: true,
+        refusal: heldError(error),
+      };
+    }
+  },
+});
+function heldError(error: unknown) {
+  if (error instanceof ConvexError) {
+    const data = error.data;
+    return typeof data === "object" && data !== null && "held" in data
+      ? String(data.held)
+      : String(data);
+  }
+  return String(error);
+}
+const correctionArgs = { ...sourceFormatArgs, actor: v.string(), expected: v.string() };
+export const correctSourceFormatInternal = internalMutation({
+  args: correctionArgs,
+  handler: async (ctx, args): Promise<Result> => {
+    if (utf8Bytes(args.expected) > MAX_GUARD_BYTES)
+      return { status: "refused", reason: "Guard exceeds 256 KiB." };
+    try {
+      return await ctx.runMutation(internal.heldBooks.applySourceFormatInternal, args, {
+        transactionLimits: await nestedLimits(ctx),
+      });
+    } catch (error) {
+      return { status: "refused", reason: heldError(error) };
+    }
+  },
+});
+/** All audit writes and the decision patch share the guard's capped transaction. */
+export const applySourceFormatInternal = internalMutation({
+  args: correctionArgs,
+  handler: async (ctx, args): Promise<Result> => {
+    const actor = await resolveActor(ctx, args.actor);
+    const state = await sourceFormatState(ctx, args.observationId, args.reviewed);
+    if (state.expected !== args.expected)
+      return refuse(
+        "Source, review, hold, work, publisher, claims or evidence changed; preview again.",
+      );
+    if (state.observation.reviewedSourceFormat) return { status: "alreadyApplied" };
+    const before = valueHash({ observation: state.observation, hold: state.hold });
+    const decidedAt = Date.now();
+    // Reserve the complete observation, both ledger states, evidence and audit tail before writing.
+    const estimatedDecision = { ...args.reviewed, decidedAt, proposalId: "reserved-proposal-id" };
+    const estimatedObservation = { ...state.observation, reviewedSourceFormat: estimatedDecision };
+    const estimatedAfter = valueHash({ observation: estimatedObservation, hold: state.hold });
+    if (
+      utf8Bytes(valueHash(estimatedDecision)) > 64 * 1024 ||
+      utf8Bytes(valueHash(estimatedObservation)) > MAX_GUARD_BYTES ||
+      utf8Bytes(valueHash({ before, after: estimatedAfter })) > MAX_GUARD_BYTES
+    )
+      return refuse("Correction observation or ledger exceeds 256 KiB audit bounds.");
+    await state.r.room();
+    const metrics = await ctx.meta.getTransactionMetrics();
+    if (
+      metrics.bytesWritten.remaining <
+      utf8Bytes(valueHash(estimatedObservation)) +
+        utf8Bytes(valueHash({ before, after: estimatedAfter })) +
+        utf8Bytes(valueHash(args.reviewed)) +
+        256 * 1024
+    )
+      return refuse("Insufficient correction audit write tail.");
+    const proposalId = await audit(
+      ctx,
+      actor,
+      args.observationId,
+      args.reviewed.reason,
+      evidenceUrls([args.reviewed.publisher.url, args.reviewed.ol.url]),
+      valueHash(args.reviewed),
+    );
+    const decision = { ...args.reviewed, proposalId, decidedAt };
+    if (utf8Bytes(valueHash(decision)) > 64 * 1024) return refuse("Decision exceeds 64 KiB.");
+    await ctx.db.patch(args.observationId, { reviewedSourceFormat: decision });
+    const after = valueHash({
+      observation: await ctx.db.get(args.observationId),
+      hold: await holdOf(ctx, args.observationId),
+    });
+    if (utf8Bytes(valueHash({ before, after })) > MAX_GUARD_BYTES)
+      return refuse("Ledger exceeds 256 KiB.");
+    const ledgerId = await ctx.db.insert("heldRepairLedger", {
+      observationId: args.observationId,
+      operation: "correctSourceFormat",
+      proposalId,
+      before,
+      after,
+    });
+    return { status: "applied", proposalId, ledgerId };
+  },
+});
+
 const restoreArgs = {
   actor: v.string(),
   ledgerId: v.id("heldRepairLedger"),
@@ -469,7 +593,39 @@ export const restoreOneInternal = internalMutation({
       const scope = await isbnScope(ctx, s.isbn13 ?? s.isbn10);
       if (scope) return refuse("Revoke the exact scope disposition before restoring a held book.");
     }
+    if (ledger.operation === "correctSourceFormat") {
+      const note = valueHash({
+        originalLedgerId: ledger._id,
+        originalProposalId: ledger.proposalId,
+        before: ledger.before,
+        after: ledger.after,
+      });
+      if (utf8Bytes(note) > MAX_GUARD_BYTES) return refuse("Undo evidence exceeds audit bounds.");
+      await ctx.db.patch(ledger.observationId, {
+        reviewedSourceFormat: before.observation.reviewedSourceFormat,
+      });
+      const proposalId = await audit(ctx, actor, ledger.observationId, args.reason, [], note);
+      const after = valueHash({
+        observation: await ctx.db.get(ledger.observationId),
+        hold: await holdOf(ctx, ledger.observationId),
+      });
+      await ctx.db.insert("heldRepairLedger", {
+        observationId: ledger.observationId,
+        operation: "undoSourceFormat",
+        proposalId,
+        before: current,
+        after,
+      });
+      return {
+        status: "applied" as const,
+        proposalId,
+        originalHoldId: before.hold?._id ?? null,
+        holdId: hold?._id ?? null,
+        maturity: "Source Format decision restored; raw observation and hold preserved.",
+      };
+    }
     await ctx.db.patch(ledger.observationId, {
+      reviewedSourceFormat: before.observation.reviewedSourceFormat,
       recordRef: before.observation.recordRef,
       printingIsbn13: before.observation.printingIsbn13,
       conflicts: before.observation.conflicts,

@@ -1,8 +1,10 @@
+import { invalidateSourceFormat } from "./sourceFormat";
 // Source Observation bookkeeping (spec §6): identity is
 // (source, source-record-id); `snapshot` holds the latest normalized form —
-// what reconciliation reads — and every superseded snapshot is retained
+// the raw source facts — and every superseded snapshot is retained
 // append-only in observationSnapshots. Unchanged fetches bump last-seen
-// only. Retention is indefinite in v1; withdrawal marks, never deletes.
+// only. Reviewed Format decisions are separate and latch invalidation on
+// raw OL changes. Retention is indefinite in v1; withdrawal marks, never deletes.
 // A record seen again stops being withdrawn, and the possible-cancellation
 // review its withdrawal queued is retired with it.
 //
@@ -152,13 +154,16 @@ export async function upsertObservation(
     snapshot: existing.snapshot,
     supersededAt: args.now,
   });
+  const reviewedSourceFormat = invalidateSourceFormat(existing, args.now);
   await ctx.db.patch(existing._id, {
+    reviewedSourceFormat,
     snapshot: args.snapshot,
     lastSeenAt: args.now,
     withdrawn: false,
   });
   const observation = {
     ...existing,
+    ...(reviewedSourceFormat ? { reviewedSourceFormat } : {}),
     snapshot: args.snapshot,
     lastSeenAt: args.now,
     withdrawn: false,

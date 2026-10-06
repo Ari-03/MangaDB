@@ -1,3 +1,4 @@
+import { projectSourceFormat, formatContext } from "./lib/sourceFormat";
 // "Prepare placement" (docs/moderation.md): a Data Team member turns a Held
 // Book into a Draft creation Proposal of their own, prefilled from its
 // observation, which they check, correct and submit through the ordinary
@@ -186,7 +187,9 @@ async function sourceFacts(
   observation: Doc<"sourceObservations">,
   heldSeriesTitle: string | null,
 ): Promise<Omit<BookFacts, "identity"> | null> {
-  const snapshot: HeldSnapshot | null = observation.snapshot ?? null;
+  const projection = projectSourceFormat(observation);
+  const snapshot: HeldSnapshot | null =
+    (projection.status === "stale" ? observation.snapshot : projection.snapshot) ?? null;
   switch (snapshot?.kind) {
     case "olEdition": {
       // The label is the one stored at parse time, the subtitle's included:
@@ -207,6 +210,7 @@ async function sourceFacts(
         ...read,
         publisherNames: snapshot.publishers,
         format: snapshot.format,
+        ...(projection.status === "stale" ? { contradiction: projection.reason } : {}),
         binding: snapshot.binding,
         pubDate: snapshot.publishDate,
         description: snapshot.description,
@@ -720,7 +724,7 @@ export async function placementChanged(
   const series = await ctx.db.get(placed.seriesId);
   if (observation === null || series === null) return true;
   const facts = await bookFacts(ctx, observation, series.title);
-  return facts === null || facts.identity !== placed.reviewed;
+  return facts === null || !!facts.contradiction || facts.identity !== placed.reviewed;
 }
 
 /**
@@ -899,6 +903,8 @@ export async function placementView(ctx: QueryCtx, ops: Doc<"proposalVersions">[
   return {
     observationId: placed.observationId,
     sourceKey: observation?.sourceKey ?? null,
+    sourceFormat: observation ? formatContext(observation) : null,
+    refusal: facts?.contradiction ?? null,
     book:
       facts === null
         ? null

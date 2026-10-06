@@ -20,6 +20,15 @@ import { makeT, type TestT } from "./test.helpers";
 import { insertBook } from "./test.moderation";
 import { sailorMoon, cirque } from "./test.heldAliases";
 import { annContentFacts } from "./lib/ann";
+import { parseEditionJson } from "./lib/openLibrary";
+import {
+  projectSourceFormat,
+  reviewedFormatRefusal,
+  type ReviewedFormat,
+} from "./lib/sourceFormat";
+import { valueHash } from "./lib/values";
+import { sourceFormatEvidence, gachaPhysicalGraph } from "./test.sourceFormats";
+import { placementChanged, placementView } from "./placement";
 
 const reason = "Exact source/product and complete canonical contents reviewed.";
 const urls = ["https://www.animenewsnetwork.com/encyclopedia/releases.php?id=43552"];
@@ -2449,3 +2458,434 @@ const lovecraftParent = {
   title: "At the Mountains of Madness",
   url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=21831",
 };
+
+const gachaEvidence = sourceFormatEvidence.find((row) => row.reviewed.isbn13 === "9781952241567")!;
+const gachaReviewed: ReviewedFormat = gachaEvidence.reviewed;
+function parsedGacha(paperback = false) {
+  const wire: Record<string, unknown> = JSON.parse(gachaEvidence.wire);
+  if (paperback) wire.physical_format = "Paperback";
+  const parsed = parseEditionJson(wire);
+  if (!parsed) throw new Error("Saved Gacha 5 wire must parse.");
+  return parsed;
+}
+async function gachaFormat(t: TestT) {
+  await admin(t);
+  return await t.run(async (ctx) => {
+    const graph = gachaPhysicalGraph;
+    const publisherId = await insertPublisher(ctx, graph.publisher);
+    const seriesId = await insertSeries(ctx, {
+      ...graph.series,
+      altTitles: [...graph.series.altTitles],
+    });
+    const volumeId = await insertVolume(ctx, { ...graph.volume, seriesId, position: 5 });
+    const book = await insertBook(ctx, {
+      publisherId,
+      seriesId,
+      volumeId,
+      edition: graph.edition,
+      release: graph.release,
+    });
+    const observationId = await insertObservation(ctx, {
+      sourceKey: "openlibrary",
+      sourceRecordId: gachaReviewed.key,
+      snapshot: parsedGacha(),
+      lastSeenAt: graph.sourceLastSeenAt,
+      conflicts: [
+        { field: "placement", reason: graph.holdReason, offered: null, at: graph.sourceLastSeenAt },
+      ],
+    });
+    const holdId = await ctx.db.insert("placementHolds", {
+      observationId,
+      sourceKey: "openlibrary",
+      kind: "volumeMissing",
+      seriesId,
+      heldAt: graph.sourceLastSeenAt,
+    });
+    return { observationId, holdId, publisherId, seriesId, volumeId, ...book };
+  });
+}
+async function formatState(t: TestT, s: Awaited<ReturnType<typeof gachaFormat>>) {
+  return await t.run(async (ctx) => ({
+    observation: (await ctx.db.get(s.observationId))!,
+    hold: await ctx.db.get(s.holdId),
+    releases: await ctx.db.query("releases").collect(),
+    editions: await ctx.db.query("editions").collect(),
+    volumes: await ctx.db.query("volumes").collect(),
+    series: await ctx.db.query("series").collect(),
+    coverages: await ctx.db.query("volumeCoverages").collect(),
+    proposals: await ctx.db.query("proposals").collect(),
+    versions: await ctx.db.query("proposalVersions").collect(),
+    ledgers: await ctx.db.query("heldRepairLedger").collect(),
+    history: await ctx.db.query("observationSnapshots").collect(),
+    printings: await ctx.db.query("releaseIsbns").collect(),
+  }));
+}
+async function correctGacha(t: TestT, s: Awaited<ReturnType<typeof gachaFormat>>) {
+  const args = { observationId: s.observationId, reviewed: gachaReviewed };
+  const preview = await t.query(internal.heldBooks.previewSourceFormatInternal, args);
+  expect(preview.refusal).toBeNull();
+  expect(preview.correctionReady).toBe(true);
+  expect(preview.placementNeedsFreshPreview).toBe(true);
+  const result = await t.mutation(internal.heldBooks.correctSourceFormatInternal, {
+    ...args,
+    expected: preview.expected!,
+    actor: "ari",
+  });
+  expect(result.status).toBe("applied");
+  return result;
+}
+async function replayGacha(t: TestT, s: Awaited<ReturnType<typeof gachaFormat>>) {
+  const args = { observationId: s.observationId, replay: true };
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(preview.refusal).toBeNull();
+  expect(preview.placement).toBe("create");
+  const result = await t.mutation(internal.heldBooks.executeInternal, {
+    ...args,
+    actor: "ari",
+    expected: preview.expected!,
+    operation: "replay",
+    reason: "Fresh guarded ebook placement after exact Format review.",
+    evidenceUrls: [gachaReviewed.publisher.url],
+  });
+  expect(result.status).toBe("applied");
+  return result;
+}
+
+describe("reviewed OL inferred physical-to-digital workflows", () => {
+  it("checks all five saved public bodies and exact own-ISBN excerpts with the actual parser", async () => {
+    const sha = async (text: string) =>
+      Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("");
+    expect(sourceFormatEvidence).toHaveLength(5);
+    for (const row of sourceFormatEvidence) {
+      const wire: Record<string, unknown> = JSON.parse(row.wire);
+      expect(wire.physical_format).toBeUndefined();
+      expect(await sha(row.wire)).toBe(row.reviewed.ol.bodySha256);
+      expect(await sha(row.reviewed.publisher.excerpt)).toBe(row.reviewed.publisher.sectionSha256);
+      const snapshot = parseEditionJson(wire)!;
+      expect(valueHash(snapshot)).toBe(row.frozen);
+      expect(snapshot.format).toBe("physical");
+      expect(
+        reviewedFormatRefusal(
+          { sourceKey: "openlibrary", sourceRecordId: snapshot.key, snapshot },
+          row.reviewed,
+        ),
+      ).toBeNull();
+    }
+  });
+  it("audits correction without changing raw facts or the hold, retains equal refetch/backfill, then creates a distinct digital Release", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    const before = await formatState(t, s);
+    const correction = await correctGacha(t, s);
+    const corrected = await formatState(t, s);
+    const { reviewedSourceFormat: decision, ...raw } = corrected.observation;
+    expect(raw).toEqual(before.observation);
+    expect(corrected.hold).toEqual(before.hold);
+    expect(corrected.releases).toEqual(before.releases);
+    expect(corrected.editions).toEqual(before.editions);
+    expect(corrected.coverages).toEqual(before.coverages);
+    expect(corrected.history).toEqual([]);
+    expect(corrected.proposals).toHaveLength(1);
+    expect(corrected.proposals[0]).toMatchObject({
+      state: "approved",
+      author: { kind: "user", roleAtAuthorship: "administrator" },
+    });
+    expect(corrected.versions).toHaveLength(1);
+    expect(corrected.versions[0]!.evidence).toContainEqual({
+      kind: "note",
+      text: valueHash(gachaReviewed),
+    });
+    expect(corrected.ledgers).toHaveLength(1);
+    expect(corrected.ledgers[0]!.before).toBe(
+      valueHash({ observation: before.observation, hold: before.hold }),
+    );
+    expect(corrected.ledgers[0]!.after).toBe(
+      valueHash({ observation: corrected.observation, hold: corrected.hold }),
+    );
+    expect(decision?.proposalId).toBe(correction.proposalId);
+    expect(projectSourceFormat(corrected.observation)).toMatchObject({
+      status: "corrected",
+      snapshot: { ...corrected.observation.snapshot, format: "digital" },
+    });
+    const repeatArgs = { observationId: s.observationId, reviewed: gachaReviewed };
+    const repeat = await t.query(internal.heldBooks.previewSourceFormatInternal, repeatArgs);
+    expect(
+      (
+        await t.mutation(internal.heldBooks.correctSourceFormatInternal, {
+          ...repeatArgs,
+          expected: repeat.expected!,
+          actor: "ari",
+        })
+      ).status,
+    ).toBe("alreadyApplied");
+    expect(await formatState(t, s)).toEqual(corrected);
+    expect(
+      (await t.mutation(internal.openLibrary.applyEdition, { snapshot: parsedGacha() })).status,
+    ).toBe("recordOnly");
+    const fetched = await formatState(t, s);
+    expect(fetched.observation.snapshot).toEqual(before.observation.snapshot);
+    expect(fetched.observation.lastSeenAt).not.toBe(before.observation.lastSeenAt);
+    expect(fetched.hold).toEqual(before.hold);
+    expect(fetched.observation.reviewedSourceFormat).toEqual(decision);
+    await t.mutation(internal.imports.backfillHolds, {});
+    const backfilled = await formatState(t, s);
+    expect(backfilled.hold).toEqual(before.hold);
+    expect(backfilled.releases).toEqual(before.releases);
+    const replay = await replayGacha(t, s);
+    const placed = await formatState(t, s);
+    expect(placed.hold).toBeNull();
+    expect(placed.releases).toHaveLength(2);
+    expect(placed.releases.find((r) => r._id === s.releaseId)).toEqual(before.releases[0]);
+    expect(placed.releases.find((r) => r._id === replay.releaseId)).toMatchObject({
+      format: "digital",
+      isbn13: "9781952241567",
+    });
+    expect(placed.series).toEqual(before.series);
+    expect(placed.volumes).toEqual(before.volumes);
+    expect(placed.observation.snapshot).toEqual(before.observation.snapshot);
+    expect(placed.observation.lastSeenAt).toBe(fetched.observation.lastSeenAt);
+    await expect(
+      t.mutation(internal.heldBooks.restoreInternal, {
+        actor: "ari",
+        ledgerId: correction.ledgerId!,
+        expectedAfter: corrected.ledgers[0]!.after,
+        reason: "Old correction undo must refuse after placement.",
+      }),
+    ).rejects.toThrow(/after-state changed/);
+    expect(await formatState(t, s)).toEqual(placed);
+    const releaseBeforeDrift = placed.releases;
+    await t.mutation(internal.openLibrary.applyEdition, { snapshot: parsedGacha(true) });
+    const linkedDrift = await formatState(t, s);
+    expect(linkedDrift.releases).toEqual(releaseBeforeDrift);
+    expect(linkedDrift.observation.reviewedSourceFormat?.invalidatedAt).toBeDefined();
+    expect(linkedDrift.history).toHaveLength(1);
+    await t.mutation(internal.openLibrary.applyEdition, { snapshot: parsedGacha() });
+    expect((await formatState(t, s)).releases).toEqual(releaseBeforeDrift);
+  });
+  it("latches actual-parser Paperback drift, retains history and hold after old wire returns, and exposes stale placement context", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    await correctGacha(t, s);
+    const draft = await t
+      .withIdentity({ subject: "admin" })
+      .mutation(api.placement.preparePlacement, { observationId: s.observationId });
+    expect(draft.status).toBe("prepared");
+    if (!("proposalId" in draft)) throw new Error("Expected a placement draft.");
+    const draftId = draft.proposalId;
+    const before = await formatState(t, s);
+    expect(before.proposals.find((p) => p._id === draftId)?.draft).toBeDefined();
+    const ops = before.proposals.find((p) => p._id === draftId)!.draft!.ops;
+    await t.mutation(internal.openLibrary.applyEdition, { snapshot: parsedGacha(true) });
+    const drift = await formatState(t, s);
+    const invalidatedAt = drift.observation.reviewedSourceFormat!.invalidatedAt;
+    expect(invalidatedAt).toBeDefined();
+    expect(drift.observation.snapshot).toEqual(parsedGacha(true));
+    expect(drift.history[0]!.snapshot).toEqual(parsedGacha());
+    expect(drift.hold).toEqual(before.hold);
+    expect(drift.releases).toEqual(before.releases);
+    expect(drift.proposals).toEqual(before.proposals);
+    expect(projectSourceFormat(drift.observation).status).toBe("stale");
+    expect(await t.run((ctx) => placementChanged(ctx, ops))).toBe(true);
+    const view = await t.run((ctx) => placementView(ctx, ops));
+    expect(view?.refusal).toMatch(/stale/);
+    expect(view?.sourceFormat).toMatchObject({
+      status: "stale",
+      effectiveFormat: null,
+      rawFormat: "physical",
+    });
+    await t.mutation(internal.openLibrary.applyEdition, { snapshot: parsedGacha() });
+    const returned = await formatState(t, s);
+    expect(returned.observation.reviewedSourceFormat!.invalidatedAt).toBe(invalidatedAt);
+    expect(returned.history).toHaveLength(2);
+    expect(projectSourceFormat(returned.observation).status).toBe("stale");
+    const preview = await t.query(internal.heldBooks.previewInternal, {
+      observationId: s.observationId,
+    });
+    expect(preview.expected).toBeNull();
+    expect(preview.refusal).toMatch(/stale/);
+    const refused = await t.mutation(internal.heldBooks.executeInternal, {
+      observationId: s.observationId,
+      actor: "ari",
+      operation: "refreshSource",
+      expected: "stale",
+      reason,
+      evidenceUrls: [gachaReviewed.publisher.url],
+    });
+    expect(refused.status).toBe("refused");
+    const printing = await t.mutation(internal.printings.recordDecidedInternal, {
+      observationId: s.observationId,
+      releaseId: s.releaseId,
+      reason,
+      evidenceUrl: gachaReviewed.publisher.url,
+    });
+    expect(printing.status).toBe("refused");
+    expect(printing).toMatchObject({ reason: expect.stringMatching(/stale/) });
+    await t.mutation(internal.imports.backfillHolds, {});
+    expect((await formatState(t, s)).hold).toEqual(before.hold);
+    expect((await formatState(t, s)).printings).toEqual([]);
+    expect(
+      (
+        await t.query(internal.heldBooks.previewInternal, {
+          observationId: s.observationId,
+          target: { type: "release", id: s.releaseId },
+        })
+      ).expected,
+    ).toBeNull();
+  });
+  it("removes the optional decision on immediate audited undo, and refuses the original undo after a genuine refetch", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    const before = await formatState(t, s);
+    const correction = await correctGacha(t, s);
+    const corrected = await formatState(t, s);
+    await t.mutation(internal.heldBooks.restoreInternal, {
+      actor: "ari",
+      ledgerId: correction.ledgerId!,
+      expectedAfter: corrected.ledgers[0]!.after,
+      reason: "Undo exact source interpretation before placement.",
+    });
+    const restored = await formatState(t, s);
+    expect(restored.observation).toEqual(before.observation);
+    expect(Object.hasOwn(restored.observation, "reviewedSourceFormat")).toBe(false);
+    expect(restored.hold).toEqual(before.hold);
+    expect(restored.ledgers).toHaveLength(2);
+    expect(restored.ledgers[0]).toEqual(corrected.ledgers[0]);
+    expect(restored.ledgers[1]).toMatchObject({
+      operation: "undoSourceFormat",
+      before: corrected.ledgers[0]!.after,
+      after: corrected.ledgers[0]!.before,
+    });
+    expect(restored.versions[1]!.evidence).toContainEqual({
+      kind: "note",
+      text: expect.stringContaining(correction.ledgerId!),
+    });
+    expect(projectSourceFormat(restored.observation).status).toBe("raw");
+    const reapplied = await correctGacha(t, s);
+    const after = await formatState(t, s);
+    const ledger = after.ledgers.find((row) => row._id === reapplied.ledgerId)!;
+    await t.mutation(internal.openLibrary.applyEdition, { snapshot: parsedGacha() });
+    const fetched = await formatState(t, s);
+    await expect(
+      t.mutation(internal.heldBooks.restoreInternal, {
+        actor: "ari",
+        ledgerId: ledger._id,
+        expectedAfter: ledger.after,
+        reason: "Refetch consumed immediate undo.",
+      }),
+    ).rejects.toThrow(/after-state changed/);
+    expect(await formatState(t, s)).toEqual(fetched);
+  });
+  it("refuses Other Printing for a corrected ebook and refuses fresh replay of an occupied digital slot while allowing correction", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    // An existing alternate-ISBN digital slot is a catalog conflict, not permission to relabel the paperback.
+    await t.run((ctx) =>
+      insertRelease(ctx, {
+        editionId: s.editionId,
+        publisherId: s.publisherId,
+        seriesIds: [s.seriesId],
+        format: "digital",
+        isbn13: "9781952241680",
+      }),
+    );
+    await correctGacha(t, s);
+    const before = await formatState(t, s);
+    const printing = await t.mutation(internal.printings.recordDecidedInternal, {
+      observationId: s.observationId,
+      releaseId: s.releaseId,
+      reason,
+      evidenceUrl: gachaReviewed.publisher.url,
+    });
+    expect(printing).toMatchObject({ status: "refused", reason: expect.stringMatching(/digital/) });
+    expect(await formatState(t, s)).toEqual(before);
+    const preview = await t.query(internal.heldBooks.previewInternal, {
+      observationId: s.observationId,
+      replay: true,
+    });
+    expect(preview.placement).not.toBe("create");
+    const replay = await t.mutation(internal.heldBooks.executeInternal, {
+      observationId: s.observationId,
+      replay: true,
+      actor: "ari",
+      expected: preview.expected ?? "incomplete",
+      operation: "replay",
+      reason,
+      evidenceUrls: [gachaReviewed.publisher.url],
+    });
+    expect(replay.status).toBe("refused");
+    expect(await formatState(t, s)).toEqual(before);
+  });
+  it("refuses changed reviewed payload, known Paperback counterfacts and member review without incidental audit writes", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    const args = { observationId: s.observationId, reviewed: gachaReviewed };
+    const preview = await t.query(internal.heldBooks.previewSourceFormatInternal, args);
+    const before = await formatState(t, s);
+    const changed = await t.mutation(internal.heldBooks.correctSourceFormatInternal, {
+      ...args,
+      reviewed: { ...gachaReviewed, reason: "Changed evidence reason" },
+      expected: preview.expected!,
+      actor: "ari",
+    });
+    expect(changed.status).toBe("refused");
+    expect(await formatState(t, s)).toEqual(before);
+    const mismatch = await t.query(internal.heldBooks.previewSourceFormatInternal, {
+      ...args,
+      reviewed: { ...gachaReviewed, isbn13: "9781952241574" },
+    });
+    expect(mismatch.expected).toBeNull();
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        state: "inReview",
+        author: {
+          kind: "user",
+          userId: (await ctx.db.query("users").unique())!._id,
+          roleAtAuthorship: "administrator",
+        },
+        currentVersionNo: 1,
+      });
+      await ctx.db.patch(s.observationId, { queuedProposalId: proposalId });
+    });
+    expect(
+      (
+        await t.mutation(internal.heldBooks.correctSourceFormatInternal, {
+          ...args,
+          expected: preview.expected!,
+          actor: "ari",
+        })
+      ).status,
+    ).toBe("refused");
+    expect((await formatState(t, s)).ledgers).toEqual([]);
+    await t.run((ctx) =>
+      ctx.db.patch(s.observationId, { queuedProposalId: undefined, snapshot: parsedGacha(true) }),
+    );
+    const paperbackBase = valueHash(parsedGacha(true));
+    const counterfact = await t.query(internal.heldBooks.previewSourceFormatInternal, {
+      ...args,
+      reviewed: {
+        ...gachaReviewed,
+        baseSnapshot: paperbackBase,
+        ol: { ...gachaReviewed.ol, normalizedSnapshot: paperbackBase },
+      },
+    });
+    expect(counterfact.expected).toBeNull();
+    expect(counterfact.refusal).toMatch(/physical-format/);
+    expect((await formatState(t, s)).ledgers).toEqual([]);
+    // OL accepts this retained subtitle; the narrow correction must still preserve its audio counterfact.
+    const audio = parseEditionJson({ ...JSON.parse(gachaEvidence.wire), subtitle: "Audiobook" })!;
+    const audioBase = valueHash(audio);
+    expect(
+      reviewedFormatRefusal(
+        { sourceKey: "openlibrary", sourceRecordId: audio.key, snapshot: audio },
+        {
+          ...gachaReviewed,
+          baseSnapshot: audioBase,
+          ol: { ...gachaReviewed.ol, normalizedSnapshot: audioBase },
+        },
+      ),
+    ).toMatch(/scope facts contradict/);
+  });
+});

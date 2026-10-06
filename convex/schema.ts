@@ -1,3 +1,4 @@
+import { sourceFormatDecisionValidator } from "./lib/sourceFormat";
 // MangaDB Convex schema.
 //
 // Open vocabularies (language codes, binding, currency, reserved usernames)
@@ -782,10 +783,11 @@ export default defineSchema({
     consecutiveFailures: v.number(),
   }).index("by_key", ["key"]),
 
-  // Identity = (source, source-record-id). `snapshot` is the latest normalized
-  // form — what reconciliation reads; prior snapshots are retained append-only
-  // in observationSnapshots. Retention is indefinite in v1.
+  // Identity = (source, source-record-id). `snapshot` keeps the latest normalized
+  // raw facts; reviewedSourceFormat supplies a separate placement interpretation.
+  // Prior raw snapshots are retained append-only in observationSnapshots.
   sourceObservations: defineTable({
+    reviewedSourceFormat: v.optional(sourceFormatDecisionValidator),
     sourceKey: v.string(),
     sourceRecordId: v.string(),
     // Linked once matched (matching-ladder rung 1); a rename at the source is

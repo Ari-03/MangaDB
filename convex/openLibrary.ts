@@ -1,3 +1,4 @@
+import { invalidateSourceFormat, projectSourceFormat } from "./lib/sourceFormat";
 // The OpenLibrary adapter (spec §6/§7): the monthly bulk-dump
 // pass — seeding stage ④ and the steady-state ISBN fill. OpenLibrary's flat
 // records only match *into* the existing skeleton and never define Series
@@ -609,6 +610,14 @@ export const applyEdition = internalMutation({
       now,
     });
 
+    const projection = projectSourceFormat(observation);
+    if (
+      projection.status === "stale" ||
+      (observation.reviewedSourceFormat && !observation.recordRef)
+    )
+      return { status: "recordOnly", changed: false };
+    const effective = projection.snapshot as OlEditionSnapshot;
+
     // Rung ①: stored source-id link.
     if (observation.recordRef?.type === "release") {
       const release = await ctx.db.get(observation.recordRef.id);
@@ -618,14 +627,14 @@ export const applyEdition = internalMutation({
       if (!changed) return { status: "unchanged", changed: false };
       // An ISBN another Release holds is that book's: none of the record's
       // facts are filled onto this link; the pair stays on the observation.
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot, now)) {
+      if (await isbnHeldElsewhere(ctx, observation, release, effective, now)) {
         return { status: "recordOnly", changed: false, releaseId: release._id };
       }
       const result = await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
         doc: release,
-        offered: offeredReleaseFields(snapshot),
+        offered: offeredReleaseFields(effective),
         observation,
         citation,
         now,
@@ -637,7 +646,7 @@ export const applyEdition = internalMutation({
       };
     }
 
-    return await applyStored(ctx, observation, snapshot, citation, now);
+    return await applyStored(ctx, observation, effective, citation, now);
   },
 });
 
@@ -823,7 +832,12 @@ export const repairDescriptionLine = internalMutation({
     if (observation === null) return { snapshotFixed: false, release: null };
     const snapshot = observation.snapshot as OlEditionSnapshot;
     const fixed = recleaned(snapshot, cleanOlDescription);
-    if (fixed !== null) await ctx.db.patch(observation._id, { snapshot: fixed });
+    if (fixed !== null)
+      await ctx.db.patch(observation._id, {
+        snapshot: fixed,
+        reviewedSourceFormat: invalidateSourceFormat(observation, Date.now()),
+      });
+    if (observation.reviewedSourceFormat) return { snapshotFixed: fixed !== null, release: null };
     const release = await repairLinkedDescription(ctx, observation, {
       sourceKey: SOURCE_KEY,
       clean: cleanOlDescription,
@@ -937,7 +951,11 @@ async function applyStored(
 }
 
 export const applyStoredInternal = internalMutation({
-  args: { observationId: v.id("sourceObservations"), expectedSnapshot: v.string() },
+  args: {
+    observationId: v.id("sourceObservations"),
+    expectedSnapshot: v.string(),
+    expectedDecision: v.optional(v.string()),
+  },
   handler: async (ctx, args): Promise<ApplyResult> => {
     const observation = await ctx.db.get(args.observationId);
     if (
@@ -945,7 +963,9 @@ export const applyStoredInternal = internalMutation({
       observation.sourceKey !== SOURCE_KEY ||
       observation.recordRef ||
       observation.withdrawn ||
-      valueHash(observation.snapshot) !== args.expectedSnapshot
+      valueHash(observation.snapshot) !== args.expectedSnapshot ||
+      valueHash(observation.reviewedSourceFormat ?? null) !==
+        (args.expectedDecision ?? valueHash(null))
     )
       throw new ConvexError("Stored placement source changed.");
     if (
@@ -953,7 +973,9 @@ export const applyStoredInternal = internalMutation({
       (await ctx.db.get(observation.queuedProposalId))?.state === "inReview"
     )
       throw new ConvexError("Placement is in review.");
-    const snapshot = observation.snapshot as OlEditionSnapshot;
+    const projection = projectSourceFormat(observation);
+    if (projection.status === "stale") throw new ConvexError(projection.reason);
+    const snapshot = projection.snapshot as OlEditionSnapshot;
     return await applyStored(
       ctx,
       observation,

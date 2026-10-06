@@ -1,3 +1,4 @@
+import { projectSourceFormat } from "./lib/sourceFormat";
 // Other Printings decided by a person (CONTEXT.md, docs/operations.md):
 // the only way a held book becomes another printing of a Release, or a
 // further record of one is linked to it. No importer records one on its
@@ -591,7 +592,10 @@ export async function readObservationBook(
   workTitles: readonly string[] = series.map((one) => one.title),
   annContext?: AnnWorkContext,
 ): Promise<BookReading> {
-  const s = observation.snapshot as SnapshotFacts;
+  const projection = projectSourceFormat(observation);
+  const s = (
+    projection.status === "stale" ? observation.snapshot : projection.snapshot
+  ) as SnapshotFacts;
   const title = typeof s?.title === "string" ? s.title.trim() : "";
 
   const seriesTitles =
@@ -631,6 +635,7 @@ export async function readObservationBook(
   const outOfScope = outOfScopeReason(title);
   if (outOfScope !== null) reading.scope.push(`its title reads ${outOfScope}`);
 
+  if (projection.status === "stale") reading.unreadable.push(projection.reason);
   if (title === "") reading.unreadable.push("The record gives no title to read the book from.");
   return reading;
 }
@@ -655,7 +660,9 @@ export async function contentRefusal(
   series: Array<Doc<"series">>,
   annContext?: AnnWorkContext,
 ): Promise<string | null> {
-  const title = (observation.snapshot as SnapshotFacts)?.title;
+  const projection = projectSourceFormat(observation);
+  if (projection.status === "stale") return projection.reason;
+  const title = (projection.snapshot as SnapshotFacts)?.title;
   if (typeof title !== "string" || title.trim() === "")
     return "The record gives no title to read the book from.";
   const context =
@@ -798,6 +805,9 @@ export const decideInternal = internalMutation({
 
     const observation = await ctx.db.get(observationId);
     if (observation === null) return refuse("No such source record.");
+    const projection = projectSourceFormat(observation);
+    if (projection.status === "stale") return refuse(projection.reason);
+    if (projection.status === "corrected") return refuse("The reviewed source Format is digital.");
     if (observation.withdrawn) return refuse("Its source no longer lists the book.");
     if (observation.recordRef !== undefined) {
       return refuse("The book's record is already linked to a record.");
