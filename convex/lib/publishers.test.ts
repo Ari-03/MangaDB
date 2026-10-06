@@ -22,6 +22,7 @@ describe("canonicalPublisherFor", () => {
     expect(canonicalPublisherFor("Dark Horse Manga")?.slug).toBe("dark-horse");
     expect(canonicalPublisherFor("Dark Horse Manhwa")?.slug).toBe("dark-horse");
     expect(canonicalPublisherFor("Irodori Inc.")?.slug).toBe("irodori-comics");
+    expect(canonicalPublisherFor("Kaiten Books LLC")?.slug).toBe("kaiten-books");
   });
 
   it("resolves imprints to their own row, naming the parent company", () => {

@@ -215,6 +215,7 @@ export const DUPLICATE_ALIASES: Record<string, string> = {
   "cpm manga": "central-park-media",
   dmp: "digital-manga",
   "irodori inc": "irodori-comics",
+  "kaiten books llc": "kaiten-books",
   // Deliberately absent: "yen on" and "del rey"/"ballantine" name prose
   // lines (light novels, SF), never their manga siblings.
 };
