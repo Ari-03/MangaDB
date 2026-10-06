@@ -638,3 +638,11 @@ is fixed.
   [configuration.md](configuration.md#analytics-posthog) says so for
   operators, and nothing tells a reader. Stripping the query from what
   posthog-js sends, or disclosing it, is the owner's call.
+- **Grimgar novel Releases occupy manga Volumes.** Exact official distribution
+  records identify ISBNs `9781626926608` and `9781626926622` as novels. The October
+  6 staging snapshot has active Releases on manga Volumes 2 and 3, with two linked
+  OL observations. The guarded scope-only Release hide in
+  [operations.md](operations.md#guarded-held-book-repairs) keeps manga Volume,
+  Edition, Series, comment and source identities; Root must establish current
+  exact scope decisions and pass the personal/namespace guards before executing.
+  Retiring the manga Volumes or merging their Series would lose the intended work.

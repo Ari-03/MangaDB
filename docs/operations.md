@@ -593,3 +593,143 @@ node scripts/repair.ts rebuild            # seriesBrowse:rebuild
   `createRelease`.
 
 `npx convex run repair:metrics` prints the metrics without the script.
+
+## Guarded held-book repairs
+
+Use the explicitly selected deployment and its current full backup, including
+file storage. The held-book inventory is an offline research queue. Its 3,846
+observations and 3,396 groups describe the October 2026 snapshot, not a count of
+executable repairs. Publisher-family acceptance remains deferred. Every
+observation needs its own current preview, reviewed disposition and result;
+siblings in one ISBN group can need different sequential operations.
+
+`heldBooks:previewInternal` accepts `{observationId, target?, reviewed?, replay?}`.
+A target is `{type:"release", id}` or `{type:"bundle", id}`. A reviewed identity
+names the exact `isbn13`, canonical `seriesId`, `publisherId`, complete ordered
+`volumeIds` and `evidenceUrls`. Optional `sourceTitle` retains an explicitly
+reviewed package/work correspondence. It cannot replace missing or contradictory
+contents. `umbrellaRouting:{sourceTitle, productTitle, productVolumeLabel}` is a
+per-observation ANN routing proof: the current parent must actually list that
+exact ISBN/title and multiple distinct Parts, and the product must read as the
+reviewed canonical Part and Volume. It never relinks the generic ANN parent.
+
+Keep the returned `expected` string intact. `heldBooks:executeInternal` takes the
+same preview arguments plus `actor`, `operation`, `expected`, `reason` and
+`evidenceUrls`; `reviewSeries` also takes `seriesId`. Operations are:
+
+- `refreshSource`: dispose of a linked, withdrawn, source-review or exact-scope
+  hold, or fill source-derived Series context while retaining its original age.
+  An unresolved OL skip/review and a member's placement review stay held.
+- `reviewSeries`: change only this hold's routing from reviewed identity evidence.
+  A conflicting source parent needs the supported explicit routing proof.
+- `link`: attach this source to the exact Release or Bundle. All contents, work,
+  extent, format, publisher, current claims and statuses must agree. A Line
+  covering one complete canonical Volume can be a single book. An empty Bundle
+  always blocks. Links change no canonical contents or Bundle memberships.
+- `refreshAnn`: re-read the stored ANN page/title with the accepted shared
+  readers. Contradictory ranges, gaps, positions and unreadable inputs refuse.
+  Changes preserve source freshness and withdrawal facts; equality writes nothing.
+- `replay`: use `replay:true` in both preview and execution. This pins the bounded
+  current Volume/Edition/Line/sibling slots and bootstrap mode. Only a stored OL
+  free-slot creation or an ANN observation without an existing ISBN owner uses
+  its actual placement adapter. It never substitutes an old source snapshot or
+  records a fake source sighting. Other adapters require their specific reviewed
+  placement route.
+
+Execute one observation per call. A refusal means preview again and review the
+changed fact; do not retry the old expected string. The whole mutation runs in a
+capped subtransaction, including incidental adapter, projection and audit writes.
+Joins stop at 80 rows, merge resolution at eight hops, and expected guards at
+256 KiB; byte/query/document/write/scheduling headroom can refuse earlier. Large
+or incomplete cases need a separately reviewed operation. The existing printing
+APIs keep their old validators, but an old held-link guard without the current
+context needs a fresh `printings:linkHeldStateInternal` preview.
+
+`scope:stateInternal({isbn})` returns complete bounded history and `expected`.
+`scope:decideInternal({actor,isbn13,reason,evidenceUrls,expected})` creates a durable
+exact-ISBN decision. Reasons are `novel`, `merchandise`, `sampler`, `nonEnglish`,
+`childrensBook` (picture/board books, not children's manga) and `audio`.
+`scope:revokeInternal({actor,decisionId,reason,expected})` retains the original
+approved evidence and records revocation. Preview before either operation, even
+an identical repeat. A scope decision stops new source/manual/Proposal/repair
+placement; it does not silently hide or unlink already linked catalog records.
+
+For a proved canonical prose Release, use
+`heldRepair:scopedReleaseStateInternal({releaseId})`, then
+`heldRepair:hideScopedReleaseInternal({actor,releaseId,expected,reason,evidenceUrls})`.
+This requires an approved exact-ISBN scope decision and complete exclusive claims.
+It refuses Release-specific tracking, variant pins, aliases and Bundle membership.
+It hides only that Release and retains its Edition, canonical manga Volumes,
+Series and historical source reference IDs. It leaves Edition/Volume/Series
+personal identities and their dependent histories intact. This is the narrow
+route for the confirmed Grimgar novel ISBNs, subject to fresh per-Release guards.
+A hidden Release needs a separate reviewed restoration after scope revocation.
+
+`heldRepair:referenceAuditInternal({releaseId,bundleId?})` returns counts and
+completeness, never private rows. The bounded audit includes Release/Edition/
+Volume/Bundle aliases, variants, collection entries, progress, ratings and
+aggregates, favorites, reviews, comments and Series state. Review/comment
+moderation history, reports, lists and shares retain their existing parent/user
+identities in supported operations. Unsupported references or incomplete joins
+block conversion; a historical count-only backup audit cannot approve a later call.
+
+For an existing box collision, preview
+`heldRepair:conversionStateInternal({releaseId,bundleId})`, then call
+`heldRepair:convertInternal({actor,releaseId,bundleId,expected,reason,evidenceUrls})`.
+The guard checks exact ordered complete members and current identity, scope,
+locks, claims, revisions and personal-reference counts. Conversion carries
+supported collection ownership with its privacy rules and records immutable
+Proposal/Revision provenance. An audited already-converted repeat writes nothing.
+Source references on the hidden box and retained placeholder Volumes are explicit
+outcomes, not automatically retired or relinked.
+
+Correct a proved format error/member replacement first with
+`heldRepair:bundleContentsStateInternal({bundleId,memberIds,corrections})`, then
+`heldRepair:repairBundleContentsInternal` with those arguments plus the common
+actor/expected/reason/evidence fields. Each correction names
+`{releaseId,from:"physical"|"digital",to:"physical"|"digital"}`. It preserves Release
+and content identities and replaces the full ordered member set. Bundle owners,
+variant-dependent corrections, unknown contents and mismatched publishers or
+formats block. This supports the proved Attack on Titan Volume 6 eBook correction
+and replacement with the existing proper paperback; it supplies no invented
+members for the empty Season 3 Part 2 Bundle.
+
+The ordinary `repair:runBatch` `createRelease` route can create researched binding
+or digital siblings on existing complete Volumes. `remodelEdition` retains live
+`targetSeriesId`/`volumeId` fields and adds optional `groups[].into` with an exact
+existing `editionId`, `editionLineId` and `linePosition`. That move requires an
+active unlocked empty unmapped target of the same canonical work and publisher;
+it leaves source coverage and Series identity intact. There is no top-level
+`into` field.
+
+`heldBooks:isbnNamespaceAuditInternal({paginationOpts})` keeps native cursor
+semantics and accepts at most 20 roots, with a root-byte cap of 4 MiB or smaller.
+Inspect every incomplete/uninspected root before treating a pass as complete.
+Run all namespace/printing consistency checks selected by the deployment review;
+an offline snapshot certificate is not a live certificate.
+
+Successful held operations record full source/hold before/after metadata and an
+approved Proposal in `heldRepairLedger`. Replay records actual new IDs separately
+from shared/preexisting Edition/Volume/Line/coverage structure.
+`heldBooks:restoreInternal({actor,ledgerId,expectedAfter,reason})` only restores
+metadata while the source/hold still equals its recorded after-state. It preserves
+hold age/reason and Proposal references; a deleted hold receives a new database
+ID, with the original ID returned as provenance. Revoke scope before requeueing.
+Maturity already supported by source evidence is not demoted. Replay, printing,
+conversion and canonical hiding are not inverted by this API or by blindly hiding
+new records: recovery needs the full backup and a reviewed restoration procedure
+that accounts for later uses, shared structure and projections.
+
+Initialize the offline disposition ledger without executing or overwriting data:
+
+```sh
+node scripts/held-dispositions.mjs report-data.json new-disposition-ledger.json
+```
+
+The script retains every group, observation, diagnostic, alias/holder and research
+action, checks exact one-time membership, and initializes all dispositions pending.
+Record reviewed operation dependencies, fresh guards, actual results and audit IDs
+per observation. A group becomes terminal only after all its observations have an
+explicit disposition. Count writes, cleared holds and ownership transfers separately.
+Citations must be trimmed absolute HTTP(S) URLs with hosts; accepted URL syntax
+alone proves neither scope nor contents.
