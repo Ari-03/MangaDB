@@ -1,3 +1,4 @@
+import { convertedClaim } from "./lib/heldRepair";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -98,7 +99,6 @@ export const previewInternal = internalQuery({
             for (const owner of state.claims.owners.values()) {
               if (owner.kind === "bundle" && owner.doc._id === bundle._id) continue;
               if (owner.kind === "release") {
-                const { convertedClaim } = await import("./lib/heldRepair");
                 const proof = await convertedClaim(ctx, owner.doc, bundle);
                 if (proof) continue;
               }
@@ -522,7 +522,6 @@ export const isbnNamespaceAuditInternal = internalQuery({
               ? "collision"
               : "reserved";
           if (classification === "collision") {
-            const { convertedClaim } = await import("./lib/heldRepair");
             const releases = owners.filter((o) => o.kind === "release");
             if (
               owners.filter((o) => o.kind === "bundle").length === 1 &&

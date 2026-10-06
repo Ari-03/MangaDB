@@ -14,7 +14,7 @@ import { v, type Infer } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
-import { packagingValidator, rangeLabels, type ParsedBookTitle } from "./bookTitle";
+import { packagingValidator, rangeLabels } from "./bookTitle";
 import { fullDateValidator } from "./dates";
 import { inferCoverage } from "./coverage";
 import { candidateSeries, hiddenSeriesTitled, matchRelease, type ReleaseFact } from "./matching";
@@ -74,22 +74,7 @@ export const catalogTitleFields = {
 const catalogTitleValidator = v.object(catalogTitleFields);
 export type CatalogTitle = Infer<typeof catalogTitleValidator>;
 
-/**
- * A parsed book title as snapshot fields (PRH, Yen Press, OpenLibrary): the
- * parser's nulls and false flags become absent fields.
- */
-export function parsedTitleFields(parsed: ParsedBookTitle) {
-  const coverRange = parsed.packaging?.coverRange ?? null;
-  return {
-    seriesTitle: parsed.seriesTitle,
-    volumeLabel: parsed.volumeLabel ?? undefined,
-    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
-    packaging: parsed.packaging ?? undefined,
-    bareNumber: parsed.bareNumber || undefined,
-    bareRoman: parsed.bareRoman || undefined,
-    bareSplit: parsed.bareSplit ?? undefined,
-  };
-}
+export { parsedTitleFields } from "./bookTitle";
 
 /**
  * The fields this source offers on a linked Release, in canonical form.

@@ -1,6 +1,11 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
-import { conversionPreview, referenceAudit, scopedReleaseState } from "./lib/heldRepair";
+import {
+  conversionPreview,
+  referenceAudit,
+  scopedReleaseState,
+  bundleContentsState,
+} from "./lib/heldRepair";
 import { nestedLimits } from "./lib/bounded";
 import { internal } from "./_generated/api";
 import { resolveActor, createAudit } from "./lib/repair/audit";
@@ -146,7 +151,6 @@ export const bundleContentsStateInternal = internalQuery({
   args: contentsArgs,
   handler: async (ctx, args) => {
     try {
-      const { bundleContentsState } = await import("./lib/heldRepair");
       const state = await bundleContentsState(ctx, args.bundleId, args.memberIds, args.corrections);
       return {
         expected: state.expected,
@@ -186,7 +190,6 @@ export const repairBundleContentsInternal = internalMutation({
 export const repairBundleContentsOneInternal = internalMutation({
   args: fixArgs,
   handler: async (ctx, args): Promise<Fixed> => {
-    const { bundleContentsState } = await import("./lib/heldRepair");
     const state = await bundleContentsState(ctx, args.bundleId, args.memberIds, args.corrections);
     if (state.expected !== args.expected)
       throw new ConvexError("Contents/format state drifted; preview again.");

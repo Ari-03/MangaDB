@@ -8,6 +8,8 @@
 // `applyClearOverride`, `validateChanges`, and the record plumbing exported
 // here.
 
+import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
+import { isbnScope } from "./lib/scope";
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
@@ -241,12 +243,10 @@ export async function applyUpdate(
         : [],
     );
     if (isbns.length) {
-      const { isbnScope } = await import("./lib/scope");
       for (const isbn of isbns) {
         const scope = await isbnScope(ctx, isbn);
         if (scope) fail("invalidField", scope);
       }
-      const { primaryNamespaceRefusal } = await import("./lib/releaseIsbns");
       const refusal = await primaryNamespaceRefusal(
         ctx,
         isbns,

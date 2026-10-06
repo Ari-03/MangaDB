@@ -856,3 +856,20 @@ export function outOfScopeReason(title: string): ScopeReason | null {
   if (parseBookTitle(text).isNovel) return "novel";
   return null;
 }
+
+/**
+ * A parsed book title as snapshot fields (PRH, Yen Press, OpenLibrary): the
+ * parser's nulls and false flags become absent fields.
+ */
+export function parsedTitleFields(parsed: ParsedBookTitle) {
+  const coverRange = parsed.packaging?.coverRange ?? null;
+  return {
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? undefined,
+    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
+    packaging: parsed.packaging ?? undefined,
+    bareNumber: parsed.bareNumber || undefined,
+    bareRoman: parsed.bareRoman || undefined,
+    bareSplit: parsed.bareSplit ?? undefined,
+  };
+}

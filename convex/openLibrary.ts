@@ -37,6 +37,8 @@
 // edition observed before its Release existed (ANN created most VIZ books
 // later) stayed unlinked, so its description never reached the Release.
 
+import { repairCountsValidator } from "./lib/descriptionRepair";
+import { isbnScope } from "./lib/scope";
 import { valueHash } from "./lib/values";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -84,7 +86,6 @@ import {
   isbnHeldElsewhere,
   needsEditionLine,
   recleaned,
-  repairCountsValidator,
   repairLinkedDescription,
   runDescriptionRepair,
   REPAIR_SCAN,
@@ -359,7 +360,6 @@ type ApplyResult = {
  * and Kodansha keys by slug, so Yen Press is the one to ask.
  */
 export async function outOfScopeElsewhere(ctx: QueryCtx, isbn13: string): Promise<string | null> {
-  const { isbnScope } = await import("./lib/scope");
   return await isbnScope(ctx, isbn13);
 }
 

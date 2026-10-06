@@ -6,6 +6,7 @@
 // bootstrap-unreviewed backlog query. Source-specific fetch/parse/apply
 // lives in each adapter module; everything here is source-agnostic.
 
+import { isbnScope } from "./lib/scope";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { type FunctionReference, paginationOptsValidator } from "convex/server";
@@ -966,7 +967,6 @@ export const backfillHolds = internalMutation({
         }
         continue;
       }
-      const { isbnScope } = await import("./lib/scope");
       const scoped = await isbnScope(
         ctx,
         (observation.snapshot as { isbn13?: string; isbn10?: string }).isbn13 ??

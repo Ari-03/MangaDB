@@ -6,6 +6,9 @@
 // and — once its Volumes are placed — Series. The stock Series merge appends
 // loser Volumes after the survivor's, so Volumes are placed by label first.
 
+import { isbnScope } from "../scope";
+import { reader, releaseContents, volumesForLabels } from "../heldBooks";
+import { referenceAudit, convertedClaim, conversionState } from "../heldRepair";
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { Contents } from "../heldBooks";
@@ -15,7 +18,7 @@ import { followMerges } from "../merges";
 import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
-import { assignedIsbnRefusal, primaryIsbnsOf } from "../releaseIsbns";
+import { assignedIsbnRefusal, primaryIsbnsOf, isbnClaims, claimResolver } from "../releaseIsbns";
 import { seriesSearchText } from "../searchMatch";
 import {
   OWNERSHIP,
@@ -1347,8 +1350,6 @@ async function boxConversionPreflight(
   bundleId: Id<"releaseBundles"> | undefined,
   retireVolumeIds: Id<"volumes">[],
 ) {
-  const { referenceAudit } = await import("../heldRepair");
-  const { reader } = await import("../heldBooks");
   const r = reader(ctx);
   try {
     if (box.status !== "active" || box.locked) skip("Box must be active and unlocked.");
@@ -1389,8 +1390,6 @@ async function conversionClaims(
   box: Doc<"releases">,
   bundle: Doc<"releaseBundles"> | null,
 ) {
-  const { isbnClaims, claimResolver } = await import("../releaseIsbns");
-  const { isbnScope } = await import("../scope");
   for (const key of primaryIsbnsOf(box)) {
     const scope = await isbnScope(ctx, key);
     if (scope) skip(scope);
@@ -1418,9 +1417,6 @@ async function conversionMembers(
   format: Doc<"releases">["format"],
   boxId?: Id<"releases">,
 ) {
-  const { reader, releaseContents } = await import("../heldBooks");
-  const { isbnClaims, claimResolver } = await import("../releaseIsbns");
-  const { isbnScope } = await import("../scope");
   const r = reader(ctx);
   await r.active(publisherId);
   if (
@@ -1503,8 +1499,6 @@ async function toBundle(
   edition: Doc<"editions">,
   name: string,
 ): Promise<Result> {
-  const { reader, releaseContents, volumesForLabels } = await import("../heldBooks");
-  const { convertedClaim } = await import("../heldRepair");
   const r = reader(ctx);
   const target = await r.active(entry.targetSeriesId);
   const boxes = await r.many(
@@ -1578,8 +1572,6 @@ async function toBundle(
         content.release.format !== box.format
       )
         skip("Box member identity differs.");
-      const { isbnScope } = await import("../scope");
-      const { isbnClaims, claimResolver } = await import("../releaseIsbns");
       for (const key of primaryIsbnsOf(content.release)) {
         const scope = await isbnScope(ctx, key);
         if (scope) skip(scope);
@@ -2697,8 +2689,6 @@ async function releaseBundle(
   audit: Audit,
   entry: EntryOf<"releaseBundle">,
 ): Promise<Result> {
-  const { reader } = await import("../heldBooks");
-  const { convertedClaim, conversionState } = await import("../heldRepair");
   const r = reader(ctx);
   let bundle: Doc<"releaseBundles"> | null = null;
   let box: Doc<"releases"> | null = null;

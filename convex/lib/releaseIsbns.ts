@@ -1,9 +1,8 @@
 // Other Printings (CONTEXT.md) as rows: the `releaseIsbns` table read by
 // ISBN and by Release, the mark a linked record of one carries, and who
-// claims an ISBN when a write must know for certain (isbnClaims). Lookups
-// only, with no imports beyond types and ISBN arithmetic, so the matching
-// ladder, reconciliation, the pages and the writers can all read it without
-// an import cycle. The write that records one is lib/printings.ts, and the
+// claims an ISBN when a write must know for certain (isbnClaims). Bounded ownership
+// lookups shared by matching, reconciliation, pages, and writers. Exact
+// scope decisions also guard writes into this namespace. The write that records one is lib/printings.ts, and the
 // decision to record one is a person's (printings.ts).
 //
 // The ownership invariant the writers keep (docs/operations.md): every
@@ -14,6 +13,7 @@
 // row (a promoted printing). An ISBN with no row keeps the older policy:
 // duplicate primaries are refused against active holders only.
 
+import { isbnScope } from "./scope";
 import type { TransactionMetrics } from "convex/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
@@ -638,7 +638,6 @@ export async function primaryNamespaceRefusal(
   const resolver = claimResolver(ctx);
   for (const isbn13 of new Set(isbns.flatMap((isbn) => toIsbn13(isbn) ?? []))) {
     if (type === "bundle") {
-      const { isbnScope } = await import("./scope");
       const scope = await isbnScope(ctx, isbn13);
       if (scope) return scope;
     }
@@ -682,7 +681,6 @@ export async function assignedIsbnRefusal(
   releaseId?: Id<"releases">,
   keep?: (claim: Claim) => boolean,
 ): Promise<string | null> {
-  const { isbnScope } = await import("./scope");
   for (const key of new Set(isbns.flatMap((isbn) => toIsbn13(isbn) ?? []))) {
     const scope = await isbnScope(ctx, key);
     if (scope) return scope;

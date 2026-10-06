@@ -18,6 +18,7 @@
 // linked one seen again make its Series mature at once when it is 18+
 // evidence (lib/mature.ts applyMatureEvidence), for every importer.
 
+import { isbnScope } from "./scope";
 import { ConvexError, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -335,7 +336,6 @@ export async function linkObservation(
 ): Promise<void> {
   const previous = await ctx.db.get(observationId);
   if (ref.type === "release" || ref.type === "releaseBundle") {
-    const { isbnScope } = await import("./scope");
     const scope = await isbnScope(ctx, observedIsbn13(previous?.snapshot));
     if (scope && !sameValue(previous?.recordRef, ref)) throw new ConvexError(scope);
   }

@@ -56,6 +56,8 @@
 // the operator's `backfillDescriptions`. A failed refetch never replaces a
 // stored page.
 
+import { repairCountsValidator } from "./lib/descriptionRepair";
+import { isbnScope } from "./lib/scope";
 import { v, type Infer } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -120,7 +122,6 @@ import {
   IMPORT_LANGUAGE,
   namedEditionLine,
   recleaned,
-  repairCountsValidator,
   repairLinkedDescription,
   rewriteOwnDescription,
   queueCreationProposal,
@@ -837,7 +838,6 @@ export const applyManga = internalMutation({
       ),
     );
     const packaged: Packaged = (line) => packagedLines.has(line);
-    const { isbnScope } = await import("./lib/scope");
     const eligible = [];
     for (const release of snapshot.releases) {
       if (!(await isbnScope(ctx, release.isbn13))) eligible.push(release);
@@ -1714,7 +1714,6 @@ export const applyReleasePage = internalMutation({
     const workNames = [series?.title ?? entryTitle];
 
     // A line out of scope is noted only, whatever else would hold it.
-    const { isbnScope } = await import("./lib/scope");
     const outOfScope = lineOutOfScope(line, workNames) ?? (await isbnScope(ctx, isbn13));
     if (outOfScope !== null) return await hold(null, outOfScope);
 

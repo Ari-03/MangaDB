@@ -7,6 +7,9 @@
 // consistency check at the end reads the whole catalog's printing claims
 // for an operator, a page at a time.
 
+import { matureFlipsOf } from "./lib/mature";
+import { heldState } from "./lib/heldBooks";
+import { isbnScope } from "./lib/scope";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, type Infer, v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -785,7 +788,6 @@ export const decideInternal = internalMutation({
     const decided = decidedIsbn13(snapshot);
     if ("refusal" in decided) return refuse(decided.refusal);
     const { isbn13 } = decided;
-    const { isbnScope } = await import("./lib/scope");
     const scope = await isbnScope(ctx, isbn13);
     if (scope) return refuse(scope);
     if (
@@ -1298,7 +1300,6 @@ export const linkHeldStateInternal = internalQuery({
   args: { observationId: v.id("sourceObservations"), releaseId: v.id("releases") },
   handler: async (ctx, args) => {
     try {
-      const { heldState } = await import("./lib/heldBooks");
       const state = await heldState(ctx, args.observationId, {
         type: "release",
         id: args.releaseId,
@@ -1312,7 +1313,6 @@ export const linkHeldStateInternal = internalQuery({
             .order("desc")
             .first()
         )?._id ?? null;
-      const { matureFlipsOf } = await import("./lib/mature");
       const flips = await matureFlipsOf(ctx, {
         ...state.observation,
         recordRef: { type: "release", id: args.releaseId },

@@ -20,6 +20,7 @@
 // Releases, Bundles or rated Editions between some Series and none is
 // refused, since no override governs tracking with no Series.
 
+import { isbnScope } from "./scope";
 import { internal } from "../_generated/api";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -68,6 +69,7 @@ import {
   type ClaimResolver,
   type IsbnClaims,
   type Room,
+  primaryNamespaceRefusal,
 } from "./releaseIsbns";
 import { sameValue } from "./values";
 
@@ -157,8 +159,6 @@ export const RELEASE_PRINTINGS_READ = 100;
  * applyRestore and the data repair, which reports it as its skip.
  */
 export async function restoreRefusal(ctx: QueryCtx, ref: RecordRef): Promise<string | null> {
-  const { primaryNamespaceRefusal } = await import("./releaseIsbns");
-  const { isbnScope } = await import("./scope");
   if (ref.type === "release" || ref.type === "releaseBundle") {
     const doc = await ctx.db.get(ref.id);
     if (doc) {

@@ -15,8 +15,12 @@
 
 import { v, type Infer } from "convex/values";
 import { bindingFacts } from "./bookFacts";
-import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
-import { parsedTitleFields } from "./catalogTitle";
+import {
+  outOfScopeReason,
+  packagingValidator,
+  parseBookTitle,
+  parsedTitleFields,
+} from "./bookTitle";
 import { calendarDay, datePartsValidator, monthFromAbbreviation, type DateParts } from "./dates";
 import { isbn10To13, isbn13CheckOk, toIsbn13 } from "./isbn";
 import { cleanBlurb } from "./text";

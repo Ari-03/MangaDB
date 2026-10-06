@@ -28,8 +28,11 @@
 // `release` is optional on both paths: a series-structured source (ANN)
 // creates or queues the Series/Volume backbone without any Release.
 
+import type { repairCountsValidator } from "./descriptionRepair";
+import { reader, releaseContents, volumesForLabels, refuse } from "./heldBooks";
+import { isbnScope } from "./scope";
 import type { FunctionReference } from "convex/server";
-import { v, type Infer } from "convex/values";
+import type { Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
@@ -56,7 +59,14 @@ import {
   type CanonicalPublisher,
 } from "./publishers";
 import { insertSourceProposal, reconcileFields } from "./reconcile";
-import { primaryNamespaceRefusal, assignedIsbnRefusal, printingReleases } from "./releaseIsbns";
+import {
+  primaryNamespaceRefusal,
+  assignedIsbnRefusal,
+  printingReleases,
+  isbnClaims,
+  claimResolver,
+  primaryIsbnsOf,
+} from "./releaseIsbns";
 import { toIsbn13 } from "./isbn";
 import { seriesSearchText } from "./searchMatch";
 
@@ -743,13 +753,6 @@ export const REPAIR_SCAN = 100;
 /** Failed records whose message a repair link logs (the count is complete). */
 const REPAIR_ERROR_SAMPLES = 20;
 
-export const repairCountsValidator = v.object({
-  scanned: v.number(),
-  snapshotFixed: v.number(),
-  releaseUpdated: v.number(),
-  releaseCleared: v.number(),
-  errors: v.number(),
-});
 type RepairCounts = Infer<typeof repairCountsValidator>;
 
 /** What repairing one observation did. */
@@ -1605,8 +1608,6 @@ export async function createReleaseBundle(
   | { bundleId: Id<"releaseBundles">; members: number; created: boolean; conflict?: string }
   | { held: string }
 > {
-  const { isbnClaims, claimResolver, primaryIsbnsOf } = await import("./releaseIsbns");
-  const { isbnScope } = await import("./scope");
   const keys = [...primaryIsbnsOf(args.release)];
   let existing: Doc<"releaseBundles"> | null = null;
   let conflict: string | null = null;
@@ -1765,7 +1766,6 @@ async function expectedBundleMembers(
   publisherId: Id<"publishers">,
   established: ReadonlySet<Id<"releases">> = new Set(),
 ): Promise<{ members: Array<{ releaseId: Id<"releases">; order: number }>; conflict?: string }> {
-  const { reader, releaseContents, volumesForLabels, refuse } = await import("./heldBooks");
   const r = reader(ctx);
   try {
     const series = await r.active(args.seriesId);
@@ -1912,7 +1912,6 @@ async function addLateBundleMembers(
     new Set(current.map((m) => m.releaseId)),
   );
   if (selected.conflict) return { expected: 0, added: 0, conflict: selected.conflict };
-  const { reader, releaseContents, refuse } = await import("./heldBooks");
   const r = reader(ctx);
   try {
     const publisher = await r.active(bundle.publisherId);
