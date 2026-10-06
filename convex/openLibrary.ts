@@ -73,6 +73,7 @@ import {
 } from "./lib/matching";
 import {
   clearHold,
+  getObservation,
   type Hold,
   linkObservation,
   recordUnplaced,
@@ -594,8 +595,15 @@ async function noteFlag(
  * One atomic mutation per record.
  */
 export const applyEdition = internalMutation({
-  args: { snapshot: olEditionValidator },
-  handler: async (ctx, { snapshot }): Promise<ApplyResult> => {
+  args: { snapshot: olEditionValidator, storedDescriptionReplay: v.optional(v.boolean()) },
+  handler: async (ctx, { snapshot, storedDescriptionReplay }): Promise<ApplyResult> => {
+    // Selection can race a Format review. Stored maintenance is not a source
+    // sighting and must leave reviewed observations, including undo pins, intact.
+    if (
+      storedDescriptionReplay &&
+      (await getObservation(ctx, SOURCE_KEY, snapshot.key))?.reviewedSourceFormat
+    )
+      return { status: "recordOnly", changed: false };
     const now = Date.now();
     const source = await getSourceByKey(ctx, SOURCE_KEY);
     const citation = {
@@ -687,7 +695,7 @@ export const unlinkedDescribedEditions = internalQuery({
     let next: string | null = null;
     for (const doc of docs) {
       next = doc.sourceRecordId;
-      if (doc.recordRef !== undefined) continue;
+      if (doc.recordRef !== undefined || doc.reviewedSourceFormat) continue;
       const snapshot = doc.snapshot as OlEditionSnapshot;
       if (snapshot.description === undefined || snapshot.isbn13 === undefined) continue;
       const declined = doc.conflicts?.some(
@@ -728,7 +736,8 @@ type ReplayResult = {
  * since most observations do not qualify); safe to rerun. An edition the
  * matcher declines (a shared ISBN, a dissimilar title) stays unlinked with
  * its `match` note, and a rerun skips it rather than replaying it again;
- * each replay bumps the observation's `lastSeenAt`, as a dump pass would.
+ * each ordinary replay bumps the observation's `lastSeenAt`, as a dump pass would.
+ * Reviewed Format observations are skipped in selection and in the mutation.
  * The monthly dump pass still retries declined editions. An explicit
  * operator command: it runs whatever the source's enabled flag says and
  * opens no Import Run.
@@ -778,7 +787,10 @@ export const replayDescriptions = internalAction({
         if (replayed > (args.replayed ?? 0) && outOfTime()) return await handOff();
         replayed++;
         try {
-          const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, { snapshot });
+          const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, {
+            snapshot,
+            storedDescriptionReplay: true,
+          });
           if (result.status === "linked") linked++;
         } catch (e) {
           errors.push(`${snapshot.key}: ${errorMessage(e)}`);

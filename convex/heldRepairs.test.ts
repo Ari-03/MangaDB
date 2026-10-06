@@ -9,6 +9,7 @@ import {
   insertBundleMember,
   insertEditionLine,
   insertEdition,
+  insertCoverage,
   insertObservation,
   insertPublisher,
   insertRelease,
@@ -19,6 +20,7 @@ import {
 import { makeT, type TestT } from "./test.helpers";
 import { insertBook } from "./test.moderation";
 import { sailorMoon, cirque } from "./test.heldAliases";
+import { nonAnnAliasCases } from "./test.heldNonAnnAliases";
 import { annContentFacts } from "./lib/ann";
 import { parseEditionJson } from "./lib/openLibrary";
 import {
@@ -123,6 +125,139 @@ async function dance(t: TestT) {
 const linkArgs = (s: Awaited<ReturnType<typeof dance>>) => ({
   observationId: s.observationId,
   target: { type: "release" as const, id: s.releaseId },
+});
+
+async function nonAnnAlias(t: TestT, row: (typeof nonAnnAliasCases)[number]) {
+  await admin(t);
+  return await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, row.publisher);
+    const seriesId = await insertSeries(ctx, row.series);
+    const heldSeriesId = row.heldSeries ? await insertSeries(ctx, row.heldSeries) : seriesId;
+    const volumeIds = [];
+    for (const fields of row.volumes)
+      volumeIds.push(await insertVolume(ctx, { ...fields, seriesId }));
+    const editionId = await insertEdition(ctx, { publisherId });
+    for (const [i, volumeId] of volumeIds.entries())
+      await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
+    const releaseId = await insertRelease(ctx, {
+      ...row.release,
+      publisherId,
+      editionId,
+      seriesIds: [seriesId],
+    });
+    const observationId = await insertObservation(ctx, {
+      sourceKey: "openlibrary",
+      sourceRecordId: row.source.key,
+      snapshot: row.source,
+      lastSeenAt: row.lastSeenAt,
+    });
+    const holdId = await ctx.db.insert("placementHolds", {
+      observationId,
+      sourceKey: "openlibrary",
+      kind: row.holdKind,
+      seriesId: heldSeriesId,
+      heldAt: row.heldAt,
+    });
+    return { publisherId, seriesId, volumeIds, editionId, releaseId, observationId, holdId };
+  });
+}
+
+describe("reviewed non-ANN canonical work aliases", () => {
+  it.each(nonAnnAliasCases)(
+    "checks captured $source.title without replacing source text",
+    async (row) => {
+      const t = makeT();
+      const s = await nonAnnAlias(t, row);
+      const args = {
+        observationId: s.observationId,
+        target: { type: "release" as const, id: s.releaseId },
+        reviewed: {
+          isbn13: row.source.isbn13!,
+          seriesId: s.seriesId,
+          publisherId: s.publisherId,
+          volumeIds: s.volumeIds,
+          evidenceUrls: [row.source.url],
+        },
+      };
+      const preview = await t.query(internal.heldBooks.previewInternal, args);
+      if (row.ready) expect(preview.refusal).toBeNull();
+      else expect(preview.refusal).not.toBeNull();
+      const before = await repairState(t);
+      const applied = await t.mutation(internal.heldBooks.executeInternal, {
+        ...args,
+        actor: "ari",
+        expected: preview.expected ?? "incomplete",
+        operation: "link",
+        reason,
+        evidenceUrls: [row.source.url],
+      });
+      if (!row.ready) {
+        expect(applied.status).toBe("refused");
+        expect(await repairState(t)).toEqual(before);
+        return;
+      }
+      expect(applied.status).toBe("applied");
+      await t.run(async (ctx) => {
+        const observation = (await ctx.db.get(s.observationId))!;
+        expect(observation.snapshot).toEqual(row.source);
+        expect(observation.lastSeenAt).toBe(row.lastSeenAt);
+        expect(observation.recordRef).toEqual({ type: "release", id: s.releaseId });
+        expect(await ctx.db.get(s.holdId)).toBeNull();
+      });
+      const after = await repairState(t);
+      expect(after.releases).toEqual(before.releases);
+      expect(after.editions).toEqual(before.editions);
+      expect(after.volumes).toEqual(before.volumes);
+    },
+  );
+
+  it("requires current independent aliases, pins their changes and rejects unrelated Part or reviewed-title substitutions", async () => {
+    const row = nonAnnAliasCases[0]!;
+    const t = makeT();
+    const s = await nonAnnAlias(t, row);
+    const args = {
+      observationId: s.observationId,
+      target: { type: "release" as const, id: s.releaseId },
+      reviewed: {
+        isbn13: row.source.isbn13!,
+        seriesId: s.seriesId,
+        publisherId: s.publisherId,
+        volumeIds: s.volumeIds,
+        evidenceUrls: [row.source.url],
+      },
+    };
+    const preview = await t.query(internal.heldBooks.previewInternal, args);
+    expect(preview.refusal).toBeNull();
+    await t.run((ctx) => ctx.db.patch(s.seriesId, { altTitles: [] }));
+    const changed = await repairState(t);
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).not.toBeNull();
+    expect(
+      (
+        await t.mutation(internal.heldBooks.executeInternal, {
+          ...args,
+          actor: "ari",
+          expected: preview.expected!,
+          operation: "link",
+          reason,
+          evidenceUrls: [row.source.url],
+        })
+      ).status,
+    ).toBe("refused");
+    expect(await repairState(t)).toEqual(changed);
+    await t.run((ctx) => ctx.db.patch(s.seriesId, { altTitles: row.series.altTitles }));
+    await t.run((ctx) => insertSeries(ctx, { title: "7thGARDEN Part 2" }));
+    const title = "7thGARDEN Part 2, Vol. 3";
+    await t.run((ctx) =>
+      ctx.db.patch(s.observationId, {
+        snapshot: { ...row.source, title, seriesTitle: "7thGARDEN Part 2" },
+      }),
+    );
+    const wrongPart = await t.query(internal.heldBooks.previewInternal, {
+      ...args,
+      reviewed: { ...args.reviewed, sourceTitle: title },
+    });
+    expect(wrongPart.refusal).toMatch(/parent Series disagrees/);
+  });
 });
 
 describe("guarded held-book workflows", () => {
@@ -2520,8 +2655,12 @@ async function formatState(t: TestT, s: Awaited<ReturnType<typeof gachaFormat>>)
     printings: await ctx.db.query("releaseIsbns").collect(),
   }));
 }
-async function correctGacha(t: TestT, s: Awaited<ReturnType<typeof gachaFormat>>) {
-  const args = { observationId: s.observationId, reviewed: gachaReviewed };
+async function correctGacha(
+  t: TestT,
+  s: Awaited<ReturnType<typeof gachaFormat>>,
+  reviewed: ReviewedFormat = gachaReviewed,
+) {
+  const args = { observationId: s.observationId, reviewed };
   const preview = await t.query(internal.heldBooks.previewSourceFormatInternal, args);
   expect(preview.refusal).toBeNull();
   expect(preview.correctionReady).toBe(true);
@@ -2778,34 +2917,65 @@ describe("reviewed OL inferred physical-to-digital workflows", () => {
     ).rejects.toThrow(/after-state changed/);
     expect(await formatState(t, s)).toEqual(fetched);
   });
-  it("refuses Other Printing for a corrected ebook and refuses fresh replay of an occupied digital slot while allowing correction", async () => {
+  it.each(["active", "hidden", "merged"] as const)(
+    "refuses Other Printing and fresh replay of an occupied %s digital slot while allowing correction",
+    async (status) => {
+      const t = makeT();
+      const s = await gachaFormat(t);
+      // An existing alternate-ISBN digital slot is a catalog conflict, not permission to relabel the paperback.
+      await t.run((ctx) =>
+        insertRelease(ctx, {
+          editionId: s.editionId,
+          publisherId: s.publisherId,
+          seriesIds: [s.seriesId],
+          format: "digital",
+          isbn13: "9781952241680",
+          status,
+        }),
+      );
+      await correctGacha(t, s);
+      const before = await formatState(t, s);
+      const printing = await t.mutation(internal.printings.recordDecidedInternal, {
+        observationId: s.observationId,
+        releaseId: s.releaseId,
+        reason,
+        evidenceUrl: gachaReviewed.publisher.url,
+      });
+      expect(printing).toMatchObject({
+        status: "refused",
+        reason: expect.stringMatching(/digital/),
+      });
+      expect(await formatState(t, s)).toEqual(before);
+      const preview = await t.query(internal.heldBooks.previewInternal, {
+        observationId: s.observationId,
+        replay: true,
+      });
+      expect(preview.placement).not.toBe("create");
+      const replay = await t.mutation(internal.heldBooks.executeInternal, {
+        observationId: s.observationId,
+        replay: true,
+        actor: "ari",
+        expected: preview.expected ?? "incomplete",
+        operation: "replay",
+        reason,
+        evidenceUrls: [gachaReviewed.publisher.url],
+      });
+      expect(replay.status).toBe("refused");
+      expect(await formatState(t, s)).toEqual(before);
+    },
+  );
+  it("allows correction before a selected Volume lock but refuses later placement without writes", async () => {
     const t = makeT();
     const s = await gachaFormat(t);
-    // An existing alternate-ISBN digital slot is a catalog conflict, not permission to relabel the paperback.
-    await t.run((ctx) =>
-      insertRelease(ctx, {
-        editionId: s.editionId,
-        publisherId: s.publisherId,
-        seriesIds: [s.seriesId],
-        format: "digital",
-        isbn13: "9781952241680",
-      }),
-    );
+    await t.run((ctx) => ctx.db.patch(s.volumeId, { locked: true }));
     await correctGacha(t, s);
     const before = await formatState(t, s);
-    const printing = await t.mutation(internal.printings.recordDecidedInternal, {
-      observationId: s.observationId,
-      releaseId: s.releaseId,
-      reason,
-      evidenceUrl: gachaReviewed.publisher.url,
-    });
-    expect(printing).toMatchObject({ status: "refused", reason: expect.stringMatching(/digital/) });
-    expect(await formatState(t, s)).toEqual(before);
     const preview = await t.query(internal.heldBooks.previewInternal, {
       observationId: s.observationId,
       replay: true,
     });
-    expect(preview.placement).not.toBe("create");
+    expect(preview.expected).toBeNull();
+    expect(preview.refusal).toMatch(/active and unlocked/);
     const replay = await t.mutation(internal.heldBooks.executeInternal, {
       observationId: s.observationId,
       replay: true,
@@ -2817,6 +2987,106 @@ describe("reviewed OL inferred physical-to-digital workflows", () => {
     });
     expect(replay.status).toBe("refused");
     expect(await formatState(t, s)).toEqual(before);
+  });
+  it("keeps correction ready while unresolved ordinary Edition ownership blocks replay", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    // Two independent whole-Volume Editions are the same unresolved slot
+    // member placement refuses, even when neither has a digital Release.
+    await t.run(async (ctx) => {
+      const editionId = await insertEdition(ctx, { publisherId: s.publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: s.volumeId });
+    });
+    await correctGacha(t, s);
+    const before = await formatState(t, s);
+    const preview = await t.query(internal.heldBooks.previewInternal, {
+      observationId: s.observationId,
+      replay: true,
+    });
+    expect(preview.expected).toBeNull();
+    expect(preview.refusal).toMatch(/Edition ownership is ambiguous/);
+    const replay = await t.mutation(internal.heldBooks.executeInternal, {
+      observationId: s.observationId,
+      replay: true,
+      actor: "ari",
+      expected: "incomplete",
+      operation: "replay",
+      reason,
+      evidenceUrls: [gachaReviewed.publisher.url],
+    });
+    expect(replay.status).toBe("refused");
+    expect(await formatState(t, s)).toEqual(before);
+  });
+  it("places Gacha 5 when only an unrelated Volume is locked", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    const unrelatedId = await t.run((ctx) =>
+      insertVolume(ctx, { seriesId: s.seriesId, label: "6", position: 6, locked: true }),
+    );
+    await correctGacha(t, s);
+    const unrelated = await t.run((ctx) => ctx.db.get(unrelatedId));
+    await replayGacha(t, s);
+    expect(await t.run((ctx) => ctx.db.get(unrelatedId))).toEqual(unrelated);
+  });
+  it("skips reviewed stored descriptions in selection and mutation, retaining immediate correction undo", async () => {
+    const t = makeT();
+    const s = await gachaFormat(t);
+    // The five captured bodies lack descriptions. This described counterpart
+    // exercises the maintenance lifecycle without claiming new publisher evidence.
+    const snapshot = { ...parsedGacha(), description: "Stored description for maintenance." };
+    await t.run(async (ctx) => {
+      await ctx.db.patch(s.observationId, { snapshot });
+      await insertRelease(ctx, {
+        editionId: s.editionId,
+        publisherId: s.publisherId,
+        seriesIds: [s.seriesId],
+        format: "digital",
+        isbn13: snapshot.isbn13,
+      });
+    });
+    const selected = await t.query(internal.openLibrary.unlinkedDescribedEditions, { after: null });
+    expect(selected.snapshots).toEqual([snapshot]);
+    const baseSnapshot = valueHash(snapshot);
+    const correction = await correctGacha(t, s, {
+      ...gachaReviewed,
+      baseSnapshot,
+      ol: { ...gachaReviewed.ol, normalizedSnapshot: baseSnapshot },
+    });
+    const before = await formatState(t, s);
+    expect(
+      (await t.query(internal.openLibrary.unlinkedDescribedEditions, { after: null })).snapshots,
+    ).toEqual([]);
+    expect(await t.action(internal.openLibrary.replayDescriptions, { limit: 1 })).toMatchObject({
+      replayed: 0,
+      linked: 0,
+      errors: [],
+    });
+    // A batch selected before correction must be skipped by the mutation too.
+    expect(
+      await t.mutation(internal.openLibrary.applyEdition, {
+        snapshot: selected.snapshots[0]!,
+        storedDescriptionReplay: true,
+      }),
+    ).toEqual({ status: "recordOnly", changed: false });
+    expect(
+      await t.mutation(internal.openLibrary.applyEdition, {
+        snapshot: { ...snapshot, description: "Older selected description." },
+        storedDescriptionReplay: true,
+      }),
+    ).toEqual({ status: "recordOnly", changed: false });
+    expect(await formatState(t, s)).toEqual(before);
+    const ledger = before.ledgers.find((row) => row._id === correction.ledgerId)!;
+    await t.mutation(internal.heldBooks.restoreInternal, {
+      actor: "ari",
+      ledgerId: ledger._id,
+      expectedAfter: ledger.after,
+      reason: "Stored maintenance must preserve immediate correction undo.",
+    });
+    const restored = await formatState(t, s);
+    expect(restored.observation.reviewedSourceFormat).toBeUndefined();
+    expect(restored.observation.snapshot).toEqual(snapshot);
+    expect(restored.observation.lastSeenAt).toBe(before.observation.lastSeenAt);
+    expect(restored.hold).toEqual(before.hold);
   });
   it("refuses changed reviewed payload, known Paperback counterfacts and member review without incidental audit writes", async () => {
     const t = makeT();

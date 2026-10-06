@@ -19,7 +19,7 @@ import { labelsEqual, sameWorkTitle } from "./matching";
 import { type AnnWorkContext, declaredWorkNames } from "./declaredWork";
 import { holdOf } from "./observations";
 import type { OlEditionSnapshot } from "./openLibrary";
-import { findPublisherByName } from "./pipeline";
+import { findPublisherByName, siblingEditions } from "./pipeline";
 import {
   type ClaimOwner,
   claimResolver,
@@ -101,9 +101,9 @@ export function reader(ctx: QueryCtx) {
 export type Reader = ReturnType<typeof reader>;
 
 /** Capture resolver dependencies, including rejected candidates and merge/redirect hops.
- * A resolver's ordinary scan cap cannot certify a complete correction guard.
+ * A resolver's ordinary scan cap cannot certify a complete held-book guard.
  */
-function correctionResolverContext(ctx: QueryCtx, r: Reader): QueryCtx {
+function guardedResolverContext(ctx: QueryCtx, r: Reader): QueryCtx {
   const wrap = <T extends object>(target: T): T =>
     new Proxy(target, {
       get(on, prop) {
@@ -146,7 +146,7 @@ function correctionResolverContext(ctx: QueryCtx, r: Reader): QueryCtx {
 export async function volumesForLabels(
   ctx: QueryCtx,
   seriesId: Id<"series">,
-  labels: readonly string[],
+  labels: readonly (string | null)[],
   r: Reader,
 ) {
   if (labels.length > MAX_JOIN)
@@ -179,12 +179,17 @@ export async function sourceSeries(
   if (observation.sourceKey === "openlibrary") {
     const projection = projectSourceFormat(observation);
     if (projection.status === "stale") return refuse(projection.reason);
-    const placement = await placeEdition(ctx, projection.snapshot as OlEditionSnapshot);
-    if (placement.kind === "create")
-      return { series: await r.active(placement.series._id), placement, parent: null };
-    if (placement.kind === "hold" && placement.hold.seriesId)
-      return { series: await r.active(placement.hold.seriesId), placement, parent: null };
-    return { series: null, placement, parent: null };
+    const snapshot = projection.snapshot as OlEditionSnapshot;
+    // The ISBN ladder can match a Release without resolving the source title.
+    // Work provenance must come from the title's independent catalog resolution.
+    const work = await resolveBaseSeries(guardedResolverContext(ctx, r), snapshot);
+    r.facts.push(work);
+    const placement = await placeEdition(ctx, snapshot);
+    return {
+      series: work.candidates.length === 1 ? await r.active(work.candidates[0]!._id) : null,
+      placement,
+      parent: null,
+    };
   }
   const key =
     observation.sourceKey === "ann" && s.mangaId
@@ -399,6 +404,46 @@ async function replaySlots(ctx: QueryCtx, series: Doc<"series">, r: Reader) {
   };
 }
 
+/** Ordinary OL creation uses the same sibling ownership rules as member placement.
+ * Hidden and merged Releases reserve their format; only the selected Volume needs readiness.
+ */
+async function olReplaySlot(
+  ctx: QueryCtx,
+  placement: Extract<Awaited<ReturnType<typeof placeEdition>>, { kind: "create" }>,
+  format: OlEditionSnapshot["format"],
+  r: Reader,
+) {
+  const volumes = await volumesForLabels(ctx, placement.series._id, [placement.volumeLabel], r);
+  // labelsEqual treats an absent label as the ordinary unlabeled Volume.
+  const selected = volumes.filter((v) => labelsEqual(v.label, placement.volumeLabel));
+  const active = selected.filter((v) => v.status === "active");
+  if (active.length !== 1) return refuse("Replay Volume is absent or ambiguous.");
+  const volume = await r.active(active[0]!._id);
+  for (const candidate of selected) {
+    if ((await r.active(candidate._id))._id !== volume._id)
+      return refuse("Replay Volume ownership is unresolved.");
+  }
+  const siblings = await siblingEditions(
+    guardedResolverContext(ctx, r),
+    placement.publisher._id,
+    [volume._id],
+    null,
+  );
+  const exact = new Set(siblings.map((edition) => edition._id));
+  const survivors = new Set<Id<"editions">>();
+  for (const sibling of siblings) {
+    const edition = await r.active(sibling._id);
+    if (!exact.has(edition._id)) return refuse("Replay Edition merged outside this slot.");
+    survivors.add(edition._id);
+    const releases = await r.many(
+      ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", sibling._id)),
+    );
+    if (releases.some((release) => release.format === format))
+      return refuse("Replay format slot is occupied; restore or resolve its existing Release.");
+  }
+  if (survivors.size > 1) return refuse("Replay Edition ownership is ambiguous.");
+}
+
 /** One source record and target per transaction. Expected includes every source, hold and graph fact read. */
 export async function heldState(
   ctx: QueryCtx,
@@ -459,8 +504,15 @@ export async function heldState(
     if (target || terminal || !source.series)
       return refuse("Replay needs an unlinked source with a resolved canonical work.");
     replayBefore = await replaySlots(ctx, source.series, r);
-    if (source.placement?.kind === "create") await r.active(source.placement.publisher._id);
-    else {
+    if (source.placement?.kind === "create") {
+      await r.active(source.placement.publisher._id);
+      await olReplaySlot(
+        ctx,
+        source.placement,
+        (effective.snapshot as OlEditionSnapshot).format,
+        r,
+      );
+    } else {
       const snapshot = observation.snapshot as AnnReleaseSnapshot;
       const publisher = snapshot.page?.distributor
         ? await findPublisherByName(ctx, snapshot.page.distributor)
@@ -752,16 +804,18 @@ async function sourceContentsMatch(
   } else {
     const title = state.observation.sourceKey === "kodansha" ? s.seriesTitle : s.title;
     if (!title) return refuse("Missing work context cannot be replaced by review.");
+    const workNames =
+      state.source.series?._id === series._id ? declaredWorkNames(series) : [series.title];
     const reading = readTitledRecord(
       state.observation.sourceKey,
       title,
       state.effective.snapshot as Parameters<typeof readTitledRecord>[2],
-      [series.title],
+      workNames,
     );
     if (
       reading.scope.length ||
       reading.unreadable.length ||
-      !sameWorkTitle(reading.work, series.title)
+      !workNames.some((name) => sameWorkTitle(reading.work, name))
     )
       return refuse("Known source work, scope or unreadable facts contradict review.");
     const parsed = parseBookTitle(title, { subtitle: s.subtitle });
@@ -779,7 +833,7 @@ async function sourceContentsMatch(
     if (positions.some((one) => !labelsEqual(one, position ?? null)))
       return refuse("Known source positions disagree.");
     if (
-      [title, s.subtitle].some((text) => bookFacts(text, [series.title]).digital) &&
+      [title, s.subtitle].some((text) => bookFacts(text, workNames).digital) &&
       s.format !== "digital"
     )
       return refuse("Known source digital format contradicts target.");
@@ -935,7 +989,7 @@ export async function sourceFormatState(
   reviewed: ReviewedFormat,
 ) {
   const r = reader(ctx);
-  const resolutionCtx = correctionResolverContext(ctx, r);
+  const resolutionCtx = guardedResolverContext(ctx, r);
   const observation = await r.read(observationId);
   if (!observation) return refuse("Missing source observation.");
   const refusal = reviewedFormatRefusal(observation, reviewed);
