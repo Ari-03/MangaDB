@@ -1085,8 +1085,11 @@ export const releasePageCandidates = internalQuery({
     now: v.number(),
     /** False once the run has spent its description refetches. */
     refetches: v.boolean(),
+    /** Already processed observations in the partially completed page. */
+    completed: v.optional(v.array(v.id("sourceObservations"))),
   },
-  handler: async (ctx, { cursor, numItems, now, refetches }) => {
+  handler: async (ctx, { cursor, numItems, now, refetches, completed }) => {
+    const processed = new Set(completed);
     const result = await ctx.db
       .query("sourceObservations")
       .withIndex("by_source_record", (q) =>
@@ -1096,8 +1099,14 @@ export const releasePageCandidates = internalQuery({
           .lt("sourceRecordId", "release;"),
       )
       .paginate({ cursor, numItems });
-    const candidates: Array<{ annId: string; fetch: boolean; refetch?: true }> = [];
+    const candidates: Array<{
+      observationId: Id<"sourceObservations">;
+      annId: string;
+      fetch: boolean;
+      refetch?: true;
+    }> = [];
     for (const obs of result.page) {
+      if (processed.has(obs._id)) continue;
       if (obs.withdrawn) continue;
       const snapshot = obs.snapshot as AnnReleaseSnapshot;
       // Content-derived ids (a line without an href) have no page.
@@ -1106,21 +1115,32 @@ export const releasePageCandidates = internalQuery({
         // A stored page that no longer restates the line (they disagree;
         // either may be the newer) is fetched again: placing judges the
         // line by its current page (lib/ann.ts packagingOf), and a fresh
-        // page that still disagrees holds it. Such a line is fetched on
-        // every pass while the disagreement lasts.
+        // page that still disagrees holds it. A continuation excludes the
+        // observations already processed in this page, so it reaches the
+        // rest without fetching or counting the same line twice. A new
+        // run carries no completed IDs and fetches the disagreement again.
         candidates.push({
+          observationId: obs._id,
           annId: snapshot.annId,
           fetch: needsFetch(snapshot.page, now) || !pageRestatesLine(snapshot),
         });
       } else if (refetches && obs.recordRef.type === "release") {
         const release = await ctx.db.get(obs.recordRef.id);
         if (descriptionRefetch(snapshot.page, release, now)) {
-          candidates.push({ annId: snapshot.annId, fetch: true, refetch: true });
+          candidates.push({
+            observationId: obs._id,
+            annId: snapshot.annId,
+            fetch: true,
+            refetch: true,
+          });
         }
       }
     }
     return {
       candidates,
+      // Retain progress only for rows still in this page. It stays bounded
+      // by the page size even if rows are added or removed between links.
+      completed: result.page.filter((obs) => processed.has(obs._id)).map((obs) => obs._id),
       continueCursor: result.continueCursor,
       isDone: result.isDone,
     };
@@ -1165,8 +1185,10 @@ export const chainReleasePages = internalMutation({
 /**
  * The release-page pass: walks every unlinked release line, fetches its
  * Encyclopedia page once (1 req/s), and places it (`applyReleasePage`).
- * Lines whose page is already stored are re-placed without a fetch — a
- * newly seeded publisher or Volume can unblock them. A linked line whose
+ * Stored pages that restate their lines are re-placed without a fetch —
+ * a newly seeded publisher or Volume can unblock them. A stored page
+ * that disagrees is fetched again, once across the run's continuations.
+ * A linked line whose
  * Release lacks a description is fetched once more to offer the page's
  * (`descriptionRefetch`), at most DESCRIPTION_REFETCHES_PER_RUN per run.
  * Chained after each finished mirror, complete or errored; self-continues
@@ -1184,6 +1206,8 @@ export const syncReleasePages = internalAction({
     maxRefetches: v.optional(v.number()),
     // ----- continuation state (never passed by callers) -----
     cursor: v.optional(v.union(v.string(), v.null())),
+    /** IDs processed in the page at cursor; reset when that page completes. */
+    completed: v.optional(v.array(v.id("sourceObservations"))),
     refetched: v.optional(v.number()),
     runId: v.optional(v.id("importRuns")),
     seen: v.optional(v.number()),
@@ -1212,6 +1236,7 @@ export const syncReleasePages = internalAction({
       let fetchedTotal = args.fetched ?? 0;
       let refetched = args.refetched ?? 0;
       let cursor: string | null = args.cursor ?? null;
+      let completed = args.completed ?? [];
       let fetchedHere = 0;
       let done = false;
 
@@ -1220,7 +1245,13 @@ export const syncReleasePages = internalAction({
           const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, fetched: fetchedTotal, continued: false };
           const page: {
-            candidates: Array<{ annId: string; fetch: boolean; refetch?: true }>;
+            candidates: Array<{
+              observationId: Id<"sourceObservations">;
+              annId: string;
+              fetch: boolean;
+              refetch?: true;
+            }>;
+            completed: Id<"sourceObservations">[];
             continueCursor: string;
             isDone: boolean;
           } = await ctx.runQuery(internal.ann.releasePageCandidates, {
@@ -1228,13 +1259,19 @@ export const syncReleasePages = internalAction({
             numItems: CANDIDATE_PAGE,
             now: Date.now(),
             refetches: refetched < maxRefetches,
+            completed,
           });
+          completed = page.completed;
           for (const candidate of page.candidates) {
             if (candidate.refetch && refetched >= maxRefetches) continue;
             // Out of time (after at least one fetch, so every link makes
-            // progress): hand off from this page's start. Its lines already
-            // fetched are stored now and come back without a fetch.
-            if (candidate.fetch && fetchedHere > 0 && Date.now() - started > LINK_BUDGET_MS) {
+            // progress): keep this page's cursor and processed IDs. The
+            // next link rereads eligibility for the remaining rows.
+            if (
+              candidate.fetch &&
+              fetchedHere > 0 &&
+              (fetchedHere >= maxFetches || Date.now() - started > LINK_BUDGET_MS)
+            ) {
               break pages;
             }
             seen++;
@@ -1259,8 +1296,10 @@ export const syncReleasePages = internalAction({
             } catch (e) {
               errors.push(`release ${candidate.annId}: ${errorMessage(e)}`);
             }
+            completed.push(candidate.observationId);
           }
           cursor = page.continueCursor;
+          completed = [];
           done = page.isDone;
         }
 
@@ -1271,6 +1310,7 @@ export const syncReleasePages = internalAction({
             maxFetches: args.maxFetches,
             maxRefetches: args.maxRefetches,
             cursor,
+            completed,
             refetched,
             runId,
             seen,
@@ -1402,10 +1442,13 @@ type Slot =
  *   beside any member it holds. A matching member hidden or locked holds;
  *   one merged into the matching member is that member.
  * - The Release: every Release of this format in the matching member, in
- *   every state, each merged one answered by its survivor. One an Editor
- *   hid, or merged into no active Release of the member, holds until a
- *   Moderator restores or resolves it: an absent active row is no free
- *   slot. Each active one is this book only when it can be: in the
+ *   every state, each merged one answered by its survivor, whose own
+ *   format, language and barcodes are what count. One an Editor hid,
+ *   merged into no active Release of the member, or merged into a Release
+ *   of another format (a physical row a Moderator found was the digital
+ *   book), holds until a Moderator restores or resolves it: an absent
+ *   active row is no free slot, and a format's ISBN never goes onto
+ *   another format's Release. Each active one is this book only when it can be: in the
  *   language ANN's books are imported in, and carrying no barcode or this
  *   ISBN (an ISBN-10 counts by its ISBN-13). Any other is another book
  *   (another printing, barcode or language) and holds as `isbn`, like the
@@ -1494,13 +1537,29 @@ async function packagedSlot(
     );
   const owners = new Map<Id<"releases">, Doc<"releases">>();
   for (const release of await releasesOf(ctx, member._id)) {
-    if (release.format !== format) continue;
+    // The identity a merged row answers to is its survivor's, all of it:
+    // a physical row merged into a digital Release says that row was the
+    // digital book, so no physical ISBN goes onto it, and which physical
+    // book (if any) the member has is a Moderator's to settle.
     const survivor = await survivorOf<"releases">(ctx, release);
+    // A retired row of another format can also resolve to this format.
+    // Ignore only identities whose raw and final formats are both other.
+    if (release.format !== format && survivor?.format !== format) continue;
     if (survivor?.status === "hidden") {
       return taken(survivor, "that an Editor hid: a Moderator restores it");
     }
-    if (survivor?.status !== "active" || survivor.editionId !== member._id) {
+    if (
+      survivor?.status !== "active" ||
+      survivor.editionId !== member._id ||
+      survivor.publisherId !== publisher._id
+    ) {
       return taken(release, "merged into no active Release of this book: an Editor resolves it");
+    }
+    if (survivor.format !== format) {
+      return taken(
+        release,
+        `merged into its ${survivor.format} Release: a Moderator settles which book it is`,
+      );
     }
     owners.set(survivor._id, survivor);
   }

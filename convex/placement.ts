@@ -360,11 +360,14 @@ type Placing = { proposalId: Id<"proposals">; plans: CreatePlan[]; release: Rele
  * and format under the hold's Series in an Edition the ops create or join
  * (never one named by a stored ID), every Volume and line it creates or
  * covers is in that Series, nothing it joins is hidden, locked or merged
- * away, the line it joins is the one line of its name every state resolves
- * to (lib/pipeline.ts namedEditionLine), the Edition it joins has no
- * Release of that format yet in any state (the slot an `isbn` hold
- * guards), and its source still names the book the member reviewed when
- * they stated the placement (`identity`).
+ * away, the line it joins, by a stored ID or by the line it would create,
+ * is the one line of its name every state resolves to, and a line it
+ * creates has no namesake in any state (`lineOtherwise`), the Edition it
+ * joins is the one member every exact sibling resolves to
+ * (lib/proposalCreates.ts storedSibling) and has no Release of that format
+ * yet in any state (the slot an `isbn` hold guards), and its source still
+ * names the book the member reviewed when they stated the placement
+ * (`identity`).
  */
 async function placeable(
   ctx: MutationCtx,
@@ -452,9 +455,11 @@ async function placedOtherwise(
   if (release.edition.kind === "id") {
     return "Its Release names a stored Edition instead of one this Proposal creates or joins: save the placement again.";
   }
+  const lineWrong = await lineOtherwise(ctx, plans);
+  if (lineWrong !== null) return lineWrong;
   const blocked = unjoinable(plans)[0];
   if (blocked !== undefined) {
-    return `A ${blocked.type} this placement would join is hidden, locked or merged away: a Moderator restores it, or the coverage is restated.`;
+    return `A ${blocked.type} this placement would join is hidden, locked, merged away, or one of two: a Moderator restores or merges it, or the coverage is restated.`;
   }
   for (const plan of plans) {
     const under: Array<Id<"series"> | null> = [];
@@ -468,22 +473,7 @@ async function placedOtherwise(
           under.push((await ctx.db.get(row.volume.id))?.seriesId ?? null);
       }
       if (plan.editionLine?.kind === "id") {
-        const joinedLine = await ctx.db.get(plan.editionLine.id);
-        under.push(joinedLine?.seriesId ?? null);
-        // The line it joins must be the one line of its name every state
-        // resolves to: never the first active one beside a hidden, locked
-        // or unresolved one, or beside an independent twin.
-        const named =
-          joinedLine !== null
-            ? await namedEditionLine(ctx, {
-                seriesId: joinedLine.seriesId,
-                publisherId: joinedLine.publisherId,
-                name: joinedLine.name,
-              })
-            : null;
-        if (named?.kind !== "line" || named.line._id !== plan.editionLine.id) {
-          return `The Edition Line this placement joins is not the one open line of its name: ${named?.kind === "closed" ? named.reason : "it is gone"}.`;
-        }
+        under.push((await ctx.db.get(plan.editionLine.id))?.seriesId ?? null);
       }
       // The slot an `isbn` hold guards: a Release of this format already
       // in the Edition it joins, in any state. One an Editor hid, or one
@@ -501,6 +491,58 @@ async function placedOtherwise(
     }
     if (under.some((id) => id !== series._id))
       return `Every record a placement creates is under "${series.title}".`;
+  }
+  return null;
+}
+
+/**
+ * How the Edition Line a placement's Edition joins or creates is not the
+ * one its name allows, or null when it is. Whether the plan names a stored
+ * line or a line it creates (a temp reference, which planning resolved to
+ * a stored line or left new), the line is checked as it stands now
+ * (lib/pipeline.ts namedEditionLine): a joined line must be the one line
+ * every line of its name, in every state, resolves to, never the first
+ * active one beside a hidden, locked, unresolved or independent twin; a
+ * new line only when no line of the name exists in any state.
+ */
+async function lineOtherwise(ctx: MutationCtx, plans: CreatePlan[]): Promise<string | null> {
+  for (const plan of plans) {
+    if (plan.table !== "editions" || plan.editionLine === undefined) continue;
+    const ref = plan.editionLine;
+    let wanted: {
+      lineId: Id<"editionLines"> | null;
+      seriesId: Id<"series">;
+      publisherId: Id<"publishers">;
+      name: string;
+    } | null = null;
+    if (ref.kind === "id") {
+      const line = await ctx.db.get(ref.id);
+      if (line !== null) {
+        const { _id, seriesId, publisherId, name } = line;
+        wanted = { lineId: _id, seriesId, publisherId, name };
+      }
+    } else {
+      const created = plans.find(
+        (other): other is Extract<CreatePlan, { table: "editionLines" }> =>
+          other.table === "editionLines" && other.tempId === ref.tempId,
+      );
+      if (created !== undefined && created.series.kind === "id") {
+        wanted = {
+          lineId: created.existingId ?? null,
+          seriesId: created.series.id,
+          publisherId: created.publisherId,
+          name: created.fields.name,
+        };
+      }
+    }
+    if (wanted === null) return "The Edition Line this placement names is gone.";
+    const named = await namedEditionLine(ctx, wanted);
+    if (wanted.lineId === null) {
+      if (named.kind !== "none")
+        return `The Edition Line this placement creates exists now: ${named.kind === "closed" ? named.reason : "save the placement again to join it"}.`;
+    } else if (named.kind !== "line" || named.line._id !== wanted.lineId) {
+      return `The Edition Line this placement joins is not the one open line of its name: ${named.kind === "closed" ? named.reason : "it is gone"}.`;
+    }
   }
   return null;
 }

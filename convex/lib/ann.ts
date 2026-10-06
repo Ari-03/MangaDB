@@ -752,7 +752,9 @@ export function annLinePackaged(line: PackagingInput, names?: readonly string[])
  * disagree, not which is newer: the page pass fetches the page again
  * before it judges the line, and a fresh page that still disagrees is
  * held as the disagreement it is (packagingOf), never made harmless by
- * the fetch. A persistent disagreement is fetched on every pass. Staging's
+ * the fetch. A persistent disagreement is fetched on the next pass;
+ * continuations carry progress within their current page rather than
+ * deciding it from fetch timestamps (ann.ts releasePageCandidates). Staging's
  * stored pages and lines all agreed (17,656 of 17,656 on 2026-10-05),
  * which says nothing of how many books any rule places. True without an
  * ok page: there is nothing to restate.
@@ -783,6 +785,12 @@ export function pageRestatesLine(line: PackagingInput): boolean {
  * coverage and the page's Volume field are left out: a reviewed placement
  * states those itself. Two lines naming the same work and line read the
  * same; "Alpha+ [VIZBIG Edition]" after "Alpha [VIZBIG Edition]" does not.
+ * A title no segmentation reads ("Alpha [Deluxe] [VIZBIG Edition]") has
+ * no work or line to compare, so the whole title is its identity, spacing,
+ * case and accents aside: "Beta [Deluxe] [VIZBIG Edition]" is another
+ * book, though both are unclear for the same reason. Any change to such a
+ * title, a number in it included, asks for the placement to be stated
+ * again.
  */
 export function annTitleIdentity(line: PackagingInput, names: readonly string[]): string {
   const packaged = annLinePackaged(line, names);
@@ -791,7 +799,7 @@ export function annTitleIdentity(line: PackagingInput, names: readonly string[])
     titles.map((title) => {
       if (title === undefined) return null;
       const read = segmentTitle(title, names, packaged);
-      if (read.kind === "ambiguous") return [read.kind, read.reason];
+      if (read.kind === "ambiguous") return [read.kind, textKey(title)];
       return read.kind === "line"
         ? [read.kind, textKey(read.work), textKey(read.name)]
         : [read.kind, textKey(read.work)];

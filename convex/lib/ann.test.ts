@@ -1896,4 +1896,31 @@ describe("the work and line an Editor's review is bound to (C66-R4-02)", () => {
     );
     expect(identity("alpha  [VIZBIG Edition]", { title: "ALPHA [VIZBIG Edition]" })).toBe(base);
   });
+
+  // C66-R5-01: an unclear title has no work to compare, so it is its own identity.
+  it.each([
+    ["Alpha [Deluxe] [VIZBIG Edition]", "Beta [Deluxe] [VIZBIG Edition]"],
+    ["Alpha VIZBIG Edition Club", "Beta VIZBIG Edition Club"],
+    ["Alpha [VIZBIG Edition", "Beta [VIZBIG Edition"],
+    ["[VIZBIG Edition] Alpha", "[VIZBIG Edition] Beta"],
+    ["Alpha [Deluxe] [VIZBIG Edition]", "Alpha+ [Deluxe] [VIZBIG Edition]"],
+  ])("tells %s from %s, though both are unclear for one reason", (title, other) => {
+    for (const where of ["line", "page"] as const) {
+      const read = (text: string) =>
+        where === "line"
+          ? identity(text, { title: "Alpha [VIZBIG Edition]" })
+          : identity("Alpha [VIZBIG Edition]", { title: text });
+      expect(readAnnLineTitle(title, { names: ["Alpha"] }).kind, title).toBe("ambiguous");
+      expect(readAnnLineTitle(other, { names: ["Alpha"] }).kind, other).toBe("ambiguous");
+      expect(read(other), where).not.toBe(read(title));
+    }
+  });
+
+  it("reads an unclear title the same, spacing, case and accents aside", () => {
+    const base = identity("Alpha [Deluxe] [VIZBIG Edition]");
+    expect(identity("ALPHA  [deluxe] [VIZBIG Edition]")).toBe(base);
+    expect(identity("Alphá [Deluxe] [VIZBIG Edition]")).toBe(base);
+    expect(identity("Alpha [Deluxe] [VIZBIG Edition] 2")).not.toBe(base);
+    expect(identity("Alpha [VIZBIG Edition]")).not.toBe(base);
+  });
 });

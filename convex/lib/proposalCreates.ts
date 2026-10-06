@@ -18,11 +18,13 @@
 // A member's placement of a held book (placement.ts) marks its Volume and
 // Edition creates `joinExisting` too: a Volume of that label an import
 // created meanwhile, or the sibling Edition it filed a Release under (same
-// publisher, line, position and coverage), is reused, never duplicated. A
-// matching record the placement may not join (a hidden Volume, one merged
-// away, a hidden, merged or locked Edition, a hidden or merged line) is
-// never read as absent: the plan names it `unavailable` and the Proposal is
-// stale. Its
+// publisher, line, position and coverage), is reused, never duplicated. Its
+// line is the one line of its name every state resolves to, and its
+// Edition the one member every exact sibling resolves to, never the first
+// open one. A matching record the placement may not join (a hidden Volume,
+// one merged away, a hidden, merged or locked Edition or line, a second
+// independent line or member) is never read as absent: the plan names it
+// `unavailable` and the Proposal is stale. Its
 // Edition may be Unmapped Packaging (`coverageUnmapped`, under a line, no
 // coverage rows), and its Release names the observation it places
 // (`placement`), which approval links to the new Release (proposals.ts).
@@ -42,8 +44,14 @@ import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { editionSeriesIds } from "./editionRows";
 import { fail } from "./errors";
-import { labelsEqual } from "./matching";
-import { joinableEdition, siblingEditions, unmappedSiblings, volumePositionFor } from "./pipeline";
+import { labelsEqual, survivorOf } from "./matching";
+import {
+  joinableEdition,
+  namedEditionLine,
+  siblingEditions,
+  unmappedSiblings,
+  volumePositionFor,
+} from "./pipeline";
 import { allocatePublicId } from "./publicIds";
 import { seriesSearchText } from "./searchMatch";
 import { fieldDescriptor, normalizeFieldValue, type RecordType } from "./moderationFields";
@@ -344,6 +352,35 @@ export async function planCreateOps(
             plan.publisherId === publisherId &&
             plan.fields.name.toLowerCase() === wanted,
         );
+        if (placing && series.kind === "id") {
+          // A placement's line is the one line of its name every state
+          // resolves to (pipeline.ts namedEditionLine), never the first
+          // active one beside a hidden, locked, unresolved or independent
+          // twin; it creates the line only when no line of the name exists
+          // in any state. A closed name is `unavailable`: the Proposal is
+          // stale until a Moderator resolves it.
+          if (twin) bad(`The edition line "${name}" is created twice by this proposal.`);
+          const resolved = await namedEditionLine(ctx, { seriesId: series.id, publisherId, name });
+          if (resolved.kind === "line" && fields.joinExisting !== true) {
+            bad(
+              `The edition line "${name}" already exists for this series and publisher — reference it instead.`,
+            );
+          }
+          plans.push({
+            table,
+            tempId: op.tempId,
+            series,
+            publisherId,
+            // Keep the requested namespace for the placement proof. The
+            // stored survivor may have been renamed by its merge.
+            fields: { name },
+            ...(resolved.kind === "line" ? { existingId: resolved.line._id } : {}),
+            ...(resolved.kind === "closed"
+              ? { unavailable: { type: "editionLine", id: resolved.lineId } }
+              : {}),
+          });
+          break;
+        }
         const named =
           series.kind === "id"
             ? (
@@ -375,16 +412,7 @@ export async function planCreateOps(
             `The edition line "${name}" already exists for this series and publisher — reference it instead.`,
           );
         }
-        // A placement never creates a twin of a hidden or merged line.
-        const closed = placing ? named[0] : undefined;
-        plans.push({
-          table,
-          tempId: op.tempId,
-          series,
-          publisherId,
-          fields: { name },
-          ...(closed !== undefined ? { unavailable: { type: "editionLine", id: closed._id } } : {}),
-        });
+        plans.push({ table, tempId: op.tempId, series, publisherId, fields: { name } });
         break;
       }
       case "editions": {
@@ -659,11 +687,15 @@ async function joinedVolume(
 /**
  * The stored Edition a placement's `joinExisting` Edition resolves to: the
  * sibling an import created meanwhile under the same publisher, line and
- * position, covering exactly these Volumes (pipeline.ts siblingEditions),
- * or the line's unmapped member at that position (unmappedSiblings). A
- * sibling that is hidden, merged or locked, with no open one beside it, is
- * `unavailable`. Nothing while any covered Volume or the line is still to
- * be created: no stored Edition can cover a record that does not exist yet.
+ * position, covering exactly these Volumes, complete and in order
+ * (pipeline.ts siblingEditions), or the line's unmapped member at that
+ * position (unmappedSiblings). Every such sibling, in every state, must
+ * resolve to one member (`oneMember`); the first open one is never chosen
+ * beside a hidden, locked or independent one. Unmapped Packaging at no
+ * known position proves no identity: beside any unmapped member at no
+ * position it is `unavailable`. Nothing while any covered Volume or the
+ * line is still to be created: no stored Edition can cover a record that
+ * does not exist yet.
  */
 async function storedSibling(
   ctx: QueryCtx | MutationCtx,
@@ -686,7 +718,11 @@ async function storedSibling(
   const line = lineId !== null ? { id: lineId, position: edition.linePosition ?? null } : null;
   let siblings: Doc<"editions">[] = [];
   if (edition.unmapped) {
-    if (line !== null) siblings = await unmappedSiblings(ctx, edition.publisherId, line);
+    if (line === null) return {};
+    siblings = await unmappedSiblings(ctx, edition.publisherId, line);
+    if (line.position === null && siblings[0] !== undefined) {
+      return { unavailable: { type: "edition", id: siblings[0]._id } };
+    }
   } else {
     const volumeIds: Id<"volumes">[] = [];
     for (const row of [...edition.coverage].sort((a, b) => a.order - b.order)) {
@@ -701,9 +737,35 @@ async function storedSibling(
     }
     siblings = await siblingEditions(ctx, edition.publisherId, volumeIds, line);
   }
-  const open = siblings.find(joinableEdition);
-  if (open !== undefined) return { existingId: open._id };
-  return siblings[0] !== undefined ? { unavailable: { type: "edition", id: siblings[0]._id } } : {};
+  return await oneMember(ctx, siblings);
+}
+
+/**
+ * The one member a placement's siblings (storedSibling: every Edition, in
+ * any state, of its publisher, line, position and contents) are: each
+ * merged one answered by its survivor, which must be one of them, active
+ * and unlocked. One hidden, locked or merged elsewhere, or two independent
+ * ones (two Editions an import or an Editor made for the same book), is
+ * `unavailable`: which one the book is, or whether either is, is a
+ * Moderator's to settle, and the placement's form never names an Edition.
+ * None: nothing to join.
+ */
+async function oneMember(
+  ctx: QueryCtx | MutationCtx,
+  siblings: Doc<"editions">[],
+): Promise<Join<"editions">> {
+  const exact = new Set(siblings.map((sibling) => sibling._id));
+  const members = new Set<Id<"editions">>();
+  for (const sibling of siblings) {
+    const survivor = await survivorOf<"editions">(ctx, sibling);
+    if (survivor === null || !exact.has(survivor._id) || !joinableEdition(survivor)) {
+      return { unavailable: { type: "edition", id: sibling._id } };
+    }
+    members.add(survivor._id);
+  }
+  const [member, second] = members;
+  if (second !== undefined) return { unavailable: { type: "edition", id: second } };
+  return member !== undefined ? { existingId: member } : {};
 }
 
 /**

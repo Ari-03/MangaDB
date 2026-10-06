@@ -1094,8 +1094,9 @@ export async function siblingEditions(
  * The active, unlocked one of those siblings (siblingEditions): the
  * Edition a same-packaging Release in another Format/Binding belongs to
  * (spec §2: an Edition is realized by Releases differing only there); an
- * omnibus never joins a single volume's Edition, or vice versa. A placement
- * Proposal's Edition joins it too (lib/proposalCreates.ts).
+ * omnibus never joins a single volume's Edition, or vice versa. Placement
+ * Proposals prove every sibling's canonical identity separately
+ * (lib/proposalCreates.ts storedSibling).
  */
 export async function findSiblingEdition(
   ctx: QueryCtx,
@@ -1132,8 +1133,9 @@ export async function unmappedSiblings(
 }
 
 /**
- * The active, unlocked one of those (unmappedSiblings). A placement
- * Proposal's unmapped Edition joins it too (lib/proposalCreates.ts).
+ * The active, unlocked one of those (unmappedSiblings). Placement
+ * Proposals prove every sibling's canonical identity separately
+ * (lib/proposalCreates.ts storedSibling).
  */
 export async function findUnmappedSibling(
   ctx: QueryCtx,
@@ -1165,7 +1167,7 @@ async function activeEditionLine(
 export type NamedLine =
   | { kind: "none" }
   | { kind: "line"; line: Doc<"editionLines"> }
-  | { kind: "closed"; reason: string };
+  | { kind: "closed"; reason: string; lineId: Id<"editionLines"> };
 
 /**
  * The one Edition Line a book naming `name` (any case) under this Series
@@ -1173,11 +1175,13 @@ export type NamedLine =
  * state: `none` when there is no such line at all; `line` when they all
  * resolve to one active, unlocked line of this Series and publisher (an
  * active one, and merged ones whose survivor it is); `closed` otherwise,
- * with why, as a noun phrase: one an Editor hid (a Moderator restores it, never a twin), a
- * merge that resolves to no active line of this Series and publisher, a
- * locked line, or two independent lines (an Editor merges them). Insertion
- * order never chooses among them. The ANN page pass and the Editor's
- * placement both ask this before a book joins a line.
+ * with why, as a noun phrase, and one line that closes it: one an Editor
+ * hid (a Moderator restores it, never a twin), a merge that resolves to no
+ * active line of this Series and publisher, a locked line, or two
+ * independent lines (an Editor merges them). Insertion order never chooses
+ * among them. The ANN page pass and the Editor's placement both ask this
+ * before a book joins a line, and before one creates it: only `none` lets
+ * a new line of the name be made.
  */
 export async function namedEditionLine(
   ctx: QueryCtx,
@@ -1191,10 +1195,12 @@ export async function namedEditionLine(
       .collect()
   ).filter((line) => line.publisherId === args.publisherId && line.name.toLowerCase() === wanted);
   if (named.length === 0) return { kind: "none" };
-  if (named.some((line) => line.status === "hidden")) {
+  const hidden = named.find((line) => line.status === "hidden");
+  if (hidden !== undefined) {
     return {
       kind: "closed",
       reason: `the Series' hidden ${args.name} line: a Moderator restores the line before a book joins it, never a second one`,
+      lineId: hidden._id,
     };
   }
   const resolved = new Map<Id<"editionLines">, Doc<"editionLines">>();
@@ -1209,19 +1215,26 @@ export async function namedEditionLine(
       return {
         kind: "closed",
         reason: `a ${args.name} line merged into no one active line of this Series and publisher — an Editor places it`,
+        lineId: line._id,
       };
     }
     resolved.set(survivor._id, survivor);
   }
   const [line, ...more] = resolved.values();
-  if (line === undefined || more.length > 0) {
+  if (line === undefined) return { kind: "none" };
+  if (more.length > 0) {
     return {
       kind: "closed",
       reason: `the Series' ${resolved.size} independent ${args.name} lines from this publisher — an Editor merges them`,
+      lineId: more[0]!._id,
     };
   }
   if (line.locked)
-    return { kind: "closed", reason: `the Series' locked ${line.name} line — an Editor places it` };
+    return {
+      kind: "closed",
+      reason: `the Series' locked ${line.name} line — an Editor places it`,
+      lineId: line._id,
+    };
   return { kind: "line", line };
 }
 

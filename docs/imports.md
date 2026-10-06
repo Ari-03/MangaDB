@@ -662,8 +662,15 @@ longer restates its line (`pageRestatesLine`) says only that the two
 disagree, not which is newer: the page pass fetches an unlinked line's
 page again before judging it, and a freshly fetched page that still
 disagrees is held as the disagreement it is. A disagreement that persists
-is fetched again on every pass, one request per line. On staging every
-stored page restated its line (17,656 ok pages, 2026-10-05); that count
+is fetched again on the next pass. A continuation carries the observation
+IDs already processed in its partially completed candidate page, at most
+25, and rereads the remaining rows' eligibility. With unchanged pagination
+membership, it fetches and counts each candidate once across those
+continuations, without treating a recent fetch timestamp as evidence of
+which run processed it. Older queued continuations without that optional
+progress may replay their partial page once; subsequent continuations
+carry progress. On staging every stored page restated its line (17,656 ok
+pages, 2026-10-05); that count
 says nothing of how many books any rule will place.
 
 Before creating a packaged book the page pass reads the line and its
