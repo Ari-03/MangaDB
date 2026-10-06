@@ -27,7 +27,8 @@
 // evidence that goes away, a Publisher row marked adult-only later, a merge
 // or Split, which repoint observations directly (lib/sensitiveOps.ts), not
 // through linkObservation, so a survivor or a restored Series is flagged
-// only then, and a projection job that failed. An observation linked to a
+// only then (a Release Split applies this to the records of printings it
+// moves), and a projection job that failed. An observation linked to a
 // Release Bundle is evidence for neither the import nor the rebuild.
 //
 // Visibility: everyone can see a Mature Series' own pages, but discovery
@@ -111,11 +112,14 @@ export async function sourceRatesMature(
  * Only `series.mature` is written here; when any Series flips, one
  * seriesBrowse.projectMature job is scheduled to update their library rows
  * and pack entries. A Series flips once per transaction, so a mutation
- * schedules at most one job per Series it flips.
+ * schedules at most one job per Series it flips. A caller applying many
+ * observations at once (a Split) passes one `settled` set: a Series this
+ * transaction already flipped or found not to need it is not read again.
  */
 export async function applyMatureEvidence(
   ctx: MutationCtx,
   observation: Doc<"sourceObservations">,
+  settled?: Set<Id<"series">>,
 ) {
   const ref = observation.recordRef;
   let seriesIds: Id<"series">[];
@@ -135,6 +139,8 @@ export async function applyMatureEvidence(
   }
   const flipped: Id<"series">[] = [];
   for (const seriesId of seriesIds) {
+    if (settled?.has(seriesId)) continue;
+    settled?.add(seriesId);
     const series = await ctx.db.get(seriesId);
     if (series?.status !== "active" || series.mature === true) continue;
     if (ratedByDataTeam(series.contentRating) !== null) continue;

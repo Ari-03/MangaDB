@@ -108,7 +108,7 @@ import {
 } from "./lib/pipeline";
 import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
-import { printingIsbnOf } from "./lib/releaseIsbns";
+import { ofOtherPrinting, printingIsbnOf } from "./lib/releaseIsbns";
 import { sameValue } from "./lib/values";
 import { withExceptionCapture } from "./lib/posthog";
 import { placeUnmatched, type ApplyResult } from "./lib/unmatched";
@@ -736,8 +736,9 @@ export const applyVolume = internalMutation({
         return { status: "recordOnly", changed: false };
       }
       // A record of one of the Release's Other Printings offers it nothing,
-      // its art included, and its other ISBN is no conflict (lib/releaseIsbns.ts).
-      if (observation.printingIsbn13 !== undefined) {
+      // its art included, and its other ISBN is no conflict (lib/releaseIsbns.ts
+      // ofOtherPrinting).
+      if (await ofOtherPrinting(ctx, release, observation)) {
         return { status: "recordOnly", changed: false, releaseId: release._id };
       }
       // An unchanged snapshot is done unless its art moved to a new URL.

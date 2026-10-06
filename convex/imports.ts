@@ -28,6 +28,7 @@ import type { OlEditionSnapshot } from "./lib/openLibrary";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
+import { ofOtherPrinting } from "./lib/releaseIsbns";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { LOCK_NOTE } from "./lib/unmatched";
 import { revisionsOf } from "./moderation";
@@ -500,14 +501,17 @@ function offersCover(observation: Doc<"sourceObservations">, sourceUrl: string):
  * touch its Releases' status, so a request queued before it would
  * otherwise replace art the Edition's moderator froze); the request's
  * record (`observationId`) must still exist, be linked to this very
- * Release with no Other Printing mark, and still offer that URL. A record
- * of another printing never changes the Release's cover, and a request
- * made before a link moved, a mark arrived, the art changed or the source
- * withdrew the book attaches nothing. A request with no record or Edition
- * (an action that started before requests named them) is held to the
- * Release's current Edition, and needs an unmarked record of the Release
- * offering the URL and none of another printing offering it; past
- * COVER_OFFER_SCAN records it is refused, never guessed.
+ * Release, be no record of another printing now (lib/releaseIsbns.ts
+ * ofOtherPrinting: no mark, and the ISBN its snapshot states is no printing
+ * of the Release but its own), and still offer that URL. A record of
+ * another printing never changes the Release's cover, and a request made
+ * before a link moved, a mark arrived, a correction made its ISBN another
+ * printing, the art changed or the source withdrew the book attaches
+ * nothing. A request with no record or Edition (an action that started
+ * before requests named them) is held to the Release's current Edition,
+ * and needs a record of the Release's own printing offering the URL and
+ * none of another printing offering it; past COVER_OFFER_SCAN records it is
+ * refused, never guessed.
  */
 async function coverOfferRefusal(
   ctx: MutationCtx,
@@ -531,7 +535,7 @@ async function coverOfferRefusal(
     const ref = observation.recordRef;
     if (ref?.type !== "release" || ref.id !== release._id)
       return "its record links another record now";
-    if (observation.printingIsbn13 !== undefined) return "its record is another printing's";
+    if (await ofOtherPrinting(ctx, release, observation)) return "its record is another printing's";
     if (!offersCover(observation, args.sourceUrl)) return "its record no longer offers that art";
     return null;
   }
@@ -544,8 +548,10 @@ async function coverOfferRefusal(
   if (linked.length > COVER_OFFER_SCAN)
     return "the request names no record, and the Release has too many to tell";
   const offering = linked.filter((observation) => offersCover(observation, args.sourceUrl));
-  if (offering.some((observation) => observation.printingIsbn13 !== undefined)) {
-    return "a record of another printing offers that art";
+  for (const observation of offering) {
+    if (await ofOtherPrinting(ctx, release, observation)) {
+      return "a record of another printing offers that art";
+    }
   }
   return offering.length > 0 ? null : "no record of the Release offers that art";
 }
@@ -675,11 +681,11 @@ export function possiblyFuture(
  * op the reviewer approves (confirmed cancellation) or rejects (keep the
  * release). Past-dated linked records are untouched, unlinked observations
  * queue nothing, and withdrawal itself never writes a canonical field —
- * absence is not evidence (spec §6). A record linked as one of the
- * Release's Other Printings (its `printingIsbn13` mark) says nothing about
- * the Release's own printing, so its withdrawal queues nothing either. The
- * observation's queuedProposalId dedups: one open queue item per
- * observation.
+ * absence is not evidence (spec §6). A record of one of the Release's
+ * Other Printings (marked, or one a correction made another printing's:
+ * lib/releaseIsbns.ts ofOtherPrinting) says nothing about the Release's
+ * own printing, so its withdrawal queues nothing either. The observation's
+ * queuedProposalId dedups: one open queue item per observation.
  */
 async function queueWithdrawalReview(
   ctx: MutationCtx,
@@ -691,6 +697,7 @@ async function queueWithdrawalReview(
   if (observation.printingIsbn13 !== undefined) return false;
   const release = await ctx.db.get(observation.recordRef.id);
   if (!release || release.status !== "active" || release.locked) return false;
+  if (await ofOtherPrinting(ctx, release, observation)) return false;
   if (!release.pubDate || !possiblyFuture(release.pubDate, Date.now())) {
     return false;
   }

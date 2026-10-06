@@ -1,7 +1,10 @@
 // A record of another printing never changes its Release's cover or blurb
 // (sevenSeas.noteListing, imports.attachCover): the listing asks for
 // neither, a download lands only while its record still offers that art to
-// that Release, and a refused download never deletes art anyone shows.
+// that Release, and a refused download never deletes art anyone shows. A
+// record is another printing's when marked, or when a correction made the
+// ISBN it states one of the Release's printings (lib/releaseIsbns.ts
+// ofOtherPrinting).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -13,7 +16,18 @@ import { insertBundle, insertObservation } from "./test.factories";
 import { alice, bob, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
 import { hideRecord, mergeAs, moderate } from "./test.moderation";
 import { ALPHA_1, imageRequests, SEVEN_SEAS, stubSite } from "./test.imports";
-import { another, OLDER, vagabond, type Vagabond } from "./test.printings";
+import { linkObservation } from "./lib/observations";
+import {
+  another,
+  CURRENT,
+  decide,
+  heldRecord,
+  OLDER,
+  promote,
+  rowsOf,
+  vagabond,
+  type Vagabond,
+} from "./test.printings";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -531,5 +545,155 @@ describe("a download racing a decision", () => {
         `${SEVEN_SEAS}/wp-content/uploads/covers/${ALPHA_1.slug}.jpg`,
       ]);
     }
+  });
+});
+
+describe("a record a primary correction made another printing's (C67-R2-02)", () => {
+  const SHOWN = "https://img.example/current.jpg";
+  const PRINTING_ART = "https://img.example/2002.jpg";
+  /** Seven Seas' page of the 2002 printing, as applyBook receives it. */
+  const page = {
+    kind: "book" as const,
+    url: "https://sevenseasentertainment.com/books/vagabond-vol-1/",
+    title: "Vagabond Vol. 1",
+    seriesTitle: "Vagabond",
+    seriesSlug: "vagabond",
+    seriesUrl: "https://sevenseasentertainment.com/series/vagabond/",
+    volumeLabel: "1",
+    isbn13: OLDER,
+    releaseDate: { year: 2002, month: 6, day: 5 },
+    priceCents: 999,
+    coverUrl: PRINTING_ART,
+    modifiedGmt: "stamp",
+    parserVersion: BOOK_PAGE_VERSION,
+    creators: [],
+  };
+
+  /**
+   * OLDER recorded as a printing of Vagabond's Release and promoted to its
+   * own ISBN; a Seven Seas record of OLDER then linked through the real
+   * link as the Release's own (so unmarked), offering PRINTING_ART while the
+   * Release shows SHOWN (a stored blob); the cover request its sync makes;
+   * the downloaded blob. With `corrected`, an approved Proposal then gives
+   * the Release its own ISBN back (CURRENT), keeping OLDER's row.
+   */
+  async function promoted(t: TestT, corrected: boolean) {
+    await seedRegistry(t);
+    await seedTeam(t, [alice, bob]);
+    const book = await t.run(vagabond);
+    const first = await t.run((ctx) => heldRecord(ctx, book.seriesId, OLDER));
+    expect(await decide(t, first, book.releaseId)).toMatchObject({ status: "recorded" });
+    await promote(t, book.releaseId, "isbn13", OLDER);
+    const ids = await t.run(async (ctx) => {
+      const old = await ctx.storage.store(blob());
+      await ctx.db.patch(book.releaseId, {
+        coverImage: { storageId: old, sourceUrl: SHOWN, attribution: "Seven Seas" },
+      });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "sevenseas",
+        sourceRecordId: "own-printing",
+        snapshot: page,
+      });
+      await linkObservation(ctx, observationId, { type: "release", id: book.releaseId });
+      const request = coverRequest(
+        (await ctx.db.get(book.releaseId))!,
+        PRINTING_ART,
+        observationId,
+      )!;
+      return { old, observationId, request, incoming: await ctx.storage.store(blob()) };
+    });
+    expect((await t.run((ctx) => ctx.db.get(ids.observationId)))?.printingIsbn13).toBeUndefined();
+    if (corrected) await promote(t, book.releaseId, "isbn13", CURRENT);
+    expect(await rowsOf(t, book.releaseId)).toEqual([OLDER]);
+    return { ...book, ...ids };
+  }
+
+  it("refuses the queued download, keeping the Release's art and deleting the unshown one", async () => {
+    const t = makeT();
+    const b = await promoted(t, true);
+    expect(
+      await t.mutation(internal.imports.attachCover, {
+        ...b.request,
+        storageId: b.incoming,
+        attribution: "Seven Seas",
+      }),
+    ).toEqual({ attached: false, held: null, refused: "its record is another printing's" });
+    expect(await coverOf(t, b.releaseId)).toMatchObject({ storageId: b.old, sourceUrl: SHOWN });
+    expect(await stored(t, b.old)).toBe(true);
+    expect(await stored(t, b.incoming)).toBe(false);
+    // An old-shape request (no record, no Edition) is held to the same reading.
+    const incoming = await t.run((ctx) => ctx.storage.store(blob()));
+    expect(
+      await attach(t, {
+        releaseId: b.releaseId,
+        storageId: incoming,
+        sourceUrl: PRINTING_ART,
+      }),
+    ).toMatchObject({ attached: false, refused: "a record of another printing offers that art" });
+    expect(await stored(t, incoming)).toBe(false);
+    expect(await stored(t, b.old)).toBe(true);
+  });
+
+  it("keeps a refused download a Bundle shows", async () => {
+    const t = makeT();
+    const b = await promoted(t, true);
+    await t.run((ctx) =>
+      insertBundle(ctx, { publisherId: b.publisherId, coverImage: { storageId: b.incoming } }),
+    );
+    expect(
+      await t.mutation(internal.imports.attachCover, {
+        ...b.request,
+        storageId: b.incoming,
+        attribution: "Seven Seas",
+      }),
+    ).toMatchObject({ attached: false, refused: "its record is another printing's" });
+    expect(await stored(t, b.incoming)).toBe(true);
+    expect(await stored(t, b.old)).toBe(true);
+  });
+
+  it("offers no new art: neither the listing nor the re-read page", async () => {
+    const t = makeT();
+    const b = await promoted(t, true);
+    expect(
+      await t.mutation(internal.sevenSeas.noteListing, {
+        sourceRecordId: "own-printing",
+        modifiedGmt: "stamp",
+        force: false,
+        offersBlurb: true,
+      }),
+    ).toEqual({ needsDetail: false });
+    const before = await t.run((ctx) => ctx.db.get(b.releaseId));
+    expect(
+      await t.mutation(internal.sevenSeas.applyBook, {
+        sourceRecordId: "own-printing",
+        snapshot: { ...page, modifiedGmt: "later", description: "The 2002 printing's blurb." },
+      }),
+    ).toEqual({ status: "recordOnly", changed: false, releaseId: b.releaseId });
+    expect(await t.run((ctx) => ctx.db.get(b.releaseId))).toEqual(before);
+  });
+
+  it("still attaches the art of a record of the Release's own printing (control)", async () => {
+    const t = makeT();
+    const b = await promoted(t, false);
+    expect(
+      await t.mutation(internal.sevenSeas.noteListing, {
+        sourceRecordId: "own-printing",
+        modifiedGmt: "stamp",
+        force: false,
+        offersBlurb: false,
+      }),
+    ).toEqual({ needsDetail: false, cover: b.request });
+    expect(
+      await t.mutation(internal.imports.attachCover, {
+        ...b.request,
+        storageId: b.incoming,
+        attribution: "Seven Seas",
+      }),
+    ).toEqual({ attached: true, held: b.incoming });
+    expect(await coverOf(t, b.releaseId)).toMatchObject({
+      storageId: b.incoming,
+      sourceUrl: PRINTING_ART,
+    });
+    expect(await stored(t, b.old)).toBe(false);
   });
 });

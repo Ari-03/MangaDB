@@ -140,7 +140,7 @@ export const holdKind = v.union(
 );
 
 // Human authors record their role at authorship; promotions never rewrite it.
-const authorRef = v.union(
+export const authorRef = v.union(
   v.object({
     kind: v.literal("user"),
     userId: v.id("users"),

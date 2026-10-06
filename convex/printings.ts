@@ -9,6 +9,7 @@
 
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalMutation,
@@ -19,6 +20,7 @@ import {
 import { type AnnReleaseSnapshot, lineOutOfScope, packagingOf } from "./ann";
 import { getSourceByKey } from "./importSources";
 import { splitReleaseTitle } from "./lib/ann";
+import { nestedLimits, platformStop } from "./lib/bounded";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
 import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
 import { labelsEqual } from "./lib/matching";
@@ -288,6 +290,35 @@ function knownBinding(value: unknown): Binding | undefined {
   return undefined;
 }
 
+/** The Binding statements among a title's peeled format tags ("Hardcover", "Trade Paperback"). */
+const titleBindings = (where: string, formatTags: string[]) =>
+  formatTags.map((tag) => ({ where: `${where}'s tag "${tag}"`, text: tag }));
+
+/**
+ * Every Binding a record states plainly (knownBinding), each with where it
+ * says so: all of them must agree, and the reading takes their one
+ * Binding. A record stating none leaves it unknown.
+ */
+function agreedBinding(
+  reading: BookReading,
+  statements: Array<{ where: string; text: unknown }>,
+): void {
+  const stated = statements.flatMap(({ where, text }) => {
+    const binding = knownBinding(text);
+    return binding === undefined ? [] : [{ where, binding }];
+  });
+  const [first, ...others] = stated;
+  if (first === undefined) return;
+  for (const other of others) {
+    if (other.binding !== first.binding) {
+      reading.unreadable.push(
+        `${first.where} says ${first.binding}, ${other.where} ${other.binding}`,
+      );
+    }
+  }
+  reading.binding = first.binding;
+}
+
 /**
  * Every Volume a record states, each with where it says so: all of them
  * must agree (labelsEqual, so "01" is "1"), and the reading takes their one
@@ -322,6 +353,8 @@ function agreedLabel(
  * any of them states must agree (agreedLabel), and ANN numbers its books,
  * so a line stating none anywhere is unknown (`needsLabel`). A missing
  * statement is unknown; a designator that no longer reads is unreadable.
+ * A Binding a title's format tag states (the line's or the page's) counts
+ * as the reading's, and tags that disagree are unreadable (agreedBinding).
  * `entryName` is the entry's title, trusted to own the packaging words in
  * the line's title only when it is one of the Release's Series titles.
  *
@@ -393,6 +426,7 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
   // read whole when the parser would take a number off it ("Kingdom
   // Hearts II"): ANN's designator, not the title, numbers the book.
   const parsed = parseBookTitle(line.title);
+  const bindings = titleBindings(`its title "${line.title}"`, parsed.formatTags);
   if (parsed.isNovel) reading.scope.push("its title marks a novel");
   if (parsed.packaging !== null || parsed.isBox) {
     reading.packaging.push(`its title "${line.title}"`);
@@ -427,8 +461,10 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
     }
     if (pageParsed.isNovel || isNovelTitle(page.title))
       reading.scope.push("its page title marks a novel");
+    bindings.push(...titleBindings(`ANN's page title "${page.title}"`, pageParsed.formatTags));
   }
   agreedLabel(reading, labels);
+  agreedBinding(reading, bindings);
   return reading;
 }
 
@@ -441,7 +477,10 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
  * does not state is the importer's reading of fields the snapshot does not
  * keep (Open Library's subtitle "Vol. 1" under the title "Vagabond"): it
  * stands, and is checked against the Release like any other. Only a title
- * stating another Volume contradicts it.
+ * stating another Volume contradicts it. A Binding is stated by the stored
+ * field or by a format tag the parser peels off the title's end ("Vagabond,
+ * Vol. 1 (Hardcover)"; never a word inside the work's name): every one
+ * stated must agree, and the reading takes it.
  */
 function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): BookReading {
   const parsed = parseBookTitle(title);
@@ -449,11 +488,15 @@ function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): B
     work: parsed.seriesTitle,
     label: undefined,
     needsLabel: false,
-    binding: knownBinding(s?.binding),
+    binding: undefined,
     packaging: [],
     scope: [],
     unreadable: [],
   };
+  agreedBinding(reading, [
+    { where: "its stored binding", text: s?.binding },
+    ...titleBindings(`its title "${title}"`, parsed.formatTags),
+  ]);
   agreedLabel(reading, [
     { where: `its title "${title}"`, label: parsed.volumeLabel },
     { where: "its stored reading", label: nonEmpty(s?.volumeLabel) ? s.volumeLabel : undefined },
@@ -584,6 +627,19 @@ async function contentRefusal(
 
 // ---------- the decision ----------
 
+const decisionArgs = {
+  observationId: v.id("sourceObservations"),
+  releaseId: v.id("releases"),
+  reason: v.string(),
+  evidenceUrl: v.optional(v.string()),
+};
+
+/** What a decision did: recorded a new printing, linked a record of one, or refused. */
+type Decided =
+  | { status: "recorded"; isbn13: string }
+  | { status: "linked"; isbn13: string; releaseId: Id<"releases">; proposalId: Id<"proposals"> }
+  | { status: "refused"; reason: string };
+
 /**
  * Record one held book as another printing of a Release, or link it to a
  * printing the Release already has, as decided by a person or a reviewed
@@ -607,24 +663,33 @@ async function contentRefusal(
  * (linkRecordedPrinting): the mark and link, with an approved Proposal and
  * a `sourceObservation` Revision of their own.
  *
+ * The whole decision runs as a nested mutation capped at what the
+ * transaction has left (lib/bounded.ts): one too large for a transaction
+ * (claims too large to read whole, say) is `refused` like any other, with
+ * nothing written, so a batch script logs it and goes on.
+ *
  *   npx convex run printings:recordDecidedInternal '{"observationId": "…",
  *     "releaseId": "…", "reason": "…", "evidenceUrl": "https://…"}'
  */
 export const recordDecidedInternal = internalMutation({
-  args: {
-    observationId: v.id("sourceObservations"),
-    releaseId: v.id("releases"),
-    reason: v.string(),
-    evidenceUrl: v.optional(v.string()),
+  args: decisionArgs,
+  handler: async (ctx, args): Promise<Decided> => {
+    const transactionLimits = await nestedLimits(ctx);
+    try {
+      return await ctx.runMutation(internal.printings.decideInternal, args, { transactionLimits });
+    } catch (error) {
+      return {
+        status: "refused",
+        reason: `The decision needs more than one transaction can read or write (${platformStop(error)}); nothing was recorded, and the book stays held.`,
+      };
+    }
   },
-  handler: async (
-    ctx,
-    { observationId, releaseId, reason, evidenceUrl },
-  ): Promise<
-    | { status: "recorded"; isbn13: string }
-    | { status: "linked"; isbn13: string; releaseId: Id<"releases">; proposalId: Id<"proposals"> }
-    | { status: "refused"; reason: string }
-  > => {
+});
+
+/** The decision itself (recordDecidedInternal), run only as its nested mutation. */
+export const decideInternal = internalMutation({
+  args: decisionArgs,
+  handler: async (ctx, { observationId, releaseId, reason, evidenceUrl }): Promise<Decided> => {
     const refuse = (why: string) => ({ status: "refused" as const, reason: why });
     if (reason.trim() === "") return refuse("A decided printing needs a reason.");
 

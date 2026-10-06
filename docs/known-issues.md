@@ -530,11 +530,18 @@ is fixed.
   [moderation](moderation.md#hide-restore-merge-split-and-locks). An
   administrator resolves those by hand.
 - **A cover request from an action started before covers named their
-  record attaches only to a matching unmarked offer.** `imports.attachCover`
-  without an `observationId` (a sync running across the deploy) needs an
-  unmarked record of the Release offering that art and none of another
-  printing, among at most 50 records; otherwise it refuses and the next run
-  retries.
+  record attaches only to a matching offer of the Release's own printing.**
+  `imports.attachCover` without an `observationId` (a sync running across
+  the deploy) needs a record of the Release's own printing offering that
+  art and none of another printing (marked, or made one by a correction),
+  among at most 50 records; otherwise it refuses and the next run retries.
+- **A Split or printing decision too large for one transaction is refused
+  whole.** Both run as a nested mutation capped at what the transaction
+  has left (`lib/bounded.ts`). Large live Bundle documents, hundreds of
+  tracked Bundles, or claims too large to read can make an otherwise valid
+  Split or decision refuse; an administrator then handles it by hand. A
+  nested call's error other than an application error is reported as the
+  refusal's cause, so a programming error there reads as a refusal too.
 
 ## Review queue
 

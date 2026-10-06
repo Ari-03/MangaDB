@@ -14,7 +14,13 @@ import type { Id } from "./_generated/dataModel";
 import { recordUnplaced } from "./lib/observations";
 import { budgetShortfall } from "./lib/releaseIsbns";
 import { SPLIT_LIMITS } from "./lib/sensitiveOps";
-import { insertObservation, insertSeries, insertVolume } from "./test.factories";
+import {
+  insertBundle,
+  insertBundleMember,
+  insertObservation,
+  insertSeries,
+  insertVolume,
+} from "./test.factories";
 import { alice, bob, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
 import { mergeAs, splitAs } from "./test.moderation";
 import {
@@ -28,9 +34,9 @@ import {
   lookup,
   OLDER,
   OLDER_10,
+  promote,
   rowsOf,
   vagabond,
-  VIZ_URL,
   X,
   X_10,
   Y,
@@ -93,22 +99,6 @@ const latestChanges = (t: TestT, releaseId: Id<"releases">) =>
         .order("desc")
         .first())!.changes,
   );
-
-const promote = async (
-  t: TestT,
-  releaseId: Id<"releases">,
-  field: "isbn13" | "isbn10",
-  value: string,
-) => {
-  const asAdmin = signedIn(t, alice);
-  const { proposalId } = await asAdmin.mutation(api.proposals.saveDraft, {
-    ops: [{ kind: "update", ref: { type: "release", id: releaseId }, changes: [{ field, value }] }],
-    evidence: [{ kind: "url", url: VIZ_URL }],
-    comment: "Use this ISBN as the Release's own.",
-  });
-  await asAdmin.mutation(api.proposals.submitProposal, { proposalId });
-  await signedIn(t, bob).mutation(api.proposals.approveProposal, { proposalId });
-};
 
 /** Split refused: nothing written, the loser still merged, its manifest still open. */
 async function refusedSplit(t: TestT, w: World, reason: RegExp) {
@@ -573,6 +563,259 @@ describe("a printing row changed since the merge (C67-12)", () => {
   });
 });
 
+describe("a record linked as its Release's own printing (C67-R2-01)", () => {
+  /** Open Library's second record of OLDER, applied by the real importer. */
+  const SECOND = "/books/OL_SECOND_M";
+  const secondRecord = (t: TestT) =>
+    t.run(
+      async (ctx) =>
+        (await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_source_record", (q) =>
+            q.eq("sourceKey", "openlibrary").eq("sourceRecordId", SECOND),
+          )
+          .unique())!._id,
+    );
+
+  /**
+   * world(), then OLDER promoted to L's own ISBN, a second Open Library
+   * record of OLDER imported (it links to L as L's own printing, unmarked),
+   * L's ISBN corrected back to LOSER (OLDER is L's printing again, its row
+   * kept), and L merged into S. With `survivorTakes`, S then takes OLDER as
+   * its own through an approved Proposal.
+   */
+  async function promotedThenMerged(t: TestT, survivorTakes: boolean) {
+    const w = await world(t);
+    await promote(t, w.l, "isbn13", OLDER);
+    await t.mutation(internal.openLibrary.applyEdition, {
+      snapshot: {
+        kind: "olEdition",
+        key: SECOND,
+        url: `https://openlibrary.org${SECOND}`,
+        title: "Vagabond, Vol. 1",
+        seriesTitle: "Vagabond",
+        volumeLabel: "1",
+        multiVolume: false,
+        isbn13: OLDER,
+        format: "physical",
+        publishers: ["VIZ Media"],
+      },
+    });
+    const second = await secondRecord(t);
+    expect(await linkOf(t, second)).toEqual({ to: w.l, mark: null });
+    await promote(t, w.l, "isbn13", LOSER);
+    await merge(t, w);
+    if (survivorTakes) await promote(t, w.s, "isbn13", OLDER);
+    return { ...w, second };
+  }
+
+  /** All four passes of the consistency check, each read to its end. */
+  const checks = async (t: TestT) => {
+    const out = [];
+    for (const pass of ["releases", "bundles", "rows", "observations"] as const) {
+      out.push(
+        await t.query(internal.printings.consistencyInternal, {
+          pass,
+          paginationOpts: { numItems: 100, cursor: null },
+        }),
+      );
+    }
+    return out;
+  };
+
+  it("keeps the unmarked record with its printing on the survivor that took it", async () => {
+    const t = makeT();
+    const w = await promotedThenMerged(t, true);
+    await split(t, w);
+    expect(await rowsOf(t, w.s)).toEqual([OLDER]);
+    expect(await linkOf(t, w.first)).toEqual({ to: w.s, mark: OLDER });
+    expect(await linkOf(t, w.second)).toEqual({ to: w.s, mark: null });
+    expect(await latestChanges(t, w.l)).toContainEqual({
+      field: "sourceObservations",
+      after: expect.arrayContaining([
+        { record: `openlibrary ${SECOND}`, stays: w.s, mark: null },
+        { record: FIRST, stays: w.s, mark: OLDER },
+      ]),
+    });
+    for (const page of await checks(t)) expect(page).toMatchObject({ findings: [], isDone: true });
+  });
+
+  it("brings the unmarked record back with its printing, marked as the loser's printing now", async () => {
+    const t = makeT();
+    const w = await promotedThenMerged(t, false);
+    await split(t, w);
+    expect(await rowsOf(t, w.l)).toEqual([OLDER]);
+    expect(await linkOf(t, w.first)).toEqual({ to: w.l, mark: OLDER });
+    expect(await linkOf(t, w.second)).toEqual({ to: w.l, mark: OLDER });
+    expect(await latestChanges(t, w.l)).toContainEqual({
+      field: "sourceObservations",
+      after: expect.arrayContaining([
+        {
+          record: `openlibrary ${SECOND}`,
+          from: w.s,
+          to: w.l,
+          markBefore: null,
+          markAfter: OLDER,
+        },
+      ]),
+    });
+    for (const page of await checks(t)) expect(page).toMatchObject({ findings: [], isDone: true });
+  });
+
+  it("leaves an unmarked record unlinked since the merge where it is, and refuses one relinked since", async () => {
+    for (const relinked of [false, true]) {
+      const t = makeT();
+      const w = await promotedThenMerged(t, false);
+      const [outcome] = await t.mutation(internal.repair.runBatch, {
+        entries: [
+          {
+            kind: "unlinkObservation",
+            key: "unlink-second",
+            reason: "Recheck the record.",
+            observationId: w.second,
+            recordType: "release",
+            recordId: w.s,
+          },
+        ],
+        dryRun: false,
+        actor: alice.username,
+      });
+      expect(outcome).toMatchObject({ status: "applied" });
+      if (!relinked) {
+        await split(t, w);
+        expect(await linkOf(t, w.second)).toEqual({ to: null, mark: null });
+        expect(await linkOf(t, w.first)).toEqual({ to: w.l, mark: OLDER });
+        continue;
+      }
+      await t.run(async (ctx) =>
+        recordUnplaced(
+          ctx,
+          (await ctx.db.get(w.second))!,
+          { kind: "isbn", reason: "Held again.", seriesId: w.seriesId },
+          Date.now(),
+        ),
+      );
+      expect(await decide(t, w.second, w.s)).toMatchObject({ status: "linked" });
+      await refusedSplit(
+        t,
+        w,
+        /Record openlibrary \/books\/OL_SECOND_M was unlinked or relinked by Revision \d+/,
+      );
+    }
+  });
+
+  it("replays an unmarked record whose ISBN has no printing row, as before", async () => {
+    const t = makeT();
+    const w = await world(t);
+    const own = await t.run((ctx) =>
+      insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL_OWN_M",
+        recordRef: { type: "release", id: w.l },
+        snapshot: { isbn13: LOSER },
+      }),
+    );
+    await merge(t, w);
+    await promote(t, w.s, "isbn13", LOSER);
+    await split(t, w);
+    expect(await linkOf(t, own)).toEqual({ to: w.l, mark: null });
+  });
+});
+
+describe("a removed printing row comes back under its ISBN-13 (C67-R2-08)", () => {
+  /**
+   * S owning OLDER, and L (ISBN X) with a legacy row spelling OLDER
+   * `spelling`; the real correction Merge removes it as S's duplicate (its
+   * manifest keeps the spelling), then an approved Proposal gives S CURRENT.
+   */
+  async function removedThenFreed(t: TestT, spelling: string) {
+    await seedRegistry(t);
+    await seedTeam(t, [alice, bob]);
+    const w = await t.run(async (ctx) => {
+      const book = await vagabond(ctx);
+      await ctx.db.patch(book.releaseId, { isbn13: OLDER });
+      const l = await another(ctx, book, { isbn13: X });
+      await insertPrinting(ctx, l, spelling);
+      return { ...book, s: book.releaseId, l };
+    });
+    await mergeAs(t, { type: "release", id: w.s }, { type: "release", id: w.l });
+    expect(await t.run((ctx) => ctx.db.query("releaseIsbns").collect())).toEqual([]);
+    await promote(t, w.s, "isbn13", CURRENT);
+    for (const pass of ["releases", "bundles", "rows", "observations"] as const) {
+      expect(
+        await t.query(internal.printings.consistencyInternal, {
+          pass,
+          paginationOpts: { numItems: 100, cursor: null },
+        }),
+      ).toMatchObject({ findings: [], isDone: true });
+    }
+    return w;
+  }
+
+  it("stores it so the barcode lookup and every check find it, whatever spelling the merge kept", async () => {
+    for (const spelling of ["978-1-59116-034-2", "1591160340", "1-59116-034-0"]) {
+      const t = makeT({ transactionLimits: true });
+      const w = await removedThenFreed(t, spelling);
+      await splitAs(t, { type: "release", id: w.l });
+      expect(await t.run((ctx) => ctx.db.query("releaseIsbns").collect())).toEqual([
+        expect.objectContaining({ isbn13: OLDER, releaseId: w.l }),
+      ]);
+      expect(await lookup(t, OLDER)).toMatchObject({ kind: "release", anchor: X });
+      expect(
+        await t.query(internal.printings.consistencyInternal, {
+          pass: "rows",
+          paginationOpts: { numItems: 100, cursor: null },
+        }),
+      ).toMatchObject({ findings: [], isDone: true });
+      expect(await latestChanges(t, w.l)).toContainEqual({
+        field: "otherPrintings",
+        after: [
+          {
+            isbn13: OLDER,
+            outcome: "restored",
+            reason: `Back with the Release it was recorded on. Stored as ${OLDER}; the merge kept "${spelling}".`,
+          },
+        ],
+      });
+      // The manifest's own record of the row is left as it was.
+      const manifest = (await t.run((ctx) => ctx.db.query("mergeManifests").first()))!;
+      expect(manifest.removed).toContainEqual(
+        expect.objectContaining({
+          table: "releaseIsbns",
+          doc: expect.objectContaining({ isbn13: spelling }),
+        }),
+      );
+    }
+  });
+
+  it("refuses, writing nothing, when another Release holds that ISBN's row now", async () => {
+    const t = makeT({ transactionLimits: true });
+    const w = await removedThenFreed(t, "1591160340");
+    const third = await t.run(async (ctx) => {
+      const third = await another(ctx, w, { isbn13: Y });
+      await insertPrinting(ctx, third, OLDER);
+      return third;
+    });
+    const before = await catalogState(t);
+    await expect(splitAs(t, { type: "release", id: w.l })).rejects.toThrow(
+      new RegExp(`ISBN ${OLDER} is now claimed by Release ${third}`),
+    );
+    expect(await catalogState(t)).toEqual(before);
+  });
+
+  it("respells a returning row the same way", async () => {
+    const t = makeT();
+    const w = await world(t);
+    await merge(t, w);
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("releaseIsbns").first())!;
+      await ctx.db.patch(row._id, { isbn13: "978-1-59116-034-2" });
+    });
+    await split(t, w);
+    expect(await rowsOf(t, w.l)).toEqual([OLDER]);
+  });
+});
+
 describe("a Split's bounds", () => {
   it("names each metric a plan would overrun", () => {
     const metrics = Object.fromEntries(
@@ -869,7 +1112,7 @@ describe("a Split under the platform's own limits (C67-02, C67-03)", () => {
     await refusedUnderLimits(
       tight,
       small.l,
-      /needs more than one transaction allows to write it and check its printings afterwards \(bytesRead/,
+      /needs more than one transaction allows (to write it and check its printings afterwards|to read its printings and who claims them) \(bytesRead/,
       small.row,
     );
     const t = makeT({ transactionLimits: true });
@@ -880,6 +1123,112 @@ describe("a Split under the platform's own limits (C67-02, C67-03)", () => {
       /needs more than one transaction allows to write it and check its printings afterwards \(bytesRead/,
       large.row,
     );
+  });
+
+  it("refuses, writing nothing, when the Series and tracking it must keep are too large to read (C67-R2-03)", async () => {
+    const t = makeT({ transactionLimits: true });
+    const w = await merged(t);
+    for (let i = 0; i < 20; i++)
+      await t.run(async (ctx) => {
+        const bundleId = await insertBundle(ctx, {
+          publisherId: w.publisherId,
+          description: big(850_000),
+        });
+        await insertBundleMember(ctx, { bundleId, releaseId: w.l });
+      });
+    await mergeAs(t, { type: "release", id: w.s }, { type: "release", id: w.l });
+    const before = await catalogState(t);
+    await expect(splitAs(t, { type: "release", id: w.l })).rejects.toThrow(
+      /This Split needs more than one transaction allows \(.*\); nothing was split/,
+    );
+    expect(await catalogState(t)).toEqual(before);
+  });
+
+  /**
+   * world() with L in a Series of its own, `count` small Bundles holding
+   * L, then the Merge; since, alice owns the first Bundle and keeps her
+   * ownership of Vagabond (where the Bundle answers now) private, with a
+   * public default.
+   */
+  async function trackedBundles(t: TestT, count: number) {
+    const w = await world(t, { seriesTitle: "Vagabond Side Stories" });
+    const bundles = await t.run(async (ctx) => {
+      const ids: Array<Id<"releaseBundles">> = [];
+      for (let i = 0; i < count; i++) {
+        const bundleId = await insertBundle(ctx, { publisherId: w.publisherId });
+        await insertBundleMember(ctx, { bundleId, releaseId: w.l });
+        ids.push(bundleId);
+      }
+      return ids;
+    });
+    await merge(t, w);
+    const asAlice = signedIn(t, alice);
+    await asAlice.mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
+    await asAlice.mutation(api.sharing.setSeriesVisibility, {
+      seriesId: w.seriesId,
+      kind: "ownership",
+      visibility: "private",
+    });
+    await asAlice.mutation(api.collection.setBundleEntry, {
+      bundleId: bundles[0]!,
+      state: "owned",
+    });
+    return { ...w, bundles };
+  }
+
+  it("keeps a private tracker private across many Bundles, or refuses whole (C67-R2-04)", async () => {
+    for (const count of [350, 400, 450]) {
+      const t = makeT({ transactionLimits: true });
+      const w = await trackedBundles(t, count);
+      const loserSeries = await t.run(async (ctx) => (await ctx.db.get(w.l))!.seriesIds[0]!);
+      const before = await catalogState(t);
+      const outcome = await splitAs(t, { type: "release", id: w.l }).then(
+        () => null,
+        (error: unknown) => String(error),
+      );
+      if (outcome !== null) {
+        expect(outcome).toMatch(/badSplit/);
+        expect(await catalogState(t)).toEqual(before);
+        continue;
+      }
+      // Done: the Bundles answer to L's Series again, which keeps alice's
+      // ownership as private as Vagabond did.
+      const state = await t.run(async (ctx) => {
+        const user = (await ctx.db
+          .query("users")
+          .withIndex("by_username", (q) => q.eq("usernameNormalized", alice.username))
+          .unique())!;
+        return await ctx.db
+          .query("userSeriesStates")
+          .withIndex("by_user_series", (q) => q.eq("userId", user._id).eq("seriesId", loserSeries))
+          .unique();
+      });
+      expect(state?.ownershipVisibility).toBe("private");
+      expect(await t.run(async (ctx) => (await ctx.db.get(w.l))?.status)).toBe("active");
+    }
+  });
+
+  it("reads a shared Series once for every mature record it moves (C67-R2-04)", async () => {
+    const t = makeT({ transactionLimits: true });
+    const w = await world(t);
+    await merge(t, w);
+    const records = [];
+    for (let i = 0; i < 20; i++) {
+      const record = await t.run((ctx) =>
+        heldRecord(ctx, w.seriesId, OLDER, { mature: true }, `/books/OL_NEW_${i}M`),
+      );
+      expect(await decide(t, record, w.s)).toMatchObject({ status: "linked" });
+      records.push(record);
+    }
+    await t.run((ctx) => ctx.db.patch(w.seriesId, { synopsis: big(850_000), mature: undefined }));
+    await split(t, w);
+    for (const record of [w.first, ...records]) {
+      expect(await linkOf(t, record)).toEqual({ to: w.l, mark: OLDER });
+    }
+    expect(await t.run(async (ctx) => (await ctx.db.get(w.seriesId))?.mature)).toBe(true);
   });
 
   it("checks every real metric before writing, under each tightened limit", async () => {

@@ -506,6 +506,55 @@ describe("each statement, on both branches: recorded and linked (C67-06 to C67-0
     await eachBranch((t) => bound(t, olEdition("Vagabond, Vol. 1"), "paperback"), "accepted");
   });
 
+  /** An Open Library edition titled `title` whose feed gives no physical_format, as its parser stores it. */
+  const titled = (title: string, fields: Record<string, unknown> = {}) =>
+    parseEditionJson({
+      key: "/books/OL_TITLE_M",
+      title,
+      isbn_13: [OLDER],
+      publishers: ["VIZ Media"],
+      ...fields,
+    })!;
+
+  it("refuses a Binding the title states plainly, with no separate field (C67-R2-05)", async () => {
+    const hardcover = titled("Vagabond, Vol. 1 (Hardcover)");
+    expect(hardcover).toMatchObject({
+      format: "physical",
+      seriesTitle: "Vagabond",
+      volumeLabel: "1",
+    });
+    expect(hardcover.binding).toBeUndefined();
+    await eachBranch(
+      (t) => bound(t, hardcover, "paperback"),
+      /is a hardcover book; the Release is paperback/,
+    );
+    await eachBranch(
+      (t) => bound(t, titled("Vagabond, Vol. 1 (Paperback)"), "hardcover"),
+      /is a paperback book; the Release is hardcover/,
+    );
+  });
+
+  it("refuses a title and a field that state different Bindings (C67-R2-05)", async () => {
+    await eachBranch(
+      (t) =>
+        bound(
+          t,
+          titled("Vagabond, Vol. 1 (Hardcover)", { physical_format: "Paperback" }),
+          "paperback",
+        ),
+      /its stored binding says paperback, its title "Vagabond, Vol\. 1 \(Hardcover\)"'s tag "Hardcover" hardcover/,
+    );
+  });
+
+  it("records a title stating the Release's Binding, or none (C67-R2-05 controls)", async () => {
+    await eachBranch(
+      (t) => bound(t, titled("Vagabond, Vol. 1 (Hardcover)"), "hardcover"),
+      "accepted",
+    );
+    await eachBranch((t) => bound(t, titled("Vagabond, Vol. 1 (Hardcover)")), "accepted");
+    await eachBranch((t) => bound(t, titled("Vagabond, Vol. 1"), "paperback"), "accepted");
+  });
+
   /** An Open Library edition as its parser stores it. */
   const parsedEdition = (fields: Record<string, unknown>) =>
     parseEditionJson({

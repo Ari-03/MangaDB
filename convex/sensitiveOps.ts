@@ -7,7 +7,7 @@
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import {
   displayInfo,
   getCanonical,
@@ -23,13 +23,14 @@ import {
   releaseMergeRefusal,
   reversibleManifestOf,
   SINGLE_RECORD_OPS,
+  replaySplit,
   variantMergeRefusal,
   type OpMeta,
   type SingleRecordOp,
 } from "./lib/sensitiveOps";
 import { fail } from "./lib/errors";
 import { requireModerator } from "./lib/roles";
-import { recordRef, recordType } from "./schema";
+import { authorRef, recordRef, recordType } from "./schema";
 
 // ---------- the manage panel query ----------
 
@@ -156,6 +157,26 @@ function singleRecordMutation(kind: SingleRecordOp) {
 }
 
 // ---------- the operations ----------
+
+/**
+ * A Split's own work, which lib/sensitiveOps.ts applySplit runs as a nested
+ * mutation capped at what its transaction has left, so that past any limit
+ * the Split is undone and refused, never aborted. Not called on its own:
+ * replaySplit, Revisions and all, with the operation's `meta`.
+ */
+export const splitInternal = internalMutation({
+  args: {
+    ref: recordRef,
+    meta: v.object({
+      proposalId: v.id("proposals"),
+      author: authorRef,
+      approvedBy: v.optional(v.id("users")),
+      comment: v.string(),
+    }),
+  },
+  handler: async (ctx, { ref, meta }): Promise<Id<"revisions">[]> =>
+    await replaySplit(ctx, ref, meta),
+});
 
 /** Hide: remove from public discovery, preserving identity/history/tracking. */
 export const hideRecord = singleRecordMutation("hide");

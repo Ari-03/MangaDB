@@ -255,6 +255,104 @@ describe("a decided printing and the ISBN's other claims", () => {
   });
 });
 
+describe("a decision too large for one transaction (C67-R2-06)", () => {
+  /** What a refused decision must leave as it was, read without loading large Releases. */
+  const smallState = (t: TestT, record: Id<"sourceObservations">) =>
+    t.run(async (ctx) => ({
+      rows: await ctx.db.query("releaseIsbns").collect(),
+      record: await ctx.db.get(record),
+      proposals: (await ctx.db.query("proposals").collect()).length,
+      revisions: (await ctx.db.query("revisions").collect()).length,
+    }));
+
+  /**
+   * `count` Releases carrying OLDER, each with a description of `size`
+   * characters, really merged into Vagabond's Release (a primary through a
+   * merge needs no row, so nothing refuses the merges), and a held record of
+   * OLDER; with `row`, the Release already has OLDER's row.
+   */
+  async function mergedClaims(t: TestT, count: number, size: number, row = false) {
+    const book = await world(t);
+    for (let i = 0; i < count; i++) {
+      const merged = await t.run((ctx) =>
+        another(ctx, book, { isbn13: OLDER, description: "x".repeat(size) }),
+      );
+      await mergeAs(t, { type: "release", id: book.releaseId }, { type: "release", id: merged });
+    }
+    if (row) await t.run((ctx) => insertPrinting(ctx, book.releaseId, OLDER));
+    return { ...book, record: await t.run((ctx) => heldRecord(ctx, book.seriesId, OLDER)) };
+  }
+
+  it("refuses, writing nothing, when the claims are too large to read whole, on both branches", async () => {
+    for (const row of [false, true]) {
+      const t = makeT({ transactionLimits: true });
+      const w = await mergedClaims(t, 20, 850_000, row);
+      const before = await smallState(t, w.record);
+      expect(await decide(t, w.record, w.releaseId)).toEqual({
+        status: "refused",
+        reason: expect.stringMatching(
+          /^The decision needs more than one transaction can read or write \(.+\); nothing was recorded, and the book stays held\.$/,
+        ),
+      });
+      expect(await smallState(t, w.record)).toEqual(before);
+      expect(await holdFor(t, w.record)).not.toBeNull();
+    }
+  });
+
+  it("still gives the ordinary refusal for small merged claims, and under tight limits refuses rather than aborts", async () => {
+    const small = makeT({ transactionLimits: true });
+    const w = await mergedClaims(small, 20, 100, false);
+    expect(await decide(small, w.record, w.releaseId)).toEqual({
+      status: "refused",
+      reason: expect.stringMatching(
+        /is the Release's own, as the ISBN of Release .* merged into it/,
+      ),
+    });
+    const tight = makeT({ transactionLimits: { bytesRead: 2_000_000 } });
+    const large = await mergedClaims(tight, 3, 850_000, false);
+    expect(await decide(tight, large.record, large.releaseId)).toMatchObject({
+      status: "refused",
+      reason: expect.stringMatching(/needs more than one transaction/),
+    });
+    expect(await holdFor(tight, large.record)).not.toBeNull();
+  });
+
+  it("undoes a decision that runs out after it began writing, and refuses", async () => {
+    // The same decision twice under one read limit: Vagabond's Series is
+    // ~950 KB, read while the decision checks the Release (before any
+    // write). A mature record's link reads it once more afterwards, to flag
+    // the Series (lib/mature.ts), after the row, Proposal, Revision and link
+    // are written: past the limit only there, so those writes are undone.
+    for (const mature of [true, false]) {
+      const t = makeT({ transactionLimits: { bytesRead: 5_500_000 } });
+      const book = await world(t);
+      await t.run((ctx) => ctx.db.patch(book.seriesId, { synopsis: "x".repeat(950_000) }));
+      const record = await t.run((ctx) => heldRecord(ctx, book.seriesId, OLDER, { mature }));
+      if (mature) {
+        await refused(
+          t,
+          record,
+          book.releaseId,
+          /needs more than one transaction can read or write/,
+        );
+      } else {
+        expect(await decide(t, record, book.releaseId)).toEqual({
+          status: "recorded",
+          isbn13: OLDER,
+        });
+      }
+    }
+  });
+
+  it("records an ordinary printing under tight limits (control)", async () => {
+    const t = makeT({ transactionLimits: { bytesRead: 2_000_000, databaseQueries: 200 } });
+    const book = await world(t);
+    const record = await t.run((ctx) => heldRecord(ctx, book.seriesId, OLDER));
+    expect(await decide(t, record, book.releaseId)).toEqual({ status: "recorded", isbn13: OLDER });
+    expect(await rowsOf(t, book.releaseId)).toEqual([OLDER]);
+  });
+});
+
 describe("other writers keep an ISBN with printings to its one owner", () => {
   /** A hidden Release whose printing is X, and the Release Y-primary that might take X. */
   async function hiddenPrinter(t: TestT) {

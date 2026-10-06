@@ -16,7 +16,7 @@ import {
   insertSeries,
   insertVolume,
 } from "./test.factories";
-import type { TestT } from "./test.helpers";
+import { alice, bob, signedIn, type TestT } from "./test.helpers";
 
 // The 2007 printing is the Release; the 2002 one another printing of it.
 export const CURRENT = "9781421519111";
@@ -126,6 +126,26 @@ export const decide = (
     reason,
     evidenceUrl: VIZ_URL,
   });
+
+/**
+ * An approved Proposal setting a Release's own ISBN (alice drafts, bob
+ * approves): a printing promoted to the primary, or a primary corrected.
+ * Needs seedTeam(t, [alice, bob]).
+ */
+export async function promote(
+  t: TestT,
+  releaseId: Id<"releases">,
+  field: "isbn13" | "isbn10",
+  value: string,
+) {
+  const { proposalId } = await signedIn(t, alice).mutation(api.proposals.saveDraft, {
+    ops: [{ kind: "update", ref: { type: "release", id: releaseId }, changes: [{ field, value }] }],
+    evidence: [{ kind: "url", url: VIZ_URL }],
+    comment: "Use this ISBN as the Release's own.",
+  });
+  await signedIn(t, alice).mutation(api.proposals.submitProposal, { proposalId });
+  await signedIn(t, bob).mutation(api.proposals.approveProposal, { proposalId });
+}
 
 /** Everything a refused or rolled-back operation must leave as it was. */
 export const catalogState = (t: TestT) =>

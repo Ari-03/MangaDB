@@ -177,6 +177,32 @@ export async function printingIsbnOf(
   return release !== null && primaryIsbnsOf(release).has(isbn13) ? undefined : isbn13;
 }
 
+/**
+ * Is a record linked to `release` one of its Other Printings' records now?
+ * Marked (the mark is sticky: a record keeps it when a later snapshot
+ * states no ISBN), or unmarked with the ISBN its snapshot states now
+ * (observedIsbn13) recorded as one of the Release's printings and not its
+ * own (printingIsbnOf). A record linked as the Release's own printing
+ * becomes another printing's when a correction gives the Release another
+ * ISBN. Such a record offers the Release nothing: no art, no blurb, no
+ * withdrawal (the paths that read this), as reconcileFields reads it. A
+ * record stating no ISBN is unknown here and reads as the Release's own.
+ */
+export async function ofOtherPrinting(
+  ctx: QueryCtx,
+  release: Doc<"releases">,
+  observation: Doc<"sourceObservations">,
+): Promise<boolean> {
+  if (observation.printingIsbn13 !== undefined) return true;
+  const isbn13 = observedIsbn13(observation.snapshot);
+  if (isbn13 === undefined || primaryIsbnsOf(release).has(isbn13)) return false;
+  const rows = await ctx.db
+    .query("releaseIsbns")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+    .take(PRINTING_SCAN);
+  return rows.some((row) => row.releaseId === release._id);
+}
+
 /** A source record as Revisions name it: "{sourceKey} {sourceRecordId}". */
 export function recordName(
   observation: Pick<Doc<"sourceObservations">, "sourceKey" | "sourceRecordId">,

@@ -8,7 +8,7 @@
 
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
-import { type IsbnField, isbnFieldValue } from "../isbn";
+import { type IsbnField, isbn13To10, isbnFieldValue, toIsbn13 } from "../isbn";
 import { followMerges } from "../merges";
 import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
@@ -1073,22 +1073,45 @@ async function entriesToBundle(
 }
 
 /**
- * A box-set Release's ISBN as the Bundle made from it stores it: the
- * field's one spelling (lib/isbn.ts isbnFieldValue), or the stored text
- * when it is no ISBN of that kind (it can then hide no claim).
+ * A box-set Release's ISBNs as the Bundle made from it stores them, or why
+ * they cannot be. A valid ISBN, in either field and any spelling, is stored
+ * as its field's one spelling (lib/isbn.ts isbnFieldValue). Text that is no
+ * valid ISBN is kept as it was (compacted when it has an ISBN's shape): it
+ * can hide no claim. A valid ISBN with no form in its field (a 979 ISBN
+ * kept as `isbn10`) is the Bundle's ISBN-13 when that field is free, and
+ * dropped when it is the same book as the ISBN-13; beside another `isbn13`
+ * it is refused, as are two valid ISBNs naming different books: a person
+ * corrects the Release first, so no barcode is lost or replaced.
  */
-function bundleIsbn(field: IsbnField, value: string | undefined): string | undefined {
-  return value === undefined ? undefined : (isbnFieldValue(field, value) ?? value);
+function bundleIsbns(
+  box: Pick<Doc<"releases">, "isbn13" | "isbn10">,
+): { isbn13?: string; isbn10?: string } | { refusal: string } {
+  const text = (field: IsbnField, raw: string | undefined) =>
+    raw === undefined ? undefined : (isbnFieldValue(field, raw) ?? raw);
+  const key13 = toIsbn13(box.isbn13);
+  const key10 = toIsbn13(box.isbn10);
+  if (key13 !== undefined && key10 !== undefined && key13 !== key10) {
+    return { refusal: `box-set release names two ISBNs (${key13}, ${key10})` };
+  }
+  const isbn13 = key13 ?? text("isbn13", box.isbn13);
+  if (key10 === undefined) return { isbn13, isbn10: text("isbn10", box.isbn10) };
+  const isbn10 = isbn13To10(key10);
+  if (isbn10 !== undefined) return { isbn13, isbn10 };
+  if (key13 === key10) return { isbn13 };
+  if (isbn13 === undefined) return { isbn13: key10 };
+  return {
+    refusal: `box-set release keeps ISBN ${key10}, which has no ISBN-10, as its isbn10 beside isbn13 "${isbn13}"`,
+  };
 }
 
-/** An existing bundle for this box-set Release: same ISBN, else same name/publisher/format. */
+/** An existing bundle for this box-set Release: same ISBN-13, else same name/publisher/format. */
 async function existingBundle(
   ctx: MutationCtx,
   release: Doc<"releases">,
+  isbn13: string | undefined,
   name: string,
   publisherId: Id<"publishers">,
 ) {
-  const isbn13 = bundleIsbn("isbn13", release.isbn13);
   if (isbn13) {
     return await ctx.db
       .query("releaseBundles")
@@ -1118,9 +1141,13 @@ async function toBundle(
 ): Promise<Result> {
   const boxes = (await releasesOf(ctx, edition._id)).filter((r) => r.status !== "merged");
   if (boxes.length === 0) return skip("box set has no release");
+  const isbnsOf = (box: Doc<"releases">) => {
+    const isbns = bundleIsbns(box);
+    return "refusal" in isbns ? skip(isbns.refusal) : isbns;
+  };
   if (
     edition.status !== "active" &&
-    !(await existingBundle(ctx, boxes[0]!, name, edition.publisherId))
+    !(await existingBundle(ctx, boxes[0]!, isbnsOf(boxes[0]!).isbn13, name, edition.publisherId))
   ) {
     return skip(`edition is ${edition.status}`);
   }
@@ -1132,7 +1159,8 @@ async function toBundle(
   const moves = newMoves(entry.key);
 
   for (const box of boxes) {
-    let bundle = await existingBundle(ctx, box, name, edition.publisherId);
+    const isbns = isbnsOf(box);
+    let bundle = await existingBundle(ctx, box, isbns.isbn13, name, edition.publisherId);
     if (!bundle) {
       // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
       const printed = await printedIsbnRefusal(ctx, [box.isbn13, box.isbn10]);
@@ -1144,8 +1172,8 @@ async function toBundle(
         name,
         publisherId: edition.publisherId,
         format: box.format,
-        isbn13: bundleIsbn("isbn13", box.isbn13),
-        isbn10: bundleIsbn("isbn10", box.isbn10),
+        isbn13: isbns.isbn13,
+        isbn10: isbns.isbn10,
         pubDate: box.pubDate,
         price: box.price,
         description: box.description,
@@ -2215,7 +2243,9 @@ async function releaseBundle(
   } else if (entry.box !== null && entry.bundleId === null) {
     box = await ctx.db.get(entry.box.releaseId);
     if (!box) return skip("box-set release missing");
-    const isbn13 = bundleIsbn("isbn13", box.isbn13);
+    const isbns = bundleIsbns(box);
+    if ("refusal" in isbns) return skip(isbns.refusal);
+    const isbn13 = isbns.isbn13;
     if (isbn13 === undefined) return skip("box-set release has no ISBN");
     bundle = await ctx.db
       .query("releaseBundles")
@@ -2237,7 +2267,7 @@ async function releaseBundle(
         publisherId: edition.publisherId,
         format: box.format,
         isbn13,
-        isbn10: bundleIsbn("isbn10", box.isbn10),
+        isbn10: isbns.isbn10,
         pubDate: box.pubDate,
         price: box.price,
         description: box.description,

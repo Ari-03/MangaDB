@@ -1258,6 +1258,100 @@ describe("lines, researched releases, cross-series books", () => {
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
   });
 
+  it("never stores a valid ISBN where its field cannot hold it, in either conversion (C67-R2-07)", async () => {
+    const W979 = "9798888772584";
+    type Fields = { isbn13?: string; isbn10?: string };
+    /** Convert the omnibus box Release, stored with `fields`, through `kind`. */
+    const convert = async (kind: "releaseBundle" | "remodelEdition", fields: Fields) => {
+      const t = makeT();
+      const s = await seed(t);
+      await t.run((ctx) =>
+        ctx.db.patch(s.omnibusRelease.releaseId, {
+          isbn13: fields.isbn13,
+          isbn10: fields.isbn10,
+        }),
+      );
+      const entry: RepairEntry =
+        kind === "releaseBundle"
+          ? {
+              kind,
+              key: "b",
+              reason: "box set of two works",
+              bundleId: null,
+              box: { releaseId: s.omnibusRelease.releaseId, name: "Noragami Box Set" },
+              members: [
+                { isbn13: "9780000000035", order: 1 },
+                { isbn13: "9780000000011", order: 2 },
+              ],
+              retireVolumeIds: [s.omnibusVol],
+            }
+          : {
+              kind,
+              key: "b",
+              reason: "box set",
+              editionId: s.omnibusRelease.editionId,
+              volumeId: s.omnibusVol,
+              targetSeriesId: s.base,
+              line: null,
+              bundle: { name: "Noragami Box Set 1" },
+              groups: [
+                {
+                  releaseIds: null,
+                  coverage: ["1", "2"].map((label) => ({
+                    label,
+                    volumeId: null,
+                    extent: "complete" as const,
+                  })),
+                  linePosition: null,
+                },
+              ],
+              retireVolumeIds: [s.omnibusVol],
+            };
+      const [outcome] = await run(t, [entry]);
+      const bundles = await t.run((ctx) => ctx.db.query("releaseBundles").collect());
+      const check = await t.query(internal.printings.consistencyInternal, {
+        pass: "bundles",
+        paginationOpts: { numItems: 100, cursor: null },
+      });
+      return { outcome, bundles, check };
+    };
+    for (const kind of ["releaseBundle", "remodelEdition"] as const) {
+      // Stored as each field's one spelling, the ISBN-13 taking a 979 ISBN
+      // kept as `isbn10`; text that is no ISBN stays as it was.
+      for (const [fields, stored] of [
+        [{ isbn10: W979 }, { isbn13: W979, isbn10: undefined }],
+        [
+          { isbn13: W979, isbn10: "979-8-8887-7258-4" },
+          { isbn13: W979, isbn10: undefined },
+        ],
+        [
+          { isbn13: "1591160340", isbn10: "9781591160342" },
+          { isbn13: "9781591160342", isbn10: "1591160340" },
+        ],
+        [
+          { isbn13: "9781591160342", isbn10: "12345" },
+          { isbn13: "9781591160342", isbn10: "12345" },
+        ],
+      ] satisfies Array<[Fields, Fields]>) {
+        const { outcome, bundles, check } = await convert(kind, fields);
+        expect(outcome?.status).toBe("applied");
+        expect(bundles).toHaveLength(1);
+        expect({ isbn13: bundles[0]!.isbn13, isbn10: bundles[0]!.isbn10 }).toEqual(stored);
+        expect(check).toMatchObject({ findings: [], isDone: true });
+      }
+      // A valid ISBN no field can hold beside another book's ISBN, or beside
+      // text in `isbn13`, is refused: nothing is written, no barcode lost.
+      for (const [fields, reason] of [
+        [{ isbn13: "9781421506555", isbn10: W979 }, /names two ISBNs/],
+        [{ isbn13: "9781421506556", isbn10: W979 }, /has no ISBN-10, as its isbn10 beside isbn13/],
+      ] satisfies Array<[Fields, RegExp]>) {
+        const { outcome, bundles } = await convert(kind, fields);
+        expect(outcome).toMatchObject({ status: "skipped", reason: expect.stringMatching(reason) });
+        expect(bundles).toEqual([]);
+      }
+    }
+  });
+
   it("turns a box set into a bundle whose members span Series, in plan order, and extends a bundle", async () => {
     const t = makeT();
     const s = await seed(t);

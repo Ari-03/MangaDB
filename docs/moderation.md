@@ -197,6 +197,12 @@ approved Proposal, so the reason lands in public history.
   Records of a printing go where the printing goes, including records
   linked to the survivor since the merge, with their mark and maturity as
   a link gives them; a record the survivor keeps keeps its mark. A record
+  is a printing's when it is marked, or when the ISBN its snapshot states
+  now has a printing row: a record linked as its Release's own printing
+  goes with that printing once a correction makes it another one. A
+  removed row comes back stored under its ISBN-13, whatever spelling the
+  merge's manifest kept, so the barcode lookup and every check find it.
+  A record
   that was unlinked or relinked by an audited decision since the merge,
   on the survivor or on any other Release it was linked to meanwhile (a
   repair unlink, a reviewed link that was not the record's first), refuses
@@ -215,7 +221,14 @@ approved Proposal, so the reason lands in public history.
   its reserve; before writing it checks room for its writes, that reserve,
   and the fresh ownership check it makes after them (measured while it
   planned). Past any of these it refuses with the count or the metric,
-  writing nothing, rather than meeting the platform's limit.
+  writing nothing, rather than meeting the platform's limit. The whole
+  Split (finding who tracks what, planning, the replay, the Series,
+  visibility, rating and maturity work after it, and the fresh check) runs
+  as one nested mutation capped at what the transaction has left
+  (`lib/bounded.ts`): past any of the seven limits anywhere in it, it is
+  undone and refused as `badSplit`, never the platform's abort. Every
+  Split, of any record, runs this way. A Series many records answer to is
+  read once for all of them.
 - **Lock** closes an active record to edits during a dispute; unlock when
   it is resolved. Hidden and merged records are locked by their status.
   Hide and merge refuse a locked record until it is unlocked.

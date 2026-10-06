@@ -313,7 +313,12 @@ record; its observation is the one the hold row names), and the
 It does not judge whether two books are the same; the person deciding
 does. It checks what the records state and who owns the ISBN, and answers
 `{"status": "refused", "reason": "…"}` instead of throwing when a check
-fails, so a script can log it and go on. The checks run in this order:
+fails, so a script can log it and go on. The whole decision runs as a
+nested mutation capped at what its transaction has left
+(`lib/bounded.ts`): one that would pass any transaction limit (claims too
+large to read whole, say) is refused the same way, its writes undone,
+with nothing recorded and the book still held. The checks run in this
+order:
 
 - the reason is not empty;
 - the record is not withdrawn or already linked, and does not call the
@@ -348,9 +353,11 @@ fails, so a script can log it and go on. The checks run in this order:
   refused, since the number may be the work's own, and so is anything a
   source files as a novel, as another language, or out of scope (a Seven
   Seas or Yen Press category, a stored `outOfScope`). A Binding the record
-  states plainly (hardcover, paperback) that is not the Release's is
-  refused: another Binding is another Release. A Binding either side
-  leaves unstated is left to the person deciding. Anything that reads as
+  states plainly (hardcover, paperback), in a stored field or as a format
+  tag ending its title ("Vagabond, Vol. 1 (Hardcover)"), that is not the
+  Release's is refused: another Binding is another Release. Statements
+  that disagree are refused as unreadable. A Binding either side leaves
+  unstated is left to the person deciding. Anything that reads as
   packaging is refused for now: a multi-Volume designator or stored range,
   a line name or packaging word in the title, or any bracketed part ("[1st
   Ed]"). The Release's Edition must collect exactly one whole Volume (a
@@ -409,9 +416,14 @@ Release's or Bundle's `isbn13` as the ISBN-13's digits, its `isbn10` as
 the ISBN-10's (an upper-case X), a row's `isbn13` as the ISBN-13's. A
 claim stored in any other spelling (hyphens, spaces, a lower-case x, an
 ISBN-10 kept as `isbn13`) is invisible to them. Every writer stores that
-one spelling (the importers' parsers, Proposals, and the data repair's
+one spelling (the importers' parsers, Proposals, the data repair's
 `updateFields`, `createRelease` and Bundle conversions, `lib/isbn.ts`
-`isbnFieldValue`), but older rows may not. The `releases` and `bundles`
+`isbnFieldValue`, and a Split restoring a removed row), but older rows
+may not. A Bundle conversion keeps a box Release's text that is no valid
+ISBN as it was; a valid 979 ISBN kept as its `isbn10` becomes the
+Bundle's ISBN-13 when that field is free, and is refused beside another
+`isbn13` (as are two valid ISBNs naming different books), so a person
+corrects the Release first. The `releases` and `bundles`
 passes find every such stored ISBN; the `rows` pass finds rows stored so.
 Until those report none, or each is corrected (a Release by a repair
 `updateFields` entry, a Bundle by a Proposal; a row by hand, since no

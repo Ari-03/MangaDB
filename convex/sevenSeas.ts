@@ -50,7 +50,7 @@ import {
   type BundleReconcile,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
-import { printingIsbnOf } from "./lib/releaseIsbns";
+import { ofOtherPrinting, printingIsbnOf } from "./lib/releaseIsbns";
 import {
   BOOK_PAGE_VERSION,
   bookSnapshotValidator,
@@ -361,9 +361,13 @@ export const noteListing = internalMutation({
       };
     }
     // A record of one of the Release's Other Printings offers it no art and
-    // no blurb (applyBook says the same once its page is read).
+    // no blurb (applyBook says the same once its page is read): marked, or
+    // made another printing's by a correction since it was linked.
     if (obs.printingIsbn13 !== undefined) return { needsDetail: false };
     const release = obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
+    if (release !== null && (await ofOtherPrinting(ctx, release, obs))) {
+      return { needsDetail: false };
+    }
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
     // budget, so the backfill needs no forced run. So is one an aggregator
@@ -527,8 +531,8 @@ export const applyBook = internalMutation({
         return { status: "recordOnly", changed: false };
       }
       // A record of one of the Release's Other Printings offers it nothing,
-      // its art included (lib/releaseIsbns.ts).
-      if (observation.printingIsbn13 !== undefined) {
+      // its art included (lib/releaseIsbns.ts ofOtherPrinting).
+      if (await ofOtherPrinting(ctx, release, observation)) {
         return { status: "recordOnly", changed: false, releaseId: release._id };
       }
       // An unchanged snapshot is done unless its art moved to a new URL.

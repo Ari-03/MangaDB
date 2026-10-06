@@ -400,11 +400,16 @@ printing is not promised a link by any particular run. Linking marks the
 record as the printing's (`printingIsbn13` on the observation) unless the
 ISBN is the Release's own ISBN-13 or ISBN-10, and a marked
 record changes nothing on the Release, even after its snapshot drops or
-changes the ISBN. `reconcileFields` skips it, Seven Seas and Kodansha
-store no art from it (the Seven Seas listing asks it for neither art nor
-a blurb, and `imports.attachCover` lands a download only while the record
-that asked for it is still linked to that Release, unmarked, and still
-offers that art), and its withdrawal queues no cancellation review. Any
+changes the ISBN. Neither does an unmarked record whose snapshot's ISBN a
+later correction made one of the Release's printings (it was linked as
+the Release's own; `lib/releaseIsbns.ts` `ofOtherPrinting` reads it from
+the record's current ISBN and the Release's current ISBNs and rows).
+`reconcileFields` skips such a record, Seven Seas and Kodansha store no
+art from it (the Seven Seas listing asks it for neither art nor a blurb,
+and `imports.attachCover` lands a download only while the record that
+asked for it is still linked to that Release, of its own printing, and
+still offers that art), and its withdrawal queues no cancellation review.
+A record stating no ISBN reads as the Release's own. Any
 download, of any record, also lands only while the Release's Edition is
 still the one it was requested for and that Edition is active and
 unlocked: hiding or locking an Edition leaves its Releases' status as it
