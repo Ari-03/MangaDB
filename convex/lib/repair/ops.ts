@@ -2895,6 +2895,9 @@ async function setCoverage(
   const moves = newMoves(entry.key);
   await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
     await replaceCoverage(ctx, audit, edition._id, rows);
+    await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
+      coverageUnmapped: undefined,
+    });
 
     if (entry.line) {
       const { seriesId, name, position } = entry.line;

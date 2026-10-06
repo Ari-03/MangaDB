@@ -1423,6 +1423,97 @@ describe("lines, researched releases, cross-series books", () => {
     });
   });
 
+  it("maps the unmapped Lovecraft deluxe Edition and audits its flag clear, with dry-run rollback", async () => {
+    const t = makeT();
+    await seed(t);
+    const s = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "Dark Horse" });
+      const seriesId = await insertSeries(ctx, {
+        publicId: 5751,
+        title: "H.P. Lovecraft's At the Mountains of Madness",
+      });
+      const volumes = [
+        await insertVolume(ctx, { seriesId, label: "1", position: 1 }),
+        await insertVolume(ctx, { seriesId, label: "2", position: 2 }),
+      ];
+      const editionLineId = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Deluxe Edition",
+      });
+      const editionId = await insertEdition(ctx, {
+        publicId: 23001,
+        publisherId,
+        editionLineId,
+        coverageUnmapped: true,
+      });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9781506740690",
+        binding: "hardcover",
+      });
+      return { seriesId, editionId, releaseId, volumes };
+    });
+    const entry: RepairEntry = {
+      kind: "setCoverage",
+      key: "lovecraft-deluxe",
+      reason: "Dark Horse's deluxe collects complete Volumes 1 and 2",
+      editionId: s.editionId,
+      before: [],
+      coverage: ["1", "2"].map((label) => ({
+        seriesId: s.seriesId,
+        label,
+        extent: "complete" as const,
+      })),
+      line: null,
+      retireVolumeIds: [],
+    };
+    const state = () =>
+      t.run(async (ctx) => ({
+        edition: await ctx.db.get(s.editionId),
+        release: await ctx.db.get(s.releaseId),
+        coverage: await ctx.db
+          .query("volumeCoverages")
+          .withIndex("by_edition", (q) => q.eq("editionId", s.editionId))
+          .collect(),
+        revisions: await ctx.db.query("revisions").collect(),
+        proposals: await ctx.db.query("proposals").collect(),
+        versions: await ctx.db.query("proposalVersions").collect(),
+      }));
+    const before = await state();
+    expect(before.coverage).toEqual([]);
+    expect(before.edition?.coverageUnmapped).toBe(true);
+    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    expect(await state()).toEqual(before);
+
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    const after = await state();
+    const { coverageUnmapped: _unmapped, ...mappedEdition } = before.edition!;
+    expect(after.edition).toEqual(mappedEdition);
+    expect(after.release).toEqual(before.release);
+    expect(
+      after.coverage.map(({ volumeId, extent, order }) => ({ volumeId, extent, order })),
+    ).toEqual(s.volumes.map((volumeId, i) => ({ volumeId, extent: "complete", order: i + 1 })));
+    expect(after.proposals).toHaveLength(1);
+    expect(after.versions).toHaveLength(1);
+    const flagChange = { field: "coverageUnmapped", before: true };
+    expect(after.revisions).toContainEqual(
+      expect.objectContaining({
+        ref: { type: "edition", id: s.editionId },
+        proposalId: after.proposals[0]!._id,
+        changes: [flagChange],
+      }),
+    );
+    expect(after.versions[0]!.ops).toContainEqual({
+      kind: "update",
+      ref: { type: "edition", id: s.editionId },
+      changes: [flagChange],
+    });
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
   it("covers Volumes of several Series with one Edition, places it in a line, and skips on drift", async () => {
     const t = makeT();
     const s = await seed(t);
