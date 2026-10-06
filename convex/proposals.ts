@@ -55,7 +55,7 @@ import {
 } from "./lib/sensitiveOps";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
-import { checkPlacement, placementView } from "./placement";
+import { checkPlacement, placementChanged, placementView } from "./placement";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
 
@@ -1266,9 +1266,12 @@ export const proposalDetail = query({
     }
 
     const current = versions.find((version) => version.versionNo === proposal.currentVersionNo);
+    // A placement whose source now names another book than its author
+    // reviewed is stale too: approval refuses it (placement.ts).
     const stale =
       proposal.state === "inReview" && current
-        ? (await staleRecordsOf(ctx, current.ops)).length > 0
+        ? (await staleRecordsOf(ctx, current.ops)).length > 0 ||
+          (await placementChanged(ctx, current.ops))
         : Boolean(proposal.stale);
 
     return {

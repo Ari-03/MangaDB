@@ -45,12 +45,13 @@ import { resolveBaseSeries } from "./lib/catalogTitle";
 import type { DateParts } from "./lib/dates";
 import { fail } from "./lib/errors";
 import type { KodanshaSnapshot } from "./lib/kodansha";
-import { annLinePackaged, packagingOf, type AnnMangaSnapshot } from "./lib/ann";
+import { annLinePackaged, annTitleIdentity, packagingOf, type AnnMangaSnapshot } from "./lib/ann";
 import { getObservation, holdOf, type HoldKind } from "./lib/observations";
 import type { OlEditionSnapshot } from "./lib/openLibrary";
 import {
   creationOps,
   findPublisherByName,
+  namedEditionLine,
   needsEditionLine,
   toPartialDate,
   type CreateOp,
@@ -100,6 +101,11 @@ type BookFacts = {
   outOfScope: string | null;
   /** Its source states it two ways no member's choice resolves: an ANN page naming another format. */
   contradiction?: string;
+  /**
+   * Which book the source names, as a member's placement is reviewed
+   * against it (`identity`): its work and line, and its publisher.
+   */
+  identity: string;
 };
 
 const lineOf = (packaging: Packaging | null | undefined): Line | null =>
@@ -130,6 +136,24 @@ function titleReading(
   };
 }
 
+/**
+ * Which book a source names, for binding a member's placement to what they
+ * reviewed: the work as the adapter reads it (an ANN line's titles by
+ * lib/ann.ts annTitleIdentity, any other source's title, spacing and case
+ * aside) and its publisher names. A placement whose source names another
+ * work, line or publisher at submission or approval than when its coverage
+ * was stated places a book nobody reviewed (`placedOtherwise`). Positions,
+ * coverage and ISBNs are not in it: the member states the first two, and
+ * the ISBNs and format are compared on their own.
+ */
+function identity(work: string, publisherNames: readonly string[]): string {
+  return JSON.stringify([work, publisherNames]);
+}
+
+/** A title as `identity` compares it: spacing and case aside. */
+const titleKey = (title: string) =>
+  title.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+
 /** A label that names one numbered Volume ("4", "7.5"): no words, no range. */
 const PLAIN_LABEL = /^\d+(?:\.\d+)?$/;
 
@@ -144,6 +168,22 @@ async function bookFacts(
   observation: Doc<"sourceObservations">,
   heldSeriesTitle: string | null,
 ): Promise<BookFacts | null> {
+  const facts = await sourceFacts(ctx, observation, heldSeriesTitle);
+  if (facts === null) return null;
+  const snapshot: HeldSnapshot = observation.snapshot;
+  const work =
+    snapshot.kind === "annRelease"
+      ? annTitleIdentity(snapshot, heldSeriesTitle !== null ? [heldSeriesTitle] : [])
+      : titleKey(facts.title);
+  return { ...facts, identity: identity(work, facts.publisherNames) };
+}
+
+/** `bookFacts` before its `identity`: each adapter's own reading. */
+async function sourceFacts(
+  ctx: QueryCtx,
+  observation: Doc<"sourceObservations">,
+  heldSeriesTitle: string | null,
+): Promise<Omit<BookFacts, "identity"> | null> {
   const snapshot: HeldSnapshot | null = observation.snapshot ?? null;
   switch (snapshot?.kind) {
     case "olEdition": {
@@ -320,8 +360,11 @@ type Placing = { proposalId: Id<"proposals">; plans: CreatePlan[]; release: Rele
  * and format under the hold's Series in an Edition the ops create or join
  * (never one named by a stored ID), every Volume and line it creates or
  * covers is in that Series, nothing it joins is hidden, locked or merged
- * away, and the Edition it joins has no Release of that format yet (the
- * slot an `isbn` hold guards).
+ * away, the line it joins is the one line of its name every state resolves
+ * to (lib/pipeline.ts namedEditionLine), the Edition it joins has no
+ * Release of that format yet in any state (the slot an `isbn` hold
+ * guards), and its source still names the book the member reviewed when
+ * they stated the placement (`identity`).
  */
 async function placeable(
   ctx: MutationCtx,
@@ -398,6 +441,13 @@ async function placedOtherwise(
   if (release.placement?.seriesId !== series._id) {
     return `The book is held under "${series.title}" now, not the Series this Proposal places it under.`;
   }
+  // The book the member reviewed: a source that now names another work,
+  // line or publisher ("Alpha+ [VIZBIG Edition]" after "Alpha [VIZBIG
+  // Edition]") asks for the placement to be stated again. A placement
+  // written before this was recorded carries none, and is never trusted.
+  if (release.placement.reviewed !== facts.identity) {
+    return "Its source names the book otherwise than when this placement was stated (its work, line or publisher changed): state the placement again so it is reviewed as the source stands.";
+  }
   // Coverage and the slot are checked on the Edition plan, so the Release goes under one.
   if (release.edition.kind === "id") {
     return "Its Release names a stored Edition instead of one this Proposal creates or joins: save the placement again.";
@@ -417,9 +467,27 @@ async function placedOtherwise(
         if (row.volume.kind === "id")
           under.push((await ctx.db.get(row.volume.id))?.seriesId ?? null);
       }
-      if (plan.editionLine?.kind === "id")
-        under.push((await ctx.db.get(plan.editionLine.id))?.seriesId ?? null);
-      // The slot an `isbn` hold guards: one Release per format in an Edition.
+      if (plan.editionLine?.kind === "id") {
+        const joinedLine = await ctx.db.get(plan.editionLine.id);
+        under.push(joinedLine?.seriesId ?? null);
+        // The line it joins must be the one line of its name every state
+        // resolves to: never the first active one beside a hidden, locked
+        // or unresolved one, or beside an independent twin.
+        const named =
+          joinedLine !== null
+            ? await namedEditionLine(ctx, {
+                seriesId: joinedLine.seriesId,
+                publisherId: joinedLine.publisherId,
+                name: joinedLine.name,
+              })
+            : null;
+        if (named?.kind !== "line" || named.line._id !== plan.editionLine.id) {
+          return `The Edition Line this placement joins is not the one open line of its name: ${named?.kind === "closed" ? named.reason : "it is gone"}.`;
+        }
+      }
+      // The slot an `isbn` hold guards: a Release of this format already
+      // in the Edition it joins, in any state. One an Editor hid, or one
+      // merged, is still that book's: a Moderator restores or resolves it.
       const joined = plan.existingId !== undefined ? await ctx.db.get(plan.existingId) : null;
       const taken =
         joined !== null &&
@@ -428,7 +496,7 @@ async function placedOtherwise(
             .query("releases")
             .withIndex("by_edition", (q) => q.eq("editionId", joined._id))
             .collect()
-        ).some((other) => other.status === "active" && other.format === format);
+        ).some((other) => other.format === format);
       if (taken) return KEPT_HOLDS.isbn;
     }
     if (under.some((id) => id !== series._id))
@@ -468,6 +536,7 @@ async function placementOps(
       observationId: observation._id,
       seriesId: series._id,
       coverage: typeof coverage === "string" ? coverage : "labels",
+      reviewed: facts.identity,
     },
   };
   return await creationOps(ctx, args);
@@ -562,7 +631,12 @@ export const preparePlacement = mutation({
   },
 });
 
-type Placed = { observationId: Id<"sourceObservations">; seriesId: Id<"series"> };
+type Placed = {
+  observationId: Id<"sourceObservations">;
+  seriesId: Id<"series">;
+  /** Which book the member reviewed (`identity`); absent on an older placement. */
+  reviewed?: string;
+};
 
 /** The book a Proposal's ops place, and under which Series: the Release create op's `placement`. */
 export function placedBy(ops: Doc<"proposalVersions">["ops"]): Placed | null {
@@ -570,10 +644,33 @@ export function placedBy(ops: Doc<"proposalVersions">["ops"]): Placed | null {
     if (op.kind !== "create" || op.table !== "releases") continue;
     const placement: Partial<Placed> | undefined = op.fields?.placement;
     if (placement?.observationId !== undefined && placement.seriesId !== undefined) {
-      return { observationId: placement.observationId, seriesId: placement.seriesId };
+      return {
+        observationId: placement.observationId,
+        seriesId: placement.seriesId,
+        ...(typeof placement.reviewed === "string" ? { reviewed: placement.reviewed } : {}),
+      };
     }
   }
   return null;
+}
+
+/**
+ * Whether ops placing a held book place one its source no longer names as
+ * the member reviewed it (`placedOtherwise`'s identity rule), for the
+ * Proposal page's stale flag: approval refuses such a placement, so a
+ * Moderator sees it stale before trying. False for ops placing no book.
+ */
+export async function placementChanged(
+  ctx: QueryCtx,
+  ops: Doc<"proposalVersions">["ops"],
+): Promise<boolean> {
+  const placed = placedBy(ops);
+  if (placed === null) return false;
+  const observation = await ctx.db.get(placed.observationId);
+  const series = await ctx.db.get(placed.seriesId);
+  if (observation === null || series === null) return true;
+  const facts = await bookFacts(ctx, observation, series.title);
+  return facts === null || facts.identity !== placed.reviewed;
 }
 
 /**

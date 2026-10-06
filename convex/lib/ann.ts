@@ -748,11 +748,14 @@ export function annLinePackaged(line: PackagingInput, names?: readonly string[])
 /**
  * Whether the line's ok release page still restates it: its Title spells
  * the line's title, and its Volume field reads as the line's designator
- * (format, label, single or several, list). False tells the page pass the
- * stored page predates the line's listing (ANN corrected one and the
- * mirror stored it) and wants fetching again before it can judge the
- * line; staging's pages and lines all agree (17,656 of 17,656 on
- * 2026-10-05). True without an ok page: there is nothing to restate.
+ * (format, label, single or several, list). False says only that the two
+ * disagree, not which is newer: the page pass fetches the page again
+ * before it judges the line, and a fresh page that still disagrees is
+ * held as the disagreement it is (packagingOf), never made harmless by
+ * the fetch. A persistent disagreement is fetched on every pass. Staging's
+ * stored pages and lines all agreed (17,656 of 17,656 on 2026-10-05),
+ * which says nothing of how many books any rule places. True without an
+ * ok page: there is nothing to restate.
  */
 export function pageRestatesLine(line: PackagingInput): boolean {
   const page = currentPage(line);
@@ -770,6 +773,30 @@ export function pageRestatesLine(line: PackagingInput): boolean {
   const range = (read: Pick<AnnRelease, "coverRange" | "coverageGapped">) =>
     read.coverageGapped ? "gapped" : `${read.coverRange?.from}-${read.coverRange?.to}`;
   return range(restated) === range(line);
+}
+
+/**
+ * Which book an ANN line's titles name, as an Editor's placement of it is
+ * reviewed (placement.ts): for its title and its ok page's Title, the
+ * segmentation's kind, work and line name read against `names` (the held
+ * Series' title), every number and mark of the work kept. Positions,
+ * coverage and the page's Volume field are left out: a reviewed placement
+ * states those itself. Two lines naming the same work and line read the
+ * same; "Alpha+ [VIZBIG Edition]" after "Alpha [VIZBIG Edition]" does not.
+ */
+export function annTitleIdentity(line: PackagingInput, names: readonly string[]): string {
+  const packaged = annLinePackaged(line, names);
+  const titles = [line.title, currentPage(line)?.title];
+  return JSON.stringify(
+    titles.map((title) => {
+      if (title === undefined) return null;
+      const read = segmentTitle(title, names, packaged);
+      if (read.kind === "ambiguous") return [read.kind, read.reason];
+      return read.kind === "line"
+        ? [read.kind, textKey(read.work), textKey(read.name)]
+        : [read.kind, textKey(read.work)];
+    }),
+  );
 }
 
 /** Whether two segmentations say the same: one kind, one work, one line name. */
@@ -834,13 +861,21 @@ function readPackaging(line: PackagingInput, names: readonly string[], entry?: s
     ...titles.flatMap((title) => title.facts.positions),
     ...(!line.multi && line.label !== undefined ? [canonicalLabel(line.label)] : []),
   ];
-  let positionUnread = titles.some((title) => title.facts.positionUnread);
+  // A single designator whose number the grammar cannot read ("GN II",
+  // "GN thirty": readCoverage), the line's or the page's, leaves the book's
+  // number unknown: no title's position stands in for it. (A stored bare
+  // "GN" whose title states a list no range holds reads the same; its
+  // number is unknown too.)
+  const unreadSingle = (read: Pick<AnnRelease, "label" | "multi" | "coverageGapped">) =>
+    !read.multi && read.label === undefined && read.coverageGapped === true;
+  let positionUnread = titles.some((title) => title.facts.positionUnread) || unreadSingle(line);
   let formatConflict = false;
-  if (restated === null) {
+  if (restated === null || (restated !== undefined && unreadSingle(restated))) {
     // A Volume field no designator reads: the book's number is unknown.
     stated = null;
     positionUnread = true;
-  } else if (restated !== undefined) {
+  }
+  if (restated) {
     formatConflict =
       "format" in restated && line.format !== undefined && restated.format !== line.format;
     // Its label is a position and its list coverage, as the line's are:
@@ -1031,8 +1066,22 @@ const TOTAL = /\s*\/\s*\d+\s*$/;
 const SINGLE = /^(\d+(?:\.\d+)?)[a-z]?$/i;
 
 /**
+ * The one payload a marker may carry that is no number and still no
+ * statement of one: "GN A", ANN's letter for an unnumbered book (pinned by
+ * the parser's tests; staging's 17,656 pages carry none, only a bare "GN"
+ * or "eBook").
+ */
+const UNNUMBERED = /^a$/i;
+
+/**
  * What a designator says after its marker, qualifier and total are taken
- * off. No number ("GN", "GN A") is an unnumbered book; one number a label.
+ * off. Nothing ("GN") or the unnumbered letter ("GN A") is an unnumbered
+ * book; one number a label. Any other payload with no ASCII digit in it
+ * ("GN II", "GN thirty", "GN n/a", "GN -", "GN Vol. two", "GN ２") states a
+ * number the grammar cannot read: a single book whose number is unread,
+ * stored as no label with `coverageGapped`, so no title's position or
+ * line size ever stands in for it (packagingOf). Upper-case Romans are not
+ * read here: "GN M" or "GN C" would be a Volume 1000 or 100 nobody wrote.
  * Anything else is a list, read whole (`wholeList`, the rule every list a
  * line states is read by): a range or contiguous list ("97-99", "1, 2, 3",
  * "1 & 2") is multi-volume with that range. One no range holds is
@@ -1040,14 +1089,15 @@ const SINGLE = /^(\d+(?:\.\d+)?)[a-z]?$/i;
  * ("1, 3", "1, 2, and 4", "1 and Vol. 3"), a numbered extra ("1-2 + 3"), a
  * dash chain, a number smaller than the one before it ("3-1", "1-5, 6-2"),
  * a fraction or more Volumes than Coverage lists ("1.5-3.5", "1-80"), or
- * text the grammar does not read ("3 Part 1-2", "２"). Its first numbers
- * are never read as a shorter list or a label.
+ * text the grammar does not read ("3 Part 1-2"). Its first numbers are
+ * never read as a shorter list or a label.
  */
 function readCoverage(
   afterMarker: string,
 ): Pick<AnnRelease, "label" | "multi" | "coverRange" | "coverageGapped"> {
   const text = afterMarker.replace(QUALIFIER, "").replace(TOTAL, "").trim();
-  if (!/\p{N}/u.test(text)) return { label: undefined, multi: false };
+  if (text === "" || UNNUMBERED.test(text)) return { label: undefined, multi: false };
+  if (!/\d/.test(text)) return { label: undefined, multi: false, coverageGapped: true };
   const single = SINGLE.exec(text)?.[1];
   if (single !== undefined) return { label: single, multi: false };
   const range = wholeList(text);

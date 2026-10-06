@@ -130,8 +130,17 @@ export type CreatePlan =
         price?: { amountCents: number; currency: string };
         description?: string;
       };
-      /** The held book this Release places, linked to it at approval, under that Series. */
-      placement?: { observationId: Id<"sourceObservations">; seriesId: Id<"series"> };
+      /**
+       * The held book this Release places, linked to it at approval, under
+       * that Series, and which book its source named when the member stated
+       * the placement (`reviewed`; absent on a placement written before it
+       * was recorded, which nothing then trusts: placement.ts).
+       */
+      placement?: {
+        observationId: Id<"sourceObservations">;
+        seriesId: Id<"series">;
+        reviewed?: string;
+      };
     };
 
 /** Bulk-operation cap: one coherent intent, not a mass migration. */
@@ -699,15 +708,16 @@ async function storedSibling(
 
 /**
  * Validate a Release op's `placement`: it names an observation that exists
- * and a Series. Whether that book can still be placed under that Series by
- * these ops is placement.ts's question (checkPlacement), asked at
- * submission and approval; whether the Series is still active and unlocked
- * is a staleness question (unavailableCreateRefs).
+ * and a Series, and carries which book the member reviewed (`reviewed`,
+ * passed through as written). Whether that book can still be placed under
+ * that Series by these ops is placement.ts's question (checkPlacement),
+ * asked at submission and approval; whether the Series is still active and
+ * unlocked is a staleness question (unavailableCreateRefs).
  */
 async function planPlacement(
   ctx: QueryCtx | MutationCtx,
   raw: unknown,
-): Promise<{ observationId: Id<"sourceObservations">; seriesId: Id<"series"> }> {
+): Promise<{ observationId: Id<"sourceObservations">; seriesId: Id<"series">; reviewed?: string }> {
   const placement = asObject(raw, "release's placement");
   const observationId =
     typeof placement.observationId === "string"
@@ -722,7 +732,11 @@ async function planPlacement(
   }
   if ((await ctx.db.get(observationId)) === null)
     return bad("The observation this release places no longer exists.");
-  return { observationId, seriesId };
+  return {
+    observationId,
+    seriesId,
+    ...(typeof placement.reviewed === "string" ? { reviewed: placement.reviewed } : {}),
+  };
 }
 
 // ---------- staleness ----------

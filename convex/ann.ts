@@ -117,6 +117,8 @@ import {
   descriptionEvidence,
   descriptionRepairWork,
   findPublisherByName,
+  IMPORT_LANGUAGE,
+  namedEditionLine,
   recleaned,
   repairCountsValidator,
   repairLinkedDescription,
@@ -128,6 +130,7 @@ import {
   toPartialDate,
   type DescriptionRepair,
 } from "./lib/pipeline";
+import { toIsbn13 } from "./lib/isbn";
 import { reconcileFields } from "./lib/reconcile";
 import { withExceptionCapture } from "./lib/posthog";
 import { pairKeyOf } from "./lib/qa";
@@ -1012,22 +1015,23 @@ const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
 
 /**
  * Why a release line is out of scope, from its title and stored page, or
- * null: a store-exclusive or variant cover, packaging (lib/ann.ts
- * annLinePackaged, read against the work's `names` when known) whose title
- * or whose release page's title marks a novel ("Alpha (Light Novel)
- * [VIZBIG Edition]"), a prose imprint, or a foreign-language distributor.
- * No one places such a line, so it is noted and never a Held Book
- * (applyReleasePage and the Editor's placement pass the Series' title;
- * imports.backfillHolds reads the stored line without one).
+ * null: a store-exclusive or variant cover by its title or its ok release
+ * page's Title ("Alpha [VIZBIG Edition] (Store Exclusive)" on a page whose
+ * line reads plain), packaging (lib/ann.ts annLinePackaged, read against
+ * the work's `names` when known) whose title or whose release page's title
+ * marks a novel ("Alpha (Light Novel) [VIZBIG Edition]"), a prose imprint,
+ * or a foreign-language distributor. No one places such a line, so it is
+ * noted and never a Held Book (applyReleasePage and the Editor's placement,
+ * at every step, pass the Series' title; imports.backfillHolds reads the
+ * stored line without one). Only unlinked lines are asked: a line already
+ * linked by its ISBN keeps its Release.
  */
 export function lineOutOfScope(line: AnnReleaseSnapshot, names?: readonly string[]): string | null {
-  if (VARIANT_LINE.test(line.title))
-    return "A store-exclusive or variant cover: never a Release of its own.";
   const pageTitle = line.page?.status === "ok" ? line.page.title : undefined;
-  if (
-    annLinePackaged(line, names) &&
-    [line.title, pageTitle].some((title) => title !== undefined && isNovelTitle(title))
-  )
+  const titles = [line.title, pageTitle].filter((title) => title !== undefined);
+  if (titles.some((title) => VARIANT_LINE.test(title)))
+    return "A store-exclusive or variant cover: never a Release of its own.";
+  if (annLinePackaged(line, names) && titles.some((title) => isNovelTitle(title)))
     return "Packaging its title marks a novel: out of manga scope.";
   const distributor = line.page?.distributor;
   if (distributor === undefined) return null;
@@ -1099,9 +1103,11 @@ export const releasePageCandidates = internalQuery({
       // Content-derived ids (a line without an href) have no page.
       if (!/^\d+$/.test(snapshot.annId)) continue;
       if (obs.recordRef === undefined) {
-        // A stored page that no longer restates the line (ANN corrected
-        // its listing since) is fetched again: placing judges the line by
-        // its current page (lib/ann.ts packagingOf).
+        // A stored page that no longer restates the line (they disagree;
+        // either may be the newer) is fetched again: placing judges the
+        // line by its current page (lib/ann.ts packagingOf), and a fresh
+        // page that still disagrees holds it. Such a line is fetched on
+        // every pass while the disagreement lasts.
         candidates.push({
           annId: snapshot.annId,
           fetch: needsFetch(snapshot.page, now) || !pageRestatesLine(snapshot),
@@ -1372,21 +1378,22 @@ async function pageCitation(ctx: QueryCtx, annId: string) {
 
 /** Where a packaged book goes among the records that exist (`packagedSlot`). */
 type Slot =
-  | { kind: "create"; lineName: string }
+  | { kind: "create"; lineName: string; lineId?: Id<"editionLines"> }
   | { kind: "link"; release: Doc<"releases"> }
   | { kind: "hold"; hold: HoldKind; reason: string };
 
 /**
  * Where a packaged ANN book would go among the Series' records as they
  * stand, read in the mutation that writes it, before anything is written.
+ * Every candidate is read before anything is decided, so the order rows
+ * were inserted in never chooses one.
  *
- * - The line: the Series' lines of this name (any case) from this
- *   publisher, in every state. An active, unlocked one is the book's; a
- *   locked one holds. With none active, one an Editor hid holds until a
- *   Moderator restores it (never an active twin), and a merged one counts
- *   only through its survivor when that is one active line of this Series
- *   and publisher (a missing, looping or hidden survivor holds). With no
- *   line at all, `create` names the new one.
+ * - The line: every line of this name (any case) the Series has from this
+ *   publisher, in every state, must resolve to one active, unlocked line
+ *   (lib/pipeline.ts namedEditionLine); a hidden, locked or unresolved
+ *   one, or two independent ones, holds. With no line at all, `create`
+ *   names the new one. Creation joins exactly the line proved here
+ *   (`lineId`).
  * - The member: a line member from this publisher at this position, or
  *   covering any of these Volumes, must be this very book (this position
  *   and exactly these Volumes, or Unmapped Packaging at this known
@@ -1394,10 +1401,20 @@ type Slot =
  *   holds. Unmapped Packaging at no known position proves no identity, so
  *   beside any member it holds. A matching member hidden or locked holds;
  *   one merged into the matching member is that member.
- * - The slot: in the matching member, an active Release of this format
- *   with no ISBN is this book and links, as the ordinary path links;
- *   one with an ISBN is another printing, held as `isbn` like the ordinary
- *   path's reprints. Another format's Release is a sibling the book joins.
+ * - The Release: every Release of this format in the matching member, in
+ *   every state, each merged one answered by its survivor. One an Editor
+ *   hid, or merged into no active Release of the member, holds until a
+ *   Moderator restores or resolves it: an absent active row is no free
+ *   slot. Each active one is this book only when it can be: in the
+ *   language ANN's books are imported in, and carrying no barcode or this
+ *   ISBN (an ISBN-10 counts by its ISBN-13). Any other is another book
+ *   (another printing, barcode or language) and holds as `isbn`, like the
+ *   ordinary path's reprints. Exactly one that can be this book, unlocked,
+ *   links; two (two Bindings, say: ANN states none) hold, never the first.
+ *   With none, the book joins the member as a sibling of its other
+ *   formats. One Release per format is not the domain's rule (format,
+ *   Binding, language and ISBNs tell Releases apart): it is only what ANN,
+ *   which states no Binding, cannot see past.
  */
 async function packagedSlot(
   ctx: MutationCtx,
@@ -1409,49 +1426,21 @@ async function packagedSlot(
     /** The covered Volumes, in order; none for Unmapped Packaging. */
     volumeIds: Id<"volumes">[];
     format: "physical" | "digital";
+    /** The book's ISBN-13, which a linked Release takes. */
+    isbn13: string;
   },
 ): Promise<Slot> {
-  const { seriesId, publisher, name, position, volumeIds, format } = args;
+  const { seriesId, publisher, name, position, volumeIds, format, isbn13 } = args;
   const book = `${name}${position !== null ? ` ${position}` : ""}`;
   const held = (reason: string, kind: HoldKind = "packaging"): Slot => ({
     kind: "hold",
     hold: kind,
     reason,
   });
-  const wanted = name.toLowerCase();
-  const named = (
-    await ctx.db
-      .query("editionLines")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .collect()
-  ).filter((line) => line.publisherId === publisher._id && line.name.toLowerCase() === wanted);
-  let line = named.find((candidate) => candidate.status === "active");
-  if (line === undefined) {
-    if (named.length === 0) return { kind: "create", lineName: name };
-    if (named.some((candidate) => candidate.status === "hidden")) {
-      return held(
-        `Packaging for the Series' hidden ${name} line: a Moderator restores the line before a book joins it, never a second one.`,
-      );
-    }
-    const survivors = await Promise.all(
-      named.map((merged) => survivorOf<"editionLines">(ctx, merged)),
-    );
-    const [survivor] = survivors;
-    if (
-      !survivor ||
-      survivors.some((other) => other?._id !== survivor._id) ||
-      survivor.status !== "active" ||
-      survivor.seriesId !== seriesId ||
-      survivor.publisherId !== publisher._id
-    ) {
-      return held(
-        `Packaging for a ${name} line merged into no one active line of this Series and publisher — an Editor places it.`,
-      );
-    }
-    line = survivor;
-  }
-  if (line.locked)
-    return held(`Packaging for the Series' locked ${line.name} line — an Editor places it.`);
+  const named = await namedEditionLine(ctx, { seriesId, publisherId: publisher._id, name });
+  if (named.kind === "none") return { kind: "create", lineName: name };
+  if (named.kind === "closed") return held(`Packaging ${book} for ${named.reason}.`);
+  const { line } = named;
 
   const unmapped = volumeIds.length === 0;
   const members = (
@@ -1495,17 +1484,52 @@ async function packagedSlot(
     );
   }
   const [member] = live;
-  if (member === undefined) return { kind: "create", lineName: line.name };
+  if (member === undefined) return { kind: "create", lineName: line.name, lineId: line._id };
   if (member.locked) return held(`Packaging ${book}: the line's member for it is locked.`);
+
+  const taken = (release: Doc<"releases">, why: string) =>
+    held(
+      `${book} already has a ${format} ${publisher.name} Release (ISBN ${release.isbn13 ?? release.isbn10 ?? "none"}) ${why}, not created or linked.`,
+      "isbn",
+    );
+  const owners = new Map<Id<"releases">, Doc<"releases">>();
   for (const release of await releasesOf(ctx, member._id)) {
-    if (release.status !== "active" || release.format !== format) continue;
-    if (release.isbn13 === undefined && !release.locked) return { kind: "link", release };
+    if (release.format !== format) continue;
+    const survivor = await survivorOf<"releases">(ctx, release);
+    if (survivor?.status === "hidden") {
+      return taken(survivor, "that an Editor hid: a Moderator restores it");
+    }
+    if (survivor?.status !== "active" || survivor.editionId !== member._id) {
+      return taken(release, "merged into no active Release of this book: an Editor resolves it");
+    }
+    owners.set(survivor._id, survivor);
+  }
+  const candidates: Doc<"releases">[] = [];
+  for (const release of owners.values()) {
+    // An ISBN-10 is the barcode its ISBN-13 is ("1974700402" is 9781974700400).
+    const barcodes = [
+      release.isbn13,
+      release.isbn10 !== undefined ? (toIsbn13(release.isbn10) ?? release.isbn10) : undefined,
+    ];
+    if (release.language !== IMPORT_LANGUAGE) {
+      return taken(release, `in language "${release.language}": another language's book`);
+    }
+    if (barcodes.some((code) => code !== undefined && code !== isbn13)) {
+      return taken(release, "carrying another barcode: a reprint or variant");
+    }
+    candidates.push(release);
+  }
+  if (candidates.length > 1) {
+    const bindings = candidates.map((release) => release.binding ?? "no binding").join(", ");
     return held(
-      `${book} already has a ${format} ${publisher.name} Release (ISBN ${release.isbn13 ?? "none"}): a reprint or variant, not created.`,
+      `${book} already has a ${format} ${publisher.name} Release (ISBN none) ${candidates.length} times over (${bindings}): ANN states no Binding, so none is chosen.`,
       "isbn",
     );
   }
-  return { kind: "create", lineName: line.name };
+  const [release] = candidates;
+  if (release === undefined) return { kind: "create", lineName: line.name, lineId: line._id };
+  if (release.locked) return taken(release, "that is locked");
+  return { kind: "link", release };
 }
 
 /**
@@ -1612,10 +1636,14 @@ export const applyReleasePage = internalMutation({
     // A designator listing Volumes no range holds ("(GN 1, 3)") states its
     // coverage, so the line's name never sizes it and no Volume is guessed:
     // an Editor maps it.
+    // So does one whose number no reading holds ("(GN II)", "(GN thirty)":
+    // lib/ann.ts readCoverage): no title's position stands in for it.
     if (line.coverageGapped) {
       return await hold(
         "packaging",
-        `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose Volume list no range holds — an Editor maps it.`,
+        !line.multi && line.label === undefined
+          ? `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose designator states its number in a way no reading holds — an Editor maps it.`
+          : `"${line.title}" (${page.volume ?? "its designator"}) is packaging whose Volume list no range holds — an Editor maps it.`,
         series?.status === "active" ? series._id : undefined,
       );
     }
@@ -1782,6 +1810,7 @@ export const applyReleasePage = internalMutation({
             volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label))!._id,
         ),
         format: line.format,
+        isbn13,
       });
       if (slot.kind === "hold") return await hold(slot.hold, slot.reason, series._id);
       if (slot.kind === "link") return await link(slot.release);
@@ -1806,7 +1835,11 @@ export const applyReleasePage = internalMutation({
         seriesId: series._id,
         seriesTitle: series.title,
         labels,
-        editionLine: { name: slot.lineName, position },
+        editionLine: {
+          name: slot.lineName,
+          position,
+          ...(slot.lineId !== undefined ? { id: slot.lineId } : {}),
+        },
         ...(unmapped ? { coverageUnmapped: true as const } : {}),
         release: {
           format: line.format,

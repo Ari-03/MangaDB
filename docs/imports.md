@@ -321,8 +321,25 @@ stated, at submission and at approval. Besides the conditions above, the
 Proposal must be the one the observation's `queuedProposalId` points at,
 its one placed Release must carry the book's ISBN-13, ISBN-10 and format
 under the Series the hold names, every Volume and line it creates or
-covers must be in that Series, and the Edition it joins must not already
-hold a Release in that format (the slot an `isbn` hold guards).
+covers must be in that Series, a line it joins must be the one line of its
+name every state resolves to (`namedEditionLine`, as the page pass
+requires), and the Edition it joins must not already hold a Release in
+that format, in any state (the slot an `isbn` hold guards; one an Editor
+hid is restored, not replaced).
+
+A placement is bound to the book the member reviewed. Stating its
+coverage records which book the source named then (`identity` in
+`convex/placement.ts`: an ANN line's work and line as its title and its
+page's Title read under the held Series, another source's title, and the
+publisher names). Submission and approval read the source again; if it now
+names another work, line or publisher ("Alpha+ [VIZBIG Edition]" after
+"Alpha [VIZBIG Edition]", by the mirror or the page pass), the Proposal
+shows as stale and approval refuses it until the member states the
+placement again (a Moderator's "request changes" returns it to a Draft).
+A position or coverage the source states differently later does not:
+the member stated those. A placement written before this was recorded
+carries none and is refused the same way, never trusted; staging held no
+placement Proposal in a Draft or in review on 2026-10-05.
 
 The observation's `queuedProposalId` points at the Draft. A second click
 by its author, or by anyone once it is in review, opens it; another
@@ -573,7 +590,15 @@ ASCII digits and upper-case Roman numerals are read: another numeral
 ("(Vol. thirty)", "(Book Thirty)", "(Vol. n/a)", "(Vol. unknown)", "(Vol.
 M)", "(Vol.)", "(Part Two)", like "(Part 2)") is an unknown position,
 inside the line's bracket, in a tag or in a subtitle alike; there is no
-table of number words to extend. A line the title names stays that line
+table of number words to extend. The designator is read the same way:
+after its marker, nothing ("(GN)") or ANN's unnumbered letter ("(GN A)")
+is an unnumbered book, and any other payload with no ASCII digit ("(GN
+II)", "(GN thirty)", "(GN n/a)", "(GN -)", "(GN Vol. two)", "(GN ２)") is a
+single book whose number is unread: stored as a rejection
+(`coverageGapped`, no label), so the line is held and no title's position
+or line size stands in for it, and a release page whose Volume field says
+so holds the book the same way. Upper-case Romans are not read in a
+designator ("(GN M)" is no Volume 1000). A line the title names stays that line
 even where the general parser reads no position for it, and the Editor's
 Draft names that line with no position.
 
@@ -629,28 +654,47 @@ line's ("GN 2" against "GN 1", "GN 4-6" against "GN 1-3", "GN 1, 3" or "GN
 1-3-5" hold the book); its "/ N" total never stands for its number. A
 Volume field no designator reads holds the book; a Title naming another
 work or another line ("Alpha+ [VIZBIG Edition]") makes its work unclear; a
-Title marking a novel puts packaging out of scope; and a Volume field
-naming another format than the line ("eBook 1" on a GN line) holds it,
-never choosing a format. On staging every stored page restated its line
-(2026-10-05), so these only arise when ANN corrects one of the two: the
-page pass fetches an unlinked line's page again whenever it no longer
-restates the line (`pageRestatesLine`), before judging it.
+Title marking a novel puts packaging out of scope; a Title marking a
+store-exclusive or variant cover puts any line out of scope, as the line's
+own title does; and a Volume field naming another format than the line
+("eBook 1" on a GN line) holds it, never choosing a format. A page that no
+longer restates its line (`pageRestatesLine`) says only that the two
+disagree, not which is newer: the page pass fetches an unlinked line's
+page again before judging it, and a freshly fetched page that still
+disagrees is held as the disagreement it is. A disagreement that persists
+is fetched again on every pass, one request per line. On staging every
+stored page restated its line (17,656 ok pages, 2026-10-05); that count
+says nothing of how many books any rule will place.
 
 Before creating a packaged book the page pass reads the line and its
 members as they stand, in the same transaction (`packagedSlot` in
-`convex/ann.ts`). The Series' line of that name from that publisher is
-read in every state: an active one is joined, a locked one holds, one an
-Editor hid holds until a Moderator restores it (never an active twin),
-and a merged one counts only through one active surviving line of the
-same Series and publisher. A member of that line at the book's position,
+`convex/ann.ts`), every candidate before deciding, so the order rows were
+inserted in never chooses one. Every line of that name (any case) the
+Series has from that publisher, in every state, must resolve to one
+active, unlocked line (`namedEditionLine` in `convex/lib/pipeline.ts`): a
+hidden one holds until a Moderator restores it (never an active twin, even
+beside an active line), a merged one counts only through one active
+surviving line of the same Series and publisher, and a locked line or two
+independent lines hold. The book is created in exactly that line, never
+in the name's first active one. A member of that line at the book's position,
 or covering any of its Volumes, must be the book itself: the same
 position and exactly those Volumes, or Unmapped Packaging at the same
 known position. Any other member there holds the book, as does Unmapped
 Packaging of unknown position beside any member, and a hidden or locked
-member. In the matching member, a Release of the book's format with no
-ISBN is the book and links, as for a single Volume; one with another ISBN
-is another printing, held as `isbn`, never a second Release; a Release of
-the other format is a sibling the book joins.
+member. In the matching member every Release of the book's format is read,
+in every state, a merged one through its survivor: one an Editor hid, or
+one merged into no active Release of the member, holds as `isbn` until a
+Moderator restores or resolves it. An active one can be the book only in
+English (the language ANN's books are imported in) and with no barcode or
+this one (an ISBN-10 counts by its ISBN-13, so "1974700402" is
+9781974700400); any other is another printing, barcode or language, held
+as `isbn`, never given this ISBN or joined by a second Release. Exactly
+one that can be the book, unlocked, links and takes the ISBN; two (two
+Bindings, say, since ANN states none) hold, never the first. With none,
+the book joins the member as a sibling of its other formats. One Release
+per format is not a catalog rule (format, Binding, language and ISBNs tell
+Releases apart); it is only what ANN, which states no Binding, cannot see
+past.
 
 Some packaging is held as `packaging` for an Editor, never placed:
 

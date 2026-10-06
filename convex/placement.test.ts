@@ -1425,6 +1425,12 @@ describe("approval after the book or its hold changed", () => {
       "its Edition's physical slot taken meanwhile",
       "slot for this publisher and format, is already taken",
     ],
+    [
+      "its Edition's physical slot taken meanwhile by a Release an Editor hid",
+      "slot for this publisher and format, is already taken",
+    ],
+    ["retitled by its source", "names the book otherwise"],
+    ["given another publisher by its source", "names the book otherwise"],
   ])("refuses, writing nothing, when the book was %s", async (change, reason) => {
     const { t, alice1, aliceId, vagabondId, publisherId, proposalId } = await submittedAlice();
     await t.run(async (ctx) => {
@@ -1465,7 +1471,7 @@ describe("approval after the book or its hold changed", () => {
         });
         await ctx.db.patch(alice1, { recordRef: { type: "release", id: releaseId } });
       }
-      if (change === "its Edition's physical slot taken meanwhile") {
+      if (change.startsWith("its Edition's physical slot taken meanwhile")) {
         const volumeId = await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1" });
         const editionId = await insertEdition(ctx, { publisherId });
         await insertCoverage(ctx, { editionId, volumeId });
@@ -1474,6 +1480,20 @@ describe("approval after the book or its hold changed", () => {
           publisherId,
           seriesIds: [aliceId],
           isbn13: "9781974799991",
+          ...(change.endsWith("an Editor hid") ? { status: "hidden" as const } : {}),
+        });
+      }
+      if (change === "retitled by its source" && observation.snapshot?.kind === "olEdition") {
+        await ctx.db.patch(alice1, {
+          snapshot: { ...observation.snapshot, title: "Alice in Borderland: Retry, Vol. 1" },
+        });
+      }
+      if (
+        change === "given another publisher by its source" &&
+        observation.snapshot?.kind === "olEdition"
+      ) {
+        await ctx.db.patch(alice1, {
+          snapshot: { ...observation.snapshot, publishers: ["VIZ Media", "Shogakukan"] },
         });
       }
     });

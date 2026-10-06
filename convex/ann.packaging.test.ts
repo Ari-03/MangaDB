@@ -1,5 +1,5 @@
-// ANN packaging's boundary through the real mutations (PR #66, review round
-// 3): the mirror reads every line under its Series' own title before it
+// ANN packaging's boundary through the real mutations (PR #66, review
+// rounds 3 and 4): the mirror reads every line under its Series' own title before it
 // builds the backbone or takes a Release slot; the page pass reads the
 // line's current release page beside it before it creates anything; a
 // marker's unread number is never a position; a packaged book reads its
@@ -49,7 +49,7 @@ async function graph(t: TestT) {
     return {
       volumes: volumes.map((vol) => `${vol.label}:${vol.status}`),
       lines: (await ctx.db.query("editionLines").collect()).map(
-        (line) => `${line._id}:${line.name}:${line.status}`,
+        (line) => `${line._id}:${line.name}:${line.status}${line.locked ? ":locked" : ""}`,
       ),
       editions: (await ctx.db.query("editions").collect()).map(
         (edition) =>
@@ -60,7 +60,7 @@ async function graph(t: TestT) {
         .sort(),
       releases: (await ctx.db.query("releases").collect()).map(
         (release) =>
-          `${release._id}:${release.editionId}:${release.format}:${release.isbn13 ?? "-"}`,
+          `${release._id}:${release.editionId}:${release.format}:${release.isbn13 ?? "-"}:${release.isbn10 ?? "-"}:${release.language}:${release.binding ?? "-"}:${release.status}`,
       ),
       holds: (await ctx.db.query("placementHolds").collect()).map((hold) => ({
         kind: hold.kind,
@@ -135,13 +135,17 @@ type Book = {
    * stored page alone, which carries no Title or Volume.
    */
   page?: { title?: string; volume?: string } | false;
+  /** The book's ISBN-13, on its stored and fetched page (`ISBN`). */
+  isbn?: string;
   arrange?: (ctx: MutationCtx, at: Seeded) => Promise<unknown>;
+  /** What a Moderator does after `arrange`, through the real mutations (bob is one). */
+  moderate?: (moderator: ReturnType<typeof signedIn>, t: TestT) => Promise<unknown>;
 };
 
 /** A release page fetched now, read by the real page parser. */
-function fetchedPage(title: string, volume: string) {
+function fetchedPage(title: string, volume: string, isbn = ISBN) {
   const parsed = parseReleasePage(
-    `<b>Title:</b> ${title}<br><b>Volume:</b> ${volume}<br><b>Distributor:</b> VIZ Media<br><b>ISBN-13:</b> ${ISBN}<br>`,
+    `<b>Title:</b> ${title}<br><b>Volume:</b> ${volume}<br><b>Distributor:</b> VIZ Media<br><b>ISBN-13:</b> ${isbn}<br>`,
   );
   if (parsed === null) throw new Error("The page fixture does not parse");
   return { status: "ok" as const, fetchedAt: 2, ...parsed };
@@ -191,7 +195,7 @@ async function pagePass(book: Book) {
         url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=5000",
         ...snapshot,
         ...(book.storedGap ? { coverageGapped: true } : {}),
-        page: { status: "ok", fetchedAt: 1, isbn13: ISBN, distributor: "VIZ Media" },
+        page: { status: "ok", fetchedAt: 1, isbn13: book.isbn ?? ISBN, distributor: "VIZ Media" },
       },
     });
     await recordUnplaced(
@@ -204,11 +208,15 @@ async function pagePass(book: Book) {
     await book.arrange?.(ctx, at);
     return { seriesId, publisherId, observationId };
   });
+  if (book.moderate !== undefined) {
+    await seedTeam(t, [alice, bob, carol]);
+    await book.moderate(signedIn(t, bob), t);
+  }
   const before = await graph(t);
   const page =
     book.page === false
       ? undefined
-      : fetchedPage(book.page?.title ?? book.title, book.page?.volume ?? designator);
+      : fetchedPage(book.page?.title ?? book.title, book.page?.volume ?? designator, book.isbn);
   const result = await t.mutation(internal.ann.applyReleasePage, { annId: "5000", page });
   const after = await graph(t);
   const observation = (await t.run((ctx) => ctx.db.get(ids.observationId)))!;
@@ -1020,5 +1028,528 @@ describe("the Editor's Draft and approval read the same facts", () => {
       ).rejects.toThrow();
       expect(canonical(await graph(run.t))).toEqual(canonical(run.before));
     }
+  });
+});
+
+// ---------- review round 4 ----------
+
+/** Alpha's active VIZ `name` line (VIZBIG Edition), with `fields`; returns its id. */
+const vizLine = (
+  ctx: MutationCtx,
+  at: Seeded,
+  fields: Partial<{ name: string; status: "active" | "hidden" | "merged"; locked: boolean }> = {},
+) =>
+  insertEditionLine(ctx, {
+    seriesId: at.seriesId,
+    publisherId: at.publisherId,
+    name: "VIZBIG Edition",
+    ...fields,
+  });
+
+/** The exact VIZBIG 1 member on Alpha 1–3, with `releases` (each a Release's fields) in it. */
+const exactMember =
+  (
+    ...releases: Array<
+      Partial<{
+        format: "physical" | "digital";
+        isbn13: string;
+        isbn10: string;
+        language: string;
+        binding: string;
+        status: "active" | "hidden";
+        locked: boolean;
+      }>
+    >
+  ) =>
+  async (ctx: MutationCtx, at: Seeded) => {
+    const editionId = await member(ctx, at, await vizLine(ctx, at), "1", ["1", "2", "3"]);
+    for (const fields of releases) {
+      await insertRelease(ctx, {
+        editionId,
+        publisherId: at.publisherId,
+        seriesIds: [at.seriesId],
+        ...fields,
+      });
+    }
+    return editionId;
+  };
+
+/** The one Release the arranged graph holds. */
+const onlyRelease = async (t: TestT) => {
+  const [release, ...more] = await t.run((ctx) => ctx.db.query("releases").collect());
+  if (release === undefined || more.length > 0) throw new Error("Expected one Release");
+  return release;
+};
+
+describe("a designator's unread number holds the book (C66-R4-01)", () => {
+  it.each(["GN thirty", "GN unknown", "GN n/a", "GN II", "GN M", "GN -", "GN Vol. two"])(
+    "holds a page saying %s beside the line's GN 1, writing nothing",
+    async (volume) => {
+      const placed = await pagePass({ title: "Alpha [VIZBIG Edition]", page: { volume } });
+      expectRefused(placed, "packaging");
+    },
+  );
+
+  it.each([
+    ["GN thirty", "fresh"],
+    ["GN II", "fresh"],
+    ["GN M", "stale"],
+    ["GN thirty", "legacy"],
+  ] as const)(
+    "holds an XML %s (%s snapshot) whatever position the title states",
+    async (designator, snapshot) => {
+      const placed = await pagePass({
+        title: "Alpha [VIZBIG Edition Vol. 1]",
+        designator,
+        snapshot,
+      });
+      expectRefused(placed, "packaging", /states its number in a way no reading holds/);
+    },
+  );
+
+  it("keeps GN A unnumbered (Unmapped) and a page restating GN 1 placed", async () => {
+    await expectCreated(
+      await pagePass({ title: "Alpha [Library Edition]", designator: "GN A" }),
+      "Library Edition",
+      "unmapped",
+      null,
+    );
+    await expectCreated(
+      await pagePass({ title: "Alpha [VIZBIG Edition]", page: { volume: "GN 1 / 9" } }),
+      "VIZBIG Edition",
+      ["1", "2", "3"],
+      "1",
+    );
+  });
+});
+
+describe("a page's store-exclusive or variant Title is out of scope (C66-R4-03)", () => {
+  it.each([
+    ["Alpha [VIZBIG Edition] (Store Exclusive)", true],
+    ["Alpha [VIZBIG Edition] - [Walmart Exclusive Cover]", false],
+    ["Alpha [VIZBIG Edition] (Variant Cover)", true],
+  ] as const)("notes %s (Bootstrap %s) with no hold and no write", async (title, bootstrap) => {
+    const placed = await pagePass({ title: "Alpha [VIZBIG Edition]", bootstrap, page: { title } });
+    expectRefused(placed, null, /store-exclusive or variant cover/);
+  });
+});
+
+describe("a hidden or unresolved Release of the book is never recreated (C66-R4-04)", () => {
+  it.each([OTHER_ISBN, undefined])(
+    "holds a book whose physical Release (ISBN %s) a Moderator hid",
+    async (isbn13) => {
+      const placed = await pagePass({
+        title: "Alpha [VIZBIG Edition]",
+        arrange: exactMember(isbn13 !== undefined ? { isbn13 } : {}),
+        moderate: async (moderator, t) =>
+          await moderator.mutation(api.sensitiveOps.hideRecord, {
+            ref: { type: "release", id: (await onlyRelease(t))._id },
+            reason: "Suppress this incorrect release.",
+            confirmImpact: true,
+          }),
+      });
+      expect(placed.before.releases[0]).toMatch(/:hidden$/);
+      expectRefused(placed, "isbn", /an Editor hid: a Moderator restores it/);
+    },
+  );
+
+  it.each([
+    { why: "a hidden survivor", survivor: "hidden" as const, reason: /an Editor hid/ },
+    { why: "no survivor", survivor: null, reason: /merged into no active Release/ },
+  ])("holds a book whose Release is merged into $why", async (c) => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: async (ctx, at) => {
+        const editionId = await exactMember()(ctx, at);
+        const base = { editionId, publisherId: at.publisherId, seriesIds: [at.seriesId] };
+        const survivor =
+          c.survivor !== null
+            ? await insertRelease(ctx, { ...base, status: c.survivor, isbn13: OTHER_ISBN })
+            : undefined;
+        await insertRelease(ctx, {
+          ...base,
+          status: "merged",
+          ...(survivor !== undefined ? { mergedIntoId: survivor } : {}),
+        });
+      },
+    });
+    expectRefused(placed, "isbn", c.reason);
+  });
+
+  it("links the active Release a merged twin survives in, and ignores another format's hidden one", async () => {
+    let survivor: Id<"releases"> | undefined;
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: async (ctx, at) => {
+        const editionId = await exactMember({ format: "digital", status: "hidden" })(ctx, at);
+        const base = { editionId, publisherId: at.publisherId, seriesIds: [at.seriesId] };
+        survivor = await insertRelease(ctx, base);
+        await insertRelease(ctx, { ...base, status: "merged", mergedIntoId: survivor });
+      },
+    });
+    expect(placed.result).toMatchObject({ status: "linked", releaseId: survivor });
+    expect(placed.after.releases).toHaveLength(3);
+  });
+});
+
+describe("an ISBN-10 is the Release's barcode (C66-R4-05)", () => {
+  it.each(["1974700402", "1974700403"])(
+    "holds a book beside a Release carrying ISBN-10 %s of another book, both barcodes kept",
+    async (isbn10) => {
+      const placed = await pagePass({
+        title: "Alpha [VIZBIG Edition]",
+        arrange: exactMember({ isbn10 }),
+      });
+      expectRefused(placed, "isbn", new RegExp(`ISBN ${isbn10}\\) carrying another barcode`));
+    },
+  );
+
+  it("links the Release whose ISBN-10 is this book's, filling its ISBN-13", async () => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: exactMember({ isbn10: "1421599996" }),
+    });
+    expect(placed.result.status).toBe("linked");
+    expect(await onlyRelease(placed.t)).toMatchObject({ isbn10: "1421599996", isbn13: ISBN });
+  });
+
+  it("links an ISBN-10-only Release to the ISBN-13 it equals", async () => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      isbn: OTHER_ISBN,
+      arrange: exactMember({ isbn10: "1974700402" }),
+    });
+    expect(placed.result.status).toBe("linked");
+    expect(await onlyRelease(placed.t)).toMatchObject({
+      isbn10: "1974700402",
+      isbn13: OTHER_ISBN,
+    });
+  });
+});
+
+describe("every Release that could be the book is read before one is chosen (C66-R4-06)", () => {
+  it.each([
+    { why: "an empty Release before an occupied one", rows: [{}, { isbn13: OTHER_ISBN }] },
+    { why: "an occupied Release before an empty one", rows: [{ isbn13: OTHER_ISBN }, {}] },
+  ])("holds $why", async ({ rows }) => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: exactMember(...rows),
+    });
+    expectRefused(placed, "isbn", /carrying another barcode/);
+  });
+
+  it.each([
+    [{ binding: "paperback" }, { binding: "hardcover" }],
+    [{ binding: "hardcover" }, { binding: "paperback" }],
+    [{}, { locked: true }],
+    [{ locked: true }, {}],
+  ])("holds two empty Releases %o and %o, choosing neither", async (first, second) => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: exactMember(first, second),
+    });
+    expectRefused(placed, "isbn", /ANN states no Binding, so none is chosen/);
+  });
+
+  it("links the one empty Release, its Binding kept, beside another format's", async () => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: exactMember({ binding: "hardcover" }, { format: "digital", isbn13: OTHER_ISBN }),
+    });
+    expect(placed.result.status).toBe("linked");
+    const release = await placed.t.run((ctx) =>
+      ctx.db.get(placed.observation.recordRef!.id as Id<"releases">),
+    );
+    expect(release).toMatchObject({ format: "physical", binding: "hardcover", isbn13: ISBN });
+    expect(placed.after.editions).toEqual(placed.before.editions);
+  });
+});
+
+describe("a Release in another language never takes this book's ISBN (C66-R4-07)", () => {
+  it("holds a book beside an empty French Release, which stays as it is", async () => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: exactMember({ language: "fr" }),
+    });
+    expectRefused(placed, "isbn", /in language "fr": another language's book/);
+  });
+
+  it("links an empty English Release", async () => {
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: exactMember({ language: "en" }),
+    });
+    expect(placed.result.status).toBe("linked");
+    expect(await onlyRelease(placed.t)).toMatchObject({ language: "en", isbn13: ISBN });
+  });
+});
+
+describe("every line of the book's name resolves to one before it joins (C66-R4-08)", () => {
+  /** Lines built in this order, then the book: the first is the exact member's. */
+  const lines =
+    (...rest: Array<(ctx: MutationCtx, at: Seeded) => Promise<unknown>>) =>
+    async (ctx: MutationCtx, at: Seeded) => {
+      for (const build of rest) await build(ctx, at);
+    };
+  const hidden = (ctx: MutationCtx, at: Seeded) =>
+    vizLine(ctx, at, { name: "vizbig edition", status: "hidden" });
+  const locked = (ctx: MutationCtx, at: Seeded) =>
+    vizLine(ctx, at, { name: "vizbig edition", locked: true });
+  const active = (ctx: MutationCtx, at: Seeded) => vizLine(ctx, at);
+  /** An independent active twin whose exact member already has this book's physical Release. */
+  const occupiedTwin = async (ctx: MutationCtx, at: Seeded) =>
+    member(ctx, at, await vizLine(ctx, at, { name: "vizbig edition" }), "1", ["1", "2", "3"], {
+      isbn13: OTHER_ISBN,
+    });
+
+  it.each([
+    { why: "an active line, then a hidden one", build: lines(active, hidden), reason: /hidden/ },
+    { why: "a hidden line, then an active one", build: lines(hidden, active), reason: /hidden/ },
+    {
+      why: "an active line, then a locked one",
+      build: lines(active, locked),
+      reason: /2 independent/,
+    },
+    {
+      why: "a locked line, then an active one",
+      build: lines(locked, active),
+      reason: /2 independent/,
+    },
+    {
+      why: "an active line, then an occupied twin",
+      build: lines(active, occupiedTwin),
+      reason: /2 independent/,
+    },
+    {
+      why: "an occupied twin, then an active line",
+      build: lines(occupiedTwin, active),
+      reason: /2 independent/,
+    },
+  ])("holds a book beside $why, writing nothing", async (c) => {
+    const placed = await pagePass({ title: "Alpha [VIZBIG Edition]", arrange: c.build });
+    expectRefused(placed, "packaging", c.reason);
+  });
+
+  it.each(["merged first", "active first"])(
+    "joins the active line a same-name merged one resolves to (%s)",
+    async (order) => {
+      let survivor: Id<"editionLines"> | undefined;
+      const placed = await pagePass({
+        title: "Alpha [VIZBIG Edition]",
+        arrange: async (ctx, at) => {
+          const merged =
+            order === "merged first" ? await vizLine(ctx, at, { status: "merged" }) : null;
+          survivor = await vizLine(ctx, at, { name: "VIZBIG EDITION" });
+          const later = merged ?? (await vizLine(ctx, at, { status: "merged" }));
+          await ctx.db.patch(later, { mergedIntoId: survivor });
+        },
+      });
+      const { line } = await expectCreated(placed, "VIZBIG EDITION", ["1", "2", "3"], "1");
+      expect(line._id).toBe(survivor);
+      expect(placed.after.lines).toEqual(placed.before.lines);
+    },
+  );
+
+  it("creates in the line it proved, never the survivor name's first active line", async () => {
+    let survivor: Id<"editionLines"> | undefined;
+    const placed = await pagePass({
+      title: "Alpha [VIZBIG Edition]",
+      arrange: async (ctx, at) => {
+        // An unrelated active line spelled like the survivor, inserted first.
+        await vizLine(ctx, at, { name: "vizbig" });
+        survivor = await vizLine(ctx, at, { name: "VIZBIG" });
+        await ctx.db.patch(await vizLine(ctx, at, { status: "merged" }), {
+          mergedIntoId: survivor,
+        });
+      },
+    });
+    const { line } = await expectCreated(placed, "VIZBIG", ["1", "2", "3"], "1");
+    expect(line._id).toBe(survivor);
+  });
+});
+
+describe("an Editor's placement is bound to the book they reviewed (C66-R4-02)", () => {
+  /** A steady-state held Alpha VIZBIG book, prepared by carol, stated as VIZBIG 1 on 1–3. */
+  async function stated(arrange?: Book["arrange"]) {
+    const placed = await pagePass({ title: "Alpha [VIZBIG Edition]", bootstrap: false, arrange });
+    expect(placed.after.holds).toEqual([{ kind: "packaging", seriesId: placed.ids.seriesId }]);
+    const { t } = placed;
+    await seedTeam(t, [alice, bob, carol]);
+    const member = signedIn(t, carol);
+    const moderator = signedIn(t, bob);
+    const prepare = await member.mutation(api.placement.preparePlacement, {
+      observationId: placed.ids.observationId,
+    });
+    if (prepare.status === "unavailable") throw new Error(prepare.reason);
+    const { proposalId } = prepare;
+    const state = () =>
+      member.mutation(api.placement.setPlacement, {
+        proposalId,
+        coverage: { from: "1", to: "3" },
+        line: { name: "VIZBIG Edition", position: "1" },
+        comment: "Checked Alpha VIZBIG book 1 collects Alpha Volumes 1-3.",
+      });
+    await state();
+    const submit = () => member.mutation(api.proposals.submitProposal, { proposalId });
+    const approve = () => moderator.mutation(api.proposals.approveProposal, { proposalId });
+    const stale = async () =>
+      (await moderator.query(api.proposals.proposalDetail, { proposalId }))?.stale;
+    return { ...placed, member, moderator, proposalId, state, submit, approve, stale };
+  }
+
+  /** The source refreshed by the real page pass, its page titled `title`. */
+  const pageRefresh = (run: Awaited<ReturnType<typeof stated>>, title: string) =>
+    run.t.mutation(internal.ann.applyReleasePage, {
+      annId: "5000",
+      page: { ...fetchedPage(title, "GN 1"), fetchedAt: 3 },
+    });
+  /** The source refreshed by the real mirror, its line titled `title`. */
+  const xmlRefresh = (run: Awaited<ReturnType<typeof stated>>, title: string) => {
+    const [manga] = parseApiResponse(
+      `<ann><manga id="88" name="Alpha"><info type="Main title" lang="EN">Alpha</info><release date="2020-01-01" href="https://www.animenewsnetwork.com/encyclopedia/releases.php?id=5000" ean="${ISBN}">${title} (GN 1)</release></manga></ann>`,
+    );
+    return run.t.mutation(internal.ann.applyManga, { snapshot: toSnapshot(manga!) });
+  };
+
+  it.each([
+    ["page", pageRefresh],
+    ["XML", xmlRefresh],
+  ] as const)("refuses approval once a %s refresh names another work", async (_, refresh) => {
+    const run = await stated();
+    await run.submit();
+    expect(await run.stale()).toBe(false);
+    await refresh(run, "Alpha+ [VIZBIG Edition]");
+    const before = await graph(run.t);
+    expect(await run.stale()).toBe(true);
+    await expect(run.approve()).rejects.toThrow(/names the book otherwise/);
+    expect(canonical(await graph(run.t))).toEqual(canonical(before));
+  });
+
+  it.each([
+    ["page", pageRefresh],
+    ["XML", xmlRefresh],
+  ] as const)("refuses submission once a %s refresh names another work", async (_, refresh) => {
+    const run = await stated();
+    await refresh(run, "Alpha+ [VIZBIG Edition]");
+    await expect(run.submit()).rejects.toThrow(/names the book otherwise/);
+  });
+
+  it("approves once the placement is stated again against the source as it stands", async () => {
+    const run = await stated();
+    await run.submit();
+    await pageRefresh(run, "Alpha+ [VIZBIG Edition]");
+    await expect(run.approve()).rejects.toThrow(/names the book otherwise/);
+    await run.moderator.mutation(api.proposals.requestChanges, {
+      proposalId: run.proposalId,
+      note: "The page now titles it Alpha+; check which work it is.",
+    });
+    await run.state();
+    await run.submit();
+    expect(await run.stale()).toBe(false);
+    expect((await run.approve()).status).toBe("approved");
+    expect(Object.values(await coverageOf(run.t))).toEqual([["1", "2", "3"]]);
+  });
+
+  it("approves when only the page's Volume field changed after review", async () => {
+    const run = await stated();
+    await run.submit();
+    await run.t.run(async (ctx) => {
+      const observation = (await ctx.db.get(run.ids.observationId))!;
+      await ctx.db.patch(observation._id, {
+        snapshot: {
+          ...observation.snapshot,
+          page: { ...observation.snapshot.page, volume: "GN 2" },
+        },
+      });
+    });
+    expect(await run.stale()).toBe(false);
+    expect((await run.approve()).status).toBe("approved");
+  });
+
+  it("refuses a placement that carries no reviewed source, as one written before it was recorded", async () => {
+    const run = await stated();
+    await run.submit();
+    await run.t.run(async (ctx) => {
+      for (const version of await ctx.db.query("proposalVersions").collect()) {
+        await ctx.db.patch(version._id, {
+          ops: version.ops.map((op) =>
+            op.kind === "create" && op.table === "releases"
+              ? {
+                  ...op,
+                  fields: {
+                    ...op.fields,
+                    placement: {
+                      observationId: op.fields.placement.observationId,
+                      seriesId: op.fields.placement.seriesId,
+                    },
+                  },
+                }
+              : op,
+          ),
+        });
+      }
+    });
+    expect(await run.stale()).toBe(true);
+    await expect(run.approve()).rejects.toThrow(/names the book otherwise/);
+  });
+
+  it("refuses approval once the page marks the book a store-exclusive variant", async () => {
+    // Through the page pass, which notes it out of scope and releases the hold.
+    const refreshed = await stated();
+    await refreshed.submit();
+    await pageRefresh(refreshed, "Alpha [VIZBIG Edition] (Store Exclusive)");
+    expect((await graph(refreshed.t)).holds).toEqual([]);
+    await expect(refreshed.approve()).rejects.toThrow(/It is not a Held Book/);
+    // The stored page alone, before any page pass: the Editor's own scope check.
+    const run = await stated();
+    await run.submit();
+    await run.t.run(async (ctx) => {
+      const observation = (await ctx.db.get(run.ids.observationId))!;
+      await ctx.db.patch(observation._id, {
+        snapshot: {
+          ...observation.snapshot,
+          page: { ...observation.snapshot.page, title: "Alpha [VIZBIG Edition] (Store Exclusive)" },
+        },
+      });
+    });
+    await expect(run.approve()).rejects.toThrow(/store-exclusive or variant cover/);
+    expect(canonical(await graph(run.t))).toEqual(canonical(run.before));
+  });
+
+  it("refuses approval once its joined Edition holds a hidden Release of the format", async () => {
+    let editionId: Id<"editions"> | undefined;
+    const run = await stated(async (ctx, at) => {
+      editionId = await member(ctx, at, await vizLine(ctx, at), "1", ["1", "2", "3"]);
+    });
+    await run.submit();
+    await run.t.run((ctx) =>
+      insertRelease(ctx, {
+        editionId: editionId!,
+        publisherId: run.ids.publisherId,
+        seriesIds: [run.ids.seriesId],
+        status: "hidden",
+      }),
+    );
+    await expect(run.approve()).rejects.toThrow(/slot for this publisher and format/);
+  });
+
+  it("refuses to join the first active line beside an independent twin", async () => {
+    const run = await stated(async (ctx, at) => {
+      await vizLine(ctx, at);
+    });
+    await run.t.run((ctx) =>
+      vizLine(
+        ctx,
+        {
+          ...run.ids,
+          volume: () => {
+            throw new Error("unused");
+          },
+        },
+        { name: "vizbig edition" },
+      ),
+    );
+    await expect(run.state()).rejects.toThrow(/not the one open line of its name/);
   });
 });

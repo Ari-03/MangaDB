@@ -211,6 +211,12 @@ placement Draft is edited only on that page; the ordinary draft save
 refuses it, and refuses a hand-written placement or an op marked to join
 an existing record.
 
+Approval refuses a placement whose source now names another work, line
+or publisher than when you stated it (the Proposal shows as stale): ask
+for changes and state it again against the source as it stands. A
+position or coverage the source restates differently later does not
+refuse it.
+
 It does nothing for a book whose hold needs another decision first, and
 says why: no single active, unlocked Series (link, unlock or merge it), an
 ISBN or slot another Release holds (correct or merge that Release), a

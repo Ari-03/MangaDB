@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   annLinePackaged,
+  annTitleIdentity,
   packagingOf,
   pageRestatesLine,
   readAnnLineTitle,
@@ -1804,5 +1805,95 @@ describe("the release page, read beside the line", () => {
     const single = stored("Alpha [VIZBIG Edition]", "GN 2");
     expect(pageRestatesLine({ ...single, page: { status: "ok", volume: "GN 2 / 4" } })).toBe(true);
     expect(pageRestatesLine({ ...single, page: { status: "ok", volume: "GN 3" } })).toBe(false);
+  });
+});
+
+describe("a designator's unread payload is a number nobody may supply (C66-R4-01)", () => {
+  // Unread payloads: no ASCII digit, yet something after the marker. Not a
+  // word table: the rule is the absence of a number the grammar reads.
+  const UNREAD = ["II", "thirty", "unknown", "n/a", "M", "-", "Vol. two", "２", "#"];
+
+  it.each(UNREAD)("stores (GN %s) as a single book whose number is unread", (payload) => {
+    expect(splitReleaseTitle(`Alpha (GN ${payload})`)).toMatchObject({
+      label: undefined,
+      multi: false,
+      coverageGapped: true,
+    });
+  });
+
+  it("keeps a bare marker and the pinned GN A unnumbered, and a digit read", () => {
+    for (const text of ["Alpha (GN)", "Alpha (GN A)", "Alpha (eBook)", "Alpha (GN box)"]) {
+      const split = splitReleaseTitle(text);
+      expect(split?.coverageGapped, text).toBeUndefined();
+      expect(split?.label, text).toBeUndefined();
+    }
+    expect(splitReleaseTitle("Alpha (GN 2)")).toMatchObject({ label: "2", multi: false });
+  });
+
+  it.each(UNREAD)("lets no title position stand in for an unread XML (GN %s)", (payload) => {
+    for (const title of ["Alpha [VIZBIG Edition Vol. 1]", "Alpha [VIZBIG Edition]"]) {
+      const read = packagingOf(stored(title, `GN ${payload}`), ["Alpha"]);
+      expect(read, title).toMatchObject({
+        coverageGapped: true,
+        coverRange: null,
+        positionConflict: true,
+        line: { name: "VIZBIG Edition", position: null },
+      });
+    }
+  });
+
+  it.each(UNREAD)("lets no line or title position stand in for a page's (GN %s)", (payload) => {
+    for (const title of ["Alpha [VIZBIG Edition]", "Alpha [VIZBIG Edition Vol. 1]"]) {
+      const read = packagingOf(stored(title, "GN 1", { title, volume: `GN ${payload}` }), [
+        "Alpha",
+      ]);
+      expect(read, title).toMatchObject({
+        coverageGapped: true,
+        positionConflict: true,
+        line: { name: "VIZBIG Edition", position: null },
+      });
+    }
+  });
+
+  it("still reads a page restating the line, or saying no number", () => {
+    for (const volume of ["GN 1", "GN", "GN A", "GN 1 / 4"]) {
+      expect(
+        packagingOf(stored("Alpha [VIZBIG Edition]", "GN 1", { volume }), ["Alpha"]),
+        volume,
+      ).toMatchObject({
+        coverageGapped: false,
+        positionConflict: false,
+        line: { position: "1" },
+      });
+    }
+  });
+});
+
+describe("the work and line an Editor's review is bound to (C66-R4-02)", () => {
+  const identity = (title: string, page?: { title?: string; volume?: string }) =>
+    annTitleIdentity(stored(title, "GN 1", page), ["Alpha"]);
+
+  it("changes with the work, the line, or a page titling another", () => {
+    const base = identity("Alpha [VIZBIG Edition]", { title: "Alpha [VIZBIG Edition]" });
+    for (const [title, pageTitle] of [
+      ["Alpha+ [VIZBIG Edition]", "Alpha [VIZBIG Edition]"],
+      ["Alpha [VIZBIG Edition]", "Alpha+ [VIZBIG Edition]"],
+      ["Alpha [Omnibus]", "Alpha [VIZBIG Edition]"],
+      ["Alpha 2 [VIZBIG Edition]", "Alpha 2 [VIZBIG Edition]"],
+      ["Alpha [VIZBIG Edition]", "Alpha (Light Novel) [VIZBIG Edition] [Omnibus]"],
+    ] as const) {
+      expect(identity(title, { title: pageTitle }), `${title} / ${pageTitle}`).not.toBe(base);
+    }
+  });
+
+  it("is the same whatever position, coverage or page Volume the titles state", () => {
+    const base = identity("Alpha [VIZBIG Edition]", { title: "Alpha [VIZBIG Edition]" });
+    expect(
+      identity("Alpha [VIZBIG Edition]", { title: "Alpha [VIZBIG Edition]", volume: "GN 2" }),
+    ).toBe(base);
+    expect(identity("Alpha [VIZBIG Edition Vol. 2]", { title: "Alpha [VIZBIG Edition]" })).toBe(
+      base,
+    );
+    expect(identity("alpha  [VIZBIG Edition]", { title: "ALPHA [VIZBIG Edition]" })).toBe(base);
   });
 });
