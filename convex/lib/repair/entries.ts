@@ -158,6 +158,17 @@ export const remodelEditionEntry = v.object({
         }),
       ),
       linePosition: nullableString,
+      // A later group whose Releases move into this existing Edition
+      // instead of a new one: the member at `linePosition` of line
+      // `editionLineId`, as the plan saw it. The group states no coverage
+      // or line position of its own.
+      into: v.optional(
+        v.object({
+          editionId: v.id("editions"),
+          editionLineId: v.id("editionLines"),
+          linePosition: nullableString,
+        }),
+      ),
     }),
   ),
   retireVolumeIds: v.array(v.id("volumes")),
@@ -349,6 +360,7 @@ export const createReleaseEntry = v.object({
 export const releaseBundleEntry = v.object({
   kind: v.literal("releaseBundle"),
   ...base,
+  expectedConversion: v.optional(v.string()),
   bundleId: v.union(v.id("releaseBundles"), v.null()),
   box: v.union(v.object({ releaseId: v.id("releases"), name: v.string() }), v.null()),
   members: v.array(v.object({ isbn13: v.string(), order: v.number() })),

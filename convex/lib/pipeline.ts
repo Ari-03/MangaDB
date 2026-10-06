@@ -56,7 +56,7 @@ import {
   type CanonicalPublisher,
 } from "./publishers";
 import { insertSourceProposal, reconcileFields } from "./reconcile";
-import { printedIsbnRefusal, printingReleases } from "./releaseIsbns";
+import { primaryNamespaceRefusal, assignedIsbnRefusal, printingReleases } from "./releaseIsbns";
 import { toIsbn13 } from "./isbn";
 import { seriesSearchText } from "./searchMatch";
 
@@ -116,7 +116,7 @@ export async function alreadyHandled(
 
 /** The row a slug means today: current slug, rename redirect, then merges. */
 export async function publisherBySlug(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   slug: string,
 ): Promise<Doc<"publishers"> | null> {
   const canonicalSlug = canonicalPublisherBySlug(slug)?.slug ?? slug;
@@ -173,7 +173,7 @@ export async function ensurePublisher(
  * publisher key.
  */
 export async function findPublisherByName(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   name: string,
 ): Promise<Doc<"publishers"> | null> {
   const wanted = publisherNameKey(name);
@@ -377,7 +377,7 @@ export type RemovedSeries =
 
 /** A publisher row and its parent: an imprint and its company are one house. */
 async function publisherHouse(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   publisherId: Id<"publishers">,
 ): Promise<Id<"publishers">[]> {
   const row = await ctx.db.get(publisherId);
@@ -389,7 +389,7 @@ async function publisherHouse(
  * coverage: an Edition covering several Volumes repeats.
  */
 export async function seriesEditions(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   seriesId: Id<"series">,
 ): Promise<Doc<"editions">[]> {
   const editions: Doc<"editions">[] = [];
@@ -409,7 +409,7 @@ export async function seriesEditions(
 
 /** Every publisher house the Series' Editions (any status) were published by. */
 async function seriesPublishers(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   seriesId: Id<"series">,
 ): Promise<Set<Id<"publishers">>> {
   const houses = new Set<Id<"publishers">>();
@@ -477,7 +477,7 @@ function hiddenWork(seriesTitle: string, series: Doc<"series">): HiddenWork {
  * hold such a book.
  */
 export async function hiddenWorkTitled(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   seriesTitle: string,
   publisherId: Id<"publishers"> | null,
 ): Promise<HiddenWork | null> {
@@ -560,7 +560,7 @@ export async function isbnHeldElsewhere(
   now: number,
 ): Promise<boolean> {
   const { isbn13, isbn10 } = offered;
-  const printed = await printedIsbnRefusal(ctx, [isbn13, isbn10], release._id);
+  const printed = await assignedIsbnRefusal(ctx, [isbn13, isbn10], release._id);
   const holder =
     printed === null && isbn13 !== undefined ? await isbnHolderBesides(ctx, release, isbn13) : null;
   const held =
@@ -1401,7 +1401,7 @@ export async function createCanonicalRecords(
   // owner's alone, active or hidden, and a claim nobody can follow blocks it
   // too (lib/releaseIsbns.ts). The book is held for an Editor instead.
   if (args.release !== undefined) {
-    const printed = await printedIsbnRefusal(ctx, [args.release.isbn13, args.release.isbn10]);
+    const printed = await assignedIsbnRefusal(ctx, [args.release.isbn13, args.release.isbn10]);
     if (printed !== null) {
       const reason = `${printed} No Release was created for this record.`;
       await recordUnplaced(
@@ -1605,32 +1605,83 @@ export async function createReleaseBundle(
   | { bundleId: Id<"releaseBundles">; members: number; created: boolean; conflict?: string }
   | { held: string }
 > {
-  const existing =
-    args.release.isbn13 !== undefined
-      ? await ctx.db
-          .query("releaseBundles")
-          .withIndex("by_isbn13", (q) => q.eq("isbn13", args.release.isbn13))
-          .first()
-      : null;
-  if (existing) {
-    await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: existing._id });
-    const { expected, conflict } = await addLateBundleMembers(ctx, existing, {
-      ...args,
-      format: args.release.format,
-    });
-    return { bundleId: existing._id, members: expected, created: false, conflict };
+  const { isbnClaims, claimResolver, primaryIsbnsOf } = await import("./releaseIsbns");
+  const { isbnScope } = await import("./scope");
+  const keys = [...primaryIsbnsOf(args.release)];
+  let existing: Doc<"releaseBundles"> | null = null;
+  let conflict: string | null = null;
+  for (const key of keys) {
+    conflict = await isbnScope(ctx, key);
+    const claims = await isbnClaims(ctx, key, { resolver: claimResolver(ctx) });
+    if (!claims?.complete || claims.unresolved.length)
+      conflict = "Bundle ISBN ownership is incomplete or unresolved.";
+    else if (
+      claims.owners.size > 1 ||
+      [...claims.owners.values()].some((owner) => owner.kind !== "bundle")
+    )
+      conflict = "Bundle ISBN is reserved by a Release or several owners.";
+    else {
+      const owner = [...claims.owners.values()][0];
+      if (owner?.kind === "bundle") {
+        if (existing && existing._id !== owner.doc._id) conflict = "Bundle ISBNs disagree.";
+        existing = owner.doc;
+      }
+    }
+    if (conflict) break;
   }
-  // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
-  const printed = await printedIsbnRefusal(ctx, [args.release.isbn13, args.release.isbn10]);
-  if (printed !== null) {
-    const reason = `${printed} No Release Bundle was created for this record.`;
+  if (
+    existing &&
+    (existing.status !== "active" || existing.locked || existing.format !== args.release.format)
+  )
+    conflict = "Existing Bundle must be active, unlocked and the same format.";
+  if (existing && !conflict) {
+    const publisher = await publisherBySlug(ctx, args.publisher.slug);
+    if (!publisher || publisher.locked || publisher._id !== existing.publisherId)
+      conflict = "Existing Bundle publisher differs or is locked.";
+    const members = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", existing!._id))
+      .take(81);
+    if (members.length > 80) conflict = "Existing Bundle contents are incomplete.";
+    for (const member of members) {
+      const release = await ctx.db.get(member.releaseId);
+      const edition = release ? await ctx.db.get(release.editionId) : null;
+      if (
+        !release ||
+        release.status !== "active" ||
+        release.locked ||
+        !edition ||
+        edition.status !== "active" ||
+        edition.locked
+      )
+        conflict = "Existing Bundle member is unavailable or locked.";
+    }
+  }
+  if (conflict) {
     await recordUnplaced(
       ctx,
       args.observation,
-      { kind: "isbn", reason, seriesId: args.seriesId },
+      { kind: "isbn", reason: conflict, seriesId: args.seriesId },
       args.now,
     );
-    return { held: reason };
+    return { held: conflict };
+  }
+  if (existing) {
+    const { expected, conflict: membershipConflict } = await addLateBundleMembers(ctx, existing, {
+      ...args,
+      format: args.release.format,
+    });
+    if (membershipConflict) {
+      await recordUnplaced(
+        ctx,
+        args.observation,
+        { kind: "packaging", reason: membershipConflict, seriesId: args.seriesId },
+        args.now,
+      );
+      return { held: membershipConflict };
+    }
+    await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: existing._id });
+    return { bundleId: existing._id, members: expected, created: false };
   }
 
   const created: CreatedRecord[] = [];
@@ -1880,6 +1931,26 @@ export async function reconcileLinkedBundle(
 ): Promise<BundleReconcile> {
   const bundle = await ctx.db.get(bundleId);
   if (!bundle) return { added: 0 };
+  if (bundle.status !== "active" || bundle.locked)
+    return { added: 0, conflict: "Bundle must be active and unlocked." };
+  const refusal = await primaryNamespaceRefusal(
+    ctx,
+    [bundle.isbn13, bundle.isbn10],
+    "bundle",
+    bundle._id,
+  );
+  if (refusal) return { added: 0, conflict: refusal };
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+    .take(81);
+  if (memberships.length > 80)
+    return { added: 0, conflict: "Existing Bundle membership inspection is incomplete." };
+  for (const row of memberships) {
+    const member = await ctx.db.get(row.releaseId);
+    if (!member || member.status !== "active" || member.locked)
+      return { added: 0, conflict: "Existing Bundle member is missing, inactive or locked." };
+  }
   const { added, conflict } = await addLateBundleMembers(ctx, bundle, args);
   return conflict === undefined ? { added } : { added, conflict };
 }

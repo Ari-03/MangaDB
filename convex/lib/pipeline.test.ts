@@ -567,7 +567,7 @@ describe("createReleaseBundle — a printing's ISBN", () => {
       expect(
         await createOrHoldBundle(ctx, { ...fireForceBox(seriesId, ["1"]), observation: obs }),
       ).toEqual({
-        held: expect.stringContaining(`ISBN 9798888772584 belongs to Release ${releaseId}`),
+        held: expect.stringContaining("Bundle ISBN is reserved by a Release"),
       });
       expect(await ctx.db.query("releaseBundles").collect()).toEqual([]);
       expect(await holdOf(ctx, obs._id)).toMatchObject({ kind: "isbn", seriesId });
@@ -674,7 +674,9 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
         { status: "active" as const, locked: true },
       ]) {
         await ctx.db.patch(early.bundleId, patch);
-        await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+        expect(
+          await createOrHoldBundle(ctx, { ...box, observation: await observation(ctx, "box") }),
+        ).toMatchObject({ held: expect.any(String) });
         expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(0);
       }
     });
@@ -810,7 +812,7 @@ describe("createReleaseBundle — an existing bundle keeps its identity (W08)", 
   it.each([
     ["another Series", "series"],
     ["another Format", "format"],
-  ] as const)("links but adds nothing when the box names %s", async (_, change) => {
+  ] as const)("holds without linking when the box names %s", async (_, change) => {
     const t = makeT();
     await t.run(async (ctx) => {
       await publisher(ctx, "Kodansha", "kodansha");
@@ -826,15 +828,14 @@ describe("createReleaseBundle — an existing bundle keeps its identity (W08)", 
       });
       expect(first).toMatchObject({ created: true, members: 1 });
 
-      const other = await createReleaseBundle(ctx, {
+      const other = await createOrHoldBundle(ctx, {
         ...box,
         ...(change === "series"
           ? { seriesId: beta }
           : { release: { ...box.release, format: "digital" as const } }),
         observation: await observation(ctx, "other-source-box"),
       });
-      expect(other).toMatchObject({ created: false, bundleId: first.bundleId, members: 0 });
-      expect(other.conflict).toMatch(change === "series" ? /Series/ : /Format/);
+      expect(other).toMatchObject({ held: expect.any(String) });
       expect((await membershipsOf(ctx, first.bundleId)).map((m) => m.releaseId)).toEqual([
         alphaOne,
       ]);
@@ -844,7 +845,7 @@ describe("createReleaseBundle — an existing bundle keeps its identity (W08)", 
           q.eq("sourceKey", "prh").eq("sourceRecordId", "other-source-box"),
         )
         .unique();
-      expect(obs!.recordRef).toEqual({ type: "releaseBundle", id: first.bundleId });
+      expect(obs!.recordRef).toBeUndefined();
       expect(obs!.conflicts?.map((c) => c.field)).toEqual(["placement"]);
     });
   });

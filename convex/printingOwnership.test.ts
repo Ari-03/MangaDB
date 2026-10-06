@@ -477,7 +477,7 @@ describe("other writers keep an ISBN with printings to its one owner", () => {
       ).rejects.toMatchObject({
         data: {
           code: "invalidField",
-          message: expect.stringContaining(`ISBN ${X} belongs to hidden Release`),
+          message: expect.stringContaining(`ISBN ${X} is reserved by release`),
         },
       });
     }
@@ -583,7 +583,7 @@ describe("other writers keep an ISBN with printings to its one owner", () => {
     });
     await expect(
       moderate(t, "restoreRecord", { type: "releaseBundle", id: box }, "Restore it."),
-    ).rejects.toThrow(/ISBN 9781591160342 is now another printing of a Release/);
+    ).rejects.toThrow(/ISBN 9781591160342 is reserved by release/);
   });
 
   it("refuses a merge whose Releases have more printings than it moves at once", async () => {
@@ -710,7 +710,7 @@ describe("imports never create over a printing claim", () => {
   });
 });
 
-describe("an ordinary ISBN costs one empty read (C67-01)", () => {
+describe("an ordinary ISBN checks scope and cross-type primaries without reading documents", () => {
   /** The seven metrics `run` used, from the installed `ctx.meta.getTransactionMetrics()`. */
   async function used<T>(
     ctx: MutationCtx,
@@ -727,14 +727,14 @@ describe("an ordinary ISBN costs one empty read (C67-01)", () => {
   const nothing = {
     bytesRead: 0,
     bytesWritten: 0,
-    databaseQueries: 1,
+    databaseQueries: 5,
     documentsRead: 0,
     documentsWritten: 0,
     functionsScheduled: 0,
     scheduledFunctionArgsBytes: 0,
   };
 
-  it("reads one empty index range for a linked Release's own ISBN with no printing, in both forms", async () => {
+  it("reads five empty indexes for a linked Release's own ISBN with no printing, in both forms", async () => {
     for (const large of [false, true]) {
       for (const unrelatedRow of [false, true]) {
         const t = makeT({ transactionLimits: true });

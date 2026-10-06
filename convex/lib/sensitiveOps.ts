@@ -157,6 +157,24 @@ export const RELEASE_PRINTINGS_READ = 100;
  * applyRestore and the data repair, which reports it as its skip.
  */
 export async function restoreRefusal(ctx: QueryCtx, ref: RecordRef): Promise<string | null> {
+  const { primaryNamespaceRefusal } = await import("./releaseIsbns");
+  const { isbnScope } = await import("./scope");
+  if (ref.type === "release" || ref.type === "releaseBundle") {
+    const doc = await ctx.db.get(ref.id);
+    if (doc) {
+      const namespace = await primaryNamespaceRefusal(
+        ctx,
+        [doc.isbn13, doc.isbn10],
+        ref.type === "release" ? "release" : "bundle",
+        doc._id,
+      );
+      if (namespace) return namespace;
+      for (const isbn of [doc.isbn13, doc.isbn10]) {
+        const scope = await isbnScope(ctx, isbn);
+        if (scope) return scope;
+      }
+    }
+  }
   const resolver = claimResolver(ctx);
   if (ref.type === "releaseBundle") {
     const bundle = await ctx.db.get(ref.id);
@@ -471,6 +489,8 @@ async function governingSeries(
  */
 export type OverrideSink = {
   reversible: boolean;
+  /** Identical monotonic carries already completed in this repair transaction. */
+  carried?: Set<string>;
   write: (
     userId: Id<"users">,
     seriesId: Id<"series">,
@@ -551,6 +571,14 @@ export async function carryVisibility(
   to: Array<Id<"series">>,
   gate: Gate = "all",
 ): Promise<void> {
+  const carryKey = JSON.stringify([
+    userId,
+    [...fields].sort(),
+    [...from].sort(),
+    [...to].sort(),
+    gate,
+  ]);
+  if (sink.carried?.has(carryKey)) return;
   const toIds = await governingSeries(ctx, to);
   const absorbed = absorbedFrom(await governingSeries(ctx, from), toIds, gate);
   if (!absorbed) return;
@@ -559,6 +587,7 @@ export async function carryVisibility(
       ? [null]
       : await Promise.all(absorbed.map((id) => seriesStateOf(ctx, userId, id)));
   for (const seriesId of toIds) await narrowState(ctx, sink, userId, seriesId, sources, fields);
+  sink.carried?.add(carryKey);
 }
 
 /** Narrow one User's state row on a Series to stricterVisibility against `sources`, through `sink`. */

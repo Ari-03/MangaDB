@@ -59,7 +59,7 @@ import {
 } from "./lib/pipeline";
 import type { PrhTitleSnapshot } from "./lib/prh";
 import { checkOpCount, planCreateOps, unjoinable, type CreatePlan } from "./lib/proposalCreates";
-import { printedIsbnRefusal } from "./lib/releaseIsbns";
+import { assignedIsbnRefusal } from "./lib/releaseIsbns";
 import { requireDataTeam } from "./lib/roles";
 import { isMangaBook, type BookSnapshot } from "./lib/sevenSeas";
 import type { YenTitleSnapshot } from "./lib/yenPress";
@@ -402,7 +402,7 @@ async function placeable(
   }
   const { isbn13, isbn10 } = facts;
   // An ISBN with Other Printings is its owner's alone, active or hidden.
-  const printed = await printedIsbnRefusal(ctx, [isbn13, isbn10]);
+  const printed = await assignedIsbnRefusal(ctx, [isbn13, isbn10]);
   if (printed !== null) return no(`${printed} Link or correct that Release instead.`);
   const holders = [
     ...(isbn13 !== undefined

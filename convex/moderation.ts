@@ -234,6 +234,28 @@ export async function applyUpdate(
   const patch: Record<string, unknown> = {};
   for (const change of changes) patch[change.field] = change.after;
 
+  if (ref.type === "release" || ref.type === "releaseBundle") {
+    const isbns = changes.flatMap((c) =>
+      (c.field === "isbn13" || c.field === "isbn10") && typeof c.after === "string"
+        ? [c.after]
+        : [],
+    );
+    if (isbns.length) {
+      const { isbnScope } = await import("./lib/scope");
+      for (const isbn of isbns) {
+        const scope = await isbnScope(ctx, isbn);
+        if (scope) fail("invalidField", scope);
+      }
+      const { primaryNamespaceRefusal } = await import("./lib/releaseIsbns");
+      const refusal = await primaryNamespaceRefusal(
+        ctx,
+        isbns,
+        ref.type === "release" ? "release" : "bundle",
+        ref.id,
+      );
+      if (refusal) fail("invalidField", refusal);
+    }
+  }
   // Derived fields maintained by the shared write path (spec §8): the Series
   // search index concatenates title + altTitles.
   if (ref.type === "series") {

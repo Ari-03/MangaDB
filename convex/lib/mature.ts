@@ -179,3 +179,34 @@ export async function syncMatureProjection(
 export function ratedByDataTeam(contentRating: Doc<"series">["contentRating"]): boolean | null {
   return contentRating === undefined ? null : contentRating === "mature";
 }
+
+/** Read-only flips for held-link manifests. applyMatureEvidence retains its transaction-local settled cache. */
+export async function matureFlipsOf(
+  ctx: QueryCtx,
+  observation: Doc<"sourceObservations">,
+): Promise<Doc<"series">[]> {
+  const ref = observation.recordRef;
+  let seriesIds: Id<"series">[];
+  if (ref?.type === "series") {
+    if (!observationRatesMature(observation)) return [];
+    seriesIds = [ref.id];
+  } else if (ref?.type === "release") {
+    const release = await ctx.db.get(ref.id);
+    if (release?.status !== "active") return [];
+    if (!observationRatesMature(observation)) {
+      const publisher = await ctx.db.get(release.publisherId);
+      if (publisher?.contentRating !== "mature") return [];
+    }
+    seriesIds = release.seriesIds;
+  } else {
+    return [];
+  }
+  const flips: Doc<"series">[] = [];
+  for (const seriesId of new Set(seriesIds)) {
+    const series = await ctx.db.get(seriesId);
+    if (series?.status !== "active" || series.mature === true) continue;
+    if (ratedByDataTeam(series.contentRating) !== null) continue;
+    flips.push(series);
+  }
+  return flips;
+}

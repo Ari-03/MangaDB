@@ -90,7 +90,7 @@ import {
   stampHandOff,
   stopAtGate,
 } from "./lib/importRuns";
-import { canonicalLabel, isNovelTitle, rangeLabels } from "./lib/bookTitle";
+import { canonicalLabel, isNovelTitle, outOfScopeReason, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import {
@@ -136,6 +136,27 @@ import { withExceptionCapture } from "./lib/posthog";
 import { pairKeyOf } from "./lib/qa";
 
 export const SOURCE_KEY = "ann";
+/** Compare canonical work IDs; stored merged IDs retain their identity. */
+async function releaseUnderSeries(ctx: QueryCtx, release: Doc<"releases">, seriesId: Id<"series">) {
+  for (const id of release.seriesIds) {
+    const seen = new Set<string>();
+    let current = id;
+    for (let hop = 0; hop <= 8; hop++) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      const series = await ctx.db.get(current);
+      if (!series) break;
+      if (series.status !== "merged") {
+        if (series.status === "active" && !series.locked && series._id === seriesId) return true;
+        break;
+      }
+      if (!series.mergedIntoId) break;
+      current = series.mergedIntoId;
+    }
+  }
+  return false;
+}
+
 /** The source's name in a citation when the registry row has none. */
 const SOURCE_NAME = "Anime News Network Encyclopedia";
 const REPORT_URL = "https://www.animenewsnetwork.com/encyclopedia/reports.xml?id=155&type=manga";
@@ -480,7 +501,7 @@ type Packaged = (line: AnnLine) => boolean;
 function backboneLabels(snapshot: AnnMangaSnapshot, packaged: Packaged): Array<string | undefined> {
   const labels: Array<string | undefined> = [];
   for (const release of snapshot.releases) {
-    if (packaged(release)) continue;
+    if (packaged(release) || outOfScopeReason(release.title) !== null) continue;
     const label = release.label !== undefined ? canonicalLabel(release.label) : undefined;
     if (!labels.some((l) => labelsEqual(l, label ?? null))) labels.push(label);
   }
@@ -816,7 +837,12 @@ export const applyManga = internalMutation({
       ),
     );
     const packaged: Packaged = (line) => packagedLines.has(line);
-    const labels = backboneLabels(snapshot, packaged);
+    const { isbnScope } = await import("./lib/scope");
+    const eligible = [];
+    for (const release of snapshot.releases) {
+      if (!(await isbnScope(ctx, release.isbn13))) eligible.push(release);
+    }
+    const labels = backboneLabels({ ...snapshot, releases: eligible }, packaged);
 
     if (seriesId === null) {
       // Brand-new Series: the steady-state always-review gate, lifted in
@@ -927,7 +953,7 @@ export const applyManga = internalMutation({
         const byIsbn =
           release.isbn13 !== undefined ? (await releaseByIsbn(ctx, release.isbn13)).active : null;
         const match = byIsbn
-          ? byIsbn.seriesIds.includes(seriesId) && !byIsbn.locked
+          ? (await releaseUnderSeries(ctx, byIsbn, seriesId)) && !byIsbn.locked
             ? ({ kind: "one", release: byIsbn } as const)
             : ({ kind: "none" } as const)
           : !packaged(release)
@@ -1026,12 +1052,15 @@ const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
  * stored line without one). Only unlinked lines are asked: a line already
  * linked by its ISBN keeps its Release.
  */
-export function lineOutOfScope(line: AnnReleaseSnapshot, names?: readonly string[]): string | null {
+export function lineOutOfScope(
+  line: AnnReleaseSnapshot,
+  _names?: readonly string[],
+): string | null {
   const pageTitle = line.page?.status === "ok" ? line.page.title : undefined;
   const titles = [line.title, pageTitle].filter((title) => title !== undefined);
   if (titles.some((title) => VARIANT_LINE.test(title)))
     return "A store-exclusive or variant cover: never a Release of its own.";
-  if (annLinePackaged(line, names) && titles.some((title) => isNovelTitle(title)))
+  if (titles.some((title) => outOfScopeReason(title) !== null || isNovelTitle(title)))
     return "Packaging its title marks a novel: out of manga scope.";
   const distributor = line.page?.distributor;
   if (distributor === undefined) return null;
@@ -1667,10 +1696,6 @@ export const applyReleasePage = internalMutation({
         ? await survivorOf<"series">(ctx, await ctx.db.get(seriesRef.id))
         : null;
 
-    // An existing Release with the ISBN: link it (same Series only).
-    const { active: byIsbn, hidden: isbnHidden } = await releaseByIsbn(ctx, isbn13);
-    if (byIsbn && series && byIsbn.seriesIds.includes(series._id)) return await link(byIsbn);
-
     // The work's own name its line words are read against: the Series'
     // title, never an entry spelling the Series does not confirm
     // ("Makunouchi Deluxe" owns no "Deluxe" of "Alpha [Deluxe]").
@@ -1678,8 +1703,14 @@ export const applyReleasePage = internalMutation({
     const workNames = [series?.title ?? entryTitle];
 
     // A line out of scope is noted only, whatever else would hold it.
-    const outOfScope = lineOutOfScope(line, workNames);
+    const { isbnScope } = await import("./lib/scope");
+    const outOfScope = lineOutOfScope(line, workNames) ?? (await isbnScope(ctx, isbn13));
     if (outOfScope !== null) return await hold(null, outOfScope);
+
+    // An existing Release with the ISBN: link it (same Series only).
+    const { active: byIsbn, hidden: isbnHidden } = await releaseByIsbn(ctx, isbn13);
+    if (byIsbn && series && !series.locked && (await releaseUnderSeries(ctx, byIsbn, series._id)))
+      return await link(byIsbn);
 
     // One an Editor hid is never recreated.
     if (!byIsbn && isbnHidden) {
@@ -1689,6 +1720,7 @@ export const applyReleasePage = internalMutation({
       return await hold(
         "isbn",
         `ISBN ${isbn13} is already on a Release of another Series — a duplicate-Series question for an Editor.`,
+        series?.status === "active" ? series._id : undefined,
       );
     }
 
@@ -1732,6 +1764,7 @@ export const applyReleasePage = internalMutation({
       return await hold(
         "packaging",
         "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.",
+        series?.status === "active" ? series._id : undefined,
       );
     }
     if (!series || series.status !== "active") {

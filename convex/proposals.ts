@@ -42,7 +42,8 @@ import {
   type IsbnUpdate,
 } from "./lib/proposalCreates";
 import { fail } from "./lib/errors";
-import { printedIsbnRefusal } from "./lib/releaseIsbns";
+import { toIsbn13 } from "./lib/isbn";
+import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
@@ -222,6 +223,7 @@ async function buildDraftOps(ctx: MutationCtx, submitted: OpInput[]): Promise<St
  */
 async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
   const isbnUpdates: IsbnUpdate[] = [];
+  const bundleAssignments = new Set<string>();
   for (const op of ops) {
     if (op.kind !== "update") continue;
     // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
@@ -229,7 +231,11 @@ async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
       const isbns = op.changes.flatMap(({ field, after }) =>
         (field === "isbn13" || field === "isbn10") && typeof after === "string" ? [after] : [],
       );
-      const printed = await printedIsbnRefusal(ctx, isbns);
+      for (const isbn of isbns) {
+        const key = toIsbn13(isbn);
+        if (key) bundleAssignments.add(key);
+      }
+      const printed = await primaryNamespaceRefusal(ctx, isbns, "bundle", op.ref.id);
       if (printed !== null) fail("invalidField", `${printed} Correct that first.`);
     }
     if (op.ref.type !== "release") continue;
@@ -242,11 +248,23 @@ async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
       });
     }
   }
-  return await planCreateOps(
+  const plans = await planCreateOps(
     ctx,
     ops.filter((op): op is CreateOpInput => op.kind === "create"),
     isbnUpdates,
   );
+  const releaseAssignments = [
+    ...isbnUpdates.map((update) => update.isbn),
+    ...plans.flatMap((plan) =>
+      plan.table === "releases" ? [plan.fields.isbn13, plan.fields.isbn10] : [],
+    ),
+  ];
+  for (const isbn of releaseAssignments) {
+    const key = toIsbn13(isbn);
+    if (key && bundleAssignments.has(key))
+      fail("invalidField", `A Release and Bundle in this proposal would share ISBN ${key}.`);
+  }
+  return plans;
 }
 
 /** Malformed evidence never reaches a version: check each row now. */

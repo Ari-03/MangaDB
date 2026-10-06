@@ -53,7 +53,7 @@ import {
   volumePositionFor,
 } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
-import { printedIsbnRefusal } from "./releaseIsbns";
+import { assignedIsbnRefusal } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
 import { fieldDescriptor, normalizeFieldValue, type RecordType } from "./moderationFields";
 
@@ -601,7 +601,7 @@ async function checkIsbnAssignments(
     // hidden (lib/releaseIsbns.ts): a Release may take its own printing's
     // ISBN as its own, and no other claim may remain but a primary this
     // proposal rewrites.
-    const printed = await printedIsbnRefusal(
+    const printed = await assignedIsbnRefusal(
       ctx,
       [isbn],
       claim.releaseId,

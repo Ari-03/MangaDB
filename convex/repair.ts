@@ -26,6 +26,7 @@ import {
   type ObservationRow,
   type Row,
 } from "./lib/repair/metrics";
+import { nestedLimits } from "./lib/bounded";
 import { applyEntry } from "./lib/repair/ops";
 
 /** Evidence stored on each repair Proposal: its source observations, else a plan note. */
@@ -98,7 +99,13 @@ export const runBatch = internalMutation({
     const outcomes: Outcome[] = [];
     for (const entry of entries) {
       try {
-        outcomes.push(await ctx.runMutation(internal.repair.applyOne, { entry, dryRun, actor }));
+        outcomes.push(
+          await ctx.runMutation(
+            internal.repair.applyOne,
+            { entry, dryRun, actor },
+            { transactionLimits: await nestedLimits(ctx) },
+          ),
+        );
       } catch (error) {
         const data = errorData(error);
         if (data?.dryRun) outcomes.push(data.dryRun);

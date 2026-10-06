@@ -18,7 +18,7 @@
 // linked one seen again make its Series mature at once when it is 18+
 // evidence (lib/mature.ts applyMatureEvidence), for every importer.
 
-import type { Infer } from "convex/values";
+import { ConvexError, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { holdKind, recordRef } from "../schema";
@@ -245,6 +245,7 @@ export async function recordUnplaced(
   observation: Doc<"sourceObservations">,
   hold: Hold,
   now: number,
+  keepHeldAt = false,
 ): Promise<boolean> {
   // The caller's copy may predate a write earlier in this mutation.
   const current = (await ctx.db.get(observation._id)) ?? observation;
@@ -278,7 +279,11 @@ export async function recordUnplaced(
     return true;
   }
   if (row.kind !== kind) {
-    await ctx.db.patch(row._id, { kind, heldAt: now, seriesId: hold.seriesId });
+    await ctx.db.patch(row._id, {
+      kind,
+      heldAt: keepHeldAt ? row.heldAt : now,
+      seriesId: hold.seriesId,
+    });
     return true;
   }
   if (row.seriesId !== hold.seriesId) {
@@ -328,6 +333,12 @@ export async function linkObservation(
   observationId: Id<"sourceObservations">,
   ref: Infer<typeof recordRef>,
 ): Promise<void> {
+  const previous = await ctx.db.get(observationId);
+  if (ref.type === "release" || ref.type === "releaseBundle") {
+    const { isbnScope } = await import("./scope");
+    const scope = await isbnScope(ctx, observedIsbn13(previous?.snapshot));
+    if (scope && !sameValue(previous?.recordRef, ref)) throw new ConvexError(scope);
+  }
   await ctx.db.patch(observationId, { recordRef: ref });
   await clearHold(ctx, observationId);
   const observation = await ctx.db.get(observationId);

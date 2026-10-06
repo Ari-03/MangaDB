@@ -136,14 +136,14 @@ async function insertNoragamiBox(
       ...(await insertBook(ctx, { publisherId, seriesId, volumeId, release: { isbn13 } })),
     };
   };
-  const v1 = (await book(series, "1", 1, "9780000000011")).volumeId;
-  await book(series, "2", 2, "9780000000028");
-  const box = await book(boxSeriesId ?? series, "Box", 9, "9780000000059");
+  const v1 = (await book(series, "1", 1, "9781612622538")).volumeId;
+  await book(series, "2", 2, "9781612622545");
+  const box = await book(boxSeriesId ?? series, "Box", 9, "9781632367006");
   return { series, v1, box };
 }
 
 /** The member ISBNs of the box set: Noragami vols 1 and 2. */
-const MEMBERS = ["9780000000011", "9780000000028"];
+const MEMBERS = ["9781612622538", "9781612622545"];
 
 /** A releaseBundle entry turning the box set into "Noragami Box Set" of `isbns`, in order. */
 const bundleEntry = (
@@ -483,13 +483,36 @@ describe("box set to bundle (B11)", () => {
         name: "Noragami Box Set",
         publisherId: s.publisherId,
         format: "physical",
-        isbn13: "9780000000059",
+        isbn13: "9781632367006",
       });
       await ctx.db.insert("collectionEntries", { userId: s.other, bundleId, state: "wanted" });
+      for (const [i, isbn] of MEMBERS.entries()) {
+        const member = await ctx.db
+          .query("releases")
+          .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn))
+          .unique();
+        await insertBundleMember(ctx, { bundleId, releaseId: member!._id, order: i + 1 });
+      }
       return bundleId;
     });
-    const entry = bundleEntry(s.box, MEMBERS);
-    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    // A Bundle cannot retain a Release Variant pin. The reader removes that
+    // pin before this existing-collision operation; fresh conversions below
+    // still exercise the audited variant transfer path.
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: s.box.releaseId,
+      state: "owned",
+    });
+    const guard = await t.query(internal.heldRepair.conversionStateInternal, {
+      releaseId: s.box.releaseId,
+      bundleId: existing,
+    });
+    expect(guard.refusal).toBeNull();
+    const base = bundleEntry(s.box, MEMBERS);
+    const entry: RepairEntry = {
+      ...base,
+      ...(base.kind === "releaseBundle" ? { expectedConversion: guard.expected! } : {}),
+    };
+    expect((await run(t, [entry]))[0]).toMatchObject({ status: "applied" });
 
     const entries = await entriesOf(t);
     expect(entries).toHaveLength(2);
@@ -643,7 +666,7 @@ describe("box set to bundle (B11)", () => {
       reason: "box contents",
       bundleId,
       box: null,
-      members: [{ isbn13: "9780000000011", order: 1 }],
+      members: [{ isbn13: "9781612622538", order: 1 }],
       retireVolumeIds: [],
     };
     expect(await shown(t)).toEqual([]);
@@ -664,7 +687,9 @@ describe("bounded personal repair work (Standards 1)", () => {
   async function runLegs(t: T, entry: RepairEntry, afterLeg: () => Promise<void>) {
     const statuses: string[] = [];
     for (let leg = 0; leg < 20; leg++) {
-      const status = (await run(t, [entry]))[0]!.status;
+      const outcome = (await run(t, [entry]))[0]!;
+      if (outcome.status === "error") throw new Error(outcome.reason);
+      const status = outcome.status;
       statuses.push(status);
       await afterLeg();
       if (status !== "partial") break;
@@ -815,7 +840,7 @@ describe("bounded personal repair work (Standards 1)", () => {
       await privateOwnership();
       const entry =
         kind === "releaseBundle"
-          ? bundleEntry(box, ["9780000000011"], "big-box")
+          ? bundleEntry(box, ["9781612622538"], "big-box")
           : remodelEntry(box, series, ["1"], { key: "big-box" });
       const boxState = () =>
         t.run(async (ctx) => ({

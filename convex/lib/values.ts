@@ -40,3 +40,27 @@ export function valueHash(value: unknown): string {
     .map(([k, v]) => `${JSON.stringify(k)}:${valueHash(v)}`);
   return `{${entries.join(",")}}`;
 }
+
+/** First non-JSON value that valueHash cannot distinguish exactly. */
+export function nonJsonPath(value: unknown, path = "snapshot"): string | null {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && !Object.is(value, -0) ? null : path;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const found = nonJsonPath(value[i], `${path}[${i}]`);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return path;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return path;
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) continue;
+    const found = nonJsonPath(item, `${path}.${key}`);
+    if (found !== null) return found;
+  }
+  return null;
+}

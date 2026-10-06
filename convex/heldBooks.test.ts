@@ -1018,7 +1018,7 @@ describe("imports.backfillHolds", () => {
 });
 
 describe("imports.backfillHolds on its first run", () => {
-  it("drops a stale note with no row to remove: a book in review, an Open Library edition it skips", async () => {
+  it("clears a source review note and retains an unresolved skipped Open Library edition", async () => {
     const t = makeT();
     const queued = await heldThenQueued(t);
     const note = {
@@ -1049,10 +1049,10 @@ describe("imports.backfillHolds on its first run", () => {
     expect(await t.run((ctx) => ctx.db.query("placementHolds").collect())).toEqual([]);
 
     const result = await t.mutation(internal.imports.backfillHolds, {});
-    expect(result).toMatchObject({ cleared: 2, done: true });
+    expect(result).toMatchObject({ cleared: 1, done: true });
     await t.run(async (ctx) => {
       expect((await ctx.db.get(queued._id))?.conflicts).toEqual([]);
-      expect((await ctx.db.get(skipped))?.conflicts).toEqual([]);
+      expect((await ctx.db.get(skipped))?.conflicts).toHaveLength(1);
     });
     expect((await list(t)).page).toEqual([]);
   });

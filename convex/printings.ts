@@ -8,7 +8,7 @@
 // for an operator, a page at a time.
 
 import { paginationOptsValidator } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, type Infer, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -17,14 +17,14 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { type AnnReleaseSnapshot, lineOutOfScope, packagingOf } from "./ann";
+import { type AnnReleaseSnapshot, lineOutOfScope } from "./ann";
 import { getSourceByKey } from "./importSources";
-import { splitReleaseTitle } from "./lib/ann";
+import { packagingOf, readAnnLineTitle, splitReleaseTitle } from "./lib/ann";
 import { nestedLimits, platformStop } from "./lib/bounded";
 import { bindingFacts, bookFacts } from "./lib/bookFacts";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
 import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
-import { labelsEqual } from "./lib/matching";
+import { labelsEqual, sameWorkTitle } from "./lib/matching";
 import { canonicalRecord, mergeSurvivor } from "./lib/merges";
 import { holdOf } from "./lib/observations";
 import { findPublisherByName, toPartialDate } from "./lib/pipeline";
@@ -43,6 +43,8 @@ import {
   readRoom,
   statedIsbns,
 } from "./lib/releaseIsbns";
+import { holdKind, releaseFormat } from "./schema";
+import { sameValue, valueHash } from "./lib/values";
 import { isMangaBook } from "./lib/sevenSeas";
 import { decodeEntities } from "./lib/text";
 
@@ -381,7 +383,8 @@ function readAnnLine(
   }
   if (line.coverageGapped) reading.packaging.push("a Volume list no range holds");
   const named = packagingOf(line);
-  if (named !== null) reading.packaging.push(`the line name ${named.name}`);
+  if (named?.line !== null && named?.line !== undefined)
+    reading.packaging.push(`the line name ${named.line.name}`);
   const outOfScope = lineOutOfScope(line);
   if (outOfScope !== null) reading.scope.push(outOfScope);
 
@@ -501,7 +504,7 @@ function readAnnLine(
  * retains joined work names in `title`. Legacy missing subtitles supply no
  * new facts, and their stored Volume continues to stand.
  */
-function readTitledRecord(
+export function readTitledRecord(
   sourceKey: string,
   title: string,
   s: SnapshotFacts,
@@ -578,8 +581,8 @@ function readTitledRecord(
  * whole for now: a packaged printing waits until its line, position and
  * coverage can be compared with the Edition's.
  */
-async function contentRefusal(
-  ctx: MutationCtx,
+export async function contentRefusal(
+  ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
   series: Array<Doc<"series">>,
@@ -589,7 +592,7 @@ async function contentRefusal(
   if (title === "") return "The record gives no title to read the book from.";
 
   const seriesTitles = series.map((one) => one.title);
-  const ownWork = (work: string) => seriesTitles.some((t) => workKey(t) === workKey(work));
+  const ownWork = (work: string) => seriesTitles.some((t) => sameWorkTitle(t, work));
 
   let reading: BookReading;
   if (observation.sourceKey === "ann" && s?.kind === "annRelease") {
@@ -608,6 +611,11 @@ async function contentRefusal(
     );
   } else {
     reading = readTitledRecord(observation.sourceKey, title, s, seriesTitles);
+  }
+  if (observation.sourceKey === "ann") {
+    const segmented = readAnnLineTitle(title, { names: seriesTitles });
+    if (segmented.kind === "ambiguous") reading.unreadable.push(segmented.reason);
+    else if (segmented.kind === "line") reading.work = segmented.work;
   }
   if (BRACKETED.test(title)) reading.packaging.push(`the bracketed part of "${title}"`);
   if (isNovelTitle(title)) reading.scope.push("its title marks a novel");
@@ -639,13 +647,13 @@ async function contentRefusal(
 
   // The Release's contents: exactly one whole Volume of one of its Series.
   const edition = await ctx.db.get(release.editionId);
-  if (edition === null || edition.status !== "active") {
+  if (edition === null || edition.status !== "active" || edition.locked) {
     return "The Release's Edition is not an active Edition.";
   }
   if (edition.coverageUnmapped) return "The Release's Edition does not say what it collects.";
   if (edition.editionLineId !== undefined) {
     const line = await canonicalRecord(ctx, "editionLines", edition.editionLineId);
-    if (!("doc" in line) || line.doc.status !== "active") {
+    if (!("doc" in line) || line.doc.status !== "active" || line.doc.locked) {
       return "The Release's Edition Line cannot be followed to an active Edition Line.";
     }
   }
@@ -658,11 +666,16 @@ async function contentRefusal(
     return "The Release's Edition does not collect exactly one whole Volume.";
   }
   const volume = await canonicalRecord(ctx, "volumes", row.volumeId);
-  if (!("doc" in volume) || volume.doc.status !== "active") {
+  if (!("doc" in volume) || volume.doc.status !== "active" || volume.doc.locked) {
     return "The Release's Volume cannot be followed to an active Volume.";
   }
   const volumeSeries = await canonicalRecord(ctx, "series", volume.doc.seriesId);
-  if (!("doc" in volumeSeries) || !series.some((one) => one._id === volumeSeries.doc._id)) {
+  if (
+    !("doc" in volumeSeries) ||
+    volumeSeries.doc.status !== "active" ||
+    volumeSeries.doc.locked ||
+    !series.some((one) => one._id === volumeSeries.doc._id)
+  ) {
     return "The Release's Volume is not a Volume of the Release's own Series.";
   }
   if (reading.label !== undefined && !labelsEqual(volume.doc.label, reading.label)) {
@@ -749,6 +762,14 @@ export const decideInternal = internalMutation({
     const decided = decidedIsbn13(snapshot);
     if ("refusal" in decided) return refuse(decided.refusal);
     const { isbn13 } = decided;
+    const { isbnScope } = await import("./lib/scope");
+    const scope = await isbnScope(ctx, isbn13);
+    if (scope) return refuse(scope);
+    if (
+      observation.queuedProposalId &&
+      (await ctx.db.get(observation.queuedProposalId))?.state === "inReview"
+    )
+      return refuse("A Proposal of the book is in review.");
     const citation = decidedCitationUrl(evidenceUrl, snapshot);
     if ("refusal" in citation) return refuse(citation.refusal);
 
@@ -1204,3 +1225,168 @@ async function checkMark(
   }
   return [];
 }
+
+// Live-compatible held-link validators. Context is optional for old callers;
+// execution requires a current expanded preview before a decision can write.
+const nullable = <T extends import("convex/values").Validator<unknown, "required", string>>(
+  validator: T,
+) => v.union(validator, v.null());
+export const linkGuard = v.object({
+  snapshot: v.string(),
+  context: v.optional(v.string()),
+  hold: nullable(
+    v.object({
+      id: v.id("placementHolds"),
+      kind: holdKind,
+      seriesId: nullable(v.id("series")),
+    }),
+  ),
+  queuedProposalId: nullable(v.id("proposals")),
+  isbn13: nullable(v.string()),
+  match: nullable(v.union(v.literal("own"), v.literal("printing"))),
+  release: v.object({
+    revisionId: nullable(v.id("revisions")),
+    editionId: v.id("editions"),
+    format: releaseFormat,
+    binding: nullable(v.string()),
+    language: v.string(),
+    isbn13: nullable(v.string()),
+    isbn10: nullable(v.string()),
+    publisherId: v.id("publishers"),
+    seriesIds: v.array(v.id("series")),
+  }),
+  edition: v.object({
+    revisionId: nullable(v.id("revisions")),
+    editionLineId: nullable(v.id("editionLines")),
+    linePosition: nullable(v.string()),
+    coverageUnmapped: v.boolean(),
+    coverage: v.array(
+      v.object({
+        volumeId: v.id("volumes"),
+        extent: v.union(v.literal("complete"), v.literal("partial")),
+      }),
+    ),
+  }),
+  matureSeriesIds: v.array(v.id("series")),
+});
+export type LinkGuard = Infer<typeof linkGuard>;
+
+export const linkHeldStateInternal = internalQuery({
+  args: { observationId: v.id("sourceObservations"), releaseId: v.id("releases") },
+  handler: async (ctx, args) => {
+    try {
+      const { heldState } = await import("./lib/heldBooks");
+      const state = await heldState(ctx, args.observationId, {
+        type: "release",
+        id: args.releaseId,
+      });
+      const target = state.contents!;
+      const revision = async (type: "release" | "edition", id: Id<"releases"> | Id<"editions">) =>
+        (
+          await ctx.db
+            .query("revisions")
+            .withIndex("by_record", (q) => q.eq("ref.type", type).eq("ref.id", id))
+            .order("desc")
+            .first()
+        )?._id ?? null;
+      const { matureFlipsOf } = await import("./lib/mature");
+      const flips = await matureFlipsOf(ctx, {
+        ...state.observation,
+        recordRef: { type: "release", id: args.releaseId },
+      });
+      const guard: LinkGuard = {
+        context: state.expected,
+        snapshot: valueHash(state.observation.snapshot),
+        hold: state.hold
+          ? { id: state.hold._id, kind: state.hold.kind, seriesId: state.hold.seriesId ?? null }
+          : null,
+        queuedProposalId: state.observation.queuedProposalId ?? null,
+        isbn13: state.isbn13,
+        match:
+          state.isbn13 && primaryIsbnsOf(target.release).has(state.isbn13) ? "own" : "printing",
+        release: {
+          revisionId: await revision("release", args.releaseId),
+          editionId: target.edition._id,
+          format: target.release.format,
+          binding: target.release.binding ?? null,
+          language: target.release.language,
+          isbn13: target.release.isbn13 ?? null,
+          isbn10: target.release.isbn10 ?? null,
+          publisherId: target.release.publisherId,
+          seriesIds: target.release.seriesIds,
+        },
+        edition: {
+          revisionId: await revision("edition", target.edition._id),
+          editionLineId: target.edition.editionLineId ?? null,
+          linePosition: target.edition.linePosition ?? null,
+          coverageUnmapped: target.edition.coverageUnmapped === true,
+          coverage: target.contents.map((c) => ({ volumeId: c.volume._id, extent: c.extent })),
+        },
+        matureSeriesIds: flips.map((s) => s._id),
+      };
+      const preview: { refusal?: string | null } = await ctx.runQuery(
+        internal.heldBooks.previewInternal,
+        { observationId: args.observationId, target: { type: "release", id: args.releaseId } },
+      );
+      return { guard, refusal: preview.refusal ?? null };
+    } catch (error) {
+      return {
+        guard: null,
+        refusal:
+          error instanceof ConvexError
+            ? String(
+                typeof error.data === "object" && error.data !== null && "held" in error.data
+                  ? error.data.held
+                  : error.data,
+              )
+            : String(error),
+      };
+    }
+  },
+});
+
+export const linkHeldInternal = internalMutation({
+  args: {
+    actor: v.string(),
+    observationId: v.id("sourceObservations"),
+    releaseId: v.id("releases"),
+    reason: v.string(),
+    evidenceUrls: v.array(v.string()),
+    expected: linkGuard,
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    status: string;
+    reason?: string;
+    proposalId?: Id<"proposals">;
+    ledgerId?: Id<"heldRepairLedger">;
+  }> => {
+    if (!args.expected.context)
+      return {
+        status: "refused",
+        reason:
+          "Read a new held-link preview with complete source/content context before execution.",
+      };
+    const current: { guard: LinkGuard | null; refusal: string | null } = await ctx.runQuery(
+      internal.printings.linkHeldStateInternal,
+      { observationId: args.observationId, releaseId: args.releaseId },
+    );
+    if (current.refusal || !sameValue(args.expected, current.guard))
+      return {
+        status: "refused",
+        reason: current.refusal ?? "The state differs from the reviewed one.",
+      };
+    const result = await ctx.runMutation(internal.heldBooks.executeInternal, {
+      actor: args.actor,
+      observationId: args.observationId,
+      target: { type: "release", id: args.releaseId },
+      reason: args.reason,
+      evidenceUrls: args.evidenceUrls,
+      expected: args.expected.context,
+      operation: "link",
+    });
+    return { ...result, status: result.status === "applied" ? "linked" : result.status };
+  },
+});

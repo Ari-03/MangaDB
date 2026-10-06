@@ -1228,6 +1228,8 @@ describe("lines, researched releases, cross-series books", () => {
   it("gives a box set's Bundle the box's ISBNs as their fields store them (C67-14)", async () => {
     const t = makeT();
     const s = await seed(t);
+    // Box members must be physical; the shared seed also exercises digital sibling work elsewhere.
+    await t.run((ctx) => ctx.db.patch(s.shardRelease.releaseId, { format: "physical" }));
     // A box Release stored before writers kept one spelling.
     await t.run((ctx) =>
       ctx.db.patch(s.omnibusRelease.releaseId, {
@@ -1265,6 +1267,8 @@ describe("lines, researched releases, cross-series books", () => {
     const convert = async (kind: "releaseBundle" | "remodelEdition", fields: Fields) => {
       const t = makeT();
       const s = await seed(t);
+      // Box members must be physical; the shared seed also exercises digital sibling work elsewhere.
+      await t.run((ctx) => ctx.db.patch(s.shardRelease.releaseId, { format: "physical" }));
       await t.run((ctx) =>
         ctx.db.patch(s.omnibusRelease.releaseId, {
           isbn13: fields.isbn13,
@@ -1355,6 +1359,8 @@ describe("lines, researched releases, cross-series books", () => {
   it("turns a box set into a bundle whose members span Series, in plan order, and extends a bundle", async () => {
     const t = makeT();
     const s = await seed(t);
+    // Box members must be physical; the shared seed also exercises digital sibling work elsewhere.
+    await t.run((ctx) => ctx.db.patch(s.shardRelease.releaseId, { format: "physical" }));
     const entry: RepairEntry = {
       kind: "releaseBundle",
       key: "b",

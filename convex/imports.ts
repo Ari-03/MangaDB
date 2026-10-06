@@ -33,7 +33,7 @@ import { requireDataTeam, requireModerator } from "./lib/roles";
 import { LOCK_NOTE } from "./lib/unmatched";
 import { revisionsOf } from "./moderation";
 import { type AnnReleaseSnapshot, lineOutOfScope, SOURCE_KEY as ANN } from "./ann";
-import { placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
+import { outOfScopeElsewhere, placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
 import { holdKind } from "./schema";
 
 // ---------- Import Runs (spec §6: runs & failure) ----------
@@ -959,9 +959,21 @@ export const backfillHolds = internalMutation({
           if (row !== null) continue;
           const at = note?.reason === placement.hold.reason ? note.at : Date.now();
           if (await recordUnplaced(ctx, observation, placement.hold, at)) counts.classified++;
-        } else if (placement.kind === "skip" || placement.kind === "review") {
+        } else if (
+          await outOfScopeElsewhere(ctx, (observation.snapshot as OlEditionSnapshot).isbn13 ?? "")
+        ) {
           if (await clearHold(ctx, observation._id)) counts.cleared++;
         }
+        continue;
+      }
+      const { isbnScope } = await import("./lib/scope");
+      const scoped = await isbnScope(
+        ctx,
+        (observation.snapshot as { isbn13?: string; isbn10?: string }).isbn13 ??
+          (observation.snapshot as { isbn10?: string }).isbn10,
+      );
+      if (scoped) {
+        if (await clearHold(ctx, observation._id)) counts.cleared++;
         continue;
       }
       if (note === undefined) continue;

@@ -524,6 +524,7 @@ export default defineSchema({
     // has not opted in, and its pages hide their cover art.
     mature: v.optional(v.literal(true)),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_family", ["familyId"])
     .index("by_bootstrap", ["bootstrapUnreviewed"])
@@ -560,6 +561,7 @@ export default defineSchema({
     label: v.optional(v.string()),
     synopsis: v.optional(v.string()),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_series", ["seriesId", "position"])
     .index("by_bootstrap", ["bootstrapUnreviewed"]),
@@ -587,6 +589,7 @@ export default defineSchema({
     // a Moderator maps it (moderation.mapEditionCoverage clears the flag).
     coverageUnmapped: v.optional(v.literal(true)),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_line", ["editionLineId"])
     .index("by_publisher", ["publisherId"])
@@ -624,6 +627,7 @@ export default defineSchema({
     publisherId: v.id("publishers"),
     seriesIds: v.array(v.id("series")),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_edition", ["editionId"])
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
@@ -667,6 +671,67 @@ export default defineSchema({
     coverImage: v.optional(cover),
   }).index("by_release", ["releaseId"]),
 
+  repairBundleOrigins: defineTable({
+    bundleId: v.id("releaseBundles"),
+    releaseId: v.id("releases"),
+    entryKey: v.string(),
+    proposalId: v.id("proposals"),
+  }).index("by_bundle", ["bundleId"]),
+
+  bundleConversions: defineTable({
+    releaseId: v.id("releases"),
+    bundleId: v.id("releaseBundles"),
+    proposalId: v.id("proposals"),
+    revisionId: v.id("revisions"),
+    isbnKeys: v.string(),
+  }).index("by_release", ["releaseId"]),
+
+  heldRepairLedger: defineTable({
+    observationId: v.id("sourceObservations"),
+    operation: v.string(),
+    proposalId: v.id("proposals"),
+    before: v.string(),
+    after: v.string(),
+    target: v.optional(
+      v.union(
+        v.object({ type: v.literal("release"), id: v.id("releases") }),
+        v.object({ type: v.literal("bundle"), id: v.id("releaseBundles") }),
+      ),
+    ),
+    createdReleaseId: v.optional(v.id("releases")),
+    replayedReleaseId: v.optional(v.id("releases")),
+    createdStructure: v.optional(
+      v.object({
+        editionId: v.id("editions"),
+        volumeIds: v.array(v.id("volumes")),
+        sharedEdition: v.boolean(),
+        newEdition: v.boolean(),
+        newVolumeIds: v.array(v.id("volumes")),
+        newCoverageIds: v.array(v.id("volumeCoverages")),
+        lineId: v.optional(v.id("editionLines")),
+        newLine: v.boolean(),
+      }),
+    ),
+  }).index("by_observation", ["observationId"]),
+
+  scopeDecisions: defineTable({
+    isbn13: v.string(),
+    reason: v.union(
+      v.literal("novel"),
+      v.literal("merchandise"),
+      v.literal("sampler"),
+      v.literal("nonEnglish"),
+      v.literal("childrensBook"),
+      v.literal("audio"),
+    ),
+    evidenceUrls: v.array(v.string()),
+    decidedBy: v.id("users"),
+    proposalId: v.id("proposals"),
+    decidedAt: v.number(),
+    revokedAt: v.optional(v.number()),
+    revokedByProposalId: v.optional(v.id("proposals")),
+  }).index("by_isbn13", ["isbn13"]),
+
   releaseBundles: defineTable({
     ...canonical("releaseBundles"),
     publicId: v.number(),
@@ -680,6 +745,7 @@ export default defineSchema({
     description: v.optional(v.string()),
     coverImage: v.optional(cover),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
@@ -1273,7 +1339,7 @@ export default defineSchema({
       v.object({ kind: v.literal("system") }),
     ),
     reason: v.optional(v.string()),
-  }),
+  }).index("by_review", ["reviewId"]),
 
   // Comments (convex/comments.ts, CONTEXT.md: Comment): short public plain
   // text on a Series or Volume page, one level of replies. Unlike Ratings

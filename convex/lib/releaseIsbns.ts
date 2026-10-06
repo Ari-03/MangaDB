@@ -627,3 +627,68 @@ export async function printedIsbnRefusal(
   }
   return null;
 }
+
+/** PRIMARY cross-type reservation, including hidden and merged claims. Same-type final swaps stay in planCreateOps. */
+export async function primaryNamespaceRefusal(
+  ctx: QueryCtx,
+  isbns: ReadonlyArray<string | undefined>,
+  type: "release" | "bundle",
+  ownId?: string,
+): Promise<string | null> {
+  const resolver = claimResolver(ctx);
+  for (const isbn13 of new Set(isbns.flatMap((isbn) => toIsbn13(isbn) ?? []))) {
+    if (type === "bundle") {
+      const { isbnScope } = await import("./scope");
+      const scope = await isbnScope(ctx, isbn13);
+      if (scope) return scope;
+    }
+    const isbn10 = isbn13To10(isbn13);
+    const opposite = type === "release" ? "releaseBundles" : "releases";
+    const opposite13 = await takeWithin(
+      ctx.db.query(opposite).withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13)),
+      CLAIM_SCAN + 1,
+    );
+    const opposite10 = isbn10
+      ? await takeWithin(
+          ctx.db.query(opposite).withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10)),
+          CLAIM_SCAN + 1,
+        )
+      : [];
+    const rows =
+      type === "bundle"
+        ? await takeWithin(
+            ctx.db.query("releaseIsbns").withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13)),
+            1,
+          )
+        : [];
+    if (!opposite13.length && !opposite10.length && !rows.length) continue;
+    const claims = await isbnClaims(ctx, isbn13, { resolver });
+    if (!claims) continue;
+    if (!claims.complete || claims.unresolved.length)
+      return `ISBN ${isbn13} ownership is incomplete or unresolved.`;
+    for (const owner of claims.owners.values()) {
+      if (owner.doc._id === ownId) continue;
+      if (owner.kind !== type)
+        return `ISBN ${isbn13} is reserved by ${owner.kind} ${owner.doc._id} (${owner.doc.status}).`;
+    }
+  }
+  return null;
+}
+
+/** New assignment boundary: exact scope and PRIMARY cross-type checks plus the accepted printing policy. */
+export async function assignedIsbnRefusal(
+  ctx: QueryCtx,
+  isbns: ReadonlyArray<string | undefined>,
+  releaseId?: Id<"releases">,
+  keep?: (claim: Claim) => boolean,
+): Promise<string | null> {
+  const { isbnScope } = await import("./scope");
+  for (const key of new Set(isbns.flatMap((isbn) => toIsbn13(isbn) ?? []))) {
+    const scope = await isbnScope(ctx, key);
+    if (scope) return scope;
+  }
+  return (
+    (await primaryNamespaceRefusal(ctx, isbns, "release", releaseId)) ??
+    (await printedIsbnRefusal(ctx, isbns, releaseId, keep))
+  );
+}

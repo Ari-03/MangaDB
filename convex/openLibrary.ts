@@ -37,7 +37,8 @@
 // edition observed before its Release existed (ANN created most VIZ books
 // later) stayed unlinked, so its description never reached the Release.
 
-import { v } from "convex/values";
+import { valueHash } from "./lib/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -69,7 +70,6 @@ import {
 } from "./lib/matching";
 import {
   clearHold,
-  getObservation,
   type Hold,
   linkObservation,
   recordUnplaced,
@@ -330,7 +330,7 @@ export const REBINDER =
  * slot free, as ANN's and the catalog feeds' slots do.
  */
 async function sameFormatRelease(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   volumeId: Id<"volumes">,
   publisherId: Id<"publishers">,
   format: "physical" | "digital",
@@ -359,9 +359,8 @@ type ApplyResult = {
  * and Kodansha keys by slug, so Yen Press is the one to ask.
  */
 export async function outOfScopeElsewhere(ctx: QueryCtx, isbn13: string): Promise<string | null> {
-  const yen = await getObservation(ctx, "yenpress", isbn13);
-  const reason = (yen?.snapshot as { outOfScope?: string } | undefined)?.outOfScope;
-  return reason !== undefined ? `Yen Press (${reason})` : null;
+  const { isbnScope } = await import("./lib/scope");
+  return await isbnScope(ctx, isbn13);
 }
 
 /** The fields this source offers on a linked Release, per its authority row. */
@@ -399,7 +398,7 @@ function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unkno
  *   unlabeled Volume, or a book another source holds out of scope.
  */
 export async function placeEdition(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   snapshot: OlEditionSnapshot,
 ): Promise<
   | { kind: "match"; release: Doc<"releases"> }
@@ -420,6 +419,8 @@ export async function placeEdition(
   // label or a distributor (["SHONEN JUMP", "viz media"]) — but a library
   // rebinder's record is another book (its own ISBN), never the
   // publisher's edition.
+  if (await outOfScopeElsewhere(ctx, snapshot.isbn13 ?? snapshot.isbn10 ?? ""))
+    return { kind: "skip" };
   if (snapshot.publishers.some((name) => REBINDER.test(name))) return { kind: "skip" };
   let publisher: Doc<"publishers"> | null = null;
   for (const name of snapshot.publishers) {
@@ -636,68 +637,7 @@ export const applyEdition = internalMutation({
       };
     }
 
-    const placement = await placeEdition(ctx, snapshot);
-    const flag =
-      placement.kind === "review"
-        ? placement.reason
-        : placement.kind === "hold"
-          ? placement.review
-          : undefined;
-    await noteFlag(ctx, observation._id, snapshot.title, flag, now);
-
-    if (placement.kind === "match") {
-      const release = placement.release;
-      await linkObservation(ctx, observation._id, { type: "release", id: release._id });
-      await reconcileFields(ctx, {
-        sourceKey: SOURCE_KEY,
-        ref: { type: "release", id: release._id },
-        doc: release,
-        offered: offeredReleaseFields(snapshot),
-        observation,
-        citation,
-        now,
-      });
-      return { status: "linked", changed: true, releaseId: release._id };
-    }
-
-    if (placement.kind === "review") {
-      await clearHold(ctx, observation._id);
-      return { status: "recordOnly", changed: false };
-    }
-
-    if (placement.kind === "hold") {
-      await recordUnplaced(ctx, observation, placement.hold, now);
-      return { status: "recordOnly", changed: false };
-    }
-
-    if (placement.kind === "skip") {
-      await clearHold(ctx, observation._id);
-      return { status: "recordOnly", changed: false };
-    }
-
-    const { series, seriesTitle, volumeLabel, publisher } = placement;
-    const creation = await createCanonicalRecords(ctx, {
-      sourceKey: SOURCE_KEY,
-      observation,
-      citation,
-      importComment: IMPORT_COMMENT,
-      seriesId: series._id,
-      seriesTitle,
-      labels: volumeLabel !== null ? [volumeLabel] : [],
-      release: {
-        format: snapshot.format,
-        binding: snapshot.binding,
-        isbn13: snapshot.isbn13,
-        isbn10: snapshot.isbn10,
-        pubDate: snapshot.publishDate ? toPartialDate(snapshot.publishDate) : undefined,
-        description: snapshot.description,
-        publisher: { name: publisher.name, slug: publisher.slug },
-      },
-      tagBootstrapUnreviewed: false,
-      now,
-    });
-    if (creation.blocked !== undefined) return { status: "recordOnly", changed: true };
-    return { status: "created", changed: true, releaseId: creation.releaseId };
+    return await applyStored(ctx, observation, snapshot, citation, now);
   },
 });
 
@@ -921,4 +861,105 @@ export const repairDescriptions = internalAction({
       repair: internal.openLibrary.repairDescriptionLine,
       self: internal.openLibrary.repairDescriptions,
     }),
+});
+
+/** Place authoritative stored input; no synthetic source sighting or snapshot replacement. */
+async function applyStored(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  snapshot: OlEditionSnapshot,
+  citation: { sourceName: string; url: string },
+  now: number,
+): Promise<ApplyResult> {
+  const placement = await placeEdition(ctx, snapshot);
+  const flag =
+    placement.kind === "review"
+      ? placement.reason
+      : placement.kind === "hold"
+        ? placement.review
+        : undefined;
+  await noteFlag(ctx, observation._id, snapshot.title, flag, now);
+
+  if (placement.kind === "match") {
+    const release = placement.release;
+    await linkObservation(ctx, observation._id, { type: "release", id: release._id });
+    await reconcileFields(ctx, {
+      sourceKey: SOURCE_KEY,
+      ref: { type: "release", id: release._id },
+      doc: release,
+      offered: offeredReleaseFields(snapshot),
+      observation,
+      citation,
+      now,
+    });
+    return { status: "linked", changed: true, releaseId: release._id };
+  }
+
+  if (placement.kind === "review") {
+    // A classifier review is unresolved; an existing hold stays visible.
+    return { status: "recordOnly", changed: false };
+  }
+
+  if (placement.kind === "hold") {
+    await recordUnplaced(ctx, observation, placement.hold, now);
+    return { status: "recordOnly", changed: false };
+  }
+
+  if (placement.kind === "skip") {
+    if (snapshot.isbn13 && (await outOfScopeElsewhere(ctx, snapshot.isbn13)))
+      await clearHold(ctx, observation._id);
+    return { status: "recordOnly", changed: false };
+  }
+
+  const { series, seriesTitle, volumeLabel, publisher } = placement;
+  const creation = await createCanonicalRecords(ctx, {
+    sourceKey: SOURCE_KEY,
+    observation,
+    citation,
+    importComment: IMPORT_COMMENT,
+    seriesId: series._id,
+    seriesTitle,
+    labels: volumeLabel !== null ? [volumeLabel] : [],
+    release: {
+      format: snapshot.format,
+      binding: snapshot.binding,
+      isbn13: snapshot.isbn13,
+      isbn10: snapshot.isbn10,
+      pubDate: snapshot.publishDate ? toPartialDate(snapshot.publishDate) : undefined,
+      description: snapshot.description,
+      publisher: { name: publisher.name, slug: publisher.slug },
+    },
+    tagBootstrapUnreviewed: false,
+    now,
+  });
+  if (creation.blocked !== undefined) return { status: "recordOnly", changed: true };
+  return { status: "created", changed: true, releaseId: creation.releaseId };
+}
+
+export const applyStoredInternal = internalMutation({
+  args: { observationId: v.id("sourceObservations"), expectedSnapshot: v.string() },
+  handler: async (ctx, args): Promise<ApplyResult> => {
+    const observation = await ctx.db.get(args.observationId);
+    if (
+      !observation ||
+      observation.sourceKey !== SOURCE_KEY ||
+      observation.recordRef ||
+      observation.withdrawn ||
+      valueHash(observation.snapshot) !== args.expectedSnapshot
+    )
+      throw new ConvexError("Stored placement source changed.");
+    if (
+      observation.queuedProposalId &&
+      (await ctx.db.get(observation.queuedProposalId))?.state === "inReview"
+    )
+      throw new ConvexError("Placement is in review.");
+    const snapshot = observation.snapshot as OlEditionSnapshot;
+    return await applyStored(
+      ctx,
+      observation,
+      snapshot,
+      { sourceName: "Open Library stored placement", url: snapshot.url },
+      Date.now(),
+    );
+  },
 });
