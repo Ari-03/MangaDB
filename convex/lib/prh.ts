@@ -36,6 +36,7 @@
 
 import { v, type Infer } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
+import { fileFormatFact } from "./bookFacts";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
 import { catalogTitleFields, parsedTitleFields } from "./catalogTitle";
 import type { FullDate } from "./dates";
@@ -235,6 +236,8 @@ function readTitle(raw: unknown): PrhTitleSnapshot | DropReason {
   const formatText = described(entry.format) ?? described(entry.formatFamily) ?? "";
   if (AUDIO.test(formatText)) return "outOfScope";
   const digital = DIGITAL.test(formatText);
+  // The subformat names an ebook's file ("EPUB FXL Manga RTL"); unread otherwise.
+  const fileFormat = digital ? fileFormatFact(described(entry.subformat)) : null;
   const binding = !digital
     ? /hardcover/i.test(formatText)
       ? "hardcover"
@@ -266,6 +269,7 @@ function readTitle(raw: unknown): PrhTitleSnapshot | DropReason {
     author: typeof entry.author === "string" ? entry.author.trim() : undefined,
     onsale: parseOnsale(entry.onsale ?? entry.onSaleDate),
     format: digital ? "digital" : "physical",
+    ...(fileFormat ? { digitalFileFormat: fileFormat } : {}),
     binding,
     imprint,
     priceCents: priceCents(entry),

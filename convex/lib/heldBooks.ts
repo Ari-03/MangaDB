@@ -1,6 +1,7 @@
 import {
   projectSourceFormat,
   reviewedFormatRefusal,
+  reviewedSnapshot,
   utf8Bytes,
   type ReviewedFormat,
 } from "./sourceFormat";
@@ -14,7 +15,7 @@ import { contentRefusal, readObservationBook, readTitledRecord } from "../printi
 import { annContentFacts, annLinePackaged, packagingOf, readAnnLineTitle } from "./ann";
 import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
-import { bindingFacts, bookFacts } from "./bookFacts";
+import { bindingFacts, bookFacts, takesFormatSlot } from "./bookFacts";
 import { labelsEqual, sameWorkTitle, type TitleScan } from "./matching";
 import { type AnnWorkContext, declaredWorkNames } from "./declaredWork";
 import { holdOf } from "./observations";
@@ -461,11 +462,12 @@ async function replaySlots(ctx: QueryCtx, series: Doc<"series">, r: Reader) {
 
 /** Ordinary OL creation uses the same sibling ownership rules as member placement.
  * Hidden and merged Releases reserve their format; only the selected Volume needs readiness.
+ * Another file format frees the slot only where both Releases' file formats are known.
  */
 async function olReplaySlot(
   ctx: QueryCtx,
   placement: Extract<Awaited<ReturnType<typeof placeEdition>>, { kind: "create" }>,
-  format: OlEditionSnapshot["format"],
+  snapshot: Pick<OlEditionSnapshot, "format" | "digitalFileFormat">,
   r: Reader,
 ) {
   const volumes = await volumesForLabels(ctx, placement.series._id, [placement.volumeLabel], r);
@@ -493,7 +495,12 @@ async function olReplaySlot(
     const releases = await r.many(
       ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", sibling._id)),
     );
-    if (releases.some((release) => release.format === format))
+    // An unclassified digital sibling, hidden and merged ones included, keeps the slot.
+    if (
+      releases.some((release) =>
+        takesFormatSlot(release, snapshot.format, snapshot.digitalFileFormat),
+      )
+    )
       return refuse("Replay format slot is occupied; restore or resolve its existing Release.");
   }
   if (survivors.size > 1) return refuse("Replay Edition ownership is ambiguous.");
@@ -561,12 +568,7 @@ export async function heldState(
     replayBefore = await replaySlots(ctx, source.series, r);
     if (source.placement?.kind === "create") {
       await r.active(source.placement.publisher._id);
-      await olReplaySlot(
-        ctx,
-        source.placement,
-        (effective.snapshot as OlEditionSnapshot).format,
-        r,
-      );
+      await olReplaySlot(ctx, source.placement, effective.snapshot as OlEditionSnapshot, r);
     } else {
       const snapshot = observation.snapshot as AnnReleaseSnapshot;
       const publisher = snapshot.page?.distributor
@@ -1112,6 +1114,16 @@ export async function sourceFormatState(
   );
   if (publisherIds.size !== 1) return refuse("Source publisher is unresolved or ambiguous.");
   const publisher = await r.active([...publisherIds][0]!);
+  const proposedSnapshot = reviewedSnapshot(snapshot, reviewed);
+  // A store product's imprint places the book: it must be the legal publisher
+  // or that publisher's own imprint row, never a name the parent's alias implies.
+  if (reviewed.publisher.kind === "publisherOwnShopifySkuEbook") {
+    const found = await findPublisherByName(resolutionCtx, reviewed.publisher.imprint);
+    const imprint = found ? await r.active(found._id) : null;
+    r.facts.push(imprint);
+    if (!imprint || (imprint._id !== publisher._id && imprint.parentPublisherId !== publisher._id))
+      return refuse("Reviewed imprint is not the source publisher or its known imprint.");
+  }
   const claims = await isbnClaims(resolutionCtx, reviewed.isbn13, {
     resolver: claimResolver(resolutionCtx, { room: r.room }),
     room: r.room,
@@ -1119,7 +1131,6 @@ export async function sourceFormatState(
   if (!claims?.complete || claims.unresolved.length)
     return refuse("ISBN claims incomplete or unresolved.");
   r.facts.push([...claims.owners.values()]);
-  const proposedSnapshot = { ...snapshot, format: "digital" as const };
   const expected = valueHash({ observationId, reviewed, proposedSnapshot, facts: r.facts });
   if (utf8Bytes(expected) > MAX_GUARD_BYTES) return refuse("Guard exceeds 256 KiB.");
   return { observation, hold, expected, proposedSnapshot, series, publisher, r };

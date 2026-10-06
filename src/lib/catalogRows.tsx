@@ -26,12 +26,17 @@ export type CoverageChipData = Pick<
   "volumePublicId" | "position" | "label" | "volumeTitle" | "extent" | "note"
 >;
 
-/** Format chip: the one fact that separates two Releases of an Edition. */
-function FormatChip({ format }: { format: ReleaseRowData["format"] }) {
+/** Format chip: what separates two Releases of an Edition, with a known PDF/EPUB file format. */
+function FormatChip({
+  format,
+  digitalFileFormat,
+}: Pick<ReleaseRowData, "format" | "digitalFileFormat">) {
   return format === "physical" ? (
     <span className="chip chip--physical">Physical</span>
   ) : (
-    <span className="chip chip--digital">Digital</span>
+    <span className="chip chip--digital">
+      {digitalFileFormat ? `Digital · ${digitalFileFormat.toUpperCase()}` : "Digital"}
+    </span>
   );
 }
 
@@ -77,7 +82,7 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
     <li className="release-row" id={release.anchor}>
       <div className="release-main">
         <p className="release-line">
-          <FormatChip format={release.format} />
+          <FormatChip format={release.format} digitalFileFormat={release.digitalFileFormat} />
           {binding ? <span className="release-binding">{binding}</span> : null}
           {date ? <span className="release-date">{date}</span> : null}
           {price ? <span className="release-price">{price}</span> : null}

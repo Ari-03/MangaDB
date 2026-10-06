@@ -14,6 +14,7 @@ import { v, type Infer } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
+import { digitalFileFormat } from "./bookFacts";
 import { packagingValidator, rangeLabels } from "./bookTitle";
 import { fullDateValidator } from "./dates";
 import { inferCoverage } from "./coverage";
@@ -63,6 +64,8 @@ export const catalogTitleFields = {
   author: v.optional(v.string()),
   onsale: v.optional(fullDateValidator),
   format: v.union(v.literal("physical"), v.literal("digital")),
+  /** A digital title's file format as the source's own record names it (PRH's subformat). */
+  digitalFileFormat: v.optional(digitalFileFormat),
   binding: v.optional(v.string()),
   /** The imprint = the publisher brand (e.g. "Kodansha Comics"). */
   imprint: v.optional(v.string()),
@@ -86,9 +89,14 @@ export { parsedTitleFields } from "./bookTitle";
  * The fields this source offers on a linked Release, in canonical form.
  * Seven Seas, Kodansha and OpenLibrary keep their own: each reads other
  * snapshot fields and offers a different set, and the key order becomes
- * the order of a queued Proposal's changes.
+ * the order of a queued Proposal's changes. A file format only fills the
+ * blank of a digital Release with the record's own ISBN: it never
+ * reclassifies one, and a physical Release has none.
  */
-function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
+function offeredReleaseFields(
+  snapshot: CatalogTitle,
+  release: Doc<"releases">,
+): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
   offered.isbn13 = snapshot.isbn13;
   if (snapshot.isbn10 !== undefined) offered.isbn10 = snapshot.isbn10;
@@ -97,6 +105,14 @@ function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
     offered.price = { amountCents: snapshot.priceCents, currency: "USD" };
   }
   if (snapshot.binding !== undefined) offered.binding = snapshot.binding;
+  if (
+    snapshot.digitalFileFormat !== undefined &&
+    snapshot.format === "digital" &&
+    release.format === "digital" &&
+    release.digitalFileFormat === undefined &&
+    release.isbn13 === snapshot.isbn13
+  )
+    offered.digitalFileFormat = snapshot.digitalFileFormat;
   if (snapshot.description !== undefined) offered.description = snapshot.description;
   return offered;
 }
@@ -302,7 +318,7 @@ export async function applyCatalogTitle(
       sourceKey: opts.sourceKey,
       ref: { type: "release", id: release._id },
       doc: release,
-      offered: offeredReleaseFields(snapshot),
+      offered: offeredReleaseFields(snapshot, release),
       observation,
       citation,
       now,
@@ -353,6 +369,7 @@ export async function applyCatalogTitle(
   const releasePayload = {
     format: snapshot.format,
     binding: snapshot.binding,
+    digitalFileFormat: snapshot.digitalFileFormat,
     isbn13: snapshot.isbn13,
     isbn10: snapshot.isbn10,
     pubDate: snapshot.onsale ? toPartialDate(snapshot.onsale) : undefined,
@@ -419,6 +436,7 @@ export async function applyCatalogTitle(
     multiVolume: packaging !== null,
     format: snapshot.format,
     binding: snapshot.binding,
+    digitalFileFormat: snapshot.digitalFileFormat,
     language: IMPORT_LANGUAGE,
     isbn13: snapshot.isbn13,
     publisherId: publisher?._id ?? null,
@@ -432,7 +450,7 @@ export async function applyCatalogTitle(
       sourceKey: opts.sourceKey,
       ref: { type: "release", id: release._id },
       doc: release,
-      offered: offeredReleaseFields(snapshot),
+      offered: offeredReleaseFields(snapshot, release),
       observation,
       citation,
       now,

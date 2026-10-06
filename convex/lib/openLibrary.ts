@@ -14,7 +14,7 @@
 // title/publisher keys matching needs.
 
 import { v, type Infer } from "convex/values";
-import { bindingFacts } from "./bookFacts";
+import { bindingFacts, digitalFileFormat } from "./bookFacts";
 import {
   outOfScopeReason,
   packagingValidator,
@@ -63,6 +63,11 @@ export const olEditionValidator = v.object({
   isbn13: v.optional(v.string()),
   isbn10: v.optional(v.string()),
   format: v.union(v.literal("physical"), v.literal("digital")),
+  /**
+   * Never parsed from Open Library: only a reviewed interpretation's
+   * projection (lib/sourceFormat.ts) states a digital file format.
+   */
+  digitalFileFormat: v.optional(digitalFileFormat),
   binding: v.optional(v.string()),
   /** Fresh physical_format verbatim, so normalization cannot hide a second known fact. */
   physicalFormat: v.optional(v.string()),

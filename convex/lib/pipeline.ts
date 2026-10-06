@@ -37,6 +37,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
+import type { DigitalFileFormat } from "./bookFacts";
 import { canonicalLabel } from "./bookTitle";
 import { partialDateSort, type DateParts } from "./dates";
 import { coverageOf, coveringOf } from "./editionRows";
@@ -600,6 +601,8 @@ export const IMPORT_LANGUAGE = "en";
 export type ReleasePayload = {
   format: "physical" | "digital";
   binding?: string;
+  /** A digital Release's file format, only from evidence naming its own ISBN. */
+  digitalFileFormat?: DigitalFileFormat;
   isbn13?: string;
   isbn10?: string;
   pubDate?: PartialDate;
@@ -1528,6 +1531,8 @@ export async function createCanonicalRecords(
     const releaseFields = {
       format: args.release.format,
       binding: args.release.binding,
+      digitalFileFormat:
+        args.release.format === "digital" ? args.release.digitalFileFormat : undefined,
       language: IMPORT_LANGUAGE,
       isbn13: args.release.isbn13,
       isbn10: args.release.isbn10,

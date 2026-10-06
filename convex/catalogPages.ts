@@ -190,6 +190,7 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     anchor: releaseAnchor(release),
     format: release.format,
     binding: release.binding ?? null,
+    digitalFileFormat: release.digitalFileFormat ?? null,
     language: release.language,
     isbn13: release.isbn13 ?? null,
     isbn10: release.isbn10 ?? null,

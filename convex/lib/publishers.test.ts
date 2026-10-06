@@ -50,6 +50,8 @@ describe("canonicalPublisherFor", () => {
 
   it("matches case- and punctuation-insensitively, and knows nothing else", () => {
     expect(canonicalPublisherFor("TOKYOPOP")?.slug).toBe("tokyopop");
+    // OpenLibrary's legal name is the parent company, never its Classics imprint.
+    expect(canonicalPublisherFor("TOKYOPOP, Incorporated")?.slug).toBe("tokyopop");
     expect(canonicalPublisherFor("Drawn and Quarterly")?.slug).toBe("drawn-and-quarterly");
     expect(canonicalPublisherFor("Kumar Publishing")).toBeNull();
     // VIZ's imprint labels are VIZ; its prose-free sibling SuBLime is a row.

@@ -10,6 +10,7 @@ import { sourceFormatDecisionValidator } from "./lib/sourceFormat";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { digitalFileFormat } from "./lib/bookFacts";
 import { scoreFormatValidator } from "./lib/scoreFormat";
 
 // ---------- shared validators ----------
@@ -615,6 +616,9 @@ export default defineSchema({
     editionId: v.id("editions"),
     format: releaseFormat,
     binding: v.optional(v.string()),
+    // Digital only: PDF and EPUB of one Edition are separate Releases, each
+    // with its own ISBN. Absent is unknown (lib/bookFacts.ts digitalFileFormat).
+    digitalFileFormat: v.optional(digitalFileFormat),
     language: v.string(),
     isbn13: v.optional(v.string()),
     isbn10: v.optional(v.string()),

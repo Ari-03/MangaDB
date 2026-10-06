@@ -59,6 +59,7 @@ export const FIELD_CATEGORY: Record<string, string> = {
   creators: "creators",
   format: "format",
   binding: "format",
+  digitalFileFormat: "format",
   price: "price",
   // Publisher blurbs: a Release Description and a Series synopsis. Own-catalog
   // publishers are authoritative, the distributor standard, aggregators weak,

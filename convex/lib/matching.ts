@@ -20,6 +20,7 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { type DigitalFileFormat, takesFormatSlot } from "./bookFacts";
 import { isNovelTitle } from "./bookTitle";
 import { coveringOf, releasesOf } from "./editionRows";
 import { factualOverrides } from "./moderationFields";
@@ -164,6 +165,8 @@ export type ReleaseFact = {
   format: "physical" | "digital";
   /** Physical Binding ("Paperback", "hardcover"); case-insensitive, unknown when absent. */
   binding?: string;
+  /** A digital record's file format, from its own ISBN's evidence; unknown when absent. */
+  digitalFileFormat?: DigitalFileFormat;
   /** Language code ("en"); unknown when absent. */
   language?: string;
   isbn13?: string;
@@ -494,8 +497,8 @@ export async function matchRelease(
   // Rungs ③/④: walk title-matching Series → label-matching Volumes → their
   // covering Editions → Releases, splitting strict full-key hits from
   // loose title-only candidates. A candidate that matches the full key
-  // except Format or a known Binding is a SIBLING, not ambiguity: Releases
-  // of one Edition differ exactly in Format/Binding (spec §2), so a
+  // except Format, a known Binding or a known file format is a SIBLING, not
+  // ambiguity: Releases of one Edition differ exactly there (spec §2), so a
   // publisher's digital counterpart or hardcover of an existing paperback
   // volume is the creation path, never a review — the creation helper
   // attaches it to the sibling's Edition.
@@ -531,8 +534,10 @@ export async function matchRelease(
           if (contradicts(release.language, fact.language)) continue;
           const sameEdition =
             wholeVolume && fact.publisherId !== null && edition.publisherId === fact.publisherId;
+          // Known, different file formats are siblings, like Bindings.
           const sameRelease =
-            release.format === fact.format && !contradicts(release.binding, fact.binding);
+            takesFormatSlot(release, fact.format, fact.digitalFileFormat) &&
+            !contradicts(release.binding, fact.binding);
           const bucket = !sameEdition ? loose : sameRelease ? strict : siblings;
           bucket.set(release._id, release);
         }

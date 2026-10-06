@@ -17,6 +17,7 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { Contents } from "../heldBooks";
 import type { MutationCtx } from "../../_generated/server";
+import type { DigitalFileFormat } from "../bookFacts";
 import { type IsbnField, isbn13To10, isbnFieldValue, toIsbn13 } from "../isbn";
 import { followMerges } from "../merges";
 import { holdOf, linkObservation } from "../observations";
@@ -1838,6 +1839,11 @@ async function updateFields(
         patch.format = change.after;
         // Binding describes physical construction only (glossary: Binding).
         if (change.after === "digital" && release.binding !== undefined) patch.binding = undefined;
+        if (change.after === "physical" && release.digitalFileFormat !== undefined)
+          patch.digitalFileFormat = undefined;
+        break;
+      case "digitalFileFormat":
+        patch.digitalFileFormat = stored(change.after);
         break;
       default:
         patch[change.field] = stored(change.after);
@@ -1856,8 +1862,57 @@ async function updateFields(
   if (printed !== null) skip(printed);
   if (release.format === "digital" && patch.binding !== undefined)
     skip("binding on a digital release");
+  const fileFormat = pending.find(
+    (change): change is Extract<typeof change, { field: "digitalFileFormat" }> =>
+      change.field === "digitalFileFormat",
+  );
+  if (fileFormat?.after) {
+    const refusal = await fileFormatRefusal(
+      ctx,
+      { ...release, ...patch },
+      entry.evidenceObservationId,
+      fileFormat,
+    );
+    if (refusal) skip(refusal);
+  }
   await updateRecord(ctx, audit, { type: "release", id: release._id }, release, patch);
   return applied;
+}
+
+/**
+ * Why a planned PDF/EPUB classification is unsupported, or null. The Release
+ * must be digital with an ISBN-13, and the evidence a present source record
+ * linked to it under that ISBN, digital, stating no other file format. A
+ * known file format changes only where that record states the new one.
+ */
+async function fileFormatRefusal(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+  evidenceId: Id<"sourceObservations"> | null,
+  change: { before: DigitalFileFormat | null; after: DigitalFileFormat | null },
+): Promise<string | null> {
+  if (release.format !== "digital") return "a file format on a physical release";
+  if (!release.isbn13) return "a file format needs the release's own ISBN-13";
+  const observation = evidenceId ? await ctx.db.get(evidenceId) : null;
+  if (!observation) return "a file format needs its linked source record";
+  const snapshot = observation.snapshot as {
+    isbn13?: unknown;
+    format?: unknown;
+    digitalFileFormat?: unknown;
+  } | null;
+  if (
+    observation.withdrawn ||
+    observation.recordRef?.type !== "release" ||
+    observation.recordRef.id !== release._id ||
+    snapshot?.isbn13 !== release.isbn13 ||
+    snapshot.format !== "digital"
+  )
+    return "the evidence is not a present digital record linked to this release under its ISBN";
+  if (snapshot.digitalFileFormat !== undefined && snapshot.digitalFileFormat !== change.after)
+    return `the linked record states ${String(snapshot.digitalFileFormat)}`;
+  if (change.before !== null && snapshot.digitalFileFormat !== change.after)
+    return "reclassifying a known file format needs a record that states the new one";
+  return null;
 }
 
 async function normalizeVolumes(

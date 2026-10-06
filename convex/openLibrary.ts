@@ -15,7 +15,9 @@ import { invalidateSourceFormat, projectSourceFormat } from "./lib/sourceFormat"
 //   publisher is the first listed name that resolves (records often lead
 //   with an imprint label: ["SHONEN JUMP", "viz media"]); library rebinds
 //   never count; and a Volume gets at most one OpenLibrary leaf per
-//   (publisher, format) — another ISBN there is a reprint or duplicate
+//   (publisher, format) — another ISBN there is a reprint or duplicate,
+//   unless a reviewed record and the existing Release both know their
+//   digital file formats and they differ (a PDF beside an EPUB)
 // - it never creates a Series, Volume, or Publisher, and never queues a
 //   match or creation review — OpenLibrary is crowd-sourced and
 //   weak-titled, so an ambiguous or structure-shaped record stays on its
@@ -62,6 +64,7 @@ import {
   stampHandOff,
   stopAtGate,
 } from "./lib/importRuns";
+import { takesFormatSlot } from "./lib/bookFacts";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import {
@@ -330,13 +333,14 @@ export const REBINDER =
  * Release of that format on one of the publisher's whole single-Volume
  * Editions (isWholeSingleVolume). An omnibus, a line's book, a partial or
  * an unmapped Edition covering the Volume is another book and leaves the
- * slot free, as ANN's and the catalog feeds' slots do.
+ * slot free, as ANN's and the catalog feeds' slots do. A digital Release
+ * takes it unless both file formats are known and differ (takesFormatSlot).
  */
 async function sameFormatRelease(
   ctx: QueryCtx,
   volumeId: Id<"volumes">,
   publisherId: Id<"publishers">,
-  format: "physical" | "digital",
+  snapshot: Pick<OlEditionSnapshot, "format" | "digitalFileFormat">,
 ): Promise<Doc<"releases"> | null> {
   const coverages = await coveringOf(ctx, volumeId);
   for (const coverage of coverages) {
@@ -344,7 +348,10 @@ async function sameFormatRelease(
     if (!edition || edition.status !== "active" || edition.publisherId !== publisherId) continue;
     if (!(await isWholeSingleVolume(ctx, edition))) continue;
     const releases = await releasesOf(ctx, edition._id);
-    const hit = releases.find((r) => r.status === "active" && r.format === format);
+    const hit = releases.find(
+      (r) =>
+        r.status === "active" && takesFormatSlot(r, snapshot.format, snapshot.digitalFileFormat),
+    );
     if (hit) return hit;
   }
   return null;
@@ -442,6 +449,7 @@ export async function placeEdition(
     multiVolume: packaged,
     format: snapshot.format,
     binding: snapshot.binding,
+    digitalFileFormat: snapshot.digitalFileFormat,
     language: IMPORT_LANGUAGE,
     isbn13: snapshot.isbn13,
     publisherId: publisher?._id ?? null,
@@ -543,13 +551,17 @@ export async function placeEdition(
   // reprint, a library binding, a hardcover, or an OL duplicate. Never a
   // second Release; the record is held. Packaging that also covers the
   // Volume (a VIZBIG, a line's book) is not that slot (sameFormatRelease).
-  const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
+  const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot);
   if (sibling) {
+    const format =
+      sibling.format === "digital" && sibling.digitalFileFormat === undefined
+        ? "digital (file format unknown)"
+        : (sibling.digitalFileFormat ?? sibling.format);
     return {
       kind: "hold",
       hold: {
         kind: "isbn",
-        reason: `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
+        reason: `Volume ${volume.label ?? "(unlabeled)"} already has a ${format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
         seriesId: series._id,
       },
     };
@@ -949,6 +961,7 @@ async function applyStored(
     release: {
       format: snapshot.format,
       binding: snapshot.binding,
+      digitalFileFormat: snapshot.digitalFileFormat,
       isbn13: snapshot.isbn13,
       isbn10: snapshot.isbn10,
       pubDate: snapshot.publishDate ? toPartialDate(snapshot.publishDate) : undefined,

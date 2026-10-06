@@ -7,6 +7,7 @@
 
 import { v, type Infer } from "convex/values";
 import { cover, money, partialDate, recordType, releaseFormat } from "../../schema";
+import { digitalFileFormat } from "../bookFacts";
 
 const nullableString = v.union(v.string(), v.null());
 
@@ -215,11 +216,21 @@ const releaseChange = v.union(
     before: v.union(cover, v.null()),
     after: v.null(),
   }),
-  // An ebook recorded as print (or the reverse); going digital drops Binding.
+  // An ebook recorded as print (or the reverse); going digital drops Binding,
+  // going physical drops the digital file format.
   v.object({
     field: v.literal("format"),
     before: releaseFormat,
     after: releaseFormat,
+  }),
+  // A digital Release's PDF or EPUB classification. Setting one needs
+  // `evidenceObservationId`: a digital source record linked to this Release
+  // under its own ISBN that states no other file format (ops.ts
+  // fileFormatRefusal); the primary proof it rests on goes in `reason`.
+  v.object({
+    field: v.literal("digitalFileFormat"),
+    before: v.union(digitalFileFormat, v.null()),
+    after: v.union(digitalFileFormat, v.null()),
   }),
 );
 

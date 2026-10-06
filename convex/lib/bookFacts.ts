@@ -1,8 +1,45 @@
 // Decision evidence is separate from the display parser's preferred label.
 // Read technical clauses independently; prose and the authentic work name
 // do not become Volume, Binding or Format statements.
+import { v, type Infer } from "convex/values";
 import { canonicalLabel, parseBookTitle } from "./bookTitle";
 import { decodeEntities } from "./text";
+
+/**
+ * A digital Release's file format (CONTEXT.md Release), recorded only from
+ * evidence that attaches it to the Release's own ISBN. Absent means unknown,
+ * never EPUB: digital, an ISBN pattern or a neighbouring Volume proves nothing.
+ */
+export const digitalFileFormat = v.union(v.literal("pdf"), v.literal("epub"));
+export type DigitalFileFormat = Infer<typeof digitalFileFormat>;
+
+/** The file format a publisher's own format name states ("EPUB FXL Manga RTL", "PDF"), else null. */
+export function fileFormatFact(value: unknown): DigitalFileFormat | null {
+  if (typeof value !== "string") return null;
+  const epub = /^\s*epub\b/i.test(value);
+  const pdf = /^\s*pdf\b/i.test(value);
+  return epub === pdf ? null : epub ? "epub" : "pdf";
+}
+
+/**
+ * Whether an existing Release takes a new one's slot: the same Format, unless
+ * both are digital with exactly classified, different file formats. An
+ * unclassified digital Release reserves the slot until its own ISBN's
+ * evidence classifies it.
+ */
+export function takesFormatSlot(
+  existing: { format: "physical" | "digital"; digitalFileFormat?: DigitalFileFormat },
+  format: "physical" | "digital",
+  fileFormat: DigitalFileFormat | undefined,
+): boolean {
+  if (existing.format !== format) return false;
+  return !(
+    format === "digital" &&
+    fileFormat !== undefined &&
+    existing.digitalFileFormat !== undefined &&
+    existing.digitalFileFormat !== fileFormat
+  );
+}
 
 const BINDING =
   /\bhard\s?(?:cover|back|bound)\b|\b(?:paper\s?back|soft\s?(?:cover|back|bound))\b/gi;

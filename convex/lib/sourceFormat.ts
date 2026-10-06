@@ -1,8 +1,9 @@
 // A reviewed interpretation of one OL record. Raw observations and their history stay raw.
 import { v, type Infer } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
-import { bookFacts, bindingFacts } from "./bookFacts";
+import { bookFacts, bindingFacts, digitalFileFormat, fileFormatFact } from "./bookFacts";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
+import { fullDateValidator } from "./dates";
 import { toIsbn13 } from "./isbn";
 import { labelsEqual, normalizeTitle, sameWorkTitle } from "./matching";
 import { olEditionValidator, type OlEditionSnapshot } from "./openLibrary";
@@ -16,10 +17,9 @@ const capturedSection = {
   byteEndExclusive: v.number(),
   excerpt: v.string(),
 };
-// A primary digital distributor's own product page for the exact ebook SKU,
-// captured whole: final URL, status, body SHA-256 and byte length.
-const distributorCapture = {
-  kind: v.literal("primaryDigitalDistributorOwnSku"),
+// A store's own product record for the exact ebook SKU, captured whole:
+// final URL, status, body SHA-256 and byte length.
+const ownSkuCapture = {
   isbn13: v.string(),
   sku: v.string(),
   url: v.string(),
@@ -27,6 +27,10 @@ const distributorCapture = {
   fetchedAt: v.number(),
   bodySha256: v.string(),
   bodyBytes: v.number(),
+};
+const distributorCapture = {
+  kind: v.literal("primaryDigitalDistributorOwnSku"),
+  ...ownSkuCapture,
 };
 
 export const reviewedFormatValidator = v.object({
@@ -38,9 +42,10 @@ export const reviewedFormatValidator = v.object({
   isbn13: v.string(),
   baseSnapshot: v.string(),
   reason: v.string(),
-  // The ebook evidence: the publisher's own "ISBN: … (ebook)" line, or a
+  // The ebook evidence: the publisher's own "ISBN: … (ebook)" line, a
   // distributor's own SKU metadata (BookWalker JSON-LD Product plus its
-  // BreadcrumbList; OverDrive's mediaItems object), kept as literal sections.
+  // BreadcrumbList; OverDrive's mediaItems object), or the publisher's own
+  // Shopify product for the SKU, kept as literal sections.
   publisher: v.union(
     v.object({
       kind: v.literal("publisherOwnIsbnEbook"),
@@ -60,6 +65,18 @@ export const reviewedFormatValidator = v.object({
       ...distributorCapture,
       distributor: v.literal("overdrive"),
       mediaItems: v.object(capturedSection),
+    }),
+    // The facts the reviewer read from the product's own tags, re-read from
+    // the section on every projection: its file format, the imprint it is
+    // published under (the legal parent or an imprint of it), and its own
+    // publication date. Its variant price states no currency and is not used.
+    v.object({
+      kind: v.literal("publisherOwnShopifySkuEbook"),
+      ...ownSkuCapture,
+      product: v.object(capturedSection),
+      digitalFileFormat,
+      imprint: v.string(),
+      publishDate: fullDateValidator,
     }),
   ),
   ol: v.object({
@@ -96,6 +113,7 @@ function olSnapshot(value: unknown): value is OlEditionSnapshot {
       "physicalFormat",
       "description",
     ].every((key) => s[key] === undefined || typeof s[key] === "string") &&
+    (s.digitalFileFormat === undefined || fileFormatFact(s.digitalFileFormat) !== null) &&
     s.kind === "olEdition" &&
     typeof s.key === "string" &&
     typeof s.url === "string" &&
@@ -146,6 +164,7 @@ export function reviewedFormatRefusal(
     return "Reviewed raw base differs from the current source.";
   if (
     s.format !== "physical" ||
+    s.digitalFileFormat !== undefined ||
     s.binding !== undefined ||
     s.physicalFormat !== undefined ||
     s.multiVolume ||
@@ -196,7 +215,8 @@ export function reviewedFormatRefusal(
     if (!section || toIsbn13(section[1]) !== reviewed.isbn13 || p.excerpt.length > 2048)
       return "Publisher excerpt must attach ebook directly to the source's own ISBN.";
   } else {
-    const refusal = distributorRefusal(p, s);
+    const refusal =
+      p.kind === "publisherOwnShopifySkuEbook" ? shopifyRefusal(p, s) : distributorRefusal(p, s);
     if (refusal) return refusal;
   }
   try {
@@ -221,9 +241,11 @@ export function reviewedFormatRefusal(
   const sections =
     p.kind === "publisherOwnIsbnEbook"
       ? [p]
-      : p.distributor === "bookwalker"
-        ? [p.product, p.breadcrumbs]
-        : [p.mediaItems];
+      : p.kind === "publisherOwnShopifySkuEbook"
+        ? [p.product]
+        : p.distributor === "bookwalker"
+          ? [p.product, p.breadcrumbs]
+          : [p.mediaItems];
   const bodyBytes = p.kind === "publisherOwnIsbnEbook" ? Number.MAX_SAFE_INTEGER : p.bodyBytes;
   if (
     ![p.fetchedAt, o.fetchedAt].every((time) => Number.isFinite(time) && time > 0) ||
@@ -245,7 +267,14 @@ export function reviewedFormatRefusal(
   return null;
 }
 
-type DistributorEvidence = Exclude<ReviewedFormat["publisher"], { kind: "publisherOwnIsbnEbook" }>;
+type DistributorEvidence = Extract<
+  ReviewedFormat["publisher"],
+  { kind: "primaryDigitalDistributorOwnSku" }
+>;
+type ShopifyEvidence = Extract<
+  ReviewedFormat["publisher"],
+  { kind: "publisherOwnShopifySkuEbook" }
+>;
 
 /**
  * The publisher names each distributor states on its own SKU, by canonical
@@ -402,6 +431,134 @@ function distributorRefusal(p: DistributorEvidence, s: OlEditionSnapshot): strin
   return null;
 }
 
+/**
+ * Publisher-owned Shopify stores, by exact host, and the canonical slug of
+ * the legal publisher each sells for. Reviewed per store; a product's own
+ * imprint tag may name that publisher or one of its known imprints.
+ */
+const SHOPIFY_STORES: Record<string, string> = { "tokyopop.com": "tokyopop" };
+
+/** The one value a product's `prefix:` tags state, or null when absent or repeated. */
+function soleTag(tags: readonly string[], prefix: string): string | null {
+  const values = tags.filter((tag) => tag.startsWith(prefix));
+  return values.length === 1 ? values[0]!.slice(prefix.length) : null;
+}
+
+/**
+ * The publisher's own Shopify product proves the source's exact ISBN is a
+ * non-shipping English manga ebook of the same numbered Volume, in the
+ * reviewed file format, under the reviewed imprint of the source's legal
+ * publisher, published on the reviewed date. Read only from the product
+ * object the store returns for this SKU; a store route other than its
+ * product JSON, a second variant, or a related product never qualifies.
+ */
+function shopifyRefusal(p: ShopifyEvidence, s: OlEditionSnapshot): string | null {
+  if (utf8Bytes(p.product.excerpt) > 8 * 1024) return "Store product section exceeds 8 KiB.";
+  let url: URL;
+  try {
+    url = new URL(p.url);
+  } catch {
+    return "Invalid publisher evidence URL.";
+  }
+  const legal = SHOPIFY_STORES[url.hostname];
+  const product = literalJson(p.product.excerpt);
+  const handle = at(product, "handle");
+  const listing =
+    url.pathname === "/products.json" &&
+    [...url.searchParams].every(
+      ([key, value]) => (key === "limit" || key === "page") && /^\d{1,4}$/.test(value),
+    );
+  const own = typeof handle === "string" && url.pathname === `/products/${handle}.json`;
+  if (
+    !legal ||
+    url.protocol !== "https:" ||
+    url.port ||
+    url.hash ||
+    !(listing || (own && !url.search))
+  )
+    return "Supply the publisher store's own HTTPS product route for this SKU.";
+
+  const variants = at(product, "variants");
+  const tags = at(product, "tags");
+  if (
+    !Array.isArray(variants) ||
+    variants.length !== 1 ||
+    at(variants[0], "sku") !== p.sku ||
+    p.sku !== p.isbn13 ||
+    at(variants[0], "product_id") !== at(product, "id") ||
+    typeof at(product, "id") !== "number" ||
+    at(variants[0], "requires_shipping") !== false ||
+    at(product, "product_type") !== "eBook" ||
+    !Array.isArray(tags) ||
+    !tags.every((tag) => typeof tag === "string")
+  )
+    return "Store product must attach the exact ISBN to its one non-shipping eBook variant.";
+  const date = soleTag(tags, "publication-date:");
+  const day = `${p.publishDate.year}-${String(p.publishDate.month).padStart(2, "0")}-${String(p.publishDate.day).padStart(2, "0")}`;
+  if (
+    soleTag(tags, "format:") !== "eBook" ||
+    fileFormatFact(soleTag(tags, "format-detail:")) !== p.digitalFileFormat ||
+    soleTag(tags, "imprint:") !== p.imprint ||
+    date === null ||
+    date !== day
+  )
+    return "Store tags must state the reviewed file format, imprint and publication date.";
+  if (
+    !tags.some((tag) => /^(?:bic|bisac)\b/i.test(tag) && /\bmanga\b/i.test(tag)) ||
+    tags.some((tag) => /\b(?:light )?novels?\b/i.test(tag) && !/graphic novels?/i.test(tag))
+  )
+    return "Store subjects must file this SKU as manga.";
+
+  // The source names the legal publisher; the product's imprint is it or one of its imprints.
+  const imprint = canonicalPublisherFor(p.imprint);
+  const stated = tags.filter((tag) => tag.startsWith("publisher:"));
+  if (
+    s.publishers.length === 0 ||
+    !s.publishers.every((one) => canonicalPublisherFor(one)?.slug === legal) ||
+    stated.length === 0 ||
+    !stated.every((tag) => canonicalPublisherFor(tag.slice(10))?.slug === legal) ||
+    !imprint ||
+    (imprint.slug !== legal && imprint.parentSlug !== legal)
+  )
+    return "Store publisher or imprint disagrees with the source's publisher.";
+
+  const name = at(product, "title");
+  if (typeof name !== "string") return "Store title must name the source's work and Volume.";
+  const title = parseBookTitle(name);
+  if (
+    title.isNovel ||
+    title.isBox ||
+    title.packaging ||
+    outOfScopeReason(name) ||
+    normalizeTitle(title.seriesTitle) !== normalizeTitle(s.seriesTitle) ||
+    title.volumeLabel === null ||
+    !labelsEqual(title.volumeLabel, s.volumeLabel ?? null)
+  )
+    return "Store title must name the source's work and Volume.";
+  return null;
+}
+
+/**
+ * The placement reading of a reviewed record: digital, and for a publisher's
+ * own store product also its file format, its imprint as the publisher and
+ * its own publication date. The raw snapshot keeps the legal publisher and
+ * Open Library's date; only placement reads this.
+ */
+export function reviewedSnapshot(
+  snapshot: OlEditionSnapshot,
+  reviewed: ReviewedFormat,
+): OlEditionSnapshot {
+  const p = reviewed.publisher;
+  if (p.kind !== "publisherOwnShopifySkuEbook") return { ...snapshot, format: "digital" };
+  return {
+    ...snapshot,
+    format: "digital",
+    digitalFileFormat: p.digitalFileFormat,
+    publishers: [p.imprint],
+    publishDate: p.publishDate,
+  };
+}
+
 export type FormatProjection =
   | { status: "raw"; snapshot: unknown }
   | { status: "corrected"; snapshot: OlEditionSnapshot; decision: SourceFormatDecision }
@@ -428,7 +585,7 @@ export function projectSourceFormat(
     };
   return {
     status: "corrected",
-    snapshot: { ...observation.snapshot, format: "digital" },
+    snapshot: reviewedSnapshot(observation.snapshot, decision),
     decision,
   };
 }
@@ -446,6 +603,9 @@ export function formatContext(observation: Doc<"sourceObservations">) {
           : olSnapshot(projection.snapshot)
             ? projection.snapshot.format
             : null,
+    effectiveFileFormat:
+      projection.status === "corrected" ? (projection.snapshot.digitalFileFormat ?? null) : null,
+    effectivePublishers: projection.status === "corrected" ? projection.snapshot.publishers : null,
     evidence: observation.reviewedSourceFormat ?? null,
     drift: projection.status === "stale" ? projection.reason : null,
   };
