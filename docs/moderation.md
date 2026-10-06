@@ -215,7 +215,9 @@ Approval refuses a placement whose source now names another work, line
 or publisher than when you stated it (the Proposal shows as stale): ask
 for changes and state it again against the source as it stands. A
 position or coverage the source restates differently later does not
-refuse it.
+refuse it when the title's work and line can be read. For an unclear title,
+its complete text must still match the reviewed source; a change requires
+stating the placement again.
 
 It does nothing for a book whose hold needs another decision first, and
 says why: no single active, unlocked Series (link, unlock or merge it), an
@@ -242,9 +244,10 @@ held as another kind or under another Series, given another ISBN or
 format, linked, or the Edition it joins already has a Release in its
 format, and it refuses a Release placed under a stored Edition instead of
 one the Proposal creates or joins. It marks the Proposal stale when it
-would join a hidden or merged Volume or Edition Line, or a hidden, merged
-or locked Edition, or when its Series was hidden, merged or locked; a
-locked active Volume or line is joined, as imports join them. After a
+would join a hidden or merged Volume, when its Edition Line or exact
+member cannot resolve to one active, unlocked identity, or when its Series
+was hidden, merged or locked. Compatible merged lines and members join
+their surviving identity; a locked active Volume can still be joined. After a
 rejection the book is held again and can be prepared anew; its import
 does not queue a creation Proposal of its own for it until its source's
 record changes.
