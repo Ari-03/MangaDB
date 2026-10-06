@@ -926,14 +926,83 @@ describe("real box collision and personal-reference workflow", () => {
   });
 });
 
-it("routes one Bookworm Part 2 observation using exact product evidence without changing its multi-Part ANN parent", async () => {
-  const t = makeT();
-  await admin(t);
-  const sourceTitle = "Ascendance of a Bookworm - Part 2: I'll even join the temple to read books!";
-  const s = await t.run(async (ctx) => {
+// Full stored public snapshots from the R2 provenance; canonical targets stay local.
+const bookwormRecord = {
+  annId: "39627",
+  date: {
+    day: 7.0,
+    month: 12.0,
+    year: 2021.0,
+  },
+  editionLineHint: false,
+  format: "physical",
+  isbn13: "9781718372573",
+  kind: "annRelease",
+  label: "1",
+  mangaId: "20892",
+  multi: false,
+  page: {
+    date: {
+      day: 7.0,
+      month: 12.0,
+      year: 2021.0,
+    },
+    distributor: "J-Novel Club",
+    distributorId: "15174",
+    fetchedAt: 1790499628004.0,
+    isbn10: "1718372574",
+    isbn13: "9781718372573",
+    mangaId: "20892",
+    priceCents: 1499.0,
+    status: "ok",
+    title: "Ascendance of a Bookworm - Part 2: I'll even join the temple to read books!",
+    volume: "GN 1",
+  },
+  title: "Ascendance of a Bookworm - Part 2: I'll even join the temple to read books!",
+  url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=39627",
+};
+const fireForceBoxRecord = {
+  annId: "51151",
+  coverRange: {
+    from: "1",
+    to: "6",
+  },
+  date: {
+    day: 27.0,
+    month: 8.0,
+    year: 2024.0,
+  },
+  editionLineHint: true,
+  format: "physical",
+  isbn13: "9798888772584",
+  kind: "annRelease",
+  mangaId: "18530",
+  multi: true,
+  page: {
+    date: {
+      day: 27.0,
+      month: 8.0,
+      year: 2024.0,
+    },
+    distributor: "Kodansha Comics",
+    distributorId: "8388",
+    fetchedAt: 1790503448766.0,
+    isbn13: "9798888772584",
+    mangaId: "18530",
+    priceCents: 6594.0,
+    status: "ok",
+    title: "Fire Force - [Box Set] 1",
+    volume: "GN 1-6",
+  },
+  title: "Fire Force - [Box Set] 1",
+  url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=51151",
+};
+
+async function bookworm(t: TestT, targetTitle = "Ascendance of a Bookworm (Manga) Part 2") {
+  return await t.run(async (ctx) => {
     const publisherId = await insertPublisher(ctx, { name: "J-Novel Club", slug: "j-novel-club" });
     const genericId = await insertSeries(ctx, { title: "Ascendance of a Bookworm" });
-    const seriesId = await insertSeries(ctx, { title: "Ascendance of a Bookworm (Manga) Part 2" });
+    const seriesId = await insertSeries(ctx, { title: targetTitle });
     const volumeId = await insertVolume(ctx, { seriesId, label: "1" });
     const book = await insertBook(ctx, {
       publisherId,
@@ -949,26 +1018,33 @@ it("routes one Bookworm Part 2 observation using exact product evidence without 
         kind: "annManga",
         title: "Ascendance of a Bookworm",
         releases: [
-          { annId: "39627", title: sourceTitle, isbn13: "9781718372573" },
-          { annId: "other", title: "Ascendance of a Bookworm - Part 1" },
+          {
+            annId: "39610",
+            title: "Ascendance of a Bookworm - Part 1: If there aren't any books, I'll make some!",
+            isbn13: "9781718372504",
+          },
+          {
+            annId: "39627",
+            title: "Ascendance of a Bookworm - Part 2: I'll even join the temple to read books!",
+            isbn13: "9781718372573",
+          },
+          {
+            annId: "54271",
+            title: "Ascendance of a Bookworm - Part 3: let’s spread books through the duchy!",
+            isbn13: "9781718372696",
+          },
+          {
+            annId: "56050",
+            title: "Ascendance of a Bookworm - Part 4: I want to save the Royal Academy’s library!",
+            isbn13: "9781718373105",
+          },
         ],
       },
     });
     const observationId = await insertObservation(ctx, {
       sourceKey: "ann",
       sourceRecordId: "release:39627",
-      snapshot: {
-        kind: "annRelease",
-        annId: "39627",
-        mangaId: "20892",
-        title: sourceTitle,
-        isbn13: "9781718372573",
-        format: "physical",
-        multi: false,
-        editionLineHint: false,
-        label: "1",
-        page: { status: "ok", volume: "GN 1", distributor: "J-Novel Club" },
-      },
+      snapshot: bookwormRecord,
     });
     await ctx.db.insert("placementHolds", {
       observationId,
@@ -979,6 +1055,13 @@ it("routes one Bookworm Part 2 observation using exact product evidence without 
     });
     return { publisherId, genericId, seriesId, volumeId, parentId, observationId, ...book };
   });
+}
+
+it("routes one Bookworm Part 2 observation using exact product evidence without changing its multi-Part ANN parent", async () => {
+  const t = makeT({ transactionLimits: true });
+  await admin(t);
+  const sourceTitle = bookwormRecord.title;
+  const s = await bookworm(t);
   const reviewed = {
     isbn13: "9781718372573",
     publisherId: s.publisherId,
@@ -1664,4 +1747,168 @@ it("R2 conversion cannot retire a placeholder with personal comments", async () 
     reason: expect.stringMatching(/Placeholder has personal references/),
   });
   expect(await repairState(t)).toEqual(before);
+});
+
+it("R3 refuses actual Bookworm Part 2 routing into an unrelated Part 2 work at review and link", async () => {
+  const t = makeT({ transactionLimits: true });
+  await admin(t);
+  const s = await bookworm(t, "Fire Force Part 2");
+  const reviewed = {
+    isbn13: bookwormRecord.isbn13,
+    publisherId: s.publisherId,
+    seriesId: s.seriesId,
+    volumeIds: [s.volumeId],
+    evidenceUrls: [bookwormRecord.url],
+    umbrellaRouting: {
+      sourceTitle: bookwormRecord.title,
+      productTitle: "Fire Force Part 2 Volume 1",
+      productVolumeLabel: "1",
+    },
+  };
+  const args = { observationId: s.observationId, reviewed };
+  const before = await repairState(t);
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(
+    (
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...args,
+        actor: "ari",
+        operation: "reviewSeries",
+        seriesId: s.seriesId,
+        expected: preview.expected!,
+        reason,
+        evidenceUrls: reviewed.evidenceUrls,
+      })
+    ).status,
+  ).toBe("refused");
+  expect(await repairState(t)).toEqual(before);
+  // A preexisting wrong hold must not turn the independently fresh link into permission.
+  await t.run(async (ctx) => {
+    const hold = (await ctx.db
+      .query("placementHolds")
+      .withIndex("by_observation", (q) => q.eq("observationId", s.observationId))
+      .unique())!;
+    await ctx.db.patch(hold._id, { seriesId: s.seriesId });
+  });
+  await refusedLink(t, { ...args, target: { type: "release", id: s.releaseId } }, /root work/);
+  expect((await t.run((ctx) => ctx.db.get(s.parentId)))?.recordRef).toEqual({
+    type: "series",
+    id: s.genericId,
+  });
+});
+
+async function fireForceBox(t: TestT) {
+  await admin(t);
+  return await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+    const seriesId = await insertSeries(ctx, { title: "Fire Force" });
+    const bundleId = await insertBundle(ctx, {
+      publisherId,
+      format: "physical",
+      name: "Fire Force Manga Box Set 1",
+      isbn13: fireForceBoxRecord.isbn13,
+    });
+    const volumeIds: Id<"volumes">[] = [];
+    for (let n = 1; n <= 6; n++) {
+      const volumeId = await insertVolume(ctx, { seriesId, label: String(n), position: n });
+      volumeIds.push(volumeId);
+      const book = await insertBook(ctx, { seriesId, volumeId, publisherId });
+      await insertBundleMember(ctx, { bundleId, releaseId: book.releaseId, order: n });
+    }
+    await insertObservation(ctx, {
+      sourceKey: "ann",
+      sourceRecordId: `manga:${fireForceBoxRecord.mangaId}`,
+      recordRef: { type: "series", id: seriesId },
+      snapshot: { kind: "annManga", title: "Fire Force" },
+    });
+    const observationId = await insertObservation(ctx, {
+      sourceKey: "ann",
+      sourceRecordId: "release:51151",
+      snapshot: fireForceBoxRecord,
+    });
+    await ctx.db.insert("placementHolds", {
+      observationId,
+      sourceKey: "ann",
+      kind: "isbn",
+      seriesId,
+      heldAt: 10,
+    });
+    return { seriesId, publisherId, bundleId, observationId, volumeIds };
+  });
+}
+
+const fireForceReview = (s: Awaited<ReturnType<typeof fireForceBox>>) => ({
+  isbn13: fireForceBoxRecord.isbn13,
+  seriesId: s.seriesId,
+  publisherId: s.publisherId,
+  volumeIds: s.volumeIds,
+  evidenceUrls: [fireForceBoxRecord.url],
+});
+
+it("R3 ordinary Fire Force box linking keeps independent PAGE contents and the complete 1–6 positive", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await fireForceBox(t);
+  const args = {
+    observationId: s.observationId,
+    target: { type: "bundle" as const, id: s.bundleId },
+  };
+  expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toBeNull();
+  await t.run((ctx) =>
+    ctx.db.patch(s.observationId, {
+      snapshot: { ...fireForceBoxRecord, page: { ...fireForceBoxRecord.page, volume: "GN 7-12" } },
+    }),
+  );
+  await refusedLink(t, args, /Known ANN/);
+  await refusedLink(t, { ...args, reviewed: fireForceReview(s) }, /Known ANN/);
+  await t.run((ctx) => ctx.db.patch(s.observationId, { snapshot: fireForceBoxRecord }));
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(preview.refusal).toBeNull();
+  expect(
+    (
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...args,
+        actor: "ari",
+        operation: "link",
+        expected: preview.expected!,
+        reason,
+        evidenceUrls: [fireForceBoxRecord.url],
+      })
+    ).status,
+  ).toBe("applied");
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(s.observationId))?.recordRef).toEqual({
+      type: "releaseBundle",
+      id: s.bundleId,
+    });
+    expect(await ctx.db.query("placementHolds").collect()).toHaveLength(0);
+  });
+});
+
+it("R3 a genuinely unstated box range requires exact contents review without overriding known facts", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await fireForceBox(t);
+  // Omit range statements rather than substitute unknown designator grammar.
+  const { coverRange: _range, ...record } = fireForceBoxRecord;
+  const { volume: _volume, ...page } = record.page;
+  await t.run((ctx) => ctx.db.patch(s.observationId, { snapshot: { ...record, page } }));
+  const args = {
+    observationId: s.observationId,
+    target: { type: "bundle" as const, id: s.bundleId },
+  };
+  await refusedLink(t, args, /no complete box contents/);
+  const reviewedArgs = { ...args, reviewed: fireForceReview(s) };
+  const preview = await t.query(internal.heldBooks.previewInternal, reviewedArgs);
+  expect(preview.refusal).toBeNull();
+  expect(
+    (
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...reviewedArgs,
+        actor: "ari",
+        operation: "link",
+        expected: preview.expected!,
+        reason,
+        evidenceUrls: [fireForceBoxRecord.url],
+      })
+    ).status,
+  ).toBe("applied");
 });

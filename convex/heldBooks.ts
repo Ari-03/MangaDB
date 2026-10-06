@@ -278,11 +278,8 @@ export const applyInternal = internalMutation({
           return refuse("Reviewed Series and proposed routing differ.");
         if (!state.source.series && !args.reviewed)
           return refuse("No source parent: supply exact product identity/contents review.");
-        if (
-          state.source.series &&
-          series._id !== state.source.series._id &&
-          !(await reviewedRouting(ctx, state, series._id))
-        )
+        const routed = await reviewedRouting(ctx, state, series._id);
+        if (state.source.series && series._id !== state.source.series._id && !routed)
           return refuse(
             "Source parent points elsewhere; repair its link before changing the hold.",
           );

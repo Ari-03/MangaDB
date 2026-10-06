@@ -534,26 +534,15 @@ export async function bundleMatch(ctx: QueryCtx, state: Awaited<ReturnType<typeo
   await publisherMatch(ctx, state.observation, bundle.publisherId);
   if (!new Set([toIsbn13(bundle.isbn13), toIsbn13(bundle.isbn10)]).has(state.isbn13 ?? undefined))
     return refuse("Bundle ISBN disagrees.");
-  const labels = s.coverRange ? rangeLabels(s.coverRange) : null;
-  if (!labels || s.coverageGapped)
+  const series = state.source.series;
+  const actual = state.memberContents.flatMap((content) => content.contents);
+  if (actual.some((content) => content.work._id !== series._id))
+    return refuse("Ordered complete Bundle work disagrees.");
+  const facts = await sourceContentsMatch(ctx, state, state.memberContents, series, false);
+  if (!facts.packaged || !facts.hasKnownRange)
     return refuse(
       "Source supplies no complete box contents; exact publisher contents review is required.",
     );
-  const actual = [];
-  for (const content of state.memberContents) {
-    if (content.release.format !== bundle.format || content.publisher._id !== bundle.publisherId)
-      return refuse("Bundle member format/publisher differs.");
-    actual.push(...content.contents);
-  }
-  if (
-    actual.length !== labels.length ||
-    actual.some(
-      (c, i) =>
-        c.work._id !== state.source.series!._id ||
-        !labelsEqual(c.volume.label ?? null, labels[i] ?? null),
-    )
-  )
-    return refuse("Ordered complete Bundle contents disagree.");
 }
 
 /** An operator's exact-ISBN determination; URL syntax does not certify its substance. */
@@ -582,6 +571,26 @@ export async function reviewedMatch(
   const routed = await reviewedRouting(ctx, state, proof.seriesId);
   if (state.source.series && state.source.series._id !== proof.seriesId && !routed)
     return refuse("Source parent work disagrees with review.");
+  const series = await state.r.active(proof.seriesId);
+  await sourceContentsMatch(ctx, state, contents, series, routed);
+  if (
+    routed &&
+    (actual.length !== 1 ||
+      !labelsEqual(actual[0]!.volume.label ?? null, proof.umbrellaRouting!.productVolumeLabel))
+  )
+    return refuse("Reviewed product Volume differs from complete canonical contents.");
+}
+
+/** Known source facts apply to the whole product in both ordinary and reviewed links. */
+async function sourceContentsMatch(
+  ctx: QueryCtx,
+  state: Awaited<ReturnType<typeof heldState>>,
+  contents: Contents[],
+  series: Doc<"series">,
+  routed: Awaited<ReturnType<typeof reviewedRouting>>,
+) {
+  const actual = contents.flatMap((content) => content.contents);
+  const proof = state.reviewed;
   const s = state.observation.snapshot as {
     title?: string;
     subtitle?: string;
@@ -598,7 +607,6 @@ export async function reviewedMatch(
   };
   if (contents.some((c) => c.release.format !== s.format))
     return refuse("Known source format differs.");
-  const series = await state.r.active(proof.seriesId);
   const ranges = [s.coverRange, s.packaging?.coverRange];
   if (s.coverageGapped || s.packaging?.coverageGapped)
     return refuse("Known incomplete source contents cannot be reviewed as a complete range.");
@@ -609,8 +617,7 @@ export async function reviewedMatch(
   let position: string | null | undefined;
   if (state.observation.sourceKey === "ann") {
     const line = state.observation.snapshot as AnnReleaseSnapshot;
-    const sourceWork = routed ? line.title.match(/^(.*?\bPart\s+\d+)\b/i)?.[1] : undefined;
-    const names = sourceWork ? [series.title, sourceWork] : [series.title];
+    const names = routed ? [series.title, routed.sourceWork] : [series.title];
     const reading = await readObservationBook(ctx, state.observation, [series], names);
     const named = readAnnLineTitle(line.title, { names });
     // A reviewed Season/Box product can be titled beyond its parent work.
@@ -620,18 +627,23 @@ export async function reviewedMatch(
       "",
     );
     const reviewedProduct =
-      proof.sourceTitle === line.title &&
-      state.source.series?._id === proof.seriesId &&
+      proof?.sourceTitle === line.title &&
+      state.source.series?._id === series._id &&
       annLinePackaged(line, names) &&
       sameWorkTitle(productWork, series.title);
     if (
       named.kind === "ambiguous" ||
-      (!routed && !sameWorkTitle(reading.work, series.title) && !reviewedProduct) ||
+      (!sameWorkTitle(reading.work, series.title) &&
+        !(
+          routed &&
+          (sameWorkTitle(reading.work, routed.rootWork) || samePartWork(reading.work, series.title))
+        ) &&
+        !reviewedProduct) ||
       reading.scope.length ||
       reading.unreadable.length
     )
       return refuse(
-        `Known ANN work, scope or unreadable facts contradict review: ${reading.unreadable.join("; ")}`,
+        `Known ANN work "${reading.work}", scope or unreadable facts contradict review: ${reading.unreadable.join("; ")}`,
       );
     const facts = annContentFacts(line, names);
     if (
@@ -714,12 +726,6 @@ export async function reviewedMatch(
     )
       return refuse("Known Edition Line name or position differs.");
   }
-  if (
-    routed &&
-    (actual.length !== 1 ||
-      !labelsEqual(actual[0]!.volume.label ?? null, proof.umbrellaRouting!.productVolumeLabel))
-  )
-    return refuse("Reviewed product Volume differs from complete canonical contents.");
   for (const range of ranges) {
     if (!range) continue;
     const labels = rangeLabels(range);
@@ -730,6 +736,28 @@ export async function reviewedMatch(
     )
       return refuse("Known ordered source contents differ.");
   }
+  return { packaged, hasKnownRange: ranges.some(Boolean) };
+}
+
+/** The manga discriminator changes spelling, not the root work's identity. */
+function mangaWorkTitle(title: string) {
+  return title.replace(/\s+\(manga\)\s*$/i, "").trim();
+}
+
+/** The root before a named Part; other title words and punctuation stay meaningful. */
+function partWork(title: string) {
+  const part = /^(.*?)\bPart\s+(\d+)\b/i.exec(title);
+  if (!part) return null;
+  const root = part[1]!.replace(/(?:\s*[-–—:]\s*)$/, "").trim();
+  return { root: mangaWorkTitle(root), part: part[2]!, sourceWork: part[0].trim() };
+}
+
+function samePartWork(sourceTitle: string, targetTitle: string) {
+  const source = partWork(sourceTitle);
+  const target = partWork(targetTitle);
+  return (
+    !!source && !!target && source.part === target.part && sameWorkTitle(source.root, target.root)
+  );
 }
 
 /** An explicitly reviewed member of a multi-Part ANN parent; never changes that parent. */
@@ -751,10 +779,13 @@ export async function reviewedRouting(
     !labelsEqual(product.volumeLabel ?? null, route.productVolumeLabel)
   )
     return refuse("Reviewed product does not independently identify this work and Volume.");
-  const sourcePart = line.title.match(/\bPart\s+(\d+)\b/i)?.[1];
-  const productPart = route.productTitle.match(/\bPart\s+(\d+)\b/i)?.[1];
-  if (!sourcePart || sourcePart !== productPart)
-    return refuse("Known source Part disagrees with reviewed product.");
+  const source = partWork(line.title);
+  if (
+    !source ||
+    !samePartWork(line.title, route.productTitle) ||
+    !samePartWork(line.title, series.title)
+  )
+    return refuse("Known source root work or Part disagrees with reviewed product.");
   const parents = await state.r.many(
     ctx.db
       .query("sourceObservations")
@@ -763,7 +794,11 @@ export async function reviewedRouting(
       ),
   );
   const parent = parents[0]?.snapshot as
-    | { kind?: string; releases?: Array<{ annId: string; title: string; isbn13?: string }> }
+    | {
+        kind?: string;
+        title?: string;
+        releases?: Array<{ annId: string; title: string; isbn13?: string }>;
+      }
     | undefined;
   const parts = new Set(
     parent?.releases?.flatMap((r) => r.title.match(/\bPart\s+(\d+)\b/i)?.[1] ?? []) ?? [],
@@ -780,5 +815,27 @@ export async function reviewedRouting(
     return refuse(
       "Source parent does not preserve this exact product in a multi-Part manga entry.",
     );
-  return true;
+  if (
+    !parent.title ||
+    !sameWorkTitle(mangaWorkTitle(parent.title), source.root) ||
+    !state.source.series ||
+    !sameWorkTitle(mangaWorkTitle(state.source.series.title), source.root)
+  )
+    return refuse("Source Part root work disagrees with its manga parent.");
+  const names = [series.title, source.sourceWork];
+  const reading = await readObservationBook(ctx, state.observation, [series], names);
+  const facts = annContentFacts(line, names);
+  if (
+    (!sameWorkTitle(reading.work, source.root) && !samePartWork(reading.work, series.title)) ||
+    reading.scope.length ||
+    reading.unreadable.length ||
+    facts.coverageGapped ||
+    facts.positionConflict ||
+    facts.formatConflict ||
+    facts.title.kind === "ambiguous" ||
+    !reading.label ||
+    !labelsEqual(reading.label, route.productVolumeLabel)
+  )
+    return refuse("Known source work or independent Volume/page facts contradict Part routing.");
+  return { sourceWork: source.sourceWork, rootWork: source.root };
 }
