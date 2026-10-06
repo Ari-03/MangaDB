@@ -188,10 +188,9 @@ const MAX_MERGE_HOPS = 8;
  * it: the row itself when not merged, null when the chain dead-ends. How
  * importers respect a repair's merges instead of recreating the loser.
  */
-export async function survivorOf<T extends "series" | "volumes" | "releases">(
-  ctx: QueryCtx | MutationCtx,
-  doc: Doc<T> | null,
-): Promise<Doc<T> | null> {
+export async function survivorOf<
+  T extends "series" | "volumes" | "editionLines" | "editions" | "releases",
+>(ctx: QueryCtx | MutationCtx, doc: Doc<T> | null): Promise<Doc<T> | null> {
   let current = doc;
   for (let hops = 0; current !== null && current.status === "merged"; hops++) {
     if (current.mergedIntoId === undefined || hops >= MAX_MERGE_HOPS) return null;

@@ -1976,21 +1976,30 @@ describe("ann.applyReleasePage — a packaged line's work and coverage", () => {
       volumes: 26,
     },
     { series: "Dragon Ball Z", entry: "Dragon Ball", title: "Dragon Ball [VIZBIG Edition]" },
-    // A line word the bad entry owns still leaves the work longer than the Series'.
-    {
-      series: "Makunouchi",
-      entry: "Makunouchi Deluxe",
-      title: "Makunouchi Deluxe [VIZBIG Edition]",
-    },
   ])("holds $title under Series $series linked from entry $entry", (c) =>
     expectHeld(c, ANOTHER_WORK),
   );
 
-  it("holds a line whose title names two lines beyond the work's own name", () =>
+  it("holds a line whose title names two lines beyond the Series' own name", () =>
     expectHeld(
       { series: "Makunouchi", title: "Makunouchi Deluxe [VIZBIG Edition]" },
       /names more than one Edition Line, so its work is unclear/,
     ));
+
+  // Only the Series' own title owns a line word. An entry spelling it does
+  // not confirm ("Makunouchi Deluxe" under Makunouchi) owns none, and the
+  // word it would own leaves the work unclear: never a "Deluxe" line under
+  // Makunouchi, never one Volume of it.
+  it.each([
+    { title: "Makunouchi Deluxe [VIZBIG Edition]" },
+    { title: "Makunouchi Deluxe", designator: "GN 2" },
+    { title: "Makunouchi Deluxe", designator: "GN 1-3" },
+  ])("holds $title $designator under Series Makunouchi from entry Makunouchi Deluxe", (c) =>
+    expectHeld(
+      { series: "Makunouchi", entry: "Makunouchi Deluxe", ...c },
+      /has a line word its manga entry's name \("Makunouchi Deluxe"\) owns and its Series' name does not, so its work is unclear/,
+    ),
+  );
 
   it.each([
     {

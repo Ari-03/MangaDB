@@ -45,7 +45,7 @@ import { resolveBaseSeries } from "./lib/catalogTitle";
 import type { DateParts } from "./lib/dates";
 import { fail } from "./lib/errors";
 import type { KodanshaSnapshot } from "./lib/kodansha";
-import { packagingOf, type AnnMangaSnapshot } from "./lib/ann";
+import { annLinePackaged, packagingOf, type AnnMangaSnapshot } from "./lib/ann";
 import { getObservation, holdOf, type HoldKind } from "./lib/observations";
 import type { OlEditionSnapshot } from "./lib/openLibrary";
 import {
@@ -98,6 +98,8 @@ type BookFacts = {
   description?: string;
   /** Why the adapter's own checks leave the book out of the catalog: prose, a rebinder, a variant. */
   outOfScope: string | null;
+  /** Its source states it two ways no member's choice resolves: an ANN page naming another format. */
+  contradiction?: string;
 };
 
 const lineOf = (packaging: Packaging | null | undefined): Line | null =>
@@ -172,28 +174,33 @@ async function bookFacts(
     }
     case "annRelease": {
       const page = snapshot.page?.status === "ok" ? snapshot.page : undefined;
+      // The facts the page pass reads (lib/ann.ts packagingOf), its current
+      // page included, against the held Series' title as the page pass reads
+      // it: the work's own line words ("Makunouchi Deluxe") never name the
+      // book's line, and an entry's name owning one the Series' does not
+      // leaves it unclear. A title still unclear ("Alpha [VIZBIG Edition]
+      // [Omnibus]", a page titling another work) leaves the line for the
+      // member to choose, and a position or coverage the source states two
+      // ways or not readably is left unknown for the member to state, never
+      // the designator's.
+      const names = heldSeriesTitle !== null ? [heldSeriesTitle] : [];
       const read = titleReading(snapshot.title, {
         multi: snapshot.multi || snapshot.editionLineHint,
       });
-      // The held Series' title, as the page pass reads it, and the entry's
-      // keep the work's own line words ("Makunouchi Deluxe") from naming the
-      // book's line, whether the entry is missing, renamed or relinked. A
-      // title still unclear ("Alpha [VIZBIG Edition] [Omnibus]") leaves
-      // the line for the member to choose (lib/ann.ts packagingOf).
-      const entry = read.packaged
-        ? await getObservation(ctx, ANN, `manga:${snapshot.mangaId}`)
-        : null;
+      const packaged = read.packaged || annLinePackaged(snapshot, names);
+      const entry = packaged ? await getObservation(ctx, ANN, `manga:${snapshot.mangaId}`) : null;
       const entryTitle = (entry?.snapshot as AnnMangaSnapshot | undefined)?.title;
-      const packaging = read.packaged
-        ? packagingOf(snapshot, [heldSeriesTitle ?? "", entryTitle ?? ""])
+      const packaging = packaged
+        ? packagingOf(snapshot, names, heldSeriesTitle !== null ? entryTitle : undefined)
         : null;
       return {
         title: snapshot.title,
         url: snapshot.url,
         isbn13: page?.isbn13 ?? snapshot.isbn13,
         isbn10: page?.isbn10,
-        label: read.packaged ? null : (snapshot.label ?? null),
+        label: packaged ? null : (snapshot.label ?? null),
         ...read,
+        packaged,
         line: packaging?.line ?? null,
         statedRange:
           packaging !== null ? packaging.coverRange : (snapshot.coverRange ?? read.statedRange),
@@ -202,7 +209,12 @@ async function bookFacts(
         pubDate: page?.date ?? snapshot.date,
         priceCents: page?.priceCents,
         description: pageDescriptionText(page),
-        outOfScope: lineOutOfScope(snapshot),
+        outOfScope: lineOutOfScope(snapshot, names),
+        ...(packaging?.formatConflict
+          ? {
+              contradiction: `Its release page (${page?.volume}) names another format than its ANN line: correct the source's record first.`,
+            }
+          : {}),
       };
     }
     case "prhTitle":
@@ -333,6 +345,7 @@ async function placeable(
   const facts = await bookFacts(ctx, observation, series.title);
   if (facts === null) return no("Prepare placement cannot read this source's records.");
   if (facts.outOfScope !== null) return no(facts.outOfScope);
+  if (facts.contradiction !== undefined) return no(facts.contradiction);
   if (facts.isBox) {
     return no("A box set is a Release Bundle, which a Proposal cannot create.");
   }

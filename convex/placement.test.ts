@@ -520,9 +520,11 @@ describe("a book read with today's parser", () => {
     });
   });
 
-  // The entry's own name accounts for its line word: the book is a VIZBIG
-  // book, never a "Deluxe" one, on the Draft an Editor prepares.
-  it("names an ANN book's line from the title's own line, past a line word in the entry's name", async () => {
+  // Only the held Series' title owns a line word: an entry named
+  // "Makunouchi Deluxe" does not make the title's "Deluxe" the work's under
+  // Vagabond, so the line is left for the member to choose, never guessed
+  // as Deluxe or VIZBIG.
+  it("never names an ANN book's line by an entry spelling the held Series does not confirm", async () => {
     const t = makeT();
     const { vagabondId } = await held(t);
     const observationId = await t.run(async (ctx) => {
@@ -557,7 +559,9 @@ describe("a book read with today's parser", () => {
       return id;
     });
     expect((await detail(t, await prepare(t, observationId)))!.placement).toMatchObject({
-      book: { label: null, line: { name: "VIZBIG Edition", position: "2" } },
+      book: { label: null, line: null },
+      line: null,
+      coverage: { kind: "pending" },
       suggestion: null,
     });
   });
