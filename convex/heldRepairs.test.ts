@@ -14,6 +14,7 @@ import {
   insertRelease,
   insertSeries,
   insertVolume,
+  insertVariant,
 } from "./test.factories";
 import { makeT, type TestT } from "./test.helpers";
 import { insertBook } from "./test.moderation";
@@ -1032,4 +1033,635 @@ it("routes one Bookworm Part 2 observation using exact product evidence without 
     type: "series",
     id: s.genericId,
   });
+});
+
+// R2 uses the actual R1 source records and local canonical counterfacts.
+// The assertions require refusal and atomicity, not the earlier unsafe outcomes.
+async function repairState(t: TestT) {
+  return await t.run(async (ctx) => {
+    const tables = [
+      "sourceObservations",
+      "placementHolds",
+      "proposals",
+      "proposalVersions",
+      "revisions",
+      "heldRepairLedger",
+      "releases",
+      "editions",
+      "volumes",
+      "releaseBundles",
+      "bundleMemberships",
+      "bundleConversions",
+      "repairBundleOrigins",
+      "releaseProgress",
+      "collectionEntries",
+      "repairTrails",
+      "userSeriesStates",
+      "releaseVariants",
+      "ratings",
+      "comments",
+    ] as const;
+    return Object.fromEntries(
+      await Promise.all(tables.map(async (table) => [table, await ctx.db.query(table).collect()])),
+    );
+  });
+}
+
+async function refusedLink(
+  t: TestT,
+  args: import("convex/server").FunctionArgs<typeof internal.heldBooks.previewInternal>,
+  refusal: RegExp,
+) {
+  const before = await repairState(t);
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(preview.refusal).toMatch(refusal);
+  const result = await t.mutation(internal.heldBooks.executeInternal, {
+    ...args,
+    actor: "ari",
+    operation: "link",
+    expected: preview.expected ?? "No executable guard",
+    reason,
+    evidenceUrls: urls,
+  });
+  expect(result.status).toBe("refused");
+  expect(await repairState(t)).toEqual(before);
+}
+
+const titanReview = (s: Awaited<ReturnType<typeof titan>>) => ({
+  isbn13: "9781632367006",
+  seriesId: s.seriesId,
+  publisherId: s.publisherId,
+  volumeIds: s.volumeIds,
+  sourceTitle: "Attack on Titan - Season 1 Part 2",
+  evidenceUrls: urls,
+});
+const titanMembers = ["9781612622545", "9781612622552", "9781612622569", "9781612622576"].map(
+  (isbn13, i) => ({ isbn13, order: i + 1 }),
+);
+
+async function prepareNewTitanBox(t: TestT, s: Awaited<ReturnType<typeof titan>>) {
+  await t.run(async (ctx) => {
+    for (const row of await ctx.db.query("bundleMemberships").collect())
+      await ctx.db.delete(row._id);
+    await ctx.db.delete(s.bundleId);
+    await ctx.db.patch(s.wrongId, { format: "digital" });
+  });
+}
+const titanConversion = (s: Awaited<ReturnType<typeof titan>>) => ({
+  kind: "releaseBundle" as const,
+  key: "titan-new-box-r2",
+  reason,
+  bundleId: null,
+  box: { releaseId: s.box.releaseId, name: "Attack on Titan Season 1 Part 2 Manga Box Set" },
+  members: titanMembers,
+  retireVolumeIds: [],
+});
+async function titanRemodel(t: TestT, s: Awaited<ReturnType<typeof titan>>) {
+  const placeholder = await t.run(
+    async (ctx) =>
+      (await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", s.box.editionId))
+        .unique())!.volumeId,
+  );
+  return {
+    kind: "remodelEdition" as const,
+    key: "titan-remodel-box-r2",
+    reason,
+    editionId: s.box.editionId,
+    volumeId: placeholder,
+    targetSeriesId: s.seriesId,
+    bundle: { name: "Attack on Titan Season 1 Part 2 Manga Box Set" },
+    line: null,
+    retireVolumeIds: [],
+    groups: [
+      {
+        releaseIds: [s.box.releaseId],
+        linePosition: null,
+        coverage: s.volumeIds.map((volumeId, i) => ({
+          volumeId,
+          label: String(i + 5),
+          extent: "complete" as const,
+        })),
+      },
+    ],
+  };
+}
+
+async function recognizedConversion(
+  t: TestT,
+  s: Awaited<ReturnType<typeof titan>>,
+  bundleId: Id<"releaseBundles">,
+) {
+  const conversion = await t.query(internal.heldRepair.conversionStateInternal, {
+    releaseId: s.box.releaseId,
+    bundleId,
+  });
+  expect(conversion.refusal).toBeNull();
+  expect(conversion.alreadyConverted).toBe(true);
+  const namespace = await t.query(internal.heldBooks.isbnNamespaceAuditInternal, {
+    paginationOpts: { numItems: 20, cursor: null },
+  });
+  expect(namespace.page[0]?.claims[0]?.classification).toBe("converted");
+  const link = await t.query(internal.heldBooks.previewInternal, {
+    observationId: s.observationId,
+    target: { type: "bundle", id: bundleId },
+    reviewed: titanReview(s),
+  });
+  expect(link.refusal).toBeNull();
+  await t.run(async (ctx) => {
+    const proof = (await ctx.db.query("bundleConversions").unique())!;
+    const revision = (await ctx.db.get(proof.revisionId))!;
+    expect(proof.bundleId).toBe(bundleId);
+    expect(revision.proposalId).toBe(proof.proposalId);
+    expect((await ctx.db.get(proof.proposalId))?.state).toBe("approved");
+    expect(revision.changes.some((change) => change.field === "convertedToBundle")).toBe(true);
+  });
+}
+
+it("R2 ANN reviewed identity keeps GN Volume and Binding facts, with the complete-Line positive", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await dance(t);
+  const args = {
+    ...linkArgs(s),
+    reviewed: {
+      isbn13: "9781645057345",
+      seriesId: s.seriesId,
+      publisherId: s.publisherId,
+      volumeIds: [s.volumeId],
+      evidenceUrls: urls,
+    },
+  };
+  expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toBeNull();
+  await t.run((ctx) => ctx.db.patch(s.volumeId, { label: "9", position: 9 }));
+  await refusedLink(t, args, /single-Volume extent/);
+  await t.run(async (ctx) => {
+    await ctx.db.patch(s.volumeId, { label: "3", position: 3 });
+    const observation = (await ctx.db.get(s.observationId))!;
+    await ctx.db.patch(s.observationId, {
+      snapshot: {
+        ...observation.snapshot,
+        title: "Dance in the Vampire Bund: Age of Scarlet Order (Hardcover)",
+      },
+    });
+  });
+  await refusedLink(t, args, /binding/);
+  await t.run(async (ctx) => {
+    const observation = (await ctx.db.get(s.observationId))!;
+    await ctx.db.patch(s.observationId, {
+      snapshot: { ...observation.snapshot, title: "Fire Force" },
+    });
+  });
+  await refusedLink(
+    t,
+    { ...args, reviewed: { ...args.reviewed, sourceTitle: "Fire Force" } },
+    /Known ANN work/,
+  );
+  await t.run(async (ctx) => {
+    const observation = (await ctx.db.get(s.observationId))!;
+    await ctx.db.patch(s.observationId, {
+      snapshot: {
+        ...observation.snapshot,
+        title: "Dance in the Vampire Bund: Age of Scarlet Order",
+      },
+    });
+  });
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(
+    (
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...args,
+        actor: "ari",
+        operation: "link",
+        expected: preview.expected!,
+        reason,
+        evidenceUrls: urls,
+      })
+    ).status,
+  ).toBe("applied");
+});
+
+it("R2 importer refuses ambiguous or newly locked late box members, then adds the unlocked book", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await titan(t);
+  await t.run(async (ctx) => {
+    await ctx.db.patch(s.box.releaseId, { isbn13: undefined });
+    for (const row of await ctx.db.query("bundleMemberships").collect())
+      await ctx.db.delete(row._id);
+  });
+  const apply = async () =>
+    await t.run(async (ctx) => {
+      const { createReleaseBundle } = await import("./lib/pipeline");
+      const observation = (await ctx.db.get(s.observationId))!;
+      return await createReleaseBundle(ctx, {
+        sourceKey: "ann",
+        observation,
+        citation: { sourceName: "ANN", url: urls[0]! },
+        importComment: reason,
+        seriesId: s.seriesId,
+        name: "Attack on Titan Season 1 Part 2 Manga Box Set",
+        labels: ["5", "6", "7", "8"],
+        publisher: { name: "Kodansha", slug: "kodansha" },
+        release: { format: "physical", isbn13: "9781632367006" },
+        tagBootstrapUnreviewed: false,
+        now: 1,
+      });
+    });
+  expect(await apply()).toMatchObject({ held: expect.stringMatching(/ambiguous/) });
+  await t.run(async (ctx) => {
+    await ctx.db.patch(s.wrongId, { format: "digital" });
+    await ctx.db.patch(s.memberIds[0]!, { locked: true });
+  });
+  expect(await apply()).toHaveProperty("held");
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("bundleMemberships").collect()).toEqual([]);
+    expect((await ctx.db.get(s.observationId))?.recordRef).toBeUndefined();
+    expect(await ctx.db.query("proposals").collect()).toEqual([]);
+    expect(await ctx.db.query("revisions").collect()).toEqual([]);
+    await ctx.db.patch(s.memberIds[0]!, { locked: false });
+  });
+  expect(await apply()).toMatchObject({ bundleId: s.bundleId, created: false, members: 4 });
+  await t.run(async (ctx) => {
+    expect((await ctx.db.query("bundleMemberships").collect()).map((m) => m.releaseId)).toEqual(
+      s.memberIds,
+    );
+    expect((await ctx.db.get(s.observationId))?.recordRef).toEqual({
+      type: "releaseBundle",
+      id: s.bundleId,
+    });
+  });
+});
+
+it("R2 both new box conversion APIs atomically refuse an active pass; supported collection transfer stays usable", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await titan(t);
+  await prepareNewTitanBox(t, s);
+  const remodel = await titanRemodel(t, s);
+  const progressId = await t.run((ctx) =>
+    ctx.db.insert("releaseProgress", {
+      userId: s.userId,
+      releaseId: s.box.releaseId,
+      seriesId: s.placeholderSeries,
+      percent: 40,
+    }),
+  );
+  for (const entry of [titanConversion(s), remodel]) {
+    const before = await repairState(t);
+    const result = await t.mutation(internal.repair.runBatch, {
+      actor: "ari",
+      dryRun: false,
+      entries: [entry],
+    });
+    expect(result[0]).toMatchObject({
+      status: "skipped",
+      reason: expect.stringMatching(/Personal-data preservation/),
+    });
+    expect(await repairState(t)).toEqual(before);
+  }
+  await t.run(async (ctx) => {
+    await ctx.db.delete(progressId);
+    await ctx.db.insert("collectionEntries", {
+      userId: s.userId,
+      releaseId: s.box.releaseId,
+      state: "owned",
+    });
+  });
+  const entry = titanConversion(s);
+  expect(
+    (
+      await t.mutation(internal.repair.runBatch, { actor: "ari", dryRun: false, entries: [entry] })
+    )[0]?.status,
+  ).toBe("applied");
+  const bundleId = await t.run(async (ctx) => (await ctx.db.query("releaseBundles").unique())!._id);
+  await recognizedConversion(t, s, bundleId);
+  const beforeRepeat = await repairState(t);
+  expect(
+    (
+      await t.mutation(internal.repair.runBatch, { actor: "ari", dryRun: false, entries: [entry] })
+    )[0]?.status,
+  ).toBe("alreadyApplied");
+  expect(await repairState(t)).toEqual(beforeRepeat);
+  await t.run(async (ctx) => {
+    expect((await ctx.db.query("collectionEntries").unique())?.bundleId).toBe(bundleId);
+    expect((await ctx.db.query("collectionEntries").unique())?.releaseId).toBeUndefined();
+    expect((await ctx.db.get(s.box.releaseId))?.status).toBe("hidden");
+  });
+});
+
+it("R2 ANN scope disposition survives a canonical ISBN hit and lets ordinary manga lines complete", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await dance(t);
+  const scope = await t.query(internal.scope.stateInternal, { isbn: "9781645057345" });
+  await t.mutation(internal.scope.decideInternal, {
+    actor: "ari",
+    isbn13: "9781645057345",
+    reason: "novel",
+    evidenceUrls: urls,
+    expected: scope.expected,
+  });
+  const ordinary = await t.run(async (ctx) => {
+    const volumeId = await insertVolume(ctx, { seriesId: s.seriesId, label: "4", position: 4 });
+    return await insertBook(ctx, { publisherId: s.publisherId, seriesId: s.seriesId, volumeId });
+  });
+  const snapshot = {
+    kind: "annManga" as const,
+    id: "22820",
+    staff: [],
+    title: "Dance in the Vampire Bund: Age of Scarlet Order",
+    altTitles: [],
+    url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=22820",
+    releases: [
+      {
+        annId: "43552",
+        title: "Dance in the Vampire Bund: Age of Scarlet Order",
+        format: "physical" as const,
+        isbn13: "9781645057345",
+        label: "3",
+        multi: false,
+        editionLineHint: false,
+      },
+      {
+        annId: "ordinary-local",
+        title: "Dance in the Vampire Bund: Age of Scarlet Order",
+        format: "physical" as const,
+        label: "4",
+        multi: false,
+        editionLineHint: false,
+      },
+    ],
+  };
+  const result = await t.mutation(internal.ann.applyManga, { snapshot });
+  expect(result.releasesLinked).toBe(1);
+  await t.run(async (ctx) => {
+    const excluded = (await ctx.db.get(s.observationId))!;
+    expect(excluded.recordRef).toBeUndefined();
+    expect(excluded.conflicts?.find((c) => c.field === "placement")?.reason).toMatch(
+      /Reviewed exact ISBN/,
+    );
+    expect(excluded.snapshot.page.fetchedAt).toBe(1790500926477);
+    expect(
+      (
+        await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_source_record", (q) =>
+            q.eq("sourceKey", "ann").eq("sourceRecordId", "release:ordinary-local"),
+          )
+          .unique()
+      )?.recordRef,
+    ).toEqual({ type: "release", id: ordinary.releaseId });
+    expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual([
+      "3",
+      "4",
+    ]);
+    // A historical contaminated link is retained, and its fields are not reconciled.
+    await ctx.db.patch(s.observationId, { recordRef: { type: "release", id: s.releaseId } });
+    await ctx.db.patch(s.releaseId, { pubDate: { year: 2020, sort: 20200000 } });
+  });
+  await t.mutation(internal.ann.applyManga, {
+    snapshot: {
+      ...snapshot,
+      releases: snapshot.releases.map((r) =>
+        r.annId === "43552" ? { ...r, date: { year: 2025 } } : r,
+      ),
+    },
+  });
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(s.observationId))?.recordRef).toEqual({
+      type: "release",
+      id: s.releaseId,
+    });
+    expect((await ctx.db.get(s.releaseId))?.status).toBe("active");
+    expect((await ctx.db.get(s.releaseId))?.pubDate).toEqual({ year: 2020, sort: 20200000 });
+  });
+});
+
+it("R2 remodel conversion emits the same exact proof, is recognized by held linking and repeats without writes", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await titan(t);
+  await prepareNewTitanBox(t, s);
+  const entry = await titanRemodel(t, s);
+  expect(
+    (
+      await t.mutation(internal.repair.runBatch, { actor: "ari", dryRun: false, entries: [entry] })
+    )[0]?.status,
+  ).toBe("applied");
+  const bundleId = await t.run(async (ctx) => (await ctx.db.query("releaseBundles").unique())!._id);
+  await recognizedConversion(t, s, bundleId);
+  const before = await repairState(t);
+  expect(
+    (
+      await t.mutation(internal.repair.runBatch, { actor: "ari", dryRun: false, entries: [entry] })
+    )[0]?.status,
+  ).toBe("alreadyApplied");
+  expect(await repairState(t)).toEqual(before);
+});
+
+it("R2 the physical AoT box requires its own coherent publisher and format, beyond valid members", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await titan(t);
+  await t.run((ctx) => ctx.db.patch(s.box.releaseId, { isbn13: undefined }));
+  const args = {
+    observationId: s.observationId,
+    target: { type: "bundle" as const, id: s.bundleId },
+    reviewed: titanReview(s),
+  };
+  expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toBeNull();
+  await t.run((ctx) => ctx.db.patch(s.bundleId, { format: "digital" }));
+  await refusedLink(t, args, /formats differ/);
+  await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, {
+      name: "Seven Seas Entertainment",
+      slug: "seven-seas",
+    });
+    await ctx.db.patch(s.bundleId, { format: "physical", publisherId });
+  });
+  await refusedLink(t, args, /publishers differ/);
+  await t.run((ctx) => ctx.db.patch(s.bundleId, { publisherId: s.publisherId }));
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(
+    (
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...args,
+        actor: "ari",
+        operation: "link",
+        expected: preview.expected!,
+        reason,
+        evidenceUrls: urls,
+      })
+    ).status,
+  ).toBe("applied");
+});
+
+it("R2 actual OL Fire Force nested 7–11 contents accept 7–11 and atomically refuse 12–16", async () => {
+  const t = makeT({ transactionLimits: true });
+  await admin(t);
+  const s = await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+    const seriesId = await insertSeries(ctx, { title: "Fire Force" });
+    const bundleId = await insertBundle(ctx, {
+      publisherId,
+      format: "physical",
+      name: "Fire Force Manga Box Set 2",
+      isbn13: "9798888772591",
+    });
+    const volumeIds: Id<"volumes">[] = [];
+    for (let label = 7; label <= 11; label++) {
+      const volumeId = await insertVolume(ctx, { seriesId, label: String(label), position: label });
+      volumeIds.push(volumeId);
+      const book = await insertBook(ctx, { publisherId, seriesId, volumeId });
+      await insertBundleMember(ctx, { bundleId, releaseId: book.releaseId, order: label - 6 });
+    }
+    const observationId = await insertObservation(ctx, {
+      sourceKey: "openlibrary",
+      sourceRecordId: "/books/OL51622423M",
+      snapshot: {
+        format: "physical",
+        isbn13: "9798888772591",
+        key: "/books/OL51622423M",
+        kind: "olEdition",
+        multiVolume: true,
+        packaging: { coverRange: { from: "7", to: "11" }, lineName: "Box Set", linePosition: "2" },
+        publishDate: { year: 2024 },
+        publishers: ["Kodansha America, Incorporated"],
+        seriesTitle: "Fire Force",
+        title: "Fire Force Manga Box Set 2 (Vol. 7-11)",
+        url: "https://openlibrary.org/books/OL51622423M",
+      },
+    });
+    await ctx.db.insert("placementHolds", {
+      observationId,
+      sourceKey: "openlibrary",
+      kind: "isbn",
+      seriesId,
+      heldAt: 10,
+    });
+    return { publisherId, seriesId, bundleId, volumeIds, observationId };
+  });
+  const args = {
+    observationId: s.observationId,
+    target: { type: "bundle" as const, id: s.bundleId },
+    reviewed: {
+      isbn13: "9798888772591",
+      seriesId: s.seriesId,
+      publisherId: s.publisherId,
+      volumeIds: s.volumeIds,
+      evidenceUrls: ["https://openlibrary.org/books/OL51622423M"],
+    },
+  };
+  expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toBeNull();
+  await t.run(async (ctx) => {
+    for (const [i, id] of s.volumeIds.entries())
+      await ctx.db.patch(id, { label: String(i + 12), position: i + 12 });
+  });
+  await refusedLink(t, args, /ordered source contents/);
+  await t.run(async (ctx) => {
+    for (const [i, id] of s.volumeIds.entries())
+      await ctx.db.patch(id, { label: String(i + 7), position: i + 7 });
+    await ctx.db.patch(s.bundleId, { name: "Fire Force Manga Box Set 3" });
+  });
+  await refusedLink(t, args, /Bundle position/);
+  await t.run((ctx) => ctx.db.patch(s.bundleId, { name: "Fire Force Manga Box Set 2" }));
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(
+    (
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...args,
+        actor: "ari",
+        operation: "link",
+        expected: preview.expected!,
+        reason,
+        evidenceUrls: args.reviewed.evidenceUrls,
+      })
+    ).status,
+  ).toBe("applied");
+});
+
+it("R2 a repair origin does not bypass pinned-variant and Edition-tracking preflight", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await titan(t);
+  const entry = titanConversion(s);
+  await t.run(async (ctx) => {
+    await ctx.db.patch(s.wrongId, { format: "digital" });
+    const wrong = (await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_release", (q) => q.eq("releaseId", s.wrongId))
+      .unique())!;
+    await ctx.db.patch(wrong._id, { releaseId: s.memberIds[1]! });
+    const proposalId = await ctx.db.insert("proposals", {
+      author: { kind: "user", userId: s.userId, roleAtAuthorship: "administrator" },
+      state: "approved",
+      currentVersionNo: 1,
+      decidedBy: s.userId,
+    });
+    await ctx.db.insert("repairBundleOrigins", {
+      bundleId: s.bundleId,
+      releaseId: s.box.releaseId,
+      entryKey: entry.key,
+      proposalId,
+    });
+    const variantId = await insertVariant(ctx, { releaseId: s.box.releaseId, name: "Box cover" });
+    await ctx.db.insert("collectionEntries", {
+      userId: s.userId,
+      releaseId: s.box.releaseId,
+      variantId,
+      state: "owned",
+    });
+    await ctx.db.insert("ratings", {
+      userId: s.userId,
+      editionId: s.box.editionId,
+      score: 80,
+      updatedAt: 1,
+    });
+  });
+  const audit = await t.query(internal.heldRepair.referenceAuditInternal, {
+    releaseId: s.box.releaseId,
+    bundleId: s.bundleId,
+  });
+  expect(audit.eligible).toBe(false);
+  expect(audit.counts["ratings.edition"]).toBe(1);
+  expect(
+    Object.entries(audit.counts).some(
+      ([name, count]) => name.startsWith("collectionEntries.variant.") && count === 1,
+    ),
+  ).toBe(true);
+  const before = await repairState(t);
+  expect(
+    (
+      await t.mutation(internal.repair.runBatch, { actor: "ari", dryRun: false, entries: [entry] })
+    )[0],
+  ).toMatchObject({
+    status: "skipped",
+    reason: expect.stringMatching(/Personal-data preservation/),
+  });
+  expect(await repairState(t)).toEqual(before);
+});
+
+it("R2 conversion cannot retire a placeholder with personal comments", async () => {
+  const t = makeT({ transactionLimits: true });
+  const s = await titan(t);
+  await prepareNewTitanBox(t, s);
+  const remodel = await titanRemodel(t, s);
+  await t.run((ctx) =>
+    ctx.db.insert("comments", {
+      userId: s.userId,
+      seriesId: s.placeholderSeries,
+      volumeId: remodel.volumeId,
+      body: "Keep this Volume's discussion",
+      spoiler: false,
+      status: "approved",
+      reportCount: 0,
+      createdAt: 1,
+    }),
+  );
+  const before = await repairState(t);
+  const entry = { ...titanConversion(s), retireVolumeIds: [remodel.volumeId] };
+  expect(
+    (
+      await t.mutation(internal.repair.runBatch, { actor: "ari", dryRun: false, entries: [entry] })
+    )[0],
+  ).toMatchObject({
+    status: "skipped",
+    reason: expect.stringMatching(/Placeholder has personal references/),
+  });
+  expect(await repairState(t)).toEqual(before);
 });

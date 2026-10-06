@@ -939,6 +939,20 @@ function readPackaging(line: PackagingInput, names: readonly string[], entry?: s
   };
 }
 
+/** Complete source facts for reviewed own-ISBN links, including boxes without an Edition Line. */
+export function annContentFacts(line: PackagingInput, names: readonly string[]) {
+  const facts = readPackaging(line, names);
+  return {
+    coverRange: facts.stated ?? null,
+    coverageGapped: facts.stated === null,
+    positionConflict: facts.positionConflict,
+    formatConflict: facts.formatConflict,
+    position: facts.position,
+    lineName: facts.box ? null : facts.name,
+    title: facts.read,
+  };
+}
+
 /**
  * One packaged ANN line's facts, every source read together: the stored
  * title and designator, and the release page's Title and Volume as last

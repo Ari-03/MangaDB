@@ -496,8 +496,8 @@ describe("box set to bundle (B11)", () => {
       return bundleId;
     });
     // A Bundle cannot retain a Release Variant pin. The reader removes that
-    // pin before this existing-collision operation; fresh conversions below
-    // still exercise the audited variant transfer path.
+    // pin before conversion; R2's common preflight also protects fresh
+    // conversions and origin continuations from losing that pin.
     await asReader(t).mutation(api.collection.setReleaseEntry, {
       releaseId: s.box.releaseId,
       state: "owned",
@@ -557,6 +557,10 @@ describe("box set to bundle (B11)", () => {
     const t = makeT();
     const s = await seedBox(t);
     const entry = remodelEntry(s.box, s.series, ["1", "2"], { retire: true });
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: s.box.releaseId,
+      state: "owned",
+    });
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     const bundle = await t.run(async (ctx) => (await ctx.db.query("releaseBundles").unique())!);
     const entries = await entriesOf(t);
@@ -586,6 +590,12 @@ describe("box set to bundle (B11)", () => {
    */
   async function seedPrivateBox(t: T) {
     const s = await seedBox(t, true);
+    // Ordinary collection-only ownership is transferable. The unsupported
+    // Variant pin is explicitly removed by its owner before conversion.
+    await asReader(t).mutation(api.collection.setReleaseEntry, {
+      releaseId: s.box.releaseId,
+      state: "owned",
+    });
     await asReader(t).mutation(api.sharing.setDefaultVisibility, {
       kind: "ownership",
       visibility: "public",

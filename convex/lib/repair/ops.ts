@@ -6,14 +6,16 @@
 // and — once its Volumes are placed — Series. The stock Series merge appends
 // loser Volumes after the survivor's, so Volumes are placed by label first.
 
+import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
+import type { Contents } from "../heldBooks";
 import type { MutationCtx } from "../../_generated/server";
 import { type IsbnField, isbn13To10, isbnFieldValue, toIsbn13 } from "../isbn";
 import { followMerges } from "../merges";
 import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
-import { assignedIsbnRefusal, primaryIsbnsOf, printingReleases } from "../releaseIsbns";
+import { assignedIsbnRefusal, primaryIsbnsOf } from "../releaseIsbns";
 import { seriesSearchText } from "../searchMatch";
 import {
   OWNERSHIP,
@@ -807,16 +809,10 @@ async function memberReleaseFor(
   for (const edition of await activeEditionsCovering(ctx, volumeId)) {
     if (!publishers.has(edition.publisherId) || edition.editionLineId) continue;
     const coverage = await coverageOf(ctx, edition._id);
-    if (
-      edition.locked ||
-      edition.coverageUnmapped ||
-      coverage.length !== 1 ||
-      coverage[0]!.extent !== "complete"
-    )
+    if (edition.coverageUnmapped || coverage.length !== 1 || coverage[0]!.extent !== "complete")
       continue;
     for (const release of await releasesOf(ctx, edition._id)) {
-      if (release.status === "active" && !release.locked && release.format === format)
-        candidates.push(release);
+      if (release.status === "active" && release.format === format) candidates.push(release);
     }
   }
   if (candidates.length > 1)
@@ -1226,8 +1222,8 @@ async function carryBundleOwners(
  * the bundle, so an Owned box set stays in its owner's library (and its
  * members with it, by Derived Ownership). A User already holding an entry
  * on the bundle keeps that one, raised to the stronger state (Owned over
- * Ordered over Wanted), and the box-set entry folds into it. A pinned
- * Release Variant was the box-set Release's own and is dropped. Ownership
+ * Ordered over Wanted), and the box-set entry folds into it. The shared
+ * preflight refuses pinned Release Variants before any transfer. Ownership
  * the box set's Series kept private stays private on the bundle's member
  * Series (carryVisibility); a bundle with no member Series would fall back
  * to the owner's default, so it cannot take an Owned box set that had one.
@@ -1344,6 +1340,156 @@ async function existingBundle(
   );
 }
 
+/** Same-transaction reference closure before any conversion effects, including origin continuations. */
+async function boxConversionPreflight(
+  ctx: MutationCtx,
+  box: Doc<"releases">,
+  bundleId: Id<"releaseBundles"> | undefined,
+  retireVolumeIds: Id<"volumes">[],
+) {
+  const { referenceAudit } = await import("../heldRepair");
+  const { reader } = await import("../heldBooks");
+  const r = reader(ctx);
+  try {
+    if (box.status !== "active" || box.locked) skip("Box must be active and unlocked.");
+    await r.active(box._id);
+    const refs = await referenceAudit(ctx, box._id, bundleId);
+    const publisher = await r.active(box.publisherId);
+    if (refs.edition.publisherId !== publisher._id)
+      skip("Box Edition and Release publishers disagree.");
+    if (refs.edition.editionLineId) {
+      const line = await r.active(refs.edition.editionLineId);
+      if (line.publisherId !== publisher._id || !box.seriesIds.includes(line.seriesId))
+        skip("Box Edition Line identity differs.");
+    }
+    if (!refs.complete || !refs.eligible)
+      skip("Personal-data preservation required before box conversion.");
+    for (const id of retireVolumeIds) {
+      if (!refs.volumes.some((v) => v._id === id))
+        skip("Retirement must name the box's own current placeholder Volumes.");
+      if (Object.entries(refs.counts).some(([name, count]) => count && name.endsWith(`.${id}`)))
+        skip("Placeholder has personal references; retain its identity and history.");
+    }
+    return refs;
+  } catch (error) {
+    if (
+      error instanceof ConvexError &&
+      typeof error.data === "object" &&
+      error.data &&
+      "held" in error.data
+    )
+      skip(String(error.data.held));
+    throw error;
+  }
+}
+
+/** Box claims permit only this box and its intended Bundle, including origin continuations. */
+async function conversionClaims(
+  ctx: MutationCtx,
+  box: Doc<"releases">,
+  bundle: Doc<"releaseBundles"> | null,
+) {
+  const { isbnClaims, claimResolver } = await import("../releaseIsbns");
+  const { isbnScope } = await import("../scope");
+  for (const key of primaryIsbnsOf(box)) {
+    const scope = await isbnScope(ctx, key);
+    if (scope) skip(scope);
+    const claims = await isbnClaims(ctx, key, { resolver: claimResolver(ctx) });
+    if (
+      !claims?.complete ||
+      claims.unresolved.length ||
+      claims.printed ||
+      [...claims.owners.values()].some(
+        (owner) => owner.doc._id !== box._id && owner.doc._id !== bundle?._id,
+      )
+    )
+      skip(
+        `ISBN ${key} belongs to Release/Bundle claims outside this conversion or an Other Printing.`,
+      );
+    if (bundle && !primaryIsbnsOf(bundle).has(key)) skip("Box and Bundle ISBNs disagree.");
+  }
+}
+
+/** Exact current members resolved before Bundle creation, membership, ownership or audit writes. */
+async function conversionMembers(
+  ctx: MutationCtx,
+  planned: EntryOf<"releaseBundle">["members"],
+  publisherId: Id<"publishers">,
+  format: Doc<"releases">["format"],
+  boxId?: Id<"releases">,
+) {
+  const { reader, releaseContents } = await import("../heldBooks");
+  const { isbnClaims, claimResolver } = await import("../releaseIsbns");
+  const { isbnScope } = await import("../scope");
+  const r = reader(ctx);
+  await r.active(publisherId);
+  if (
+    !planned.length ||
+    planned.length > 80 ||
+    new Set(planned.map((p) => p.order)).size !== planned.length
+  )
+    skip("Box conversion needs complete nonempty uniquely ordered members.");
+  const selected: Array<{
+    release: Contents["release"];
+    contents: Contents["contents"];
+    order: number;
+  }> = [];
+  for (const member of planned) {
+    const key = toIsbn13(member.isbn13);
+    const scope = await isbnScope(ctx, key);
+    if (scope) skip(scope);
+    let releaseId: Id<"releases">;
+    if (key) {
+      const claims = await isbnClaims(ctx, key, {
+        resolver: claimResolver(ctx, { room: r.room }),
+        room: r.room,
+      });
+      if (!claims?.complete || claims.unresolved.length || claims.owners.size !== 1)
+        return skip(`member ${member.isbn13}: ownership is incomplete or ambiguous`);
+      const owner = [...claims.owners.values()][0]!;
+      if (owner.kind !== "release") return skip("Box member must be a Release.");
+      releaseId = owner.doc._id;
+    } else {
+      // Legacy non-ISBN text has no normalized namespace claim. Preserve
+      // the old exact selector, requiring one unambiguous stored Release.
+      const exact = await r.many(
+        ctx.db.query("releases").withIndex("by_isbn13", (q) => q.eq("isbn13", member.isbn13)),
+      );
+      if (exact.length !== 1) skip("Legacy member selector is absent or ambiguous.");
+      releaseId = exact[0]!._id;
+    }
+    if (releaseId === boxId) skip("Box must not be its own member.");
+    const content = await releaseContents(ctx, releaseId, r);
+    if (content.publisher._id !== publisherId || content.release.format !== format)
+      skip("Member publisher or format differs from Bundle.");
+    selected.push({ release: content.release, contents: content.contents, order: member.order });
+  }
+  if (new Set(selected.map((m) => m.release._id)).size !== selected.length)
+    skip("Box repeats the same member Release.");
+  return selected;
+}
+
+/** Both callable converters finish with the same exact immutable proof. */
+async function completeBoxConversion(
+  ctx: MutationCtx,
+  audit: Audit,
+  box: Doc<"releases">,
+  bundle: Doc<"releaseBundles">,
+) {
+  if (!(await hide(ctx, audit, { type: "release", id: box._id }, box))) return;
+  const revision = await audit.revise({ type: "release", id: box._id }, [
+    { field: "convertedToBundle", after: `#${bundle.publicId} ${bundle.name}` },
+  ]);
+  if (!revision) return skip("Conversion audit missing.");
+  await ctx.db.insert("bundleConversions", {
+    releaseId: box._id,
+    bundleId: bundle._id,
+    proposalId: (await audit.meta()).proposalId,
+    revisionId: revision.revisionId,
+    isbnKeys: valueHash([...primaryIsbnsOf(box)].sort()),
+  });
+}
+
 /**
  * A box set is a Release Bundle (spec §2): each box-set Release's facts
  * become a bundle's, member Releases join in coverage order, their
@@ -1357,34 +1503,133 @@ async function toBundle(
   edition: Doc<"editions">,
   name: string,
 ): Promise<Result> {
-  const boxes = (await releasesOf(ctx, edition._id)).filter((r) => r.status !== "merged");
-  if (boxes.length === 0) return skip("box set has no release");
-  const isbnsOf = (box: Doc<"releases">) => {
-    const isbns = bundleIsbns(box);
-    return "refusal" in isbns ? skip(isbns.refusal) : isbns;
-  };
-  if (
-    edition.status !== "active" &&
-    !(await existingBundle(ctx, boxes[0]!, isbnsOf(boxes[0]!).isbn13, name, edition.publisherId))
-  ) {
-    return skip(`edition is ${edition.status}`);
-  }
-  const labels = (entry.groups[0]?.coverage ?? []).flatMap((c) =>
-    c.label === null ? [] : [c.label],
+  const { reader, releaseContents, volumesForLabels } = await import("../heldBooks");
+  const { convertedClaim } = await import("../heldRepair");
+  const r = reader(ctx);
+  const target = await r.active(entry.targetSeriesId);
+  const boxes = await r.many(
+    ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", edition._id)),
   );
-  if (!labels.length || new Set(labels).size !== labels.length)
-    skip("Box conversion needs complete nonempty unique contents.");
-  const company = new Set([edition.publisherId]);
-  let firstMemberVolume: Id<"volumes"> | null = null;
+  const actualBoxes = boxes.filter((b) => b.status !== "merged");
+  if (!actualBoxes.length) skip("box set has no release");
+  if (entry.groups.length !== 1 || entry.groups[0]!.coverage.some((c) => c.extent !== "complete"))
+    skip("Box conversion needs one complete content group.");
+  const coverage = entry.groups[0]!.coverage;
+  if (coverage.length > 80) skip("Requested box contents exceed 80 Volumes; incomplete.");
+  const plans = [];
+  for (const box of actualBoxes) {
+    const isbns = bundleIsbns(box);
+    if ("refusal" in isbns) return skip(isbns.refusal);
+    const bundle = await existingBundle(ctx, box, isbns.isbn13, name, edition.publisherId);
+    if (
+      bundle &&
+      (bundle.status !== "active" ||
+        bundle.locked ||
+        bundle.publisherId !== box.publisherId ||
+        bundle.format !== box.format)
+    )
+      skip("Existing Bundle identity or eligibility differs.");
+    const origin = bundle
+      ? await ctx.db
+          .query("repairBundleOrigins")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+          .unique()
+      : null;
+    if (bundle && (origin?.releaseId !== box._id || origin.entryKey !== entry.key))
+      skip("Existing Bundle remodel needs an explicit guarded releaseBundle conversion.");
+    const proof = bundle ? await convertedClaim(ctx, box, bundle) : null;
+    if (!proof) {
+      await boxConversionPreflight(ctx, box, bundle?._id, entry.retireVolumeIds);
+      if (!(await coverageOf(ctx, edition._id)).some((c) => c.volumeId === entry.volumeId))
+        skip("Box Edition no longer covers the planned placeholder.");
+      await conversionClaims(ctx, box, bundle);
+    }
+    const selected: Array<{
+      release: Contents["release"];
+      contents: Contents["contents"];
+      order: number;
+    }> = [];
+    const labels = coverage.flatMap((row) =>
+      row.volumeId === null && row.label !== null ? [row.label] : [],
+    );
+    const volumes = labels.length ? await volumesForLabels(ctx, target._id, labels, r) : [];
+    for (const [i, row] of coverage.entries()) {
+      const matches =
+        row.volumeId !== null
+          ? [await r.active(row.volumeId)].filter((v) => v.seriesId === target._id)
+          : volumes.filter((v) => v.status === "active" && sameLabel(v.label, row.label));
+      if (matches.length !== 1) skip("Box contents need one exact current Volume for each member.");
+      const volume = await r.active(matches[0]!._id);
+      if (row.label !== null && !sameLabel(volume.label, row.label))
+        skip("Box member Volume label drifted.");
+      const member = await memberReleaseFor(
+        ctx,
+        volume._id,
+        new Set([edition.publisherId]),
+        box.format,
+      );
+      if (!member || member._id === box._id)
+        return skip("Box contents incomplete: no exact member Release.");
+      const content = await releaseContents(ctx, member._id, r);
+      if (
+        content.publisher._id !== edition.publisherId ||
+        content.contents.length !== 1 ||
+        content.contents[0]!.volume._id !== volume._id ||
+        content.release.format !== box.format
+      )
+        skip("Box member identity differs.");
+      const { isbnScope } = await import("../scope");
+      const { isbnClaims, claimResolver } = await import("../releaseIsbns");
+      for (const key of primaryIsbnsOf(content.release)) {
+        const scope = await isbnScope(ctx, key);
+        if (scope) skip(scope);
+        const claims = await isbnClaims(ctx, key, {
+          resolver: claimResolver(ctx, { room: r.room }),
+          room: r.room,
+        });
+        if (
+          !claims?.complete ||
+          claims.unresolved.length ||
+          claims.owners.size !== 1 ||
+          !claims.owners.has(content.release._id)
+        )
+          skip("Box member primary claims are incomplete or ambiguous.");
+      }
+      selected.push({ release: content.release, contents: content.contents, order: i + 1 });
+    }
+    if (!selected.length || new Set(selected.map((m) => m.release._id)).size !== selected.length)
+      skip("Box conversion needs nonempty unique members.");
+    const current = bundle
+      ? await r.many(
+          ctx.db
+            .query("bundleMemberships")
+            .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id)),
+        )
+      : [];
+    if (
+      current.some(
+        (m) => !selected.some((p) => p.release._id === m.releaseId && p.order === m.order),
+      ) ||
+      (proof && current.length !== selected.length)
+    )
+      skip("Existing Bundle members drifted.");
+    if (proof) {
+      for (const id of entry.retireVolumeIds) {
+        const volume = await ctx.db.get(id);
+        if (!volume || volume.status === "active")
+          skip("Converted placeholder retirement drifted.");
+      }
+    }
+    plans.push({ box, bundle, isbns, selected, current, proof });
+  }
+  if (plans.every((p) => p.proof)) return already;
   const moves = newMoves(entry.key);
-
-  for (const box of boxes) {
-    const isbns = isbnsOf(box);
-    let bundle = await existingBundle(ctx, box, isbns.isbn13, name, edition.publisherId);
+  let firstMemberVolume: Id<"volumes"> | null = null;
+  for (const plan of plans) {
+    if (plan.proof) continue;
+    const { box, selected, current, isbns } = plan;
+    let bundle = plan.bundle;
     if (!bundle) {
-      // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
-      const printed = await assignedIsbnRefusal(ctx, [box.isbn13, box.isbn10]);
-      if (printed !== null) skip(printed);
       await audit.meta();
       const fields = {
         status: "active" as const,
@@ -1417,54 +1662,28 @@ async function toBundle(
       bundle = await ctx.db.get(id);
     }
     if (!bundle) return skip("bundle vanished");
-    if (
-      bundle.locked ||
-      bundle.status !== "active" ||
-      bundle.publisherId !== box.publisherId ||
-      bundle.format !== box.format
-    )
-      skip("Existing Bundle identity or eligibility differs.");
-    const origin = await ctx.db
-      .query("repairBundleOrigins")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
-      .unique();
-    if (origin?.releaseId !== box._id || origin.entryKey !== entry.key)
-      skip("Existing Bundle remodel needs an explicit guarded releaseBundle conversion.");
-    const bundleId = bundle._id;
-    const seriesBefore = await bundleSeries(ctx, bundleId);
-    const members = await ctx.db
-      .query("bundleMemberships")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
-      .collect();
-    const missing: string[] = [];
-    const volumes = await activeVolumes(ctx, entry.targetSeriesId);
-    for (const [i, label] of labels.entries()) {
-      const volume = volumes.find((v) => sameLabel(v.label, label));
-      if (volume && firstMemberVolume === null) firstMemberVolume = volume._id;
-      const member = volume ? await memberReleaseFor(ctx, volume._id, company, box.format) : null;
-      if (!member) {
-        missing.push(label);
-        continue;
-      }
-      if (members.some((m) => m.releaseId === member._id)) continue;
+    const seriesBefore = await bundleSeries(ctx, bundle._id);
+    for (const member of selected) {
+      firstMemberVolume ??= member.contents[0]!.volume._id;
+      if (current.some((m) => m.releaseId === member.release._id)) continue;
       await audit.meta();
-      await ctx.db.insert("bundleMemberships", { bundleId, releaseId: member._id, order: i + 1 });
-      await audit.revise({ type: "releaseBundle", id: bundleId }, [
-        { field: "member", after: `release ${member.isbn13 ?? member._id} (vol ${label})` },
+      await ctx.db.insert("bundleMemberships", {
+        bundleId: bundle._id,
+        releaseId: member.release._id,
+        order: member.order,
+      });
+      await audit.revise({ type: "releaseBundle", id: bundle._id }, [
+        {
+          field: "member",
+          after: `release ${member.release.isbn13 ?? member.release._id} (order ${member.order})`,
+        },
       ]);
     }
-    if (missing.length > 0)
-      skip(`Box contents incomplete: no exact member for vol ${missing.join(", ")}.`);
-    await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundleId, seriesBefore);
-    if (!(await entriesToBundle(ctx, audit, moves, box, bundleId))) continue;
-    if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
-      await audit.revise({ type: "release", id: box._id }, [
-        { field: "convertedToBundle", after: `#${bundle.publicId} ${name}` },
-      ]);
-    }
+    await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundle._id, seriesBefore);
+    if (await entriesToBundle(ctx, audit, moves, box, bundle._id))
+      await completeBoxConversion(ctx, audit, box, bundle);
   }
   await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
-  // Box sets still holding entries stay up until a later leg empties them.
   if (moves.unfinished) return partial;
   await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   await retireVolumes(ctx, audit, entry.retireVolumeIds, firstMemberVolume);
@@ -2478,69 +2697,27 @@ async function releaseBundle(
   audit: Audit,
   entry: EntryOf<"releaseBundle">,
 ): Promise<Result> {
+  const { reader } = await import("../heldBooks");
+  const { convertedClaim, conversionState } = await import("../heldRepair");
+  const r = reader(ctx);
   let bundle: Doc<"releaseBundles"> | null = null;
   let box: Doc<"releases"> | null = null;
+  let isbns: { isbn13?: string; isbn10?: string } = {};
+  let converted = false;
   if (entry.bundleId !== null && entry.box === null) {
-    bundle = await ctx.db.get(entry.bundleId);
+    bundle = await r.active(entry.bundleId);
   } else if (entry.box !== null && entry.bundleId === null) {
     box = await ctx.db.get(entry.box.releaseId);
     if (!box) return skip("box-set release missing");
-    const isbns = bundleIsbns(box);
-    if ("refusal" in isbns) return skip(isbns.refusal);
-    const isbn13 = isbns.isbn13;
-    if (isbn13 === undefined) return skip("box-set release has no ISBN");
+    const read = bundleIsbns(box);
+    if ("refusal" in read) return skip(read.refusal);
+    isbns = read;
+    if (!isbns.isbn13) skip("box-set release has no ISBN");
     bundle = await ctx.db
       .query("releaseBundles")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbns.isbn13))
       .unique();
     if (bundle) {
-      const origin = await ctx.db
-        .query("repairBundleOrigins")
-        .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
-        .unique();
-      const { convertedClaim } = await import("../heldRepair");
-      const converted = await convertedClaim(ctx, box, bundle);
-      if (converted) {
-        const current = await ctx.db
-          .query("bundleMemberships")
-          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
-          .take(81);
-        if (current.length > 80 || current.length !== entry.members.length)
-          skip("Converted Bundle members or retirement plan drifted.");
-        for (const id of entry.retireVolumeIds) {
-          const volume = await ctx.db.get(id);
-          if (!volume || volume.status === "active")
-            skip("Converted placeholder retirement drifted.");
-        }
-        for (const planned of entry.members) {
-          const member = await ctx.db
-            .query("releases")
-            .withIndex("by_isbn13", (q) => q.eq("isbn13", planned.isbn13))
-            .unique();
-          if (
-            !member ||
-            !current.some((m) => m.releaseId === member._id && m.order === planned.order)
-          )
-            skip("Converted Bundle members drifted.");
-        }
-        return already;
-      }
-      if (origin?.releaseId !== box._id || origin.entryKey !== entry.key) {
-        if (!entry.expectedConversion)
-          skip("An existing Bundle conversion needs a current expectedConversion guard.");
-        const { conversionState } = await import("../heldRepair");
-        const state = await conversionState(ctx, box._id, bundle._id);
-        if (state.expected !== entry.expectedConversion) skip("Conversion state drifted.");
-        const planned = entry.members.map((m) => ({ isbn13: toIsbn13(m.isbn13), order: m.order }));
-        const actual = state.contents.map((c, i) => ({
-          isbn13: c.release.isbn13,
-          order: state.members[i]!.order,
-        }));
-        if (!sameValue(planned, actual))
-          skip("Conversion needs the exact complete member set and order.");
-        if (entry.retireVolumeIds.length)
-          skip("Placeholder retirement requires a separate preservation-backed repair.");
-      }
       if (
         bundle.locked ||
         bundle.status !== "active" ||
@@ -2548,138 +2725,137 @@ async function releaseBundle(
         bundle.format !== box.format
       )
         skip("Existing Bundle identity or eligibility differs.");
+      converted = Boolean(await convertedClaim(ctx, box, bundle));
+      if (!converted) {
+        const origin = await ctx.db
+          .query("repairBundleOrigins")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
+          .unique();
+        if (origin?.releaseId !== box._id || origin.entryKey !== entry.key) {
+          if (!entry.expectedConversion)
+            skip("An existing Bundle conversion needs a current expectedConversion guard.");
+          const state = await conversionState(ctx, box._id, bundle._id);
+          if (state.expected !== entry.expectedConversion) skip("Conversion state drifted.");
+          const planned = entry.members.map((m) => ({
+            isbn13: toIsbn13(m.isbn13),
+            order: m.order,
+          }));
+          const actual = state.contents.map((c, i) => ({
+            isbn13: toIsbn13(c.release.isbn13),
+            order: state.members[i]!.order,
+          }));
+          if (!sameValue(planned, actual))
+            skip("Conversion needs the exact complete member set and order.");
+          if (entry.retireVolumeIds.length)
+            skip("Placeholder retirement requires a separate preservation-backed repair.");
+        }
+      }
     }
-    if (!bundle) {
-      if (box.status !== "active") return skip(`box-set release is ${box.status}`);
-      if (box.locked) skip("box-set release is locked");
-      const edition = await ctx.db.get(box.editionId);
-      if (!edition) return skip("box-set edition missing");
-      // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
-      const printed = await assignedIsbnRefusal(ctx, [isbn13, box.isbn10]);
-      if (printed !== null) skip(printed);
-      await audit.meta();
-      const fields = {
-        status: "active" as const,
-        publicId: await allocatePublicId(ctx, "bundle"),
-        name: entry.box.name,
-        publisherId: edition.publisherId,
-        format: box.format,
-        isbn13,
-        isbn10: isbns.isbn10,
-        pubDate: box.pubDate,
-        price: box.price,
-        description: box.description,
-        coverImage: box.coverImage,
-        bootstrapUnreviewed: true,
-      };
-      const id = await ctx.db.insert("releaseBundles", fields);
-      await ctx.db.insert("repairBundleOrigins", {
-        bundleId: id,
-        releaseId: box._id,
-        entryKey: entry.key,
-        proposalId: (await audit.meta()).proposalId,
-      });
-      audit.op({ kind: "create", table: "releaseBundles", tempId: id, fields });
-      await audit.revise(
-        { type: "releaseBundle", id },
-        Object.entries(fields)
-          .filter(([, after]) => after !== undefined)
-          .map(([field, after]) => ({ field, after })),
-      );
-      bundle = await ctx.db.get(id);
+    if (!converted) {
+      await boxConversionPreflight(ctx, box, bundle?._id, entry.retireVolumeIds);
+      await conversionClaims(ctx, box, bundle);
     }
-  } else {
-    return skip("plan error: name either a bundle or a box set");
+  } else skip("plan error: name either a bundle or a box set");
+
+  const publisherId = bundle?.publisherId ?? box!.publisherId;
+  const format = bundle?.format ?? box!.format;
+  const selected = await conversionMembers(ctx, entry.members, publisherId, format, box?._id);
+  const current = bundle
+    ? await r.many(
+        ctx.db
+          .query("bundleMemberships")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id)),
+      )
+    : [];
+  // An origin continuation may still lack members, but must not gain other contents.
+  if (
+    box &&
+    current.some((m) => !selected.some((p) => p.release._id === m.releaseId && p.order === m.order))
+  )
+    skip("Existing Bundle has unplanned members or order.");
+  if (converted) {
+    if (current.length !== selected.length) skip("Converted Bundle members drifted.");
+    for (const id of entry.retireVolumeIds) {
+      const volume = await ctx.db.get(id);
+      if (!volume || volume.status === "active") skip("Converted placeholder retirement drifted.");
+    }
+    return already;
   }
-  if (!bundle || bundle.status !== "active" || bundle.locked)
-    return skip("bundle not active or locked");
+  for (const member of selected) {
+    const row = current.find((m) => m.releaseId === member.release._id);
+    if (row && row.order !== member.order)
+      skip(`member ${member.release.isbn13} sits at order ${row.order}`);
+    if (!row && current.some((m) => m.order === member.order))
+      skip(`order ${member.order} is taken by another member`);
+  }
+  // Every dependency and personal reference has been read before the first effect.
+  if (!bundle) {
+    await audit.meta();
+    const fields = {
+      status: "active" as const,
+      publicId: await allocatePublicId(ctx, "bundle"),
+      name: entry.box!.name,
+      publisherId,
+      format,
+      isbn13: isbns.isbn13,
+      isbn10: isbns.isbn10,
+      pubDate: box!.pubDate,
+      price: box!.price,
+      description: box!.description,
+      coverImage: box!.coverImage,
+      bootstrapUnreviewed: true,
+    };
+    const id = await ctx.db.insert("releaseBundles", fields);
+    await ctx.db.insert("repairBundleOrigins", {
+      bundleId: id,
+      releaseId: box!._id,
+      entryKey: entry.key,
+      proposalId: (await audit.meta()).proposalId,
+    });
+    audit.op({ kind: "create", table: "releaseBundles", tempId: id, fields });
+    await audit.revise(
+      { type: "releaseBundle", id },
+      Object.entries(fields)
+        .filter(([, after]) => after !== undefined)
+        .map(([field, after]) => ({ field, after })),
+    );
+    bundle = await ctx.db.get(id);
+  }
+  if (!bundle) return skip("bundle vanished");
   const bundleRef = { type: "releaseBundle" as const, id: bundle._id };
   const moves = newMoves(entry.key);
   const seriesBefore = await bundleSeries(ctx, bundle._id);
-
-  const memberships = await ctx.db
-    .query("bundleMemberships")
-    .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-    .collect();
-  let firstVolume: Id<"volumes"> | null = null;
-  for (const planned of entry.members) {
-    // The Release with that ISBN, as its own or as one of its other printings'.
-    const holders = [
-      ...(await ctx.db
-        .query("releases")
-        .withIndex("by_isbn13", (q) => q.eq("isbn13", planned.isbn13))
-        .collect()),
-      ...(await printingReleases(ctx, planned.isbn13)),
-    ];
-    const hits = [
-      ...new Map(
-        holders.flatMap((r) => (r !== null && r.status === "active" ? [[r._id, r] as const] : [])),
-      ).values(),
-    ];
-    const member = hits[0];
-    if (!member || hits.length > 1)
-      return skip(`member ${planned.isbn13}: ${hits.length} active releases`);
-    if (
-      member.locked ||
-      member.publisherId !== bundle.publisherId ||
-      member.format !== bundle.format
-    )
-      skip("Member publisher, format or lock differs from Bundle.");
-    const { releaseContents, reader } = await import("../heldBooks");
-    await releaseContents(ctx, member._id, reader(ctx));
-    if (box && member._id === box._id) skip("plan error: the box set is its own member");
-    firstVolume ??=
-      (await coverageOf(ctx, member.editionId)).sort((a, b) => a.order - b.order)[0]?.volumeId ??
-      null;
-    const row = memberships.find((m) => m.releaseId === member._id);
-    if (row) {
-      if (row.order !== planned.order) skip(`member ${planned.isbn13} sits at order ${row.order}`);
-      continue;
-    }
-    if (memberships.some((m) => m.order === planned.order))
-      skip(`order ${planned.order} is taken by another member`);
+  for (const member of selected) {
+    if (current.some((m) => m.releaseId === member.release._id)) continue;
     await audit.meta();
-    const id = await ctx.db.insert("bundleMemberships", {
+    await ctx.db.insert("bundleMemberships", {
       bundleId: bundle._id,
-      releaseId: member._id,
-      order: planned.order,
+      releaseId: member.release._id,
+      order: member.order,
     });
-    const inserted = await ctx.db.get(id);
-    if (inserted) memberships.push(inserted);
-    const change = { field: "member", after: `release ${planned.isbn13} (order ${planned.order})` };
+    const change = {
+      field: "member",
+      after: `release ${member.release.isbn13 ?? member.release._id} (order ${member.order})`,
+    };
     audit.op({ kind: "update", ref: bundleRef, changes: [change] });
     await audit.revise(bundleRef, [change]);
   }
-
   await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundle._id, seriesBefore);
   if (box && (await entriesToBundle(ctx, audit, moves, box, bundle._id))) {
-    if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
-      await audit.revise({ type: "release", id: box._id }, [
-        { field: "convertedToBundle", after: `#${bundle.publicId} ${bundle.name}` },
-      ]);
-      const revision = await ctx.db
-        .query("revisions")
-        .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", box!._id))
-        .order("desc")
-        .first();
-      if (!revision) return skip("Conversion audit missing.");
-      await ctx.db.insert("bundleConversions", {
-        releaseId: box._id,
-        bundleId: bundle._id,
-        proposalId: (await audit.meta()).proposalId,
-        revisionId: revision._id,
-        isbnKeys: valueHash([...primaryIsbnsOf(box)].sort()),
-      });
-    }
+    await completeBoxConversion(ctx, audit, box, bundle);
     const edition = await ctx.db.get(box.editionId);
     const live = (await releasesOf(ctx, box.editionId)).filter((r) => r.status === "active");
-    if (edition && live.length === 0)
+    if (edition && !live.length)
       await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   }
   await closeMoves(ctx, audit, box ? { type: "release", id: box._id } : bundleRef, moves);
-  // A box set still holding entries stays up until a later leg empties it.
   if (moves.unfinished) return partial;
-  await retireVolumes(ctx, audit, entry.retireVolumeIds, firstVolume);
+  await retireVolumes(
+    ctx,
+    audit,
+    entry.retireVolumeIds,
+    selected[0]?.contents[0]?.volume._id ?? null,
+  );
   return audit.wrote ? applied : already;
 }
 

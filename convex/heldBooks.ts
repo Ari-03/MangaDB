@@ -8,6 +8,7 @@ import { packagingOf, readAnnLineTitle, splitReleaseTitle } from "./lib/ann";
 import { nestedLimits, platformStop } from "./lib/bounded";
 import {
   bundleMatch,
+  bundleEnvelope,
   contentMatch,
   heldState,
   reader,
@@ -15,7 +16,6 @@ import {
   publisherMatch,
   reviewedMatch,
   reviewedRouting,
-  releaseContents,
   refuse,
 } from "./lib/heldBooks";
 import { clearHold, holdOf, linkObservation, recordUnplaced } from "./lib/observations";
@@ -89,6 +89,7 @@ export const previewInternal = internalQuery({
             }
           } else {
             const bundle = state.bundle!;
+            await bundleEnvelope(ctx, state);
             if (
               state.heldSeries &&
               state.heldSeries._id !== (args.reviewed?.seriesId ?? state.source.series?._id)
@@ -106,10 +107,7 @@ export const previewInternal = internalQuery({
             if (!state.isbn13 || !primaryIsbnsOf(bundle).has(state.isbn13))
               refuse("Bundle and source ISBN differ.");
             if (args.reviewed) {
-              const contents = [];
-              for (const m of state.members)
-                contents.push(await releaseContents(ctx, m.releaseId, state.r));
-              await reviewedMatch(ctx, state, contents);
+              await reviewedMatch(ctx, state, state.memberContents);
             } else await bundleMatch(ctx, state);
           }
         } catch (error) {

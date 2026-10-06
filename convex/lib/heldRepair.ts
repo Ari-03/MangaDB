@@ -97,6 +97,22 @@ export async function referenceAudit(
   const reviewIds = new Set<Id<"reviews">>();
   const commentIds = new Set<Id<"comments">>();
   const count = async <T>(name: string, query: AsyncIterable<T>) => {
+    // Supported ownership transfers can span several bounded legs. Count
+    // these rows completely under the transaction budget without retaining
+    // personal bodies or treating the catalog join limit as a population cap.
+    if (
+      name === "collectionEntries.release" ||
+      name === "collectionEntries.bundle" ||
+      name.startsWith("userSeriesStates.")
+    ) {
+      await r.room();
+      for await (const _row of query) {
+        counts[name] = (counts[name] ?? 0) + 1;
+        await r.room();
+      }
+      counts[name] ??= 0;
+      return [];
+    }
     const rows = await r.many(query);
     counts[name] = (counts[name] ?? 0) + rows.length;
     return rows;

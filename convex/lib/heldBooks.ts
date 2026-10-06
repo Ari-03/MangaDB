@@ -3,10 +3,11 @@ import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { type AnnReleaseSnapshot, lineOutOfScope } from "../ann";
 import { placeEdition } from "../openLibrary";
-import { contentRefusal, readTitledRecord } from "../printings";
-import { annLinePackaged, packagingOf, readAnnLineTitle } from "./ann";
+import { contentRefusal, readObservationBook, readTitledRecord } from "../printings";
+import { annContentFacts, annLinePackaged, packagingOf, readAnnLineTitle } from "./ann";
 import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
+import { bindingFacts, bookFacts } from "./bookFacts";
 import { labelsEqual, sameWorkTitle } from "./matching";
 import { holdOf } from "./observations";
 import type { OlEditionSnapshot } from "./openLibrary";
@@ -90,6 +91,30 @@ export function reader(ctx: QueryCtx) {
   return { room, facts, read, active, many };
 }
 export type Reader = ReturnType<typeof reader>;
+
+/** Scan one Series under the transaction budget, retaining only requested labels.
+ * Long works do not become ineligible merely because unrelated Volumes exceed a join limit.
+ */
+export async function volumesForLabels(
+  ctx: QueryCtx,
+  seriesId: Id<"series">,
+  labels: readonly string[],
+  r: Reader,
+) {
+  if (labels.length > MAX_JOIN)
+    return refuse("Requested box contents exceed 80 Volumes; incomplete.");
+  const matches: Doc<"volumes">[] = [];
+  await r.room();
+  for await (const volume of ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))) {
+    if (labels.some((label) => labelsEqual(volume.label, label))) matches.push(volume);
+    if (matches.length > MAX_JOIN) return refuse("Box Volume candidates exceed 80; incomplete.");
+    await r.room();
+  }
+  r.facts.push(matches);
+  return matches;
+}
 
 /** Full current source-parent provenance, never inferred from the ISBN holder. */
 export async function sourceSeries(
@@ -376,6 +401,7 @@ export async function heldState(
   let contents: Contents | null = null;
   let bundle: Doc<"releaseBundles"> | null = null;
   let members: Array<{ releaseId: Id<"releases">; order: number }> = [];
+  const memberContents: Contents[] = [];
   if (target?.type === "release") contents = await releaseContents(ctx, target.id, r);
   if (target?.type === "bundle") {
     bundle = await r.active(target.id);
@@ -389,7 +415,8 @@ export async function heldState(
     ).sort((a, b) => a.order - b.order);
     if (!members.length)
       return refuse("Bundle contents are empty; research and repair membership first.");
-    for (const member of members) await releaseContents(ctx, member.releaseId, r);
+    for (const member of members)
+      memberContents.push(await releaseContents(ctx, member.releaseId, r));
   }
   if (reviewed) {
     if (
@@ -431,6 +458,7 @@ export async function heldState(
     contents,
     bundle,
     members,
+    memberContents,
     expected,
     eligible,
     r,
@@ -473,6 +501,22 @@ export async function publisherMatch(
   return refuse("Source publisher cannot be resolved.");
 }
 
+/** The containing product must agree with its own active publisher and every member. */
+export async function bundleEnvelope(ctx: QueryCtx, state: Awaited<ReturnType<typeof heldState>>) {
+  const bundle = state.bundle ?? refuse("No Bundle.");
+  const publisher = await state.r.active(bundle.publisherId);
+  const format = (state.observation.snapshot as { format?: string }).format;
+  if (bundle.format !== format) return refuse("Bundle and source formats differ.");
+  if (state.reviewed) {
+    if (state.reviewed.publisherId !== publisher._id)
+      return refuse("Bundle and reviewed product publishers differ.");
+  } else await publisherMatch(ctx, state.observation, publisher._id);
+  for (const content of state.memberContents) {
+    if (content.release.format !== bundle.format || content.publisher._id !== publisher._id)
+      return refuse("Bundle member format/publisher differs.");
+  }
+}
+
 export async function bundleMatch(ctx: QueryCtx, state: Awaited<ReturnType<typeof heldState>>) {
   const bundle = state.bundle ?? refuse("No Bundle.");
   const s = state.observation.snapshot as AnnReleaseSnapshot;
@@ -496,8 +540,7 @@ export async function bundleMatch(ctx: QueryCtx, state: Awaited<ReturnType<typeo
       "Source supplies no complete box contents; exact publisher contents review is required.",
     );
   const actual = [];
-  for (const member of state.members) {
-    const content = await releaseContents(ctx, member.releaseId, state.r);
+  for (const content of state.memberContents) {
     if (content.release.format !== bundle.format || content.publisher._id !== bundle.publisherId)
       return refuse("Bundle member format/publisher differs.");
     actual.push(...content.contents);
@@ -541,41 +584,71 @@ export async function reviewedMatch(
     return refuse("Source parent work disagrees with review.");
   const s = state.observation.snapshot as {
     title?: string;
+    subtitle?: string;
     seriesTitle?: string;
     format?: string;
     coverRange?: { from: string; to: string };
     coverageGapped?: boolean;
-    page?: { volume?: string };
+    packaging?: {
+      coverRange?: { from: string; to: string } | null;
+      coverageGapped?: boolean;
+      lineName?: string | null;
+      linePosition?: string | null;
+    };
   };
   if (contents.some((c) => c.release.format !== s.format))
     return refuse("Known source format differs.");
   const series = await state.r.active(proof.seriesId);
+  const ranges = [s.coverRange, s.packaging?.coverRange];
+  if (s.coverageGapped || s.packaging?.coverageGapped)
+    return refuse("Known incomplete source contents cannot be reviewed as a complete range.");
+  let sourceLabel: string | undefined;
+  let sourceBinding: "hardcover" | "paperback" | undefined;
+  let packaged = false;
+  let lineName: string | null | undefined;
+  let position: string | null | undefined;
   if (state.observation.sourceKey === "ann") {
     const line = state.observation.snapshot as AnnReleaseSnapshot;
-    const named = readAnnLineTitle(line.title, { names: [series.title] });
+    const sourceWork = routed ? line.title.match(/^(.*?\bPart\s+\d+)\b/i)?.[1] : undefined;
+    const names = sourceWork ? [series.title, sourceWork] : [series.title];
+    const reading = await readObservationBook(ctx, state.observation, [series], names);
+    const named = readAnnLineTitle(line.title, { names });
+    // A reviewed Season/Box product can be titled beyond its parent work.
+    // Exact title text plus selected IDs cannot excuse an unrelated known work.
+    const productWork = line.title.replace(
+      /\s*(?:[-–—:]\s*)?(?:Season\s+\d+(?:\s+Part\s+\d+)?|Box\s+Set(?:\s+\d+)?)(?:\s+Manga\s+Box\s+Set)?$/i,
+      "",
+    );
+    const reviewedProduct =
+      proof.sourceTitle === line.title &&
+      state.source.series?._id === proof.seriesId &&
+      annLinePackaged(line, names) &&
+      sameWorkTitle(productWork, series.title);
     if (
       named.kind === "ambiguous" ||
-      (!routed &&
-        !sameWorkTitle(named.work, series.title) &&
-        !(proof.sourceTitle === line.title && state.source.series?._id === proof.seriesId)) ||
-      lineOutOfScope(line, [series.title])
+      (!routed && !sameWorkTitle(reading.work, series.title) && !reviewedProduct) ||
+      reading.scope.length ||
+      reading.unreadable.length
     )
-      return refuse("Known ANN work or scope contradicts review.");
-    // Keep final importer semantics: unknown/GN grammar remains deferred.
-    const ordinary = await contentRefusal(
-      ctx,
-      state.observation,
-      contents[0]!.release,
-      contents[0]!.series,
-    );
+      return refuse(
+        `Known ANN work, scope or unreadable facts contradict review: ${reading.unreadable.join("; ")}`,
+      );
+    const facts = annContentFacts(line, names);
     if (
-      (!routed && ordinary?.includes("cannot be read")) ||
-      ordinary?.includes("outside the catalog")
+      facts.coverageGapped ||
+      facts.positionConflict ||
+      facts.formatConflict ||
+      facts.title.kind === "ambiguous"
     )
-      return refuse(ordinary);
-    const packaged = packagingOf(line, [series.title]);
-    if (packaged?.coverageGapped || packaged?.positionConflict || packaged?.formatConflict)
       return refuse("Known ANN content/position/format conflict.");
+    ranges.push(facts.coverRange);
+    packaged = reading.packaging.length > 0;
+    sourceLabel = reading.label;
+    sourceBinding = reading.binding;
+    lineName = facts.lineName;
+    position = facts.position;
+    if (!packaged && reading.needsLabel && !sourceLabel)
+      return refuse("ANN states no Volume; exact contents remain unknown.");
   } else {
     const title = state.observation.sourceKey === "kodansha" ? s.seriesTitle : s.title;
     if (!title) return refuse("Missing work context cannot be replaced by review.");
@@ -591,17 +664,55 @@ export async function reviewedMatch(
       !sameWorkTitle(reading.work, series.title)
     )
       return refuse("Known source work, scope or unreadable facts contradict review.");
+    const parsed = parseBookTitle(title, { subtitle: s.subtitle });
+    const raw = parseBookTitle(title);
+    ranges.push(parsed.packaging?.coverRange, raw.packaging?.coverRange);
+    if (parsed.packaging?.coverageGapped || raw.packaging?.coverageGapped)
+      return refuse("Known incomplete source contents cannot be reviewed as a complete range.");
+    lineName = s.packaging?.lineName ?? parsed.packaging?.lineName;
+    position = s.packaging?.linePosition ?? parsed.packaging?.linePosition;
+    const positions = [
+      s.packaging?.linePosition,
+      parsed.packaging?.linePosition,
+      raw.packaging?.linePosition,
+    ].filter((one): one is string => !!one);
+    if (positions.some((one) => !labelsEqual(one, position ?? null)))
+      return refuse("Known source positions disagree.");
     if (
-      reading.binding &&
-      contents.some((c) => c.release.binding && c.release.binding !== reading.binding)
+      [title, s.subtitle].some((text) => bookFacts(text, [series.title]).digital) &&
+      s.format !== "digital"
     )
+      return refuse("Known source digital format contradicts target.");
+    packaged = reading.packaging.length > 0;
+    sourceLabel = reading.label;
+    sourceBinding = reading.binding;
+  }
+  for (const content of contents) {
+    const bindings = new Set(bindingFacts(content.release.binding));
+    if (bindings.size > 1 || (sourceBinding && bindings.size && !bindings.has(sourceBinding)))
       return refuse("Known source binding contradicts target.");
+  }
+  // A single source label is a Volume; a packaged label is its position.
+  // Compare a package with all members together, never with its first Release.
+  if (
+    !packaged &&
+    sourceLabel &&
+    (actual.length !== 1 || !labelsEqual(actual[0]!.volume.label ?? null, sourceLabel))
+  )
+    return refuse("Known single-Volume extent differs.");
+  if (state.bundle && packaged && position) {
+    const targetPosition = parseBookTitle(state.bundle.name).packaging?.linePosition;
+    if (targetPosition && !labelsEqual(targetPosition, position))
+      return refuse("Known Bundle position differs.");
+  }
+  if (!state.bundle && packaged && lineName) {
+    const target = contents[0]!;
     if (
-      !reading.packaging.length &&
-      reading.label &&
-      (actual.length !== 1 || !labelsEqual(actual[0]!.volume.label ?? null, reading.label))
+      !target.line ||
+      !sameWorkTitle(target.line.name, lineName) ||
+      (position && !labelsEqual(target.edition.linePosition ?? null, position))
     )
-      return refuse("Known single-Volume extent differs.");
+      return refuse("Known Edition Line name or position differs.");
   }
   if (
     routed &&
@@ -609,10 +720,9 @@ export async function reviewedMatch(
       !labelsEqual(actual[0]!.volume.label ?? null, proof.umbrellaRouting!.productVolumeLabel))
   )
     return refuse("Reviewed product Volume differs from complete canonical contents.");
-  if (s.coverageGapped)
-    return refuse("Known incomplete source contents cannot be reviewed as a complete range.");
-  if (s.coverRange) {
-    const labels = rangeLabels(s.coverRange);
+  for (const range of ranges) {
+    if (!range) continue;
+    const labels = rangeLabels(range);
     if (
       !labels ||
       actual.length !== labels.length ||

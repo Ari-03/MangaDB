@@ -442,7 +442,13 @@ function readAnnLine(
   }
   const bare = parsed.bareNumber || parsed.bareRoman;
   if (!bare) reading.work = parsed.seriesTitle;
-  if (!bare) labels.push({ where: `its title "${line.title}"`, label: parsed.volumeLabel });
+  const namedPart = line.title.match(/^(.*?\bPart\s+\d+)\b/i)?.[1];
+  const partOfWork =
+    namedPart !== undefined && names.some((name) => sameWorkTitle(name, namedPart));
+  // A verified Part belongs to the work name. Independent Vol./GN clauses
+  // still come from bookFacts and the designator, and must all agree.
+  if (!bare && !partOfWork)
+    labels.push({ where: `its title "${line.title}"`, label: parsed.volumeLabel });
   if (nonEmpty(page?.title)) {
     // The page's title is a statement of its own, read whole before its
     // work is compared: its own designator ("Vagabond (GN 1)") and its own
@@ -465,7 +471,8 @@ function readAnnLine(
       reading.unreadable.push(`ANN's page is titled "${page.title}", the line "${line.title}"`);
     }
     labels.push({ where: `ANN's page title "${page.title}"`, label: split?.label });
-    if (!pageBare) {
+    const pagePart = pageTitle.match(/^(.*?\bPart\s+\d+)\b/i)?.[1];
+    if (!pageBare && !(pagePart && names.some((name) => sameWorkTitle(name, pagePart)))) {
       labels.push({ where: `ANN's page title "${page.title}"`, label: pageParsed.volumeLabel });
     }
     if (
@@ -568,30 +575,17 @@ export function readTitledRecord(
   return reading;
 }
 
-/**
- * Why the record is not a printing of the Release's one Volume, or null:
- * the content check every decision passes before ownership is read. The
- * record must read as one Volume of a work titled as one of the Release's
- * Series (releaseSeries), with nothing marking it packaging, out of scope,
- * or unreadable, and no plainly stated Binding other than the Release's;
- * and the Release's Edition must collect exactly that one whole Volume, an
- * active Volume whose own Series, followed through merges, is one of those
- * Series by ID (a Series merely titled the same is another work). An
- * Edition Line member with only that Volume counts. Packaging is refused
- * whole for now: a packaged printing waits until its line, position and
- * coverage can be compared with the Edition's.
- */
-export async function contentRefusal(
+/** The final source reading, independent of the printing-only one-Volume target rule. */
+export async function readObservationBook(
   ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
-  release: Doc<"releases">,
   series: Array<Doc<"series">>,
-): Promise<string | null> {
+  workTitles = series.map((one) => one.title),
+): Promise<BookReading> {
   const s = observation.snapshot as SnapshotFacts;
   const title = typeof s?.title === "string" ? s.title.trim() : "";
-  if (title === "") return "The record gives no title to read the book from.";
 
-  const seriesTitles = series.map((one) => one.title);
+  const seriesTitles = workTitles;
   const ownWork = (work: string) => seriesTitles.some((t) => sameWorkTitle(t, work));
 
   let reading: BookReading;
@@ -622,6 +616,35 @@ export async function contentRefusal(
   const outOfScope = outOfScopeReason(title);
   if (outOfScope !== null) reading.scope.push(`its title reads ${outOfScope}`);
 
+  if (title === "") reading.unreadable.push("The record gives no title to read the book from.");
+  return reading;
+}
+
+/**
+ * Why the record is not a printing of the Release's one Volume, or null:
+ * the content check every decision passes before ownership is read. The
+ * record must read as one Volume of a work titled as one of the Release's
+ * Series (releaseSeries), with nothing marking it packaging, out of scope,
+ * or unreadable, and no plainly stated Binding other than the Release's;
+ * and the Release's Edition must collect exactly that one whole Volume, an
+ * active Volume whose own Series, followed through merges, is one of those
+ * Series by ID (a Series merely titled the same is another work). An
+ * Edition Line member with only that Volume counts. Packaging is refused
+ * whole for now: a packaged printing waits until its line, position and
+ * coverage can be compared with the Edition's.
+ */
+export async function contentRefusal(
+  ctx: QueryCtx,
+  observation: Doc<"sourceObservations">,
+  release: Doc<"releases">,
+  series: Array<Doc<"series">>,
+): Promise<string | null> {
+  const title = (observation.snapshot as SnapshotFacts)?.title;
+  if (typeof title !== "string" || title.trim() === "")
+    return "The record gives no title to read the book from.";
+  const seriesTitles = series.map((one) => one.title);
+  const ownWork = (work: string) => seriesTitles.some((t) => sameWorkTitle(t, work));
+  const reading = await readObservationBook(ctx, observation, series);
   if (reading.scope.length > 0) {
     return `The record is outside the catalog: ${[...new Set(reading.scope)].join("; ")}.`;
   }

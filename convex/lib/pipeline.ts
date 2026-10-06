@@ -36,7 +36,7 @@ import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
 import { partialDateSort, type DateParts } from "./dates";
-import { coverageOf, coveringOf, releasesOf } from "./editionRows";
+import { coverageOf, coveringOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
@@ -1695,11 +1695,21 @@ export async function createReleaseBundle(
     });
   }
 
-  const members = await expectedBundleMembers(
+  const selected = await expectedBundleMembers(
     ctx,
     { ...args, format: args.release.format },
     publisher.id,
   );
+  if (selected.conflict) {
+    await recordUnplaced(
+      ctx,
+      args.observation,
+      { kind: "packaging", reason: selected.conflict, seriesId: args.seriesId },
+      args.now,
+    );
+    return { held: selected.conflict };
+  }
+  const members = selected.members;
   const memberIds = members.map((member) => member.releaseId);
 
   const publicId = await allocatePublicId(ctx, "bundle");
@@ -1753,37 +1763,66 @@ async function expectedBundleMembers(
   ctx: MutationCtx,
   args: Pick<BundleMembersArgs, "seriesId" | "labels" | "format">,
   publisherId: Id<"publishers">,
-): Promise<Array<{ releaseId: Id<"releases">; order: number }>> {
-  const volumes = await ctx.db
-    .query("volumes")
-    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
-    .collect();
-  const members: Array<{ releaseId: Id<"releases">; order: number }> = [];
-  for (const [i, label] of args.labels.entries()) {
-    const volume = volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label));
-    if (!volume) continue;
-    const coverages = await coveringOf(ctx, volume._id);
-    for (const coverage of coverages) {
-      const edition = await ctx.db.get(coverage.editionId);
-      if (!edition || edition.status !== "active") continue;
-      // The member is the publisher's whole single-Volume book: never a
-      // packaging line's, an omnibus, or a book holding part of the Volume
-      // (the rule matching applies, lib/matching.ts).
-      if (edition.publisherId !== publisherId || !(await isWholeSingleVolume(ctx, edition))) {
-        continue;
-      }
-      const member = (await releasesOf(ctx, edition._id)).find(
-        (release) => release.status === "active" && release.format === args.format,
+  established: ReadonlySet<Id<"releases">> = new Set(),
+): Promise<{ members: Array<{ releaseId: Id<"releases">; order: number }>; conflict?: string }> {
+  const { reader, releaseContents, volumesForLabels, refuse } = await import("./heldBooks");
+  const r = reader(ctx);
+  try {
+    const series = await r.active(args.seriesId);
+    const publisher = await r.active(publisherId);
+    const volumes = await volumesForLabels(ctx, series._id, args.labels, r);
+    const members: Array<{ releaseId: Id<"releases">; order: number }> = [];
+    for (const [i, label] of args.labels.entries()) {
+      const matching = volumes.filter((v) => v.status === "active" && labelsEqual(v.label, label));
+      if (matching.length > 1) refuse("Box Volume selection is ambiguous.");
+      const volume = matching[0];
+      // Missing books retain the ordinary incomplete-box import policy.
+      if (!volume) continue;
+      await r.active(volume._id);
+      const candidates = new Map<Id<"releases">, Doc<"releases">>();
+      const coverages = await r.many(
+        ctx.db.query("volumeCoverages").withIndex("by_volume", (q) => q.eq("volumeId", volume._id)),
       );
-      if (member) {
-        if (!members.some((m) => m.releaseId === member._id)) {
-          members.push({ releaseId: member._id, order: i + 1 });
+      for (const coverage of coverages) {
+        const edition = await r.read(coverage.editionId);
+        if (
+          !edition ||
+          edition.status !== "active" ||
+          edition.publisherId !== publisher._id ||
+          !(await isWholeSingleVolume(ctx, edition))
+        )
+          continue;
+        const releases = await r.many(
+          ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", edition._id)),
+        );
+        for (const release of releases) {
+          if (release.status === "active" && release.format === args.format)
+            candidates.set(release._id, release);
         }
-        break;
+      }
+      const kept = [...candidates.values()].filter((c) => established.has(c._id));
+      if (!kept.length && candidates.size > 1)
+        refuse("Box member selection is ambiguous; exact members need review.");
+      // Existing explicit memberships retain an Editor's book choices and order.
+      // A new member is selected only when its candidate is unambiguous.
+      const selected = kept.length ? kept : [...candidates.values()];
+      for (const candidate of selected) {
+        const content = await releaseContents(ctx, candidate._id, r);
+        if (
+          content.publisher._id !== publisher._id ||
+          content.release.format !== args.format ||
+          content.contents.length !== 1 ||
+          content.contents[0]!.volume._id !== volume._id ||
+          content.contents[0]!.work._id !== series._id
+        )
+          refuse("Selected Box member canonical identity differs.");
+        members.push({ releaseId: content.release._id, order: i + 1 });
       }
     }
+    return { members };
+  } catch (error) {
+    return { members: [], conflict: errorMessage(error) };
   }
-  return members;
 }
 
 /** What reconciling a box's members needs: its covered Volumes, Format and citation. */
@@ -1850,7 +1889,11 @@ async function addLateBundleMembers(
   args: BundleMembersArgs,
 ): Promise<{ expected: number; added: number; conflict?: string }> {
   if (bundle.status !== "active" || bundle.locked || bundle.overriddenFields?.includes("members")) {
-    return { expected: 0, added: 0 };
+    return {
+      expected: 0,
+      added: 0,
+      conflict: "Bundle membership is locked or manually overridden.",
+    };
   }
   // In page order: by `order`, then creation.
   const current = await ctx.db
@@ -1862,7 +1905,26 @@ async function addLateBundleMembers(
     await recordUnplaced(ctx, args.observation, { kind: "series", reason: conflict }, args.now);
     return { expected: 0, added: 0, conflict };
   }
-  const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
+  const selected = await expectedBundleMembers(
+    ctx,
+    args,
+    bundle.publisherId,
+    new Set(current.map((m) => m.releaseId)),
+  );
+  if (selected.conflict) return { expected: 0, added: 0, conflict: selected.conflict };
+  const { reader, releaseContents, refuse } = await import("./heldBooks");
+  const r = reader(ctx);
+  try {
+    const publisher = await r.active(bundle.publisherId);
+    for (const row of current) {
+      const content = await releaseContents(ctx, row.releaseId, r);
+      if (content.publisher._id !== publisher._id || content.release.format !== bundle.format)
+        refuse("Existing Bundle member publisher/format differs.");
+    }
+  } catch (error) {
+    return { expected: 0, added: 0, conflict: errorMessage(error) };
+  }
+  const expected = selected.members;
   const linked = new Set<Id<"releases">>(current.map((row) => row.releaseId));
   const missing = expected.filter((member) => !linked.has(member.releaseId));
   if (missing.length === 0) return { expected: expected.length, added: 0 };

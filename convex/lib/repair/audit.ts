@@ -123,7 +123,7 @@ export function createAudit(
     async revise(ref: Ref, changes: Change[]) {
       if (changes.length === 0) return;
       const opMeta = await this.meta();
-      await insertRevision(ctx, ref, (await revisionsOf(ctx, ref))[0], changes, opMeta);
+      return await insertRevision(ctx, ref, (await revisionsOf(ctx, ref))[0], changes, opMeta);
     },
     /** Freeze the Proposal's immutable version once the entry is done. */
     async finish() {

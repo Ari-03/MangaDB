@@ -940,6 +940,17 @@ export const applyManga = internalMutation({
         now,
       );
 
+      // Scope precedes ISBN matching and reconciliation. Existing links remain
+      // historical evidence for guarded canonical repair, with no field offers.
+      const scope =
+        lineOutOfScope(releaseObs.snapshot as AnnReleaseSnapshot, [seriesTitle]) ??
+        (await isbnScope(ctx, release.isbn13));
+      if (scope) {
+        changed =
+          (await recordUnplaced(ctx, releaseObs, { kind: null, reason: scope }, now)) || changed;
+        continue;
+      }
+
       let canonical: Doc<"releases"> | null = null;
       if (releaseObs.recordRef?.type === "release") {
         const linked = await ctx.db.get(releaseObs.recordRef.id);
