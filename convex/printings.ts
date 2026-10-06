@@ -20,15 +20,14 @@ import { type AnnReleaseSnapshot, lineOutOfScope, packagingOf } from "./ann";
 import { getSourceByKey } from "./importSources";
 import { splitReleaseTitle } from "./lib/ann";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
-import { toIsbn13 } from "./lib/isbn";
+import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
 import { labelsEqual } from "./lib/matching";
-import { mergeSurvivor } from "./lib/merges";
+import { canonicalRecord, mergeSurvivor } from "./lib/merges";
 import { holdOf } from "./lib/observations";
 import { findPublisherByName, toPartialDate } from "./lib/pipeline";
 import { linkRecordedPrinting, recordPrinting } from "./lib/printings";
 import {
-  type Budget,
-  budgetShortfall,
+  addClaim,
   CLAIM_SCAN,
   type ClaimResolver,
   claimResolver,
@@ -37,6 +36,8 @@ import {
   MAX_DOCUMENT_BYTES,
   primaryIsbnsOf,
   printedClaimRefusal,
+  type Room,
+  readRoom,
   statedIsbns,
 } from "./lib/releaseIsbns";
 import { isMangaBook } from "./lib/sevenSeas";
@@ -173,27 +174,47 @@ function decidedCitationUrl(
 }
 
 /**
+ * The Release's Series as they are now, each followed through its merges
+ * (lib/merges.ts canonicalRecord) to an active Series, or why one is not:
+ * the work a decision compares the record with, by ID. A hidden Series, or
+ * one whose merges end nowhere, has no printings decided for it.
+ */
+async function releaseSeries(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+): Promise<{ series: Array<Doc<"series">> } | { refusal: string }> {
+  const series: Array<Doc<"series">> = [];
+  for (const id of release.seriesIds) {
+    const found = await canonicalRecord(ctx, "series", id);
+    if ("problem" in found) {
+      return { refusal: `The Release's Series cannot be followed: ${found.problem}.` };
+    }
+    if (found.doc.status !== "active") {
+      return { refusal: `The Release's Series "${found.doc.title}" is ${found.doc.status}.` };
+    }
+    series.push(found.doc);
+  }
+  return { series };
+}
+
+/**
  * Why the held book's Series or publisher is not the Release's, or null:
  * its hold's Series, followed through merges, must be one of the Release's
- * Series, and a publisher the record names must resolve to the Release's
- * publisher (followed through merges too).
+ * Series (releaseSeries), and a publisher the record names must resolve to
+ * the Release's publisher (followed through merges too).
  */
 async function slotRefusal(
   ctx: MutationCtx,
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
+  series: Array<Doc<"series">>,
   s: SnapshotFacts,
 ): Promise<string | null> {
   const hold = await holdOf(ctx, observation._id);
   if (hold?.seriesId === undefined) return "The book is not held under a Series.";
-  const heldSeries = await mergeSurvivor(ctx, "series", await ctx.db.get(hold.seriesId));
-  const releaseSeries = await Promise.all(
-    release.seriesIds.map(
-      async (id) => (await mergeSurvivor(ctx, "series", await ctx.db.get(id)))?._id,
-    ),
-  );
-  if (heldSeries === null || !releaseSeries.includes(heldSeries._id)) {
-    return `The book is held under ${heldSeries ? `"${heldSeries.title}"` : "a Series that no longer exists"}, which is not the Release's Series.`;
+  const held = await canonicalRecord(ctx, "series", hold.seriesId);
+  if (!("doc" in held) || !series.some((one) => one._id === held.doc._id)) {
+    return `The book is held under ${"doc" in held ? `"${held.doc.title}"` : "a Series that cannot be followed"}, which is not the Release's Series.`;
   }
 
   const names = publisherNames(observation.sourceKey, s);
@@ -234,6 +255,13 @@ type BookReading = {
   work: string;
   /** The single Volume it states, canonical; undefined when it states none. */
   label: string | undefined;
+  /**
+   * The source numbers every book it lists (ANN), so a record of it that
+   * states no Volume anywhere is unknown, never the Release's Volume.
+   */
+  needsLabel: boolean;
+  /** Its Binding when it says plainly (knownBinding); undefined is unknown. */
+  binding: Binding | undefined;
   /** Why it reads as more (or other) than one Volume: any one refuses for now. */
   packaging: string[];
   /** Why it is outside the catalog (a novel, a non-English book, …). */
@@ -245,16 +273,57 @@ type BookReading = {
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value !== "";
 const BRACKETED = /\[[^\]]*\]/;
 
+/** The two Bindings a record or Release can state plainly. */
+type Binding = "hardcover" | "paperback";
+
+/**
+ * A stated Binding read plainly (the sources and Releases write
+ * "hardcover" and "paperback"; "hardback", "softcover" and the like count
+ * too), else undefined: unknown, left to the reviewer, never a mismatch.
+ */
+function knownBinding(value: unknown): Binding | undefined {
+  if (typeof value !== "string") return undefined;
+  if (/\bhard ?(?:cover|back|bound)\b/i.test(value)) return "hardcover";
+  if (/\b(?:paper ?back|soft ?(?:cover|back|bound))\b/i.test(value)) return "paperback";
+  return undefined;
+}
+
+/**
+ * Every Volume a record states, each with where it says so: all of them
+ * must agree (labelsEqual, so "01" is "1"), and the reading takes their one
+ * Volume. A record stating none leaves the label unknown.
+ */
+function agreedLabel(
+  reading: BookReading,
+  statements: Array<{ where: string; label: string | null | undefined }>,
+): void {
+  const stated = statements.filter(
+    (s): s is { where: string; label: string } => nonEmpty(s.label) && s.label.trim() !== "",
+  );
+  const [first] = stated;
+  if (first === undefined) return;
+  for (const other of stated.slice(1)) {
+    if (!labelsEqual(first.label, other.label)) {
+      reading.unreadable.push(
+        `${first.where} says Volume ${first.label}, ${other.where} Volume ${other.label}`,
+      );
+    }
+  }
+  reading.label = canonicalLabel(first.label);
+}
+
 /**
  * The work and Volume an ANN release line states, from each of its
  * statements separately: the line's title, the release page's designator
- * (re-read with today's parser), the page's own title and manga entry, and
- * the stored flags. A stored flag is evidence, never the authority: a fresh
- * reading that disagrees with it is unreadable, and either one saying
- * packaging is packaging. A missing statement is unknown; a designator that
- * no longer reads is unreadable. `entryName` is the entry's title, trusted
- * to own the packaging words in the line's title only when it is one of
- * the Release's Series titles.
+ * (re-read with today's parser), the page's own title (its "Vol. 1" or its
+ * "(GN 1)") and manga entry, and the stored flags. A stored flag is
+ * evidence, never the authority: a fresh reading that disagrees with it is
+ * unreadable, and either one saying packaging is packaging. Every Volume
+ * any of them states must agree (agreedLabel), and ANN numbers its books,
+ * so a line stating none anywhere is unknown (`needsLabel`). A missing
+ * statement is unknown; a designator that no longer reads is unreadable.
+ * `entryName` is the entry's title, trusted to own the packaging words in
+ * the line's title only when it is one of the Release's Series titles.
  *
  * Integration point (docs/operations.md): with the fixed ANN line reader
  * (lib/ann.ts readAnnLineTitle and lib/matching.ts sameWorkTitle), this is
@@ -263,11 +332,16 @@ const BRACKETED = /\[[^\]]*\]/;
 function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
   const reading: BookReading = {
     work: line.title,
-    label: line.label !== undefined ? canonicalLabel(line.label) : undefined,
+    label: undefined,
+    needsLabel: true,
+    binding: undefined,
     packaging: [],
     scope: [],
     unreadable: [],
   };
+  const labels: Array<{ where: string; label: string | null | undefined }> = [
+    { where: "the stored line", label: line.label },
+  ];
   if (line.multi) reading.packaging.push("a multi-volume designator");
   if (line.editionLineHint) reading.packaging.push("a packaging designator or title");
   if (line.coverRange) {
@@ -286,8 +360,9 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
       reading.unreadable.push(`ANN's designator "${page.volume}" does not read as one book`);
     } else {
       const label = fresh.label !== undefined ? canonicalLabel(fresh.label) : undefined;
+      const storedLabel = line.label !== undefined ? canonicalLabel(line.label) : undefined;
       const stated = [
-        ["Volume", label, reading.label],
+        ["Volume", label, storedLabel],
         ["multi-volume", fresh.multi, line.multi],
         ["packaging", fresh.editionLineHint, line.editionLineHint],
         [
@@ -305,7 +380,7 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
         }
       }
       if (fresh.multi) reading.packaging.push(`the designator "${page.volume}"`);
-      reading.label = label;
+      labels.push({ where: `ANN's designator "${page.volume}"`, label: fresh.label });
     }
   }
   if (nonEmpty(page?.mangaId) && page.mangaId !== line.mangaId) {
@@ -324,29 +399,36 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
   }
   const bare = parsed.bareNumber || parsed.bareRoman;
   if (!bare) reading.work = parsed.seriesTitle;
-  if (!bare && parsed.volumeLabel !== null) {
-    if (reading.label !== undefined && !labelsEqual(parsed.volumeLabel, reading.label)) {
-      reading.unreadable.push(
-        `its title says Volume ${parsed.volumeLabel}, its designator Volume ${reading.label}`,
-      );
-    }
-    reading.label ??= canonicalLabel(parsed.volumeLabel);
-  }
+  if (!bare) labels.push({ where: `its title "${line.title}"`, label: parsed.volumeLabel });
   if (nonEmpty(page?.title)) {
-    const pageTitle = splitReleaseTitle(page.title, entryName)?.title ?? page.title;
+    // The page's title is a statement of its own, read whole before its
+    // work is compared: its own designator ("Vagabond (GN 1)") and its own
+    // Volume ("Vagabond, Vol. 1") count, as do packaging or a novel there.
+    const split = splitReleaseTitle(page.title, entryName);
+    const pageTitle = split?.title ?? page.title;
     const pageParsed = parseBookTitle(pageTitle);
-    const pageWork =
-      pageParsed.bareNumber || pageParsed.bareRoman ? pageTitle : pageParsed.seriesTitle;
+    const pageBare = pageParsed.bareNumber || pageParsed.bareRoman;
+    const pageWork = pageBare ? pageTitle : pageParsed.seriesTitle;
     if (workKey(pageWork) !== workKey(reading.work)) {
       reading.unreadable.push(`ANN's page is titled "${page.title}", the line "${line.title}"`);
     }
-    // The page's title is a statement of its own: packaging or a novel there counts too.
-    if (pageParsed.packaging !== null || pageParsed.isBox || BRACKETED.test(page.title)) {
+    labels.push({ where: `ANN's page title "${page.title}"`, label: split?.label });
+    if (!pageBare) {
+      labels.push({ where: `ANN's page title "${page.title}"`, label: pageParsed.volumeLabel });
+    }
+    if (
+      pageParsed.packaging !== null ||
+      pageParsed.isBox ||
+      BRACKETED.test(page.title) ||
+      split?.multi === true ||
+      split?.editionLineHint === true
+    ) {
       reading.packaging.push(`ANN's page title "${page.title}"`);
     }
     if (pageParsed.isNovel || isNovelTitle(page.title))
       reading.scope.push("its page title marks a novel");
   }
+  agreedLabel(reading, labels);
   return reading;
 }
 
@@ -355,17 +437,27 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
  * shared parser, checked against the fields the importer stored. A trailing
  * number the parser would split off without a Volume marker ("Kingdom
  * Hearts II") may be the work's own name, so such a reading is unreadable
- * here: a record that says "Vol." is read.
+ * here: a record that says "Vol." is read. A stored Volume the kept title
+ * does not state is the importer's reading of fields the snapshot does not
+ * keep (Open Library's subtitle "Vol. 1" under the title "Vagabond"): it
+ * stands, and is checked against the Release like any other. Only a title
+ * stating another Volume contradicts it.
  */
 function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): BookReading {
   const parsed = parseBookTitle(title);
   const reading: BookReading = {
     work: parsed.seriesTitle,
-    label: parsed.volumeLabel !== null ? canonicalLabel(parsed.volumeLabel) : undefined,
+    label: undefined,
+    needsLabel: false,
+    binding: knownBinding(s?.binding),
     packaging: [],
     scope: [],
     unreadable: [],
   };
+  agreedLabel(reading, [
+    { where: `its title "${title}"`, label: parsed.volumeLabel },
+    { where: "its stored reading", label: nonEmpty(s?.volumeLabel) ? s.volumeLabel : undefined },
+  ]);
   if (parsed.packaging !== null || parsed.isBox) reading.packaging.push(`its title "${title}"`);
   if (s?.multiVolume === true) reading.packaging.push("its stored multi-volume flag");
   if (s?.packaging !== undefined && s.packaging !== null) {
@@ -375,11 +467,6 @@ function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): B
   if (parsed.bareNumber || parsed.bareRoman || s?.bareNumber === true || s?.bareRoman === true) {
     reading.unreadable.push(
       `its title "${title}" ends in a number that may be the work's own, with no Volume marker`,
-    );
-  }
-  if (nonEmpty(s?.volumeLabel) && !labelsEqual(s.volumeLabel, reading.label ?? null)) {
-    reading.unreadable.push(
-      `its title says Volume ${reading.label ?? "none"}, its stored Volume ${s.volumeLabel}`,
     );
   }
   if (parsed.isNovel) reading.scope.push("its title marks a novel");
@@ -400,26 +487,26 @@ function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): B
  * Why the record is not a printing of the Release's one Volume, or null:
  * the content check every decision passes before ownership is read. The
  * record must read as one Volume of a work titled as one of the Release's
- * Series, with nothing marking it packaging, out of scope, or unreadable;
- * and the Release's Edition must collect exactly that one whole Volume of
- * that Series (an Edition Line member with only that Volume counts).
- * Packaging is refused whole for now: a packaged printing waits until its
- * line, position and coverage can be compared with the Edition's.
+ * Series (releaseSeries), with nothing marking it packaging, out of scope,
+ * or unreadable, and no plainly stated Binding other than the Release's;
+ * and the Release's Edition must collect exactly that one whole Volume, an
+ * active Volume whose own Series, followed through merges, is one of those
+ * Series by ID (a Series merely titled the same is another work). An
+ * Edition Line member with only that Volume counts. Packaging is refused
+ * whole for now: a packaged printing waits until its line, position and
+ * coverage can be compared with the Edition's.
  */
 async function contentRefusal(
   ctx: MutationCtx,
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
+  series: Array<Doc<"series">>,
 ): Promise<string | null> {
   const s = observation.snapshot as SnapshotFacts;
   const title = typeof s?.title === "string" ? s.title.trim() : "";
   if (title === "") return "The record gives no title to read the book from.";
 
-  const seriesTitles: string[] = [];
-  for (const id of release.seriesIds) {
-    const series = await mergeSurvivor(ctx, "series", await ctx.db.get(id));
-    if (series !== null && series.status !== "merged") seriesTitles.push(series.title);
-  }
+  const seriesTitles = series.map((one) => one.title);
   const ownWork = (work: string) => seriesTitles.some((t) => workKey(t) === workKey(work));
 
   let reading: BookReading;
@@ -453,6 +540,13 @@ async function contentRefusal(
   if (!ownWork(reading.work)) {
     return `The record's work "${reading.work}" is not the Release's Series (${seriesTitles.map((t) => `"${t}"`).join(", ") || "none"}).`;
   }
+  if (reading.label === undefined && reading.needsLabel) {
+    return "The record states no Volume anywhere (its line, designator, title or page), and its source numbers every book: which Volume it is is unknown.";
+  }
+  const target = knownBinding(release.binding);
+  if (reading.binding !== undefined && target !== undefined && reading.binding !== target) {
+    return `The record is a ${reading.binding} book; the Release is ${target}. Another Binding is another Release, not another printing of this one.`;
+  }
 
   // The Release's contents: exactly one whole Volume of one of its Series.
   const edition = await ctx.db.get(release.editionId);
@@ -461,9 +555,9 @@ async function contentRefusal(
   }
   if (edition.coverageUnmapped) return "The Release's Edition does not say what it collects.";
   if (edition.editionLineId !== undefined) {
-    const line = await mergeSurvivor(ctx, "editionLines", await ctx.db.get(edition.editionLineId));
-    if (line === null || line.status === "merged") {
-      return "The Release's Edition Line cannot be followed to an Edition Line.";
+    const line = await canonicalRecord(ctx, "editionLines", edition.editionLineId);
+    if (!("doc" in line) || line.doc.status !== "active") {
+      return "The Release's Edition Line cannot be followed to an active Edition Line.";
     }
   }
   const coverage = await ctx.db
@@ -474,19 +568,16 @@ async function contentRefusal(
   if (row === undefined || coverage.length > 1 || row.extent !== "complete") {
     return "The Release's Edition does not collect exactly one whole Volume.";
   }
-  const volume = await mergeSurvivor(ctx, "volumes", await ctx.db.get(row.volumeId));
-  const volumeSeries =
-    volume !== null ? await mergeSurvivor(ctx, "series", await ctx.db.get(volume.seriesId)) : null;
-  if (
-    volume === null ||
-    volume.status !== "active" ||
-    volumeSeries === null ||
-    !ownWork(volumeSeries.title)
-  ) {
-    return "The Release's Volume cannot be followed to an active Volume of its Series.";
+  const volume = await canonicalRecord(ctx, "volumes", row.volumeId);
+  if (!("doc" in volume) || volume.doc.status !== "active") {
+    return "The Release's Volume cannot be followed to an active Volume.";
   }
-  if (reading.label !== undefined && !labelsEqual(volume.label, reading.label)) {
-    return `The record is Volume ${reading.label}; the Release is Volume ${volume.label ?? "(unlabeled)"}.`;
+  const volumeSeries = await canonicalRecord(ctx, "series", volume.doc.seriesId);
+  if (!("doc" in volumeSeries) || !series.some((one) => one._id === volumeSeries.doc._id)) {
+    return "The Release's Volume is not a Volume of the Release's own Series.";
+  }
+  if (reading.label !== undefined && !labelsEqual(volume.doc.label, reading.label)) {
+    return `The record is Volume ${reading.label}; the Release is Volume ${volume.doc.label ?? "(unlabeled)"}.`;
   }
   return null;
 }
@@ -556,9 +647,11 @@ export const recordDecidedInternal = internalMutation({
     if (release.status !== "active") return refuse(`The Release is ${release.status}.`);
     if (release.locked) return refuse("The Release is locked.");
     if (release.format !== "physical") return refuse("The Release is not physical.");
-    const slot = await slotRefusal(ctx, observation, release, snapshot);
+    const work = await releaseSeries(ctx, release);
+    if ("refusal" in work) return refuse(work.refusal);
+    const slot = await slotRefusal(ctx, observation, release, work.series, snapshot);
     if (slot !== null) return refuse(slot);
-    const content = await contentRefusal(ctx, observation, release);
+    const content = await contentRefusal(ctx, observation, release, work.series);
     if (content !== null) return refuse(content);
 
     // Every claim on the ISBN, merges followed. The Release's own ISBN (or
@@ -605,17 +698,20 @@ export const recordDecidedInternal = internalMutation({
 
 /** Items one page of the check inspects at most. */
 const CHECK_PAGE = 100;
-/** Before each item's joins: room for its claims and links, beyond the page itself. */
-const CHECK_ITEM: Budget = {
-  bytesRead: 2 * MAX_DOCUMENT_BYTES,
-  documentsRead: 4 * (CLAIM_SCAN + 1) + 20,
-  databaseQueries: 20,
-};
+/**
+ * The most a page's own read may take (`paginationOpts.maximumBytesRead`,
+ * this when omitted): the rest of the transaction is its items' joins.
+ */
+const CHECK_PAGE_BYTES = 4 * MAX_DOCUMENT_BYTES;
+
+/** Thrown inside one item's joins when the transaction cannot afford its next read. */
+class OutOfRoom extends Error {}
 
 /** One thing the check found, and how bad it is. */
 type Finding = {
   /**
-   * `violation`: the ownership invariant (lib/releaseIsbns.ts) is broken.
+   * `violation`: the ownership invariant (lib/releaseIsbns.ts) is broken,
+   * or a stored ISBN is spelled so that no ownership check finds it.
    * `incomplete`: this item was not fully inspected. `diagnostic`: history
    * worth a look (a record unlinked since, a mark nobody owns any more),
    * not corruption.
@@ -624,6 +720,8 @@ type Finding = {
   isbn13?: string;
   rowId?: Id<"releaseIsbns">;
   observationId?: Id<"sourceObservations">;
+  releaseId?: Id<"releases">;
+  bundleId?: Id<"releaseBundles">;
   message: string;
 };
 
@@ -696,29 +794,58 @@ async function linkedRelease(
   return "doc" in resolved ? { release: resolved.doc } : { problem: resolved.unresolved };
 }
 
+/** The tables the check pages through, by pass. */
+const PASS_TABLES = {
+  rows: "releaseIsbns",
+  observations: "sourceObservations",
+  releases: "releases",
+  bundles: "releaseBundles",
+} as const;
+type Pass = keyof typeof PASS_TABLES;
+
 /**
  * One page of the Other Printings consistency check, read-only, for an
- * operator to walk to the end (docs/operations.md). Pass `rows` reads
- * `releaseIsbns`: each row's ISBN must be valid and have one owner, a
- * physical Release, with no Bundle claiming it (violations); a row whose
- * evidence record is gone or now links elsewhere is a diagnostic. Pass
- * `observations` reads every source record and checks the marked ones: a
- * mark must be a valid ISBN, on a record linked to a Release, whose one
- * owner is that Release (merges followed; the Release may hold it as its
- * own after a promotion); a mark nobody owns, or on an unlinked record, is a
- * diagnostic. Pages are native (`paginationOpts`, its byte and row limits
- * honoured), at most CHECK_PAGE items; an item whose joins the transaction
- * cannot afford is reported `incomplete`, never passed over. The catalog
- * is checked once both passes reach `isDone` with no `incomplete` finding,
- * and clean when there is also no violation. It reads ownership and
- * evidence only, never whether two books are the same.
+ * operator to walk to the end (docs/operations.md). Four passes:
+ *
+ * - `releases` and `bundles` read every Release and Bundle: an ISBN stored
+ *   in a spelling its index cannot find under the ISBN's own key (lib/
+ *   isbn.ts isbnHiddenFromIndex: hyphens, a lower-case x, an ISBN-10 kept
+ *   as `isbn13`) is a violation. Every other check reads exact keys, so
+ *   until these two passes are clean, nothing the other two find, or do
+ *   not find, is complete.
+ * - `rows` reads `releaseIsbns`: each row's ISBN must be valid, stored as
+ *   its key, and have one owner, a physical Release, with no Bundle
+ *   claiming it (violations). The row itself counts as a claim whatever its
+ *   spelling, so a row the exact read misses still meets the others. A row
+ *   whose evidence record is gone or now links elsewhere is a diagnostic.
+ * - `observations` reads every source record and checks the marked ones: a
+ *   mark must be a valid ISBN, on a record linked to a Release, whose one
+ *   owner is that Release (merges followed; the Release may hold it as its
+ *   own after a promotion); a mark nobody owns, or on an unlinked record, is
+ *   a diagnostic.
+ *
+ * Pages are native: `paginationOpts` goes to `.paginate()` with all its
+ * fields; `maximumBytesRead` may be at most CHECK_PAGE_BYTES and is that
+ * when omitted (a page of large records stops early and its cursor goes
+ * on), and `numItems` at most CHECK_PAGE. Each item's joins read one
+ * document at a time while the transaction can afford the largest; an
+ * item they could not finish, and every item after it, is reported
+ * `incomplete` by ID, never passed over. The catalog is checked once all
+ * four passes reach `isDone` with no `incomplete` finding, and clean when
+ * there is also no violation. It reads ownership and evidence only, never
+ * whether two books are the same.
  *
  *   npx convex run printings:consistencyInternal \
- *     '{"pass": "rows", "paginationOpts": {"numItems": 100, "cursor": null}}'
+ *     '{"pass": "releases", "paginationOpts": {"numItems": 100, "cursor": null}}'
  */
 export const consistencyInternal = internalQuery({
   args: {
-    pass: v.union(v.literal("rows"), v.literal("observations")),
+    pass: v.union(
+      v.literal("rows"),
+      v.literal("observations"),
+      v.literal("releases"),
+      v.literal("bundles"),
+    ),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, { pass, paginationOpts }) => {
@@ -728,29 +855,38 @@ export const consistencyInternal = internalQuery({
         message: `A page inspects 1 to ${CHECK_PAGE} items.`,
       });
     }
-    const resolver = claimResolver(ctx);
+    const bytes = paginationOpts.maximumBytesRead;
+    if (bytes !== undefined && (bytes < 1 || bytes > CHECK_PAGE_BYTES)) {
+      throw new ConvexError({
+        code: "invalidArgs",
+        message: `A page reads at most ${CHECK_PAGE_BYTES} bytes (maximumBytesRead), leaving the rest for its checks.`,
+      });
+    }
+    const page = await ctx.db
+      .query(PASS_TABLES[pass])
+      .paginate({ ...paginationOpts, maximumBytesRead: bytes ?? CHECK_PAGE_BYTES });
+    const room = readRoom(ctx, {}, () => {
+      throw new OutOfRoom();
+    });
+    const resolver = claimResolver(ctx, { room });
     const findings: Finding[] = [];
-    const page =
-      pass === "rows"
-        ? await ctx.db.query("releaseIsbns").paginate(paginationOpts)
-        : await ctx.db.query("sourceObservations").paginate(paginationOpts);
     let inspected = 0;
     for (const item of page.page) {
-      const short = budgetShortfall(await ctx.meta.getTransactionMetrics(), CHECK_ITEM);
-      if (short.length > 0) {
-        const left = page.page.length - inspected;
-        findings.push({
-          severity: "incomplete",
-          message: `${left} item(s) of this page were read but not inspected: the transaction is nearly spent (${short.join(", ")}). Check this page again with fewer items.`,
-        });
+      try {
+        findings.push(...(await checkItem(ctx, pass, item, resolver, room)));
+      } catch (error) {
+        if (!(error instanceof OutOfRoom)) throw error;
+        for (const left of page.page.slice(inspected)) {
+          findings.push({
+            severity: "incomplete",
+            ...idOf(pass, left),
+            message:
+              "Read but not inspected: the transaction could not afford its checks. Check this page again with fewer items.",
+          });
+        }
         break;
       }
       inspected++;
-      findings.push(
-        ...(pass === "rows"
-          ? await checkRow(ctx, resolver, item as Doc<"releaseIsbns">)
-          : await checkMark(ctx, resolver, item as Doc<"sourceObservations">)),
-      );
     }
     return {
       findings,
@@ -762,13 +898,73 @@ export const consistencyInternal = internalQuery({
   },
 });
 
+type PassItem =
+  | Doc<"releaseIsbns">
+  | Doc<"sourceObservations">
+  | Doc<"releases">
+  | Doc<"releaseBundles">;
+
+/** An item's ID in its pass's Finding field. */
+function idOf(pass: Pass, item: PassItem): Partial<Finding> {
+  switch (pass) {
+    case "rows":
+      return { rowId: item._id as Id<"releaseIsbns"> };
+    case "observations":
+      return { observationId: item._id as Id<"sourceObservations"> };
+    case "releases":
+      return { releaseId: item._id as Id<"releases"> };
+    case "bundles":
+      return { bundleId: item._id as Id<"releaseBundles"> };
+  }
+}
+
+function checkItem(
+  ctx: QueryCtx,
+  pass: Pass,
+  item: PassItem,
+  resolver: ClaimResolver,
+  room: Room,
+): Promise<Finding[]> {
+  switch (pass) {
+    case "rows":
+      return checkRow(ctx, resolver, room, item as Doc<"releaseIsbns">);
+    case "observations":
+      return checkMark(ctx, resolver, room, item as Doc<"sourceObservations">);
+    case "releases":
+    case "bundles":
+      return Promise.resolve(checkKeys(pass, item as Doc<"releases"> | Doc<"releaseBundles">));
+  }
+}
+
+/** The key passes, for one Release or Bundle: each ISBN stored as its index finds it. */
+function checkKeys(pass: "releases" | "bundles", doc: Doc<"releases"> | Doc<"releaseBundles">) {
+  const what = pass === "releases" ? `Release ${doc._id}` : `Release Bundle ${doc._id}`;
+  const fix =
+    pass === "releases" ? "a repair updateFields entry" : "a Proposal updating the Bundle";
+  return (["isbn13", "isbn10"] as const).flatMap((field): Finding[] =>
+    isbnHiddenFromIndex(field, doc[field])
+      ? [
+          {
+            severity: "violation",
+            isbn13: toIsbn13(doc[field]),
+            ...(pass === "releases"
+              ? { releaseId: doc._id as Id<"releases"> }
+              : { bundleId: doc._id as Id<"releaseBundles"> }),
+            message: `${what} stores its ${field} as "${doc[field]}", a spelling no ownership check reads (they read ${isbnFieldValue(field, doc[field]!) ?? "no ISBN-10 for a 979 ISBN"}): store it so (${fix}).`,
+          },
+        ]
+      : [],
+  );
+}
+
 /** The rows pass, for one `releaseIsbns` row. */
 async function checkRow(
   ctx: QueryCtx,
   resolver: ClaimResolver,
+  room: Room,
   row: Doc<"releaseIsbns">,
 ): Promise<Finding[]> {
-  const claims = await isbnClaims(ctx, row.isbn13, { resolver });
+  const claims = await isbnClaims(ctx, row.isbn13, { resolver, room });
   if (claims === null) {
     return [
       {
@@ -778,10 +974,31 @@ async function checkRow(
       },
     ];
   }
-  const sole = soleOwner(claims);
-  if ("finding" in sole) return [{ ...sole.finding, rowId: row._id }];
-  const findings: Finding[] = [];
   const isbn13 = claims.isbn13;
+  const findings: Finding[] = [];
+  if (row.isbn13 !== isbn13) {
+    findings.push({
+      severity: "violation",
+      isbn13,
+      rowId: row._id,
+      message: `Row ${row._id} stores its ISBN as "${row.isbn13}", which no ownership check reads (they read ${isbn13}): store it so.`,
+    });
+  }
+  // The row is a claim whatever its spelling: one the exact read did not
+  // return still meets the claims it did.
+  const listed = [...claims.owners.values()]
+    .flatMap((owner) => owner.claims)
+    .concat(claims.unresolved.map(({ claim }) => claim))
+    .some((claim) => claim.on === "release" && claim.rowId === row._id);
+  if (!listed) {
+    await addClaim(
+      claims,
+      { on: "release", via: "printing", storedId: row.releaseId, rowId: row._id },
+      resolver,
+    );
+  }
+  const sole = soleOwner(claims);
+  if ("finding" in sole) return [...findings, { ...sole.finding, rowId: row._id }];
   if (sole.owner.format !== "physical") {
     findings.push({
       severity: "violation",
@@ -791,6 +1008,7 @@ async function checkRow(
     });
   }
   if (row.observationId !== undefined) {
+    await room();
     const observation = await ctx.db.get(row.observationId);
     const link = observation === null ? null : await linkedRelease(resolver, observation);
     const message =
@@ -820,6 +1038,7 @@ async function checkRow(
 async function checkMark(
   ctx: QueryCtx,
   resolver: ClaimResolver,
+  room: Room,
   observation: Doc<"sourceObservations">,
 ): Promise<Finding[]> {
   const mark = observation.printingIsbn13;
@@ -852,7 +1071,7 @@ async function checkMark(
       },
     ];
   }
-  const claims = (await isbnClaims(ctx, isbn13, { resolver }))!;
+  const claims = (await isbnClaims(ctx, isbn13, { resolver, room }))!;
   const sole = soleOwner(claims);
   if ("finding" in sole) return [{ ...sole.finding, observationId }];
   if (sole.owner._id !== link.release._id) {

@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { createCanonicalRecords, isbnHeldElsewhere } from "./lib/pipeline";
 import type { RepairEntry } from "./lib/repair/entries";
 import {
   CLAIM_SCAN,
@@ -607,5 +609,316 @@ describe("imports never create over a printing claim", () => {
         await isbnHeldElsewhere(ctx, observation, release, { isbn13: X, isbn10: X_10 }, 1),
       ).toBe(false);
     });
+  });
+});
+
+describe("an ordinary ISBN costs one empty read (C67-01)", () => {
+  /** The seven metrics `run` used, from the installed `ctx.meta.getTransactionMetrics()`. */
+  async function used<T>(
+    ctx: MutationCtx,
+    run: () => Promise<T>,
+  ): Promise<{ result: T; metrics: Record<string, number> }> {
+    const before = await ctx.meta.getTransactionMetrics();
+    const result = await run();
+    const after = await ctx.meta.getTransactionMetrics();
+    const metrics = Object.fromEntries(
+      Object.entries(after).map(([k, v]) => [k, v.used - before[k as keyof typeof before].used]),
+    );
+    return { result, metrics };
+  }
+  const nothing = {
+    bytesRead: 0,
+    bytesWritten: 0,
+    databaseQueries: 1,
+    documentsRead: 0,
+    documentsWritten: 0,
+    functionsScheduled: 0,
+    scheduledFunctionArgsBytes: 0,
+  };
+
+  it("reads one empty index range for a linked Release's own ISBN with no printing, in both forms", async () => {
+    for (const large of [false, true]) {
+      for (const unrelatedRow of [false, true]) {
+        const t = makeT({ transactionLimits: true });
+        const ids = await t.run(async (ctx) => {
+          const book = await vagabond(ctx);
+          await ctx.db.patch(book.releaseId, {
+            isbn10: "1421519119",
+            ...(large ? { description: "x".repeat(100_000) } : {}),
+          });
+          if (unrelatedRow) await insertPrinting(ctx, book.releaseId, OLDER);
+          return { ...book, observationId: await heldRecord(ctx, book.seriesId, CURRENT) };
+        });
+        for (const offered of [
+          { isbn13: CURRENT },
+          { isbn13: CURRENT, isbn10: "1421519119" },
+          { isbn10: "1-4215-1911-9" },
+        ]) {
+          await t.run(async (ctx) => {
+            const release = (await ctx.db.get(ids.releaseId))!;
+            const observation = (await ctx.db.get(ids.observationId))!;
+            const { result, metrics } = await used(ctx, () =>
+              isbnHeldElsewhere(ctx, observation, release, offered, 1),
+            );
+            expect(result).toBe(false);
+            expect(metrics).toEqual(nothing);
+          });
+        }
+      }
+    }
+  });
+
+  it("still reads every claim once where a printing row exists, in either form, with the same outcomes", async () => {
+    const cases: Array<
+      [
+        string,
+        (ctx: MutationCtx, book: Awaited<ReturnType<typeof vagabond>>) => Promise<unknown>,
+        boolean,
+      ]
+    > = [
+      ["its own row", (ctx, b) => insertPrinting(ctx, b.releaseId, OLDER), false],
+      [
+        "another Release's row",
+        async (ctx, b) => insertPrinting(ctx, await another(ctx, b), OLDER),
+        true,
+      ],
+      [
+        "a hidden Release's row",
+        async (ctx, b) => insertPrinting(ctx, await another(ctx, b, { status: "hidden" }), OLDER),
+        true,
+      ],
+      [
+        "its own row and a Bundle",
+        async (ctx, b) => {
+          await insertPrinting(ctx, b.releaseId, OLDER);
+          await insertBundle(ctx, { publisherId: b.publisherId, isbn10: OLDER_10 });
+        },
+        true,
+      ],
+      [
+        "a row of a Release that is gone",
+        async (ctx, b) => {
+          const gone = await another(ctx, b);
+          await insertPrinting(ctx, gone, OLDER);
+          await ctx.db.delete(gone);
+        },
+        true,
+      ],
+      [
+        "more rows than one read takes, all its own",
+        async (ctx, b) => {
+          for (let i = 0; i <= CLAIM_SCAN; i++) await insertPrinting(ctx, b.releaseId, OLDER);
+        },
+        true,
+      ],
+    ];
+    for (const [, claims, blocked] of cases) {
+      const t = makeT({ transactionLimits: true });
+      const ids = await t.run(async (ctx) => {
+        const book = await vagabond(ctx);
+        await claims(ctx, book);
+        return { ...book, observationId: await heldRecord(ctx, book.seriesId, OLDER) };
+      });
+      const queries: number[] = [];
+      for (const offered of [
+        { isbn13: OLDER },
+        { isbn13: OLDER, isbn10: OLDER_10 },
+        { isbn13: "978-1-59116-034-2", isbn10: "1-59116-034-0" },
+      ]) {
+        await t.run(async (ctx) => {
+          await ctx.db.patch(ids.observationId, { conflicts: undefined });
+          const release = (await ctx.db.get(ids.releaseId))!;
+          const observation = (await ctx.db.get(ids.observationId))!;
+          const { result, metrics } = await used(ctx, () =>
+            isbnHeldElsewhere(ctx, observation, release, offered, 1),
+          );
+          expect(result).toBe(blocked);
+          queries.push(metrics.databaseQueries!);
+        });
+      }
+      // Equivalent forms are one ISBN, its claims read once.
+      expect(new Set(queries).size).toBe(1);
+    }
+  });
+
+  it("creates a Release with the same reads whichever forms its ISBN comes in", async () => {
+    const reads: Array<Record<string, number>> = [];
+    for (const both of [false, true]) {
+      const t = makeT({ transactionLimits: true });
+      const ids = await t.run(async (ctx) => {
+        const book = await vagabond(ctx);
+        return { ...book, observationId: await heldRecord(ctx, book.seriesId, OLDER) };
+      });
+      await t.run(async (ctx) => {
+        const observation = (await ctx.db.get(ids.observationId))!;
+        const { result, metrics } = await used(ctx, () =>
+          createCanonicalRecords(ctx, {
+            sourceKey: "prh",
+            observation,
+            seriesId: ids.seriesId,
+            seriesTitle: "Vagabond",
+            labels: ["2"],
+            release: {
+              format: "physical",
+              isbn13: OLDER,
+              ...(both ? { isbn10: OLDER_10 } : {}),
+              publisher: { name: "VIZ Media", slug: "viz-media" },
+            },
+            citation: { sourceName: "PRH", url: "https://example.com/book" },
+            importComment: "Fixture",
+            tagBootstrapUnreviewed: false,
+            now: 1,
+          }),
+        );
+        expect(result.blocked).toBeUndefined();
+        reads.push(metrics);
+      });
+    }
+    expect(reads[0]!.databaseQueries).toBe(reads[1]!.databaseQueries);
+    expect(reads[0]!.documentsRead).toBe(reads[1]!.documentsRead);
+  });
+});
+
+describe("a repair stores an ISBN as its field's index finds it (C67-14)", () => {
+  const update = (
+    id: Id<"releases">,
+    field: "isbn13" | "isbn10",
+    before: string | null,
+    after: string,
+    key = `${field}-${after}`,
+  ): RepairEntry => ({
+    kind: "updateFields",
+    key,
+    reason: "Correct the ISBN.",
+    table: "releases",
+    id,
+    changes: [{ field, before, after }],
+    evidenceObservationId: null,
+  });
+  const run = (t: TestT, entries: RepairEntry[]) =>
+    t.mutation(internal.repair.runBatch, { entries, dryRun: false, actor: alice.username });
+
+  it("refuses a printing a repaired, hyphenated primary claims, and every pass of the check agrees", async () => {
+    const t = makeT();
+    const book = await world(t);
+    const ids = await t.run(async (ctx) => ({
+      owner: await another(ctx, book, { isbn13: X }),
+      observationId: await heldRecord(ctx, book.seriesId, OLDER),
+    }));
+    const [repair] = await run(t, [update(ids.owner, "isbn13", X, "978-1-59116-034-2")]);
+    expect(repair).toMatchObject({ status: "applied" });
+    expect(await t.run(async (ctx) => (await ctx.db.get(ids.owner))?.isbn13)).toBe(OLDER);
+    const revision = await t.run((ctx) =>
+      ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", ids.owner))
+        .order("desc")
+        .first(),
+    );
+    expect(revision?.changes).toContainEqual({ field: "isbn13", before: X, after: OLDER });
+    await refused(
+      t,
+      ids.observationId,
+      book.releaseId,
+      new RegExp(`is Release ${ids.owner}'s own|belongs to Release ${ids.owner}`),
+    );
+    for (const pass of ["rows", "observations", "releases", "bundles"] as const) {
+      const page = await t.query(internal.printings.consistencyInternal, {
+        pass,
+        paginationOpts: { numItems: 100, cursor: null },
+      });
+      expect(page).toMatchObject({ findings: [], isDone: true });
+    }
+  });
+
+  it("writes each spelling as its field stores it, and skips what is no ISBN of that kind", async () => {
+    const t = makeT();
+    const book = await world(t);
+    const results = await run(t, [update(book.releaseId, "isbn10", null, "0-8044-2957-x")]);
+    expect(results).toMatchObject([{ status: "applied" }]);
+    expect(await t.run(async (ctx) => (await ctx.db.get(book.releaseId))?.isbn10)).toBe(
+      "080442957X",
+    );
+    const other = await t.run((ctx) => another(ctx, book));
+    for (const [field, after, stored] of [
+      ["isbn13", " 1-59116-034-0 ", OLDER],
+      ["isbn10", "9781591160342", OLDER_10],
+    ] as const) {
+      await t.run((ctx) => ctx.db.patch(other, { isbn13: undefined, isbn10: undefined }));
+      expect(
+        await run(t, [update(other, field, null, after, `${field}-to-${stored}`)]),
+      ).toMatchObject([{ status: "applied" }]);
+      expect(await t.run(async (ctx) => (await ctx.db.get(other))?.[field])).toBe(stored);
+    }
+    for (const [field, after] of [
+      ["isbn10", W979],
+      ["isbn13", "ISBN 978"],
+    ] as const) {
+      expect(await run(t, [update(other, field, null, after, `bad-${field}`)])).toMatchObject([
+        { status: "skipped", reason: expect.stringContaining(`"${after}" is not an`) },
+      ]);
+    }
+  });
+
+  it("creates a Release whose 979 ISBN, hyphenated, is stored whole with no ISBN-10", async () => {
+    const t = makeT();
+    const book = await world(t);
+    const create: RepairEntry = {
+      kind: "createRelease",
+      key: "create-979",
+      reason: "missing",
+      isbn13: "979-8-8887-7258-4",
+      isbn10: null,
+      format: "physical",
+      binding: null,
+      pubDate: null,
+      price: null,
+      publisherId: book.publisherId,
+      coverage: [{ volumeId: book.volumeId, extent: "complete" }],
+      line: null,
+      sources: [],
+    };
+    expect(await run(t, [create])).toMatchObject([{ status: "applied" }]);
+    const made = await t.run((ctx) =>
+      ctx.db
+        .query("releases")
+        .withIndex("by_isbn13", (q) => q.eq("isbn13", W979))
+        .unique(),
+    );
+    expect(made).toMatchObject({ isbn13: W979 });
+    expect(made?.isbn10).toBeUndefined();
+    // Run again, it finds what it made; another entry for that ISBN, spelled any way, is refused.
+    expect(await run(t, [create])).toMatchObject([{ status: "alreadyApplied" }]);
+    expect(await run(t, [{ ...create, key: "again", isbn13: W979 }])).toMatchObject([
+      { status: "skipped", reason: expect.stringContaining("already exists") },
+    ]);
+  });
+
+  it("still takes Proposal ISBNs in any spacing, and a Release its own printing's (control)", async () => {
+    const t = makeT();
+    const book = await world(t);
+    await t.run((ctx) => insertPrinting(ctx, book.releaseId, OLDER));
+    const asAdmin = signedIn(t, alice);
+    const { proposalId } = await asAdmin.mutation(api.proposals.saveDraft, {
+      ops: [
+        {
+          kind: "update",
+          ref: { type: "release", id: book.releaseId },
+          changes: [
+            { field: "isbn13", value: "978 1 59116 034 2" },
+            { field: "isbn10", value: "1-59116-034-0" },
+          ],
+        },
+      ],
+      evidence: [{ kind: "url", url: VIZ_URL }],
+      comment: "Its own printing's ISBN.",
+    });
+    await asAdmin.mutation(api.proposals.submitProposal, { proposalId });
+    await signedIn(t, bob).mutation(api.proposals.approveProposal, { proposalId });
+    expect(await t.run((ctx) => ctx.db.get(book.releaseId))).toMatchObject({
+      isbn13: OLDER,
+      isbn10: OLDER_10,
+    });
+    expect(await lookup(t, OLDER_10)).toMatchObject({ anchor: OLDER });
   });
 });

@@ -8,6 +8,7 @@
 
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
+import { type IsbnField, isbnFieldValue } from "../isbn";
 import { followMerges } from "../merges";
 import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
@@ -1071,6 +1072,15 @@ async function entriesToBundle(
   return !more;
 }
 
+/**
+ * A box-set Release's ISBN as the Bundle made from it stores it: the
+ * field's one spelling (lib/isbn.ts isbnFieldValue), or the stored text
+ * when it is no ISBN of that kind (it can then hide no claim).
+ */
+function bundleIsbn(field: IsbnField, value: string | undefined): string | undefined {
+  return value === undefined ? undefined : (isbnFieldValue(field, value) ?? value);
+}
+
 /** An existing bundle for this box-set Release: same ISBN, else same name/publisher/format. */
 async function existingBundle(
   ctx: MutationCtx,
@@ -1078,10 +1088,11 @@ async function existingBundle(
   name: string,
   publisherId: Id<"publishers">,
 ) {
-  if (release.isbn13) {
+  const isbn13 = bundleIsbn("isbn13", release.isbn13);
+  if (isbn13) {
     return await ctx.db
       .query("releaseBundles")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", release.isbn13))
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
       .first();
   }
   // Bundles are few (box sets only); a scan is fine for a one-time repair.
@@ -1133,8 +1144,8 @@ async function toBundle(
         name,
         publisherId: edition.publisherId,
         format: box.format,
-        isbn13: box.isbn13,
-        isbn10: box.isbn10,
+        isbn13: bundleIsbn("isbn13", box.isbn13),
+        isbn10: bundleIsbn("isbn10", box.isbn10),
         pubDate: box.pubDate,
         price: box.price,
         description: box.description,
@@ -1244,6 +1255,22 @@ async function foldEdition(
 const stored = <T>(value: T | null): T | undefined => (value === null ? undefined : value);
 
 /**
+ * A plan's ISBN as its field stores it (lib/isbn.ts isbnFieldValue: the one
+ * spelling every claim check finds), before any collision check, write or
+ * audit uses it; a plan value that is no ISBN of that kind skips the entry.
+ * Null (absent) stays null.
+ */
+function plannedIsbn(field: IsbnField, value: string): string;
+function plannedIsbn(field: IsbnField, value: string | null): string | null;
+function plannedIsbn(field: IsbnField, value: string | null): string | null {
+  if (value === null) return null;
+  return (
+    isbnFieldValue(field, value) ??
+    skip(`"${value}" is not an ${field === "isbn13" ? "ISBN-13" : "ISBN-10"}`)
+  );
+}
+
+/**
  * Check each change against the record: already at `after` is fine, at
  * `before` gets applied, anything else is drift. Returns the fields to patch.
  */
@@ -1287,7 +1314,14 @@ async function updateFields(
   const release = await ctx.db.get(entry.id);
   if (!release || release.status !== "active") return skip("release not active");
   if (release.locked) return skip("release locked");
-  const pending = pendingChanges(release, entry.changes);
+  // A new ISBN is written, checked and audited as its field stores it; the
+  // value it replaces is compared as stored.
+  const changes = entry.changes.map((change) =>
+    change.field === "isbn13" || change.field === "isbn10"
+      ? { ...change, after: plannedIsbn(change.field, change.after) }
+      : change,
+  );
+  const pending = pendingChanges(release, changes);
   if (pending.length === 0) return already;
   const patch: Partial<Doc<"releases">> = {};
   for (const change of pending) {
@@ -2071,8 +2105,14 @@ async function hideEditionLine(
 async function createRelease(
   ctx: MutationCtx,
   audit: Audit,
-  entry: EntryOf<"createRelease">,
+  planned: EntryOf<"createRelease">,
 ): Promise<Result> {
+  // Its ISBNs as their fields store them, for every check and the write.
+  const entry = {
+    ...planned,
+    isbn13: plannedIsbn("isbn13", planned.isbn13),
+    isbn10: plannedIsbn("isbn10", planned.isbn10),
+  };
   const clashes = await ctx.db
     .query("releases")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
@@ -2175,7 +2215,7 @@ async function releaseBundle(
   } else if (entry.box !== null && entry.bundleId === null) {
     box = await ctx.db.get(entry.box.releaseId);
     if (!box) return skip("box-set release missing");
-    const isbn13 = box.isbn13;
+    const isbn13 = bundleIsbn("isbn13", box.isbn13);
     if (isbn13 === undefined) return skip("box-set release has no ISBN");
     bundle = await ctx.db
       .query("releaseBundles")
@@ -2197,7 +2237,7 @@ async function releaseBundle(
         publisherId: edition.publisherId,
         format: box.format,
         isbn13,
-        isbn10: box.isbn10,
+        isbn10: bundleIsbn("isbn10", box.isbn10),
         pubDate: box.pubDate,
         price: box.price,
         description: box.description,

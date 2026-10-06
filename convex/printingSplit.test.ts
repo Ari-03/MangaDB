@@ -326,17 +326,22 @@ describe("records linked since the merge", () => {
     });
   });
 
-  /** Repair's audited unlink of a record from S, then held again for a decision. */
-  async function unlinkAndHold(t: TestT, w: World, observationId: Id<"sourceObservations">) {
+  /** Repair's audited unlink of a record from `from` (S by default), then held again for a decision. */
+  async function unlinkAndHold(
+    t: TestT,
+    w: World,
+    observationId: Id<"sourceObservations">,
+    from: Id<"releases"> = w.s,
+  ) {
     const [outcome] = await t.mutation(internal.repair.runBatch, {
       entries: [
         {
           kind: "unlinkObservation",
-          key: `unlink-${observationId}`,
+          key: `unlink-${observationId}-${from}`,
           reason: "Recheck the record.",
           observationId,
           recordType: "release",
-          recordId: w.s,
+          recordId: from,
         },
       ],
       dryRun: false,
@@ -394,6 +399,77 @@ describe("records linked since the merge", () => {
     expect(await linkOf(t, w.first)).toEqual({ to: w.l, mark: OLDER });
   });
 
+  /** A third Release T of Vagabond vol 1, with a record of OLDER linked to it as an import would. */
+  async function linkedElsewhere(t: TestT, w: World, recordId: string) {
+    return await t.run(async (ctx) => {
+      const third = await another(ctx, w, {});
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: recordId,
+        recordRef: { type: "release", id: third },
+        snapshot: {
+          kind: "olEdition",
+          url: `https://openlibrary.org${recordId}`,
+          title: "Vagabond, Vol. 1",
+          publishers: ["VIZ Media"],
+          format: "physical",
+          isbn13: OLDER,
+        },
+      });
+      return { third, observationId };
+    });
+  }
+
+  it("refuses when a record linked to another Release before the merge was unlinked there since, then linked to the printing (C67-11)", async () => {
+    const t = makeT();
+    const w = await world(t);
+    const { third, observationId } = await linkedElsewhere(t, w, "/books/OL5M");
+    await merge(t, w);
+    await unlinkAndHold(t, w, observationId, third);
+    expect(await decide(t, observationId, w.s)).toMatchObject({ status: "linked" });
+    await refusedSplit(
+      t,
+      w,
+      new RegExp(
+        `Record openlibrary /books/OL5M was unlinked or relinked by Revision \\d+ of Release ${third}`,
+      ),
+    );
+    expect(await linkOf(t, observationId)).toEqual({ to: w.s, mark: OLDER });
+  });
+
+  it("refuses the same for a record first seen after the merge and linked elsewhere meanwhile", async () => {
+    const t = makeT();
+    const w = await world(t);
+    await merge(t, w);
+    const { third, observationId } = await linkedElsewhere(t, w, "/books/OL6M");
+    await unlinkAndHold(t, w, observationId, third);
+    expect(await decide(t, observationId, w.s)).toMatchObject({ status: "linked" });
+    await refusedSplit(t, w, /Record openlibrary \/books\/OL6M was unlinked or relinked/);
+  });
+
+  it("moves a record whose unlink elsewhere came before the merge: that is not a relink since", async () => {
+    const t = makeT();
+    const w = await world(t);
+    const { third, observationId } = await linkedElsewhere(t, w, "/books/OL7M");
+    await unlinkAndHold(t, w, observationId, third);
+    await merge(t, w);
+    expect(await decide(t, observationId, w.s)).toMatchObject({ status: "linked" });
+    await split(t, w);
+    expect(await linkOf(t, observationId)).toEqual({ to: w.l, mark: OLDER });
+  });
+
+  it("is not misled by another Release's audit of a record whose name starts the same", async () => {
+    const t = makeT();
+    const w = await world(t);
+    await merge(t, w);
+    const tenth = await linkedElsewhere(t, w, "/books/OL10M");
+    await unlinkAndHold(t, w, tenth.observationId, tenth.third);
+    const first = await t.run((ctx) => heldRecord(ctx, w.seriesId, OLDER, {}, "/books/OL1M0"));
+    expect(await decide(t, first, w.s)).toMatchObject({ status: "linked" });
+    await split(t, w);
+    expect(await linkOf(t, first)).toEqual({ to: w.l, mark: OLDER });
+  });
+
   it("leaves the survivor's own printings and their records alone", async () => {
     const t = makeT();
     const w = await world(t);
@@ -403,6 +479,97 @@ describe("records linked since the merge", () => {
     await split(t, w);
     expect(await rowsOf(t, w.s)).toEqual([Y]);
     expect(await linkOf(t, own)).toEqual({ to: w.s, mark: Y });
+  });
+});
+
+describe("a printing row changed since the merge (C67-12)", () => {
+  /** The moved row of L's printing OLDER. */
+  const rowOf = (t: TestT) =>
+    t.run(
+      async (ctx) =>
+        (await ctx.db
+          .query("releaseIsbns")
+          .withIndex("by_isbn13", (q) => q.eq("isbn13", OLDER))
+          .unique())!,
+    );
+
+  it("leaves a row whose ISBN was corrected since on the survivor, and says so", async () => {
+    const t = makeT();
+    const w = await world(t);
+    await merge(t, w);
+    const row = await rowOf(t);
+    await t.run((ctx) =>
+      ctx.db.patch(row._id, { isbn13: Y, reason: "Corrected: the printing is ISBN Y." }),
+    );
+    await split(t, w);
+    expect(await t.run(async (ctx) => (await ctx.db.get(row._id))!.releaseId)).toBe(w.s);
+    expect(await rowsOf(t, w.l)).toEqual([]);
+    expect(await rowsOf(t, w.s)).toEqual([Y]);
+    expect(await latestChanges(t, w.l)).toContainEqual({
+      field: "otherPrintings",
+      after: [
+        {
+          isbn13: OLDER,
+          outcome: "changedSinceMerge",
+          reason: expect.stringMatching(new RegExp(`carries ISBN ${Y} now, not the ${OLDER}`)),
+        },
+      ],
+    });
+  });
+
+  it("replays a row whose ISBN was only respelled, or whose reason was edited", async () => {
+    for (const patch of [{ isbn13: "978-1-59116-034-2" }, { reason: "A clearer reason." }]) {
+      const t = makeT();
+      const w = await world(t);
+      await merge(t, w);
+      const row = await rowOf(t);
+      await t.run((ctx) => ctx.db.patch(row._id, patch));
+      await split(t, w);
+      expect(await t.run(async (ctx) => (await ctx.db.get(row._id))!.releaseId)).toBe(w.l);
+      expect(await linkOf(t, w.first)).toEqual({ to: w.l, mark: OLDER });
+    }
+  });
+
+  it("leaves a row removed and recorded again on the survivor where it is, with its record", async () => {
+    const t = makeT();
+    const w = await world(t);
+    await merge(t, w);
+    const row = await rowOf(t);
+    await t.run(async (ctx) => {
+      await ctx.db.delete(row._id);
+      await insertPrinting(ctx, w.s, OLDER);
+    });
+    await split(t, w);
+    expect(await rowsOf(t, w.s)).toEqual([OLDER]);
+    expect(await rowsOf(t, w.l)).toEqual([]);
+    expect(await linkOf(t, w.first)).toEqual({ to: w.s, mark: OLDER });
+  });
+
+  it("keeps a record whose mark changed since with that printing's owner", async () => {
+    const t = makeT();
+    const w = await world(t);
+    await t.run((ctx) => insertPrinting(ctx, w.s, Y));
+    await merge(t, w);
+    await t.run((ctx) => ctx.db.patch(w.first, { printingIsbn13: Y }));
+    await split(t, w);
+    expect(await linkOf(t, w.first)).toEqual({ to: w.s, mark: Y });
+    expect(await rowsOf(t, w.l)).toEqual([OLDER]);
+  });
+
+  it("refuses a merge recorded before manifests kept the ISBN a row carried, writing nothing", async () => {
+    const t = makeT();
+    const w = await world(t);
+    await merge(t, w);
+    await t.run(async (ctx) => {
+      const manifest = (await ctx.db.query("mergeManifests").first())!;
+      await ctx.db.patch(manifest._id, {
+        repointed: manifest.repointed.map(({ isbn13, ...entry }) => {
+          void isbn13;
+          return entry;
+        }),
+      });
+    });
+    await refusedSplit(t, w, /recorded before merges kept the ISBN they moved/);
   });
 });
 
@@ -546,5 +713,190 @@ describe("a Split's bounds", () => {
     await merge(t, w);
     await split(t, w);
     expect(await linkOf(t, w.first)).toEqual({ to: w.l, mark: OLDER });
+  });
+});
+
+describe("a Split under the platform's own limits (C67-02, C67-03)", () => {
+  // These run with convex-test's default transaction limits (16 MiB read,
+  // 4,096 queries, ...): a Split ends in its own refusal, writing nothing,
+  // or completes; never the platform's abort.
+  const big = (n: number) => "x".repeat(n);
+
+  /** L merged into S (its own ISBN only); `setUp` adds what each case needs. */
+  async function merged(t: TestT) {
+    await seedRegistry(t);
+    await seedTeam(t, [alice, bob]);
+    const ids = await t.run(async (ctx) => {
+      const book = await vagabond(ctx);
+      return { ...book, s: book.releaseId, l: await another(ctx, book, { isbn13: LOSER }) };
+    });
+    return ids;
+  }
+  /** What a refusal must leave as it was, read without loading the large documents. */
+  const smallState = (t: TestT, l: Id<"releases">, rowId?: Id<"releaseIsbns">) =>
+    t.run(async (ctx) => ({
+      loser: await ctx.db.get(l),
+      row: rowId ? await ctx.db.get(rowId) : null,
+      manifest: await ctx.db
+        .query("mergeManifests")
+        .withIndex("by_loser", (q) => q.eq("loserRef.type", "release").eq("loserRef.id", l))
+        .order("desc")
+        .first(),
+      revisions: (await ctx.db.query("revisions").collect()).length,
+    }));
+  async function refusedUnderLimits(
+    t: TestT,
+    l: Id<"releases">,
+    reason: RegExp,
+    rowId?: Id<"releaseIsbns">,
+  ) {
+    const before = await smallState(t, l, rowId);
+    await expect(splitAs(t, { type: "release", id: l })).rejects.toThrow(reason);
+    expect(await smallState(t, l, rowId)).toEqual(before);
+    expect(before.loser?.status).toBe("merged");
+  }
+
+  it("refuses when the survivor's printing rows are too large to read", async () => {
+    const t = makeT({ transactionLimits: true });
+    const w = await merged(t);
+    await mergeAs(t, { type: "release", id: w.s }, { type: "release", id: w.l });
+    for (let i = 0; i < 20; i++)
+      await t.run((ctx) => insertPrinting(ctx, w.s, isbn13For(i), { reason: big(850_000) }));
+    await refusedUnderLimits(
+      t,
+      w.l,
+      /needs more than one transaction allows to read its printings and who claims them \(bytesRead/,
+    );
+  });
+
+  it("refuses when a printing's claims are too large to read", async () => {
+    const t = makeT({ transactionLimits: true });
+    const w = await merged(t);
+    await mergeAs(t, { type: "release", id: w.s }, { type: "release", id: w.l });
+    const rowId = await t.run((ctx) => insertPrinting(ctx, w.s, OLDER));
+    for (let i = 0; i < 20; i++)
+      await t.run((ctx) =>
+        another(ctx, w, {
+          isbn13: OLDER,
+          status: "merged",
+          mergedIntoId: w.s,
+          description: big(850_000),
+        }),
+      );
+    await refusedUnderLimits(
+      t,
+      w.l,
+      /needs more than one transaction allows to read its printings and who claims them \(bytesRead/,
+      rowId,
+    );
+  });
+
+  it("never reads an earlier merge's reversed manifests, however large", async () => {
+    const t = makeT({ transactionLimits: true });
+    const w = await merged(t);
+    const rowId = await t.run((ctx) => insertPrinting(ctx, w.l, OLDER));
+    await mergeAs(t, { type: "release", id: w.s }, { type: "release", id: w.l });
+    await splitAs(t, { type: "release", id: w.l });
+    const exemplar = (await t.run((ctx) => ctx.db.query("mergeManifests").first()))!;
+    for (let i = 0; i < 20; i++)
+      await t.run(async (ctx) => {
+        const { _id, _creationTime, ...fields } = exemplar;
+        void _id;
+        void _creationTime;
+        await ctx.db.insert("mergeManifests", {
+          ...fields,
+          removed: [
+            {
+              table: "releaseIsbns",
+              doc: {
+                releaseId: w.l,
+                isbn13: OLDER,
+                reason: big(850_000),
+                sourceKey: "openlibrary",
+              },
+            },
+          ],
+          reversedAt: 1,
+        });
+      });
+    await mergeAs(t, { type: "release", id: w.s }, { type: "release", id: w.l });
+    await splitAs(t, { type: "release", id: w.l });
+    const after = await smallState(t, w.l, rowId);
+    expect(after.loser?.status).toBe("active");
+    expect(after.row?.releaseId).toBe(w.l);
+    expect(after.manifest?.reversedAt).toBeDefined();
+  });
+
+  /**
+   * L with printing OLDER, merged into S, then `n` Releases (each a
+   * 950,000-character description) carrying OLDER merged into L: Split
+   * returns the row to L and must re-read all of their claims afterwards.
+   */
+  async function largeClaims(t: TestT, n: number) {
+    await seedRegistry(t);
+    await seedTeam(t, [alice, bob]);
+    const ids = await t.run(async (ctx) => {
+      const book = await vagabond(ctx);
+      const l = await another(ctx, book, { isbn13: LOSER });
+      return { ...book, s: book.releaseId, l, row: await insertPrinting(ctx, l, OLDER) };
+    });
+    await mergeAs(t, { type: "release", id: ids.s }, { type: "release", id: ids.l });
+    for (let i = 0; i < n; i++)
+      await t.run((ctx) =>
+        another(ctx, ids, {
+          isbn13: OLDER,
+          status: "merged",
+          mergedIntoId: ids.l,
+          description: big(950_000),
+        }),
+      );
+    return ids;
+  }
+
+  it("reserves the fresh ownership check after its writes, and completes when it fits", async () => {
+    const t = makeT({ transactionLimits: true });
+    const w = await largeClaims(t, 3);
+    await splitAs(t, { type: "release", id: w.l });
+    const after = await smallState(t, w.l, w.row);
+    expect(after.loser?.status).toBe("active");
+    expect(after.row?.releaseId).toBe(w.l);
+    expect(await lookup(t, OLDER)).toMatchObject({ kind: "release" });
+  });
+
+  it("refuses before writing when that check would not fit, under tighter limits or larger claims", async () => {
+    const tight = makeT({ transactionLimits: { bytesRead: 8 * 1024 * 1024 } });
+    const small = await largeClaims(tight, 3);
+    await refusedUnderLimits(
+      tight,
+      small.l,
+      /needs more than one transaction allows to write it and check its printings afterwards \(bytesRead/,
+      small.row,
+    );
+    const t = makeT({ transactionLimits: true });
+    const large = await largeClaims(t, 9);
+    await refusedUnderLimits(
+      t,
+      large.l,
+      /needs more than one transaction allows to write it and check its printings afterwards \(bytesRead/,
+      large.row,
+    );
+  });
+
+  it("checks every real metric before writing, under each tightened limit", async () => {
+    const limits = {
+      bytesRead: 5_000_000,
+      bytesWritten: 1_000_000,
+      databaseQueries: 500,
+      documentsRead: 2000,
+      documentsWritten: 1000,
+      functionsScheduled: 25,
+      scheduledFunctionArgsBytes: 100_000,
+    } as const;
+    for (const [metric, limit] of Object.entries(limits)) {
+      const t = makeT({ transactionLimits: { [metric]: limit } });
+      const w = await merged(t);
+      await mergeAs(t, { type: "release", id: w.s }, { type: "release", id: w.l });
+      await refusedUnderLimits(t, w.l, new RegExp(`${metric} \\(needs`));
+    }
   });
 });

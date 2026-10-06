@@ -7,9 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { coverRequest } from "./lib/covers";
 import { BOOK_PAGE_VERSION } from "./lib/sevenSeas";
 import { insertBundle, insertObservation } from "./test.factories";
-import { makeT, seedRegistry, type TestT } from "./test.helpers";
+import { alice, bob, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
+import { hideRecord, mergeAs, moderate } from "./test.moderation";
 import { ALPHA_1, imageRequests, SEVEN_SEAS, stubSite } from "./test.imports";
 import { another, OLDER, vagabond, type Vagabond } from "./test.printings";
 
@@ -299,6 +301,168 @@ describe("attaching a cover", () => {
       held: null,
       stale: true,
     });
+  });
+});
+
+describe("a download queued before its Edition was frozen (C67-10)", () => {
+  const OLD = "https://img.example/old.jpg";
+  const NEW = "https://img.example/new.jpg";
+
+  /**
+   * Vagabond's Release showing art OLD (a stored blob), a record offering
+   * NEW, the cover request a sync makes for it, and the downloaded blob.
+   */
+  async function queued(t: TestT) {
+    await seedRegistry(t);
+    await seedTeam(t, [alice, bob]);
+    return await t.run(async (ctx) => {
+      const book = await vagabond(ctx);
+      const old = await ctx.storage.store(blob());
+      await ctx.db.patch(book.releaseId, {
+        coverImage: { storageId: old, sourceUrl: OLD, attribution: "Seven Seas" },
+      });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "sevenseas",
+        sourceRecordId: "queued",
+        recordRef: { type: "release", id: book.releaseId },
+        snapshot: { coverUrl: NEW },
+      });
+      const request = coverRequest((await ctx.db.get(book.releaseId))!, NEW, observationId)!;
+      return { ...book, old, request, incoming: await ctx.storage.store(blob()) };
+    });
+  }
+  const freeze: Array<
+    [string, (t: TestT, b: Awaited<ReturnType<typeof queued>>) => Promise<unknown>, RegExp]
+  > = [
+    ["hidden", (t, b) => hideRecord(t, { type: "edition", id: b.editionId }), /Edition is hidden/],
+    [
+      "locked",
+      (t, b) => moderate(t, "lockRecord", { type: "edition", id: b.editionId }, "A dispute."),
+      /Edition is locked/,
+    ],
+    [
+      "merged away",
+      async (t, b) => {
+        const survivor = await t.run(
+          async (ctx) => (await ctx.db.get(await another(ctx, b)))!.editionId,
+        );
+        await mergeAs(t, { type: "edition", id: survivor }, { type: "edition", id: b.editionId });
+      },
+      /in another Edition now/,
+    ],
+    ["removed", (t, b) => t.run((ctx) => ctx.db.delete(b.editionId)), /Edition is gone/],
+  ];
+
+  it("refuses it, keeping the Release's art and deleting only the unshown download", async () => {
+    for (const [, change, reason] of freeze) {
+      const t = makeT();
+      const b = await queued(t);
+      await change(t, b);
+      const before = await coverOf(t, b.releaseId);
+      expect(
+        await t.mutation(internal.imports.attachCover, {
+          ...b.request,
+          storageId: b.incoming,
+          attribution: "Seven Seas",
+        }),
+      ).toEqual({ attached: false, held: null, refused: expect.stringMatching(reason) });
+      expect(await coverOf(t, b.releaseId)).toEqual(before);
+      expect(await stored(t, b.old)).toBe(true);
+      expect(await stored(t, b.incoming)).toBe(false);
+    }
+  });
+
+  it("keeps a download another Release or a Bundle already shows, and refuses an old-shape request too", async () => {
+    for (const sharer of ["release", "bundle"] as const) {
+      const t = makeT();
+      const b = await queued(t);
+      await t.run(async (ctx) => {
+        if (sharer === "release")
+          await ctx.db.patch(await another(ctx, b), {
+            coverImage: { storageId: b.incoming, sourceUrl: NEW, attribution: "Seven Seas" },
+          });
+        else
+          await insertBundle(ctx, {
+            publisherId: b.publisherId,
+            coverImage: { storageId: b.incoming },
+          });
+      });
+      await hideRecord(t, { type: "edition", id: b.editionId });
+      expect(
+        await t.mutation(internal.imports.attachCover, {
+          ...b.request,
+          storageId: b.incoming,
+          attribution: "Seven Seas",
+        }),
+      ).toMatchObject({ attached: false, refused: expect.stringMatching(/Edition is hidden/) });
+      expect(await stored(t, b.incoming)).toBe(true);
+      expect(await stored(t, b.old)).toBe(true);
+    }
+    // A request from an action that started before requests named their record and Edition.
+    const t = makeT();
+    const b = await queued(t);
+    await moderate(t, "lockRecord", { type: "edition", id: b.editionId }, "A dispute.");
+    expect(
+      await attach(t, { releaseId: b.releaseId, storageId: b.incoming, sourceUrl: NEW }),
+    ).toMatchObject({ attached: false, refused: expect.stringMatching(/Edition is locked/) });
+    expect(await stored(t, b.old)).toBe(true);
+  });
+
+  it("refuses a placeholder the same way, and a marked record still linked to a merged-away Release", async () => {
+    for (const parent of [{ status: "hidden" as const }, { locked: true }]) {
+      const t = makeT();
+      const book = await offered(t);
+      await t.run((ctx) => ctx.db.patch(book.editionId, parent));
+      expect(
+        await attach(t, {
+          releaseId: book.releaseId,
+          editionId: book.editionId,
+          observationId: book.observationId,
+        }),
+      ).toMatchObject({
+        attached: false,
+        held: null,
+        refused: expect.stringMatching(/Edition is/),
+      });
+      expect(await coverOf(t, book.releaseId)).toBeNull();
+    }
+    const t = makeT();
+    const ids = await t.run(async (ctx) => {
+      const book = await vagabond(ctx);
+      const merged = await another(ctx, book, { status: "merged", mergedIntoId: book.releaseId });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "sevenseas",
+        sourceRecordId: "old-link",
+        recordRef: { type: "release", id: merged },
+        printingIsbn13: OLDER,
+        snapshot: { coverUrl: ART },
+      });
+      return { ...book, observationId };
+    });
+    expect(
+      await attach(t, {
+        releaseId: ids.releaseId,
+        editionId: ids.editionId,
+        observationId: ids.observationId,
+      }),
+    ).toMatchObject({
+      attached: false,
+      refused: expect.stringMatching(/links another record now/),
+    });
+  });
+
+  it("attaches it while the Edition stays active and unlocked (control)", async () => {
+    const t = makeT();
+    const b = await queued(t);
+    expect(
+      await t.mutation(internal.imports.attachCover, {
+        ...b.request,
+        storageId: b.incoming,
+        attribution: "Seven Seas",
+      }),
+    ).toEqual({ attached: true, held: b.incoming });
+    expect(await coverOf(t, b.releaseId)).toMatchObject({ storageId: b.incoming, sourceUrl: NEW });
+    expect(await stored(t, b.old)).toBe(false);
   });
 });
 

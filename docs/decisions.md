@@ -119,6 +119,23 @@ it cannot resolve rather than take an ISBN from a third owner. The rule
 covers current rows only. A historical reservation would need an ISBN
 ledger, and ISBNs without rows keep the older active-only rule.
 
+The claim reads use exact keys, so every writer stores an ISBN in its
+field's one spelling (`lib/isbn.ts` `isbnFieldValue`: the ISBN-13's
+digits, the ISBN-10's digits with an upper-case X), and the consistency
+check finds any older stored ISBN spelled otherwise (decided in review,
+2026-10-05). A normalized index or a backfill of every Release was ruled
+out: the check finds the few such rows in four paged passes, they are
+corrected one by one, and until then no catalog-wide clean result or
+replay of data is trusted (operations.md). An ordinary write reads one
+index range for an ISBN with no printing row and reads every claim only
+when a row exists.
+
+A merge's manifest keeps each moved printing row's ISBN (`mergeManifests`
+`repointed[].isbn13`, optional, so older manifests stay valid and the
+deploy needs no backfill), so a Split replays only the printing the merge
+moved: a row whose ISBN changed since stays, and a row moved by an older
+merge refuses the Split, since nothing else shows what that merge moved.
+
 Ruled out: a Release per printing, which splits one book's owners,
 ratings and dates across rows; recording every same-slot ISBN, which
 takes ebook ISBNs filed as print and same-named novels; and an automatic

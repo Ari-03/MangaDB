@@ -495,13 +495,17 @@ function offersCover(observation: Doc<"sourceObservations">, sourceUrl: string):
 
 /**
  * Why art from `sourceUrl` may not attach to `release`, or null: the
- * request's record (`observationId`) must still exist, be linked to this
- * very Release with no Other Printing mark, and still offer that URL, and
- * the Release must still be in the request's Edition. A record of another
- * printing never changes the Release's cover, and a request made before a
- * link moved, a mark arrived, the art changed or the source withdrew the
- * book attaches nothing. A request with no record (an action that started
- * before requests named one) needs an unmarked record of the Release
+ * Release must still be in the request's Edition, and that Edition must
+ * still exist, active and unlocked (hiding or locking an Edition does not
+ * touch its Releases' status, so a request queued before it would
+ * otherwise replace art the Edition's moderator froze); the request's
+ * record (`observationId`) must still exist, be linked to this very
+ * Release with no Other Printing mark, and still offer that URL. A record
+ * of another printing never changes the Release's cover, and a request
+ * made before a link moved, a mark arrived, the art changed or the source
+ * withdrew the book attaches nothing. A request with no record or Edition
+ * (an action that started before requests named them) is held to the
+ * Release's current Edition, and needs an unmarked record of the Release
  * offering the URL and none of another printing offering it; past
  * COVER_OFFER_SCAN records it is refused, never guessed.
  */
@@ -517,6 +521,10 @@ async function coverOfferRefusal(
   if (args.editionId !== undefined && release.editionId !== args.editionId) {
     return "the Release is in another Edition now";
   }
+  const edition = await ctx.db.get(release.editionId);
+  if (edition === null) return "the Release's Edition is gone";
+  if (edition.status !== "active") return `the Release's Edition is ${edition.status}`;
+  if (edition.locked === true) return "the Release's Edition is locked";
   if (args.observationId !== undefined) {
     const observation = await ctx.db.get(args.observationId);
     if (observation === null) return "its record is gone";

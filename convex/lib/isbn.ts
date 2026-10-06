@@ -39,3 +39,37 @@ export function toIsbn13(raw: string | undefined): string | undefined {
   }
   return undefined;
 }
+
+/** A Release's or Bundle's ISBN column. */
+export type IsbnField = "isbn13" | "isbn10";
+
+/**
+ * What `field` stores for `raw`: the one spelling the claim indexes find
+ * (lib/releaseIsbns.ts isbnClaims reads exact keys). A valid ISBN in any
+ * spelling is stored as that field's form: `isbn13` its ISBN-13, `isbn10`
+ * its ISBN-10 with an upper-case X (a 979 ISBN has none: undefined). Text
+ * with no valid check digit keeps the shape a Proposal accepts (13 digits,
+ * or 9 digits and a digit or X, spaces and hyphens dropped); anything else
+ * is undefined. A writer stores this value, never the raw text.
+ */
+export function isbnFieldValue(field: IsbnField, raw: string): string | undefined {
+  const isbn13 = toIsbn13(raw);
+  if (isbn13 !== undefined) return field === "isbn13" ? isbn13 : isbn13To10(isbn13);
+  const compact = raw.replace(/[\s-]/g, "").toUpperCase();
+  return (field === "isbn13" ? /^\d{13}$/ : /^\d{9}[\dX]$/).test(compact) ? compact : undefined;
+}
+
+/**
+ * Is `stored` a valid ISBN that `field`'s index cannot find under its
+ * canonical key (isbnFieldValue): a hyphenated or spaced ISBN, a lower-case
+ * x, an ISBN-10 kept as `isbn13`, an ISBN-13 kept as `isbn10`? Such a claim
+ * is invisible to every ownership check, so the consistency check reports
+ * it (printings.consistencyInternal).
+ */
+export function isbnHiddenFromIndex(field: IsbnField, stored: string | undefined): boolean {
+  return (
+    stored !== undefined &&
+    toIsbn13(stored) !== undefined &&
+    stored !== isbnFieldValue(field, stored)
+  );
+}

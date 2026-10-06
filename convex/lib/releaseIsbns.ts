@@ -203,6 +203,50 @@ export const CLAIM_SCAN = 20;
 // unresolved; exactly this many resolve.
 export const MERGE_HOPS = 8;
 
+/**
+ * A check made before each further read (a document, an index range): it
+ * throws, through the caller's own refusal, when the transaction could not
+ * afford one more document of the largest size and the caller's reserve.
+ * An operation that must end in its own answer rather than the platform's
+ * abort (a Release Split, the consistency check) reads through one; a
+ * plain write leaves it out, and the platform's limit rolls it back whole.
+ */
+export type Room = () => Promise<void>;
+
+/** A Room that keeps `reserve` (what the caller still needs afterwards) beyond the next read. */
+export function readRoom(ctx: QueryCtx, reserve: Budget, refuse: (short: string[]) => never): Room {
+  const need: Budget = {
+    ...reserve,
+    bytesRead: MAX_DOCUMENT_BYTES + (reserve.bytesRead ?? 0),
+    documentsRead: 1 + (reserve.documentsRead ?? 0),
+    databaseQueries: 1 + (reserve.databaseQueries ?? 0),
+  };
+  return async () => {
+    const short = budgetShortfall(await ctx.meta.getTransactionMetrics(), need);
+    if (short.length > 0) refuse(short);
+  };
+}
+
+/**
+ * Up to `limit` documents of `query`, read one at a time, each only once
+ * `room` (when given) says it fits: never a burst the check did not see.
+ */
+export async function takeWithin<T>(
+  query: AsyncIterable<T>,
+  limit: number,
+  room?: Room,
+): Promise<T[]> {
+  const out: T[] = [];
+  if (limit <= 0) return out;
+  await room?.();
+  for await (const doc of query) {
+    out.push(doc);
+    if (out.length >= limit) break;
+    await room?.();
+  }
+  return out;
+}
+
 /** One stored claim on an ISBN, before merges are followed. */
 export type Claim =
   | {
@@ -217,56 +261,99 @@ export type Claim =
 type Resolution<T> = { doc: T } | { unresolved: string };
 
 /**
- * Follows claims' merge chains, each stored record once per operation. With
- * `terminal`, that Release resolves to itself even while merged, so a Split
- * can ask who will own a claim once the Release is active again; chains
- * through it stop there.
+ * Follows claims' merge chains. Every record read on a chain remembers
+ * where its chain ends and how many pointers away, so chains that share a
+ * tail read it once, whichever record they start from; a claim's own
+ * record, when the caller already read it from an index, is not read again.
+ * With `terminal`, that Release resolves to itself even while merged, so a
+ * Split can ask who will own a claim once the Release is active again;
+ * chains through it stop there. With `room`, every read is checked first.
  */
 export type ClaimResolver = {
-  release(id: Id<"releases">): Promise<Resolution<Doc<"releases">>>;
-  bundle(id: Id<"releaseBundles">): Promise<Resolution<Doc<"releaseBundles">>>;
+  release(id: Id<"releases">, stored?: Doc<"releases">): Promise<Resolution<Doc<"releases">>>;
+  bundle(
+    id: Id<"releaseBundles">,
+    stored?: Doc<"releaseBundles">,
+  ): Promise<Resolution<Doc<"releaseBundles">>>;
 };
 
 export function claimResolver(
   ctx: QueryCtx,
-  options: { terminal?: Id<"releases"> } = {},
+  options: { terminal?: Id<"releases">; room?: Room } = {},
 ): ClaimResolver {
-  async function follow<T extends "releases" | "releaseBundles">(
-    id: Id<T>,
-  ): Promise<Resolution<Doc<T>>> {
-    const visited = new Set<string>();
-    let current = await ctx.db.get(id);
-    if (current === null) return { unresolved: `${id} no longer exists` };
-    for (let hops = 0; ; hops++) {
-      if (current._id === options.terminal || current.status !== "merged") return { doc: current };
-      const next = current.mergedIntoId as Id<T> | undefined;
-      if (next === undefined) return { unresolved: `${current._id} is merged into nothing` };
-      if (visited.has(current._id)) return { unresolved: `${current._id} is in a merge cycle` };
-      if (hops === MERGE_HOPS) {
+  type Ending<T> = { doc: T; hops: number } | { unresolved: string };
+  function resolver<T extends "releases" | "releaseBundles">() {
+    const endings = new Map<string, Ending<Doc<T>>>();
+    const read = async (id: Id<T>): Promise<Doc<T> | null> => {
+      await options.room?.();
+      return await ctx.db.get(id);
+    };
+    return async (id: Id<T>, stored?: Doc<T>): Promise<Resolution<Doc<T>>> => {
+      const known = endings.get(id);
+      if (known === undefined) await walk(id, stored);
+      const ending = endings.get(id);
+      if (ending === undefined) {
         return { unresolved: `${id} is merged more than ${MERGE_HOPS} times over` };
       }
-      visited.add(current._id);
-      const survivor: Doc<T> | null = await ctx.db.get(next);
-      if (survivor === null) {
-        return { unresolved: `${current._id} is merged into ${next}, which no longer exists` };
+      if ("unresolved" in ending) return ending;
+      return ending.hops > MERGE_HOPS
+        ? { unresolved: `${id} is merged more than ${MERGE_HOPS} times over` }
+        : { doc: ending.doc };
+    };
+    // Reads `id`'s chain to its end (or MERGE_HOPS + 1 pointers, whichever
+    // comes first) and remembers each record's ending on the way.
+    async function walk(id: Id<T>, stored?: Doc<T>): Promise<void> {
+      const path: string[] = [];
+      let current = stored ?? (await read(id));
+      let end: Ending<Doc<T>>;
+      if (current === null) {
+        endings.set(id, { unresolved: `${id} no longer exists` });
+        return;
       }
-      current = survivor;
+      for (;;) {
+        const known = endings.get(current._id);
+        if (known !== undefined) {
+          end = known;
+          break;
+        }
+        if (current._id === options.terminal || current.status !== "merged") {
+          end = { doc: current, hops: 0 };
+          endings.set(current._id, end);
+          break;
+        }
+        const next = current.mergedIntoId as Id<T> | undefined;
+        if (next === undefined) {
+          end = { unresolved: `${current._id} is merged into nothing` };
+          endings.set(current._id, end);
+          break;
+        }
+        if (path.includes(current._id)) {
+          end = { unresolved: `${current._id} is in a merge cycle` };
+          break;
+        }
+        path.push(current._id);
+        // Past MERGE_HOPS pointers the start is unresolved however the
+        // chain ends; nothing on it is remembered, so a later start nearer
+        // the end reads it afresh.
+        if (path.length > MERGE_HOPS) return;
+        const survivor: Doc<T> | null = await read(next);
+        if (survivor === null) {
+          end = { unresolved: `${current._id} is merged into ${next}, which no longer exists` };
+          break;
+        }
+        current = survivor;
+      }
+      path.forEach((recordId, index) => {
+        endings.set(
+          recordId,
+          "doc" in end ? { doc: end.doc, hops: end.hops + path.length - index } : end,
+        );
+      });
     }
   }
-  const once = <V>(memo: Map<string, Promise<V>>, id: string, load: () => Promise<V>) => {
-    let hit = memo.get(id);
-    if (!hit) {
-      hit = load();
-      memo.set(id, hit);
-    }
-    return hit;
-  };
-  const releases = new Map<string, Promise<Resolution<Doc<"releases">>>>();
-  const bundles = new Map<string, Promise<Resolution<Doc<"releaseBundles">>>>();
-  return {
-    release: (id) => once(releases, id, () => follow(id)),
-    bundle: (id) => once(bundles, id, () => follow(id)),
-  };
+  const releases = resolver<"releases">();
+  const bundles = resolver<"releaseBundles">();
+  return { release: releases, bundle: bundles };
 }
 
 /** A canonical record and the stored claims on one ISBN that reach it. */
@@ -287,93 +374,163 @@ export type IsbnClaims = {
   printed: boolean;
 };
 
+/** The claims on one ISBN as stored, read once, before merges are followed (claimsOf). */
+export type StoredClaims = {
+  isbn13: string;
+  /** Each claim, with its record when the index read returned it. */
+  raw: Array<{ claim: Claim; stored?: Doc<"releases"> | Doc<"releaseBundles"> }>;
+  complete: boolean;
+  printed: boolean;
+};
+
 /**
  * Every stored claim on `isbn` (any spelling; null when it is no ISBN):
  * Releases' `isbn13` and `isbn10` (by the ISBN-10 form; a 979 ISBN has
  * none), printing rows, and Bundles' `isbn13` and `isbn10`, active, hidden
- * and merged alike. `keep` drops claims (a row being moved, a field being
- * rewritten) before merges are followed, so what remains is grouped by
- * where each claim's chain ends (`resolver`); one owner may carry several
- * claims, and the caller decides by claim kind. Each index is read up to
- * CLAIM_SCAN + 1 rows; `complete` says whether that was all of them.
+ * and merged alike. Each index is read up to CLAIM_SCAN + 1 rows, one at a
+ * time within `room`; `complete` says whether that was all of them. Exact
+ * keys only: a claim stored in another spelling is not found here, which
+ * the consistency check reports (lib/isbn.ts isbnHiddenFromIndex).
  */
-export async function isbnClaims(
+export async function storedClaims(
   ctx: QueryCtx,
   isbn: string,
-  { resolver, keep }: { resolver: ClaimResolver; keep?: (claim: Claim) => boolean },
-): Promise<IsbnClaims | null> {
+  room?: Room,
+): Promise<StoredClaims | null> {
   const isbn13 = toIsbn13(isbn);
   if (isbn13 === undefined) return null;
   const isbn10 = isbn13To10(isbn13);
   const take = CLAIM_SCAN + 1;
-  const [own13, own10, rows, box13, box10] = await Promise.all([
-    ctx.db
-      .query("releases")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-      .take(take),
+  const own13 = await takeWithin(
+    ctx.db.query("releases").withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13)),
+    take,
+    room,
+  );
+  const own10 =
     isbn10 === undefined
       ? []
-      : ctx.db
-          .query("releases")
-          .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))
-          .take(take),
-    ctx.db
-      .query("releaseIsbns")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-      .take(take),
-    ctx.db
-      .query("releaseBundles")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-      .take(take),
+      : await takeWithin(
+          ctx.db.query("releases").withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10)),
+          take,
+          room,
+        );
+  const rows = await takeWithin(
+    ctx.db.query("releaseIsbns").withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13)),
+    take,
+    room,
+  );
+  const box13 = await takeWithin(
+    ctx.db.query("releaseBundles").withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13)),
+    take,
+    room,
+  );
+  const box10 =
     isbn10 === undefined
       ? []
-      : ctx.db
-          .query("releaseBundles")
-          .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))
-          .take(take),
-  ]);
-  const raw: Claim[] = [
-    ...own13.map((r): Claim => ({ on: "release", via: "isbn13", storedId: r._id })),
-    ...own10.map((r): Claim => ({ on: "release", via: "isbn10", storedId: r._id })),
-    ...rows.map(
-      (row): Claim => ({ on: "release", via: "printing", storedId: row.releaseId, rowId: row._id }),
-    ),
-    ...box13.map((b): Claim => ({ on: "bundle", via: "isbn13", storedId: b._id })),
-    ...box10.map((b): Claim => ({ on: "bundle", via: "isbn10", storedId: b._id })),
-  ];
-  const claims: IsbnClaims = {
+      : await takeWithin(
+          ctx.db.query("releaseBundles").withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10)),
+          take,
+          room,
+        );
+  return {
     isbn13,
-    owners: new Map(),
-    unresolved: [],
+    raw: [
+      ...own13.map((r) => ({
+        claim: { on: "release", via: "isbn13", storedId: r._id } satisfies Claim,
+        stored: r,
+      })),
+      ...own10.map((r) => ({
+        claim: { on: "release", via: "isbn10", storedId: r._id } satisfies Claim,
+        stored: r,
+      })),
+      ...rows.map((row) => ({
+        claim: {
+          on: "release",
+          via: "printing",
+          storedId: row.releaseId,
+          rowId: row._id,
+        } satisfies Claim,
+      })),
+      ...box13.map((b) => ({
+        claim: { on: "bundle", via: "isbn13", storedId: b._id } satisfies Claim,
+        stored: b,
+      })),
+      ...box10.map((b) => ({
+        claim: { on: "bundle", via: "isbn10", storedId: b._id } satisfies Claim,
+        stored: b,
+      })),
+    ],
     complete: [own13, own10, rows, box13, box10].every((read) => read.length < take),
     printed: rows.length > 0,
   };
-  for (const claim of keep ? raw.filter(keep) : raw) {
-    const resolved =
-      claim.on === "release"
-        ? await resolver.release(claim.storedId)
-        : await resolver.bundle(claim.storedId);
-    if ("unresolved" in resolved) {
-      claims.unresolved.push({ claim, reason: resolved.unresolved });
-      continue;
-    }
-    const owner = claims.owners.get(resolved.doc._id);
-    if (owner) owner.claims.push(claim);
-    else if (claim.on === "release") {
-      claims.owners.set(resolved.doc._id, {
-        kind: "release",
-        doc: resolved.doc as Doc<"releases">,
-        claims: [claim],
-      });
-    } else {
-      claims.owners.set(resolved.doc._id, {
-        kind: "bundle",
-        doc: resolved.doc as Doc<"releaseBundles">,
-        claims: [claim],
-      });
-    }
+}
+
+/**
+ * Add one claim to `claims`, under the canonical record its chain reaches
+ * (`resolver`), or as unresolved.
+ */
+export async function addClaim(
+  claims: IsbnClaims,
+  claim: Claim,
+  resolver: ClaimResolver,
+  stored?: Doc<"releases"> | Doc<"releaseBundles">,
+): Promise<void> {
+  const resolved =
+    claim.on === "release"
+      ? await resolver.release(claim.storedId, stored as Doc<"releases"> | undefined)
+      : await resolver.bundle(claim.storedId, stored as Doc<"releaseBundles"> | undefined);
+  if ("unresolved" in resolved) {
+    claims.unresolved.push({ claim, reason: resolved.unresolved });
+    return;
+  }
+  const owner = claims.owners.get(resolved.doc._id);
+  if (owner) owner.claims.push(claim);
+  else if (claim.on === "release") {
+    claims.owners.set(resolved.doc._id, {
+      kind: "release",
+      doc: resolved.doc as Doc<"releases">,
+      claims: [claim],
+    });
+  } else {
+    claims.owners.set(resolved.doc._id, {
+      kind: "bundle",
+      doc: resolved.doc as Doc<"releaseBundles">,
+      claims: [claim],
+    });
+  }
+}
+
+/**
+ * Stored claims grouped by where each claim's chain ends (`resolver`).
+ * `keep` drops claims (a row being moved, a field being rewritten) before
+ * merges are followed; one owner may carry several claims, and the caller
+ * decides by claim kind. One read can be grouped under several resolvers.
+ */
+export async function claimsOf(
+  stored: StoredClaims,
+  { resolver, keep }: { resolver: ClaimResolver; keep?: (claim: Claim) => boolean },
+): Promise<IsbnClaims> {
+  const claims: IsbnClaims = {
+    isbn13: stored.isbn13,
+    owners: new Map(),
+    unresolved: [],
+    complete: stored.complete,
+    printed: stored.printed,
+  };
+  for (const { claim, stored: doc } of stored.raw) {
+    if (keep === undefined || keep(claim)) await addClaim(claims, claim, resolver, doc);
   }
   return claims;
+}
+
+/** storedClaims grouped by claimsOf: every claim on `isbn`, read and followed. */
+export async function isbnClaims(
+  ctx: QueryCtx,
+  isbn: string,
+  options: { resolver: ClaimResolver; keep?: (claim: Claim) => boolean; room?: Room },
+): Promise<IsbnClaims | null> {
+  const stored = await storedClaims(ctx, isbn, options.room);
+  return stored === null ? null : await claimsOf(stored, options);
 }
 
 /** How a claim names its ISBN, for a refusal. */
@@ -416,8 +573,13 @@ export function printedClaimRefusal(claims: IsbnClaims, releaseId?: Id<"releases
  * Why a write may not leave `isbns` (any spellings; undefined skipped)
  * claimed by Release `releaseId`, or by a new Release or a Bundle when it
  * is omitted, or null: printedClaimRefusal for each ISBN with a printing
- * row. An ISBN without one is left to the caller's older checks. `keep`
- * drops claims the same write removes (a primary it rewrites).
+ * row. An ISBN without one is left to the caller's older checks. Each
+ * distinct ISBN is checked once, whichever spellings name it, and most
+ * have no row: one indexed probe for a row settles that before any claim
+ * is read, so an ordinary write reads one empty index range per ISBN.
+ * Where a row exists, every claim is read and followed, the Release's own
+ * included. `keep` drops claims the same write removes (a primary it
+ * rewrites).
  */
 export async function printedIsbnRefusal(
   ctx: QueryCtx,
@@ -425,10 +587,16 @@ export async function printedIsbnRefusal(
   releaseId?: Id<"releases">,
   keep?: (claim: Claim) => boolean,
 ): Promise<string | null> {
+  const keys = new Set(isbns.flatMap((isbn) => toIsbn13(isbn) ?? []));
   const resolver = claimResolver(ctx);
-  for (const isbn of isbns) {
-    const claims = isbn === undefined ? null : await isbnClaims(ctx, isbn, { resolver, keep });
-    const why = claims?.printed ? printedClaimRefusal(claims, releaseId) : null;
+  for (const isbn13 of keys) {
+    const row = await ctx.db
+      .query("releaseIsbns")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .first();
+    if (row === null) continue;
+    const claims = await isbnClaims(ctx, isbn13, { resolver, keep });
+    const why = claims === null ? null : printedClaimRefusal(claims, releaseId);
     if (why !== null) return why;
   }
   return null;

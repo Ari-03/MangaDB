@@ -509,6 +509,20 @@ is fixed.
   row a merge removed as a duplicate, or one a correction deletes, leaves
   its ISBN to the older rule (duplicate primaries refused against active
   Releases only), so a hidden Release's former printing can be claimed.
+- **Stored ISBNs in another spelling hide claims until corrected.** Every
+  ownership check reads exact keys. Writers now store one spelling, but a
+  Release, Bundle or printing row stored before (hyphens, a lower-case x,
+  an ISBN-10 in `isbn13`) is seen by no check; the consistency check's
+  `releases`, `bundles` and `rows` passes list them. A row has no audited
+  correction yet, so it is fixed by hand. Until those passes are clean, no
+  decision, Split or clean result is complete for those ISBNs.
+- **A Release Split refuses rows moved by a merge older than the manifest
+  ISBN.** Manifests written before they kept each moved row's ISBN cannot
+  show the row still carries it, so such a Split refuses and an
+  administrator splits it by hand. A Split that moves records of a
+  printing reads every Revision written since the merge (at most 1,000)
+  to show none of them was relinked; on a busy catalog an older merge
+  passes that and is refused the same way.
 - **Printing bounds refuse rather than read further.** A merge refuses a
   Release with more than 100 printings, Restore a Release with more than
   100, a decision an ISBN with more than 20 stored claims of one kind, and

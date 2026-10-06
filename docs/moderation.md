@@ -189,20 +189,33 @@ approved Proposal, so the reason lands in public history.
   the merge found it a duplicate), and the Split is refused when anyone
   else claims it, when an ISBN coming back with the loser (its own, or that
   of a Release merged into it) would collide with a survivor's row, or when
-  a claim cannot be followed. Records of a printing go where the printing
-  goes, including records linked to the survivor since the merge, with
-  their mark and maturity as a link gives them; a record the survivor
-  keeps keeps its mark. A record that was unlinked or relinked by an
-  audited decision since the merge (a repair unlink, a reviewed link that
-  was not the record's first) refuses the Split, naming the Revision,
-  because nothing can tell that link from the merge's. Both Revisions list
-  each printing (`otherPrintings`: restored or kept on the survivor) and
-  each record (`sourceObservations`: from, to, mark before and after). A
-  Release Split decides at most 40 ISBNs, reads at most 400 of the
-  survivor's records and Revisions since the merge, moves at most 100
-  records, replays at most 4,000 manifest entries, keeps each audit under
-  64 KiB, and checks before each read and before writing that the
-  transaction has room left; past any of these it refuses with the count.
+  a claim cannot be followed. A merge's manifest keeps each moved row's
+  ISBN: a row whose ISBN was changed since (not merely respelled) is a
+  later decision and stays where it is (`changedSinceMerge`), and a row
+  moved by a merge recorded before manifests kept the ISBN refuses the
+  Split, since nothing shows the row still carries what the merge moved.
+  Records of a printing go where the printing goes, including records
+  linked to the survivor since the merge, with their mark and maturity as
+  a link gives them; a record the survivor keeps keeps its mark. A record
+  that was unlinked or relinked by an audited decision since the merge,
+  on the survivor or on any other Release it was linked to meanwhile (a
+  repair unlink, a reviewed link that was not the record's first), refuses
+  the Split, naming the Revision, because nothing can tell that link from
+  the merge's: every Revision written since the merge is read once to find
+  them. Both Revisions list each printing (`otherPrintings`: restored,
+  kept on the survivor, or changed since the merge) and each record
+  (`sourceObservations`: from, to, mark before and after). A Release Split
+  decides at most 40 ISBNs, reads at most 400 of the survivor's records and
+  1,000 Revisions written since the merge, moves at most 100 records,
+  replays at most 4,000 manifest entries, and keeps each audit under 64
+  KiB. It reads only the latest merge's manifests, never an earlier one
+  already split. Every read it makes, of manifests, printing rows, claims
+  and their merges, records and history, is one document at a time and
+  only while the transaction can still read the largest document and keep
+  its reserve; before writing it checks room for its writes, that reserve,
+  and the fresh ownership check it makes after them (measured while it
+  planned). Past any of these it refuses with the count or the metric,
+  writing nothing, rather than meeting the platform's limit.
 - **Lock** closes an active record to edits during a dispute; unlock when
   it is resolved. Hidden and merged records are locked by their status.
   Hide and merge refuse a locked record until it is unlocked.

@@ -1225,6 +1225,39 @@ describe("lines, researched releases, cross-series books", () => {
     ).toMatchObject({ status: "skipped" });
   });
 
+  it("gives a box set's Bundle the box's ISBNs as their fields store them (C67-14)", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    // A box Release stored before writers kept one spelling.
+    await t.run((ctx) =>
+      ctx.db.patch(s.omnibusRelease.releaseId, {
+        isbn13: "978-0-8044-2957-3",
+        isbn10: "0-8044-2957-x",
+      }),
+    );
+    const entry: RepairEntry = {
+      kind: "releaseBundle",
+      key: "b",
+      reason: "box set of two works",
+      bundleId: null,
+      box: { releaseId: s.omnibusRelease.releaseId, name: "Noragami Box Set" },
+      members: [
+        { isbn13: "9780000000035", order: 1 },
+        { isbn13: "9780000000011", order: 2 },
+      ],
+      retireVolumeIds: [s.omnibusVol],
+    };
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    const bundle = await t.run((ctx) =>
+      ctx.db
+        .query("releaseBundles")
+        .withIndex("by_isbn13", (q) => q.eq("isbn13", "9780804429573"))
+        .unique(),
+    );
+    expect(bundle).toMatchObject({ isbn13: "9780804429573", isbn10: "080442957X" });
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
   it("turns a box set into a bundle whose members span Series, in plan order, and extends a bundle", async () => {
     const t = makeT();
     const s = await seed(t);

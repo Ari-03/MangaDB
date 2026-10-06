@@ -17,10 +17,12 @@ import {
   insertPrinting,
   isbn13For,
   OLDER,
+  OLDER_10,
   vagabond,
   type Vagabond,
   X,
   Y,
+  Z,
 } from "./test.printings";
 
 const year = (y: number) => ({ year: y, sort: y * 10000 });
@@ -107,9 +109,10 @@ describe("the Release row's Other Printings", () => {
 });
 
 type Finding = { severity: string; message: string; isbn13?: string };
+type Pass = "rows" | "observations" | "releases" | "bundles";
 
 /** Walk one pass to the end, a page of `numItems` at a time. */
-async function walk(t: TestT, pass: "rows" | "observations", numItems = 1) {
+async function walk(t: TestT, pass: Pass, numItems = 1) {
   const findings: Finding[] = [];
   let cursor: string | null = null;
   for (let pages = 0; pages < 1000; pages++) {
@@ -226,7 +229,7 @@ describe("the consistency check", () => {
     ]);
   });
 
-  it("refuses oversized pages, and reports items it read but could not afford to inspect", async () => {
+  it("refuses pages larger than it inspects or reads, before reading", async () => {
     const t = makeT({ transactionLimits: true });
     await expect(
       t.query(internal.printings.consistencyInternal, {
@@ -234,24 +237,232 @@ describe("the consistency check", () => {
         paginationOpts: { numItems: 101, cursor: null },
       }),
     ).rejects.toThrow(/A page inspects 1 to 100 items/);
-    const book = await t.run((ctx) => vagabond(ctx));
-    for (let i = 0; i < 16; i++) {
+    await expect(
+      t.query(internal.printings.consistencyInternal, {
+        pass: "observations",
+        paginationOpts: { numItems: 10, cursor: null, maximumBytesRead: 8 * 1024 * 1024 },
+      }),
+    ).rejects.toThrow(/A page reads at most 4194304 bytes/);
+  });
+});
+
+describe("the consistency check under the platform's own limits (C67-02, C67-04)", () => {
+  // Default transaction limits: every page ends in an answer, never the
+  // platform's abort, and nothing it read goes unaccounted.
+  const big = (n: number) => "x".repeat(n);
+  type Page = {
+    findings: Array<Finding & { rowId?: string; observationId?: string }>;
+    scanned: number;
+    inspected: number;
+    isDone: boolean;
+    continueCursor: string;
+  };
+  const page = (
+    t: TestT,
+    pass: Pass,
+    paginationOpts: {
+      numItems: number;
+      cursor: string | null;
+      maximumBytesRead?: number;
+      maximumRowsRead?: number;
+    },
+  ): Promise<Page> => t.query(internal.printings.consistencyInternal, { pass, paginationOpts });
+
+  it("stops a page of large records early and goes on by its cursor, whatever numItems asks", async () => {
+    const t = makeT({ transactionLimits: true });
+    const ids: string[] = [];
+    for (let i = 0; i < 20; i++)
+      ids.push(
+        await t.run((ctx) =>
+          insertObservation(ctx, {
+            sourceKey: "ann",
+            sourceRecordId: `root:${i}`,
+            snapshot: { payload: big(850_000) },
+          }),
+        ),
+      );
+    for (const numItems of [100, 1]) {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let n = 0; n < 40; n++) {
+        const result: Page = await page(t, "observations", { numItems, cursor });
+        expect(result.findings).toEqual([]);
+        expect(result.inspected).toBe(result.scanned);
+        expect(result.scanned).toBeLessThanOrEqual(Math.min(numItems, 5));
+        seen.push(
+          ...Array(result.scanned)
+            .fill(0)
+            .map((_, k) => `${n}:${k}`),
+        );
+        if (result.isDone) break;
+        cursor = result.continueCursor;
+      }
+      expect(seen).toHaveLength(20);
+    }
+    // A caller's own limits are kept: a smaller byte budget, or a row budget.
+    expect(
+      (await page(t, "observations", { numItems: 100, cursor: null, maximumBytesRead: 1 })).scanned,
+    ).toBe(1);
+    expect(
+      (await page(t, "observations", { numItems: 100, cursor: null, maximumRowsRead: 2 })).scanned,
+    ).toBe(2);
+  });
+
+  it("does the same for large printing rows", async () => {
+    const t = makeT({ transactionLimits: true });
+    await t.run(vagabond);
+    const book = await t.run(async (ctx) => (await ctx.db.query("releases").first())!);
+    for (let i = 0; i < 20; i++)
+      await t.run((ctx) => insertPrinting(ctx, book._id, isbn13For(i), { reason: big(850_000) }));
+    expect(await walk(t, "rows", 100)).toEqual([]);
+  });
+
+  it("reports a row whose claims are too large to read as incomplete, by ID, never clean", async () => {
+    const t = makeT({ transactionLimits: true });
+    const book = await t.run(vagabond);
+    const rowId = await t.run((ctx) => insertPrinting(ctx, book.releaseId, OLDER));
+    for (let i = 0; i < 20; i++)
       await t.run((ctx) =>
-        insertObservation(ctx, {
-          ...marked(book.releaseId, OLDER, `/books/OL${i}M`),
-          snapshot: { payload: "x".repeat(950_000) },
+        another(ctx, book, {
+          isbn13: OLDER,
+          status: "merged",
+          mergedIntoId: book.releaseId,
+          description: big(850_000),
         }),
       );
+    const result = await page(t, "rows", { numItems: 1, cursor: null });
+    expect(result.inspected).toBe(0);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        severity: "incomplete",
+        rowId,
+        message: expect.stringContaining("Read but not inspected"),
+      }),
+    ]);
+  });
+
+  /** `keys` printing rows on the Release, each claimed by 20 merged Releases reaching it through `chain`. */
+  async function chained(t: TestT, keys: number, shared: boolean, description?: string) {
+    const book = await t.run(vagabond);
+    const chainTo = async (): Promise<Id<"releases">> => {
+      let chain = book.releaseId;
+      for (let i = 0; i < 7; i++)
+        chain = await t.run((ctx) =>
+          another(ctx, book, {
+            status: "merged",
+            mergedIntoId: chain,
+            ...(description ? { description } : {}),
+          }),
+        );
+      return chain;
+    };
+    const sharedChain = shared ? await chainTo() : undefined;
+    for (let k = 0; k < keys; k++) {
+      const isbn = isbn13For(k);
+      await t.run((ctx) => insertPrinting(ctx, book.releaseId, isbn));
+      for (let i = 0; i < 20; i++) {
+        const into = sharedChain ?? (await chainTo());
+        await t.run((ctx) =>
+          another(ctx, book, { isbn13: isbn, status: "merged", mergedIntoId: into }),
+        );
+      }
     }
-    const page = await t.query(internal.printings.consistencyInternal, {
-      pass: "observations",
-      paginationOpts: { numItems: 16, cursor: null },
+    return book;
+  }
+
+  it("follows merge chains that share a tail once, and finds 24 rows of 20 eight-hop claims clean", async () => {
+    const t = makeT({ transactionLimits: true });
+    await chained(t, 24, true);
+    const result = await page(t, "rows", { numItems: 100, cursor: null });
+    expect(result).toMatchObject({ findings: [], scanned: 24, inspected: 24, isDone: true });
+  });
+
+  it("reports rows whose distinct chains the transaction cannot afford as incomplete", async () => {
+    const t = makeT({ transactionLimits: true });
+    await chained(t, 1, false, big(150_000));
+    const result = await page(t, "rows", { numItems: 100, cursor: null });
+    expect(result.inspected).toBe(0);
+    expect(result.findings).toEqual([expect.objectContaining({ severity: "incomplete" })]);
+  });
+});
+
+describe("a stored ISBN no exact read finds (C67-05, C67-14)", () => {
+  it("counts a row stored in another spelling as a claim: two owners are a violation, never clean", async () => {
+    for (const spelling of ["978-1-59116-034-2", OLDER_10, "1-59116-034-0"]) {
+      const t = makeT();
+      const rowId = await t.run(async (ctx) => {
+        const book = await vagabond(ctx);
+        await another(ctx, book, { isbn13: OLDER });
+        return await insertPrinting(ctx, book.releaseId, spelling);
+      });
+      const rows = await walk(t, "rows");
+      expect(
+        rows.map((f) => [f.severity, f.message.replace(/\b[0-9a-zA-Z]{24,}\b/g, "ID")]),
+      ).toEqual([
+        [
+          "violation",
+          `Row ID stores its ISBN as "${spelling}", which no ownership check reads (they read ${OLDER}): store it so.`,
+        ],
+        ["violation", `ISBN ${OLDER} is claimed by 2 records: ID, ID.`],
+      ]);
+      expect(rows.every((f) => !("rowId" in f) || f.rowId === rowId)).toBe(true);
+    }
+  });
+
+  it("still reports the spelling of a row with one owner, and nothing for a canonical one or an invalid one's owner", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const book = await vagabond(ctx);
+      await insertPrinting(ctx, book.releaseId, "978-1-59116-034-2");
+      await insertPrinting(ctx, book.releaseId, Y);
+      await insertPrinting(ctx, book.releaseId, "9781591160343");
     });
-    expect(page.scanned).toBe(16);
-    expect(page.inspected).toBeLessThan(16);
-    expect(page.findings.at(-1)).toMatchObject({
-      severity: "incomplete",
-      message: expect.stringMatching(/item\(s\) of this page were read but not inspected/),
+    expect(
+      (await walk(t, "rows")).map((f) => [
+        f.severity,
+        f.message.replace(/\b[0-9a-zA-Z]{24,}\b/g, "ID"),
+      ]),
+    ).toEqual([
+      [
+        "violation",
+        `Row ID stores its ISBN as "978-1-59116-034-2", which no ownership check reads (they read ${OLDER}): store it so.`,
+      ],
+      ["violation", 'Row ID\'s ISBN "9781591160343" is no valid ISBN.'],
+    ]);
+  });
+
+  it("finds every Release and Bundle ISBN stored where no exact read finds it", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const book = await vagabond(ctx);
+      await another(ctx, book, { isbn13: "978-1-59116-034-2" });
+      await another(ctx, book, { isbn13: OLDER_10 });
+      await another(ctx, book, { isbn13: "9780804429573", isbn10: "080442957x" });
+      await another(ctx, book, { isbn13: Y, isbn10: Y });
+      await another(ctx, book, { isbn13: "9781591160343" });
+      await insertBundle(ctx, { publisherId: book.publisherId, isbn13: "979 8888772584" });
+      await insertBundle(ctx, {
+        publisherId: book.publisherId,
+        isbn13: Z,
+        isbn10: "9798888772584",
+      });
     });
+    const releases = await walk(t, "releases");
+    expect(
+      releases.map((f) => [f.severity, f.isbn13, f.message.match(/stores its (\w+)/)?.[1]]),
+    ).toEqual([
+      ["violation", OLDER, "isbn13"],
+      ["violation", OLDER, "isbn13"],
+      ["violation", "9780804429573", "isbn10"],
+      ["violation", Y, "isbn10"],
+    ]);
+    const bundles = await walk(t, "bundles", 5);
+    expect(
+      bundles.map((f) => [f.severity, f.isbn13, f.message.match(/stores its (\w+)/)?.[1]]),
+    ).toEqual([
+      ["violation", "9798888772584", "isbn13"],
+      ["violation", "9798888772584", "isbn10"],
+    ]);
+    expect(bundles[1]?.message).toContain("no ISBN-10 for a 979 ISBN");
   });
 });

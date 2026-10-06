@@ -322,8 +322,10 @@ fails, so a script can log it and go on. The checks run in this order:
   ISBN-10s, any spelling) is valid and names the same book;
 - the citation URL above is usable;
 - the Release is active, unlocked and physical;
-- the book is held under one of the Release's Series, each followed
-  through merges;
+- the Release's Series, each followed through its merges (at most 8, no
+  cycle, no merge into nothing), are all active: a hidden Series, or one
+  whose merges end nowhere, has no printings decided for it;
+- the book is held under one of those Series, followed the same way;
 - the publisher the record names is the Release's, followed through
   merges. The name is ANN's distributor, the first name in Open Library's
   list that resolves, the PRH or Yen Press imprint, or Seven Seas for its
@@ -332,17 +334,30 @@ fails, so a script can log it and go on. The checks run in this order:
 - the contents. The record must read as one Volume of a work titled as one
   of the Release's Series (case and spacing aside: "Citrus+" is not
   "Citrus"). Every statement is read on its own: an ANN line's title, its
-  page's designator re-read with today's parser, the page's title and
-  manga entry, and the stored flags. Statements that disagree, or a
-  designator that no longer reads, are refused. So is a title ending in a
-  number with no "Vol." ("Kingdom Hearts II"), since the number may be the
-  work's own, and anything a source files as a novel, as another
-  language, or out of scope (a Seven Seas or Yen Press category, a stored
-  `outOfScope`). Anything that reads as packaging is refused for now: a
-  multi-Volume designator or stored range, a line name or packaging word
-  in the title, or any bracketed part ("[1st Ed]"). The Release's Edition
-  must collect exactly one whole Volume of one of its Series (a line member
-  with one Volume counts), and a Volume the record states must be that one;
+  page's designator re-read with today's parser, the page's own title
+  (its "Vol. 1" or its "(GN 1)"), its manga entry, and the stored flags.
+  Every Volume any of them states must be the same one ("01" is "1");
+  statements that disagree, or a designator that no longer reads, are
+  refused. ANN numbers every book it lists, so an ANN record that states
+  no Volume anywhere is refused as unknown; another source's record
+  stating none is left to the person deciding, as before. A Volume the
+  importer stored that the kept title does not state (Open Library's
+  subtitle "Vol. 1" under the title "Vagabond") stands, and is checked
+  like any other; only a title stating another Volume contradicts it. A
+  title ending in a number with no "Vol." ("Kingdom Hearts II") is
+  refused, since the number may be the work's own, and so is anything a
+  source files as a novel, as another language, or out of scope (a Seven
+  Seas or Yen Press category, a stored `outOfScope`). A Binding the record
+  states plainly (hardcover, paperback) that is not the Release's is
+  refused: another Binding is another Release. A Binding either side
+  leaves unstated is left to the person deciding. Anything that reads as
+  packaging is refused for now: a multi-Volume designator or stored range,
+  a line name or packaging word in the title, or any bracketed part ("[1st
+  Ed]"). The Release's Edition must collect exactly one whole Volume (a
+  line member with one Volume counts), active, whose own Series, followed
+  through merges, is one of the Release's Series by ID: a Series merely
+  titled the same is another work. A Volume the record states must be
+  that one;
 - ownership, every claim on the ISBN read whole (`lib/releaseIsbns.ts`
   `isbnClaims`: Releases' ISBN-13 and ISBN-10, printing rows, and Release
   Bundles' ISBNs, merges followed, hidden records included). The ISBN may
@@ -374,34 +389,61 @@ position and coverage instead of refused.
 ### Checking printing consistency
 
 `printings:consistencyInternal` reads the whole catalog's printing claims,
-read-only, one native page at a time. Run both passes from a `null` cursor
-to the end, passing each answer's `continueCursor` back:
+read-only, one native page at a time. Run all four passes from a `null`
+cursor to the end, passing each answer's `continueCursor` back, the two
+key passes first:
 
 ```sh
+npx convex run printings:consistencyInternal \
+  '{"pass": "releases", "paginationOpts": {"numItems": 100, "cursor": null}}'
+npx convex run printings:consistencyInternal \
+  '{"pass": "bundles", "paginationOpts": {"numItems": 100, "cursor": null}}'
 npx convex run printings:consistencyInternal \
   '{"pass": "rows", "paginationOpts": {"numItems": 100, "cursor": null}}'
 npx convex run printings:consistencyInternal \
   '{"pass": "observations", "paginationOpts": {"numItems": 100, "cursor": null}}'
 ```
 
-A page inspects 1 to 100 items, and `maximumRowsRead` and
-`maximumBytesRead` work as in any native page. Each answer has
-`findings`, `scanned`, `inspected`, `isDone` and `continueCursor`. A
-finding's `severity` is:
+Every ownership check, here and in every writer, reads exact keys: a
+Release's or Bundle's `isbn13` as the ISBN-13's digits, its `isbn10` as
+the ISBN-10's (an upper-case X), a row's `isbn13` as the ISBN-13's. A
+claim stored in any other spelling (hyphens, spaces, a lower-case x, an
+ISBN-10 kept as `isbn13`) is invisible to them. Every writer stores that
+one spelling (the importers' parsers, Proposals, and the data repair's
+`updateFields`, `createRelease` and Bundle conversions, `lib/isbn.ts`
+`isbnFieldValue`), but older rows may not. The `releases` and `bundles`
+passes find every such stored ISBN; the `rows` pass finds rows stored so.
+Until those report none, or each is corrected (a Release by a repair
+`updateFields` entry, a Bundle by a Proposal; a row by hand, since no
+audited operation corrects one yet), what the other passes find, and
+what a decision or a Split concludes about those ISBNs, is not complete:
+do not record printings or replay data on the strength of it.
+
+A page inspects 1 to 100 items (`numItems`). `paginationOpts` goes to the
+native page whole: `maximumRowsRead` works as in any native page, and
+`maximumBytesRead` may be at most 4 MiB, and is 4 MiB when left out, so
+the page itself never spends the transaction its checks need. A page of
+large records stops early (`scanned` below `numItems`, `isDone` false)
+and its cursor goes on. Each answer has `findings`, `scanned`,
+`inspected`, `isDone` and `continueCursor`. A finding's `severity` is:
 
 - `violation`: an ISBN with a printing row has more than one owner, a
   Bundle owner, a claim whose merges cannot be followed, or a non-physical
-  owner; or a marked record's mark is no ISBN, its link cannot be followed,
-  or the one owner of its mark is not the Release it links (merges
-  followed: a link to a Release merged into the owner is fine);
-- `incomplete`: an ISBN had more claims than one read takes, or the page
-  read items it could not afford to inspect (it says how many; check that
-  page again with fewer items);
+  owner (a row counts as a claim whatever its spelling); a stored ISBN is
+  spelled so no exact read finds it; or a marked record's mark is no ISBN,
+  its link cannot be followed, or the one owner of its mark is not the
+  Release it links (merges followed: a link to a Release merged into the
+  owner is fine);
+- `incomplete`: an ISBN had more claims than one read takes, or an item's
+  checks could not be afforded: each check reads one document at a time
+  while the transaction can still read the largest, and the item it ran
+  out on and every item after it on the page are reported by ID (check
+  that page again with fewer items);
 - `diagnostic`: history, not corruption. A row's evidence record is gone,
   unlinked, or now links another Release; a mark is on an unlinked record,
   or nobody claims its ISBN any more.
 
-The catalog is checked only when both passes reach `isDone` with no
+The catalog is checked only when all four passes reach `isDone` with no
 `incomplete` finding, and clean when there is also no `violation`. It
 checks ownership and evidence, never whether two books are the same.
 

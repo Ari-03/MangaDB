@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { recordUnplaced } from "./lib/observations";
+import { parseEditionJson } from "./lib/openLibrary";
 import {
   insertCoverage,
   insertEdition,
@@ -197,7 +198,7 @@ describe("ANN lines are read statement by statement", () => {
       [annLine("Vagabond", "1", { volume: "GN 2" }), /now reads Volume 2, the stored line 1/],
       [
         annLine("Vagabond, Vol. 1", "2", { volume: "GN 2" }),
-        /its title says Volume 1, its designator Volume 2/,
+        /the stored line says Volume 2, its title "Vagabond, Vol. 1" Volume 1/,
       ],
       [
         annLine("Citrus", "1", { volume: "GN 1", title: "Citrus+" }),
@@ -278,7 +279,10 @@ describe("other sources' records", () => {
 
   it("refuses stored statements that disagree with the title, and stored packaging", async () => {
     for (const [extra, reason] of [
-      [{ volumeLabel: "2" }, /its title says Volume 1, its stored Volume 2/],
+      [
+        { volumeLabel: "2" },
+        /its title "Vagabond, Vol. 1" says Volume 1, its stored reading Volume 2/,
+      ],
       [{ multiVolume: true }, /stored multi-volume flag/],
       [
         { packaging: { lineName: "Omnibus", linePosition: "1", coverRange: null } },
@@ -382,7 +386,7 @@ describe("the Release's own contents", () => {
           return editionId;
         },
         "Vagabond, Vol. 1",
-        /cannot be followed to an active Volume of its Series/,
+        /is not a Volume of the Release's own Series/,
       ],
     ] as const) {
       const t = makeT();
@@ -399,5 +403,228 @@ describe("the Release's own contents", () => {
       }),
       /reads as packaging/,
     );
+  });
+});
+
+describe("each statement, on both branches: recorded and linked (C67-06 to C67-09, C67-13)", () => {
+  type Ids = Awaited<ReturnType<typeof setup>>;
+
+  /**
+   * The decision on `make`'s fixture with no row yet (`recorded`) and with
+   * the row already recorded on the Release (`linked`): accepted on both,
+   * or refused on both writing nothing.
+   */
+  async function eachBranch(make: (t: TestT) => Promise<Ids>, expected: RegExp | "accepted") {
+    for (const existing of [false, true]) {
+      const t = makeT();
+      const ids = await make(t);
+      if (existing) await t.run((ctx) => insertPrinting(ctx, ids.releaseId, OLDER));
+      if (expected === "accepted") {
+        expect(await decide(t, ids.observationId, ids.releaseId)).toMatchObject({
+          status: existing ? "linked" : "recorded",
+          isbn13: OLDER,
+        });
+        expect(await holdFor(t, ids.observationId)).toBeNull();
+      } else await expectRefused(t, ids, expected);
+    }
+  }
+  const volume2 = { label: "2" };
+
+  it("refuses an ANN page title stating another Volume than the line, its designator and the Release (C67-06)", async () => {
+    for (const title of ["Vagabond, Vol. 1", "Vagabond (GN 1)"]) {
+      await eachBranch(
+        (t) => setup(t, "ann", annLine("Vagabond", "2", { volume: "GN 2", title }), volume2),
+        /says Volume 2, ANN's page title "Vagabond(, Vol\. 1| \(GN 1\))" Volume 1/,
+      );
+    }
+  });
+
+  it("records an ANN page title stating the same Volume, in any form (C67-06 control)", async () => {
+    for (const title of ["Vagabond, Vol. 02", "Vagabond (GN 2)", "Vagabond"]) {
+      await eachBranch(
+        (t) => setup(t, "ann", annLine("Vagabond", "2", { volume: "GN 2", title }), volume2),
+        "accepted",
+      );
+    }
+  });
+
+  it("refuses an ANN record that states no Volume anywhere (C67-08)", async () => {
+    await eachBranch(
+      (t) => setup(t, "ann", annLine("Vagabond", undefined)),
+      /states no Volume anywhere/,
+    );
+  });
+
+  it("records an ANN record whose Volume only its title or page title states (C67-08 control)", async () => {
+    await eachBranch((t) => setup(t, "ann", annLine("Vagabond, Vol. 1", undefined)), "accepted");
+    await eachBranch(
+      (t) => setup(t, "ann", annLine("Vagabond", undefined, { title: "Vagabond, Vol. 1" })),
+      "accepted",
+    );
+  });
+
+  it("leaves a record of another source stating no Volume to the reviewer, as before", async () => {
+    await eachBranch((t) => setup(t, "openlibrary", olEdition("Vagabond")), "accepted");
+  });
+
+  /** setup, with the Release's Binding `binding`. */
+  const bound = async (t: TestT, snapshot: Record<string, unknown>, binding?: string) => {
+    const ids = await setup(t, "openlibrary", snapshot);
+    if (binding !== undefined) await t.run((ctx) => ctx.db.patch(ids.releaseId, { binding }));
+    return ids;
+  };
+
+  it("refuses a record whose stated Binding is not the Release's, either way round (C67-09)", async () => {
+    await eachBranch(
+      (t) => bound(t, olEdition("Vagabond, Vol. 1", { binding: "hardcover" }), "paperback"),
+      /is a hardcover book; the Release is paperback/,
+    );
+    await eachBranch(
+      (t) => bound(t, olEdition("Vagabond, Vol. 1", { binding: "paperback" }), "Hardcover"),
+      /is a paperback book; the Release is hardcover/,
+    );
+    const parsed = parseEditionJson({
+      key: "/books/OL9M",
+      title: "Vagabond, Vol. 1",
+      isbn_13: [OLDER],
+      publishers: ["VIZ Media"],
+      physical_format: "Hardcover",
+    })!;
+    expect(parsed.binding).toBe("hardcover");
+    await eachBranch((t) => bound(t, parsed, "paperback"), /is a hardcover book/);
+  });
+
+  it("records the same Binding, or one either side leaves unknown (C67-09 controls)", async () => {
+    await eachBranch(
+      (t) => bound(t, olEdition("Vagabond, Vol. 1", { binding: "hardcover" }), "hardcover"),
+      "accepted",
+    );
+    await eachBranch(
+      (t) => bound(t, olEdition("Vagabond, Vol. 1", { binding: "hardcover" })),
+      "accepted",
+    );
+    await eachBranch((t) => bound(t, olEdition("Vagabond, Vol. 1"), "paperback"), "accepted");
+  });
+
+  /** An Open Library edition as its parser stores it. */
+  const parsedEdition = (fields: Record<string, unknown>) =>
+    parseEditionJson({
+      key: "/books/OL8M",
+      isbn_13: [OLDER],
+      publishers: ["VIZ Media"],
+      physical_format: "Paperback",
+      ...fields,
+    })!;
+
+  it("records an Open Library book whose Volume its subtitle states, as the parser stored it (C67-13)", async () => {
+    const snapshot = parsedEdition({ title: "Vagabond", subtitle: "Vol. 1" });
+    expect(snapshot).toMatchObject({ title: "Vagabond", volumeLabel: "1" });
+    await eachBranch((t) => setup(t, "openlibrary", snapshot), "accepted");
+  });
+
+  it("still checks that Volume against the Release, and refuses a title that says otherwise (C67-13)", async () => {
+    const snapshot = parsedEdition({ title: "Vagabond", subtitle: "Vol. 1" });
+    await eachBranch(
+      (t) => setup(t, "openlibrary", snapshot, volume2),
+      /is Volume 1; the Release is Volume 2/,
+    );
+    await eachBranch(
+      (t) => setup(t, "openlibrary", olEdition("Vagabond, Vol. 2", { volumeLabel: "1" })),
+      /its title "Vagabond, Vol. 2" says Volume 2, its stored reading Volume 1/,
+    );
+    await eachBranch(
+      (t) => setup(t, "openlibrary", parsedEdition({ title: "Kingdom", subtitle: "Hearts II" })),
+      /ends in a number that may be the work's own/,
+    );
+  });
+
+  /** Series B, also titled "Vagabond", covering the Release's Edition instead of its own Volume 1. */
+  const foreignVolume =
+    (series: Partial<Doc<"series">>) =>
+    async (ctx: MutationCtx, { publisherId }: { publisherId: Id<"publishers"> }) => {
+      const other = await insertSeries(ctx, { title: "Vagabond", ...series });
+      const volumeId = await insertVolume(ctx, { seriesId: other, position: 1 });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
+      return editionId;
+    };
+
+  it("refuses a Volume of another Series titled the same, active, hidden or merged into nothing (C67-07)", async () => {
+    for (const series of [{}, { status: "hidden" as const }, { status: "merged" as const }]) {
+      await eachBranch(
+        (t) =>
+          setup(t, "openlibrary", olEdition("Vagabond, Vol. 1"), {
+            edition: foreignVolume(series),
+          }),
+        /The Release's Volume is not a Volume of the Release's own Series/,
+      );
+    }
+  });
+
+  it("refuses a Release whose own Series is hidden or cannot be followed (C67-07)", async () => {
+    for (const [patch, reason] of [
+      [{ status: "hidden" }, /The Release's Series "Vagabond" is hidden/],
+      [{ status: "merged" }, /The Release's Series cannot be followed: .* is merged into nothing/],
+    ] as const) {
+      await eachBranch(async (t) => {
+        const ids = await setup(t, "openlibrary", olEdition("Vagabond, Vol. 1"));
+        await t.run((ctx) => ctx.db.patch(ids.seriesId, patch));
+        return ids;
+      }, reason);
+    }
+  });
+
+  it("refuses a covered Volume whose merges loop (C67-07)", async () => {
+    await eachBranch(
+      (t) =>
+        setup(t, "openlibrary", olEdition("Vagabond, Vol. 1"), {
+          edition: async (ctx, { seriesId, publisherId }) => {
+            const a = await insertVolume(ctx, { seriesId, position: 1, status: "merged" });
+            const b = await insertVolume(ctx, { seriesId, position: 1, status: "merged" });
+            await ctx.db.patch(a, { mergedIntoId: b });
+            await ctx.db.patch(b, { mergedIntoId: a });
+            const editionId = await insertEdition(ctx, { publisherId });
+            await insertCoverage(ctx, { editionId, volumeId: a });
+            return editionId;
+          },
+        }),
+      /cannot be followed to an active Volume/,
+    );
+  });
+
+  it("follows legitimate merges of the Release's Series and Volume to the same work (C67-07 control)", async () => {
+    await eachBranch(async (t) => {
+      const ids = await setup(t, "openlibrary", olEdition("Vagabond, Vol. 1"), {
+        edition: async (ctx, { seriesId, publisherId }) => {
+          // The covered Volume was merged into the Series' Volume 1, its own
+          // Series into the Release's.
+          const old = await insertSeries(ctx, {
+            title: "Vagabond (VIZBIG)",
+            status: "merged",
+            mergedIntoId: seriesId,
+          });
+          const kept = await insertVolume(ctx, { seriesId, position: 1 });
+          const merged = await insertVolume(ctx, {
+            seriesId: old,
+            position: 1,
+            status: "merged",
+            mergedIntoId: kept,
+          });
+          const editionId = await insertEdition(ctx, { publisherId });
+          await insertCoverage(ctx, { editionId, volumeId: merged });
+          return editionId;
+        },
+      });
+      // The Release still names a Series merged into its own.
+      await t.run(async (ctx) => {
+        const merged = await insertSeries(ctx, {
+          title: "Vagabond",
+          status: "merged",
+          mergedIntoId: ids.seriesId,
+        });
+        await ctx.db.patch(ids.releaseId, { seriesIds: [merged] });
+      });
+      return ids;
+    }, "accepted");
   });
 });

@@ -404,7 +404,12 @@ changes the ISBN. `reconcileFields` skips it, Seven Seas and Kodansha
 store no art from it (the Seven Seas listing asks it for neither art nor
 a blurb, and `imports.attachCover` lands a download only while the record
 that asked for it is still linked to that Release, unmarked, and still
-offers that art), and its withdrawal queues no cancellation review.
+offers that art), and its withdrawal queues no cancellation review. Any
+download, of any record, also lands only while the Release's Edition is
+still the one it was requested for and that Edition is active and
+unlocked: hiding or locking an Edition leaves its Releases' status as it
+was, so a download queued before would otherwise replace the art its
+moderator froze. A refused download is deleted unless something shows it.
 
 An ISBN with a printing row belongs to that row's Release alone, active or
 hidden (`lib/releaseIsbns.ts`). No import creates a Release or a Release

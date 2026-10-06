@@ -879,6 +879,10 @@ export default defineSchema({
         field: v.string(),
         before: v.optional(v.any()),
         after: v.optional(v.any()),
+        // A moved `releaseIsbns` row's ISBN-13 as the merge moved it, so a
+        // Split replays only the printing the merge moved (lib/sensitiveOps.ts
+        // planPrintingSplit). Manifests written before it was kept lack it.
+        isbn13: v.optional(v.string()),
       }),
     ),
     removed: v.array(v.object({ table: v.string(), doc: v.any() })),
