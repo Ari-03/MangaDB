@@ -714,8 +714,9 @@ on the snapshot as `subtitle`, and Prepare placement reads it with the
 title. Snapshots stored before the field existed lack it; 74 held editions
 on staging are known to have lost one. For those, the stored
 `seriesTitle` and `volumeLabel` stay authoritative: placement and replays
-of stored editions use them and never re-read the bare title. A parser
-change that should reach new conclusions about stored editions needs fresh
+of stored editions use them and never re-derive the work or Volume label
+from the bare title. A parser change that should reach new conclusions
+about stored editions needs fresh
 dump input, so run the sync again rather than reparsing snapshots. A
 filtered or incomplete dump withdraws nothing. An existing observation
 gains `subtitle` the next time a normal run sees its edition; editions

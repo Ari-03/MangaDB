@@ -53,6 +53,7 @@ type SnapshotFacts = {
   kind?: unknown;
   url?: unknown;
   title?: unknown;
+  subtitle?: unknown;
   format?: unknown;
   binding?: unknown;
   imprint?: unknown;
@@ -85,13 +86,15 @@ function observedDate(s: SnapshotFacts) {
 }
 
 // An ebook as the sources write it: ANN's "eBook 3" designator, Open
-// Library's "Kindle Edition" or "ebook" format, a title's "(Digital Edition)".
-const DIGITAL_TEXT = /\be-?books?\b|\bkindle\b|\bdigital (?:edition|version)\b/i;
+// Library's "Kindle Edition" or "ebook" format, or a title/subtitle
+// stating "(Digital Edition)", "(Digital)" or just "Digital".
+const DIGITAL_TEXT =
+  /\be-?books?\b|\bkindle\b|\bdigital (?:edition|version)\b|(?:^|[([])\s*digital\s*(?:$|[)\]])/i;
 
-/** The record calls the book digital: its format, binding, designator or title. */
+/** The record calls the book digital: its format, binding, designator, title or subtitle. */
 function saysDigital(s: SnapshotFacts): boolean {
   if (s?.format === "digital") return true;
-  return [s?.binding, s?.title, s?.page?.volume, s?.page?.title].some(
+  return [s?.binding, s?.title, s?.subtitle, s?.page?.volume, s?.page?.title].some(
     (text) => typeof text === "string" && DIGITAL_TEXT.test(text),
   );
 }
@@ -476,14 +479,24 @@ function readAnnLine(line: AnnReleaseSnapshot, entryName: string): BookReading {
  * here: a record that says "Vol." is read. A stored Volume the kept title
  * does not state is the importer's reading of fields the snapshot does not
  * keep (Open Library's subtitle "Vol. 1" under the title "Vagabond"): it
- * stands, and is checked against the Release like any other. Only a title
- * stating another Volume contradicts it. A Binding is stated by the stored
- * field or by a format tag the parser peels off the title's end ("Vagabond,
- * Vol. 1 (Hardcover)"; never a word inside the work's name): every one
- * stated must agree, and the reading takes it.
+ * stands, and is checked against the Release like any other. An explicit
+ * title or retained subtitle stating another Volume contradicts it.
+ * A Binding is stated by the stored
+ * field or by a format tag the parser peels off a title's end. A retained
+ * subtitle is read separately for explicit Volume, Binding, packaging and
+ * scope facts, so a main-title label cannot hide a contrary subtitle. Its
+ * prose is never appended to work identity here; the producer already
+ * retains joined work names in `title`. Legacy missing subtitles supply no
+ * new facts, and their stored Volume continues to stand.
  */
 function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): BookReading {
   const parsed = parseBookTitle(title);
+  const subtitle = nonEmpty(s?.subtitle) ? s.subtitle.trim() : "";
+  // The neutral work prefix lets the shared parser read a standalone
+  // "Vol. 2" or "Volumes 1-2" without any main-title designation winning.
+  // Only explicit facts count: provisional bare numerals and the parsed
+  // subtitle work text never select the work or Volume.
+  const subtitleParsed = subtitle === "" ? null : parseBookTitle(`Book, ${subtitle}`);
   const reading: BookReading = {
     work: parsed.seriesTitle,
     label: undefined,
@@ -496,12 +509,37 @@ function readTitledRecord(sourceKey: string, title: string, s: SnapshotFacts): B
   agreedBinding(reading, [
     { where: "its stored binding", text: s?.binding },
     ...titleBindings(`its title "${title}"`, parsed.formatTags),
+    ...titleBindings(`its subtitle "${subtitle}"`, subtitleParsed?.formatTags ?? []),
+    // A subtitle consisting only of a Binding is itself an explicit fact.
+    ...(/^(?:hard ?(?:cover|back|bound)|(?:trade )?paper ?back|soft ?(?:cover|back|bound))$/i.test(
+      subtitle,
+    )
+      ? [{ where: `its subtitle "${subtitle}"`, text: subtitle }]
+      : []),
   ]);
   agreedLabel(reading, [
     { where: `its title "${title}"`, label: parsed.volumeLabel },
     { where: "its stored reading", label: nonEmpty(s?.volumeLabel) ? s.volumeLabel : undefined },
+    {
+      where: `its subtitle "${subtitle}"`,
+      label:
+        subtitleParsed?.bareNumber || subtitleParsed?.bareRoman
+          ? undefined
+          : subtitleParsed?.volumeLabel,
+    },
   ]);
   if (parsed.packaging !== null || parsed.isBox) reading.packaging.push(`its title "${title}"`);
+  if (
+    (subtitleParsed !== null && subtitleParsed.packaging !== null) ||
+    subtitleParsed?.isBox ||
+    BRACKETED.test(subtitle)
+  ) {
+    reading.packaging.push(`its subtitle "${subtitle}"`);
+  }
+  if (subtitle !== "") {
+    const scope = outOfScopeReason(subtitle);
+    if (scope !== null) reading.scope.push(`its subtitle reads ${scope}`);
+  }
   if (s?.multiVolume === true) reading.packaging.push("its stored multi-volume flag");
   if (s?.packaging !== undefined && s.packaging !== null) {
     reading.packaging.push("its stored packaging");

@@ -348,7 +348,12 @@ order:
   stating none is left to the person deciding, as before. A Volume the
   importer stored that the kept title does not state (Open Library's
   subtitle "Vol. 1" under the title "Vagabond") stands, and is checked
-  like any other; only a title stating another Volume contradicts it. A
+  like any other. A retained Open Library subtitle is read separately for
+  explicit Volume, Binding, format, packaging and scope facts; every fact
+  must agree with the main title, stored fields and target. Main-title
+  precedence cannot erase a subtitle counterfact. Subtitle prose alone
+  does not change work identity; a joined work name stays in the producer's
+  title. Legacy snapshots with a lost subtitle supply no invented facts. A
   title ending in a number with no "Vol." ("Kingdom Hearts II") is
   refused, since the number may be the work's own, and so is anything a
   source files as a novel, as another language, or out of scope (a Seven
