@@ -38,6 +38,15 @@ describe("parseBookTitle — volume markers", () => {
     expect(split("Sudoku Plus, Volume Two")).toEqual(["Sudoku Plus", "2", null]);
   });
 
+  it("reads a period before the marker as a separator, never a period inside the name", () => {
+    // Real held Open Library titles (2026-10-06), Inuyasha Volumes 27-31.
+    for (const label of ["27", "28", "29", "31"])
+      expect(split(`Inu-Yasha. vol ${label}`)).toEqual(["Inu-Yasha", label, null]);
+    expect(split("D.Gray-man, Vol. 27")).toEqual(["D.Gray-man", "27", null]);
+    expect(split("Dr. Slump, Vol. 3")).toEqual(["Dr. Slump", "3", null]);
+    expect(split("A.I. Love You, Vol. 2")).toEqual(["A.I. Love You", "2", null]);
+  });
+
   it("keeps a per-volume subtitle out of the series title", () => {
     expect(split("Lone Wolf and Cub Volume 7: Cloud Dragon, Wind Tiger")).toEqual([
       "Lone Wolf and Cub",

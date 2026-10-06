@@ -432,8 +432,18 @@ function readAnnLine(
 
   // The line's title: its own Volume statement must agree, and its work is
   // read whole when the parser would take a number off it ("Kingdom
-  // Hearts II"): ANN's designator, not the title, numbers the book.
-  const parsed = parseBookTitle(line.title);
+  // Hearts II"): ANN's designator, not the title, numbers the book. A line
+  // title that keeps ANN's designator, as its page title does ("Skip Beat!
+  // [Omnibus] (GN 12)"), is read off it the same way as the page's, and that
+  // designator is one more statement that must agree.
+  const lineSplit = splitReleaseTitle(line.title, entryName);
+  if (lineSplit !== null) {
+    labels.push({ where: `the designator in its title "${line.title}"`, label: lineSplit.label });
+    if (lineSplit.multi || lineSplit.editionLineHint) {
+      reading.packaging.push(`the designator in its title "${line.title}"`);
+    }
+  }
+  const parsed = parseBookTitle(lineSplit?.title ?? line.title);
   const titleFacts = bookFacts(line.title, names);
   labels.push(...titleFacts.labels.map((label) => ({ where: `its title "${line.title}"`, label })));
   reading.packaging.push(...titleFacts.packaging);
@@ -653,7 +663,11 @@ export async function readObservationBook(
  * whole for now: a packaged printing waits until its line, position and
  * coverage can be compared with the Edition's. A held caller that resolved
  * the source to one of those Series independently supplies workContext, and
- * the record may then name that Series by any of its current declared names.
+ * the record may then name that Series by any of its current declared names,
+ * or name the Release's own Edition Line and number the book at the Edition's
+ * stored linePosition (VIZ's "Dragon Ball Z, Vol. 8" is Dragon Ball 24): the
+ * active Line of that Series and the Release's publisher. The stored position
+ * is compared as written; no offset is ever computed from it.
  */
 export async function contentRefusal(
   ctx: QueryCtx,
@@ -680,9 +694,10 @@ export async function contentRefusal(
   if (reading.packaging.length > 0) {
     return `The record reads as packaging (${[...new Set(reading.packaging)].join("; ")}): a printing is recorded only of one whole Volume until packaged printings can be compared.`;
   }
-  if (!ownWork(reading.work)) {
-    return `The record's work "${reading.work}" is not the Release's Series (${seriesTitles.map((t) => `"${t}"`).join(", ") || "none"}).`;
-  }
+  const namesSeries = ownWork(reading.work);
+  const notSeries = `The record's work "${reading.work}" is not the Release's Series (${seriesTitles.map((t) => `"${t}"`).join(", ") || "none"}).`;
+  // Only a routed held record may name the Line instead; that waits for the Line below.
+  if (!namesSeries && !context) return notSeries;
   if (reading.label === undefined && reading.needsLabel) {
     return "The record states no Volume anywhere (its line, designator, title or page), and its source numbers every book: which Volume it is is unknown.";
   }
@@ -700,11 +715,13 @@ export async function contentRefusal(
     return "The Release's Edition is not an active Edition.";
   }
   if (edition.coverageUnmapped) return "The Release's Edition does not say what it collects.";
+  let line: Doc<"editionLines"> | null = null;
   if (edition.editionLineId !== undefined) {
-    const line = await canonicalRecord(ctx, "editionLines", edition.editionLineId);
-    if (!("doc" in line) || line.doc.status !== "active" || line.doc.locked) {
+    const followed = await canonicalRecord(ctx, "editionLines", edition.editionLineId);
+    if (!("doc" in followed) || followed.doc.status !== "active" || followed.doc.locked) {
       return "The Release's Edition Line cannot be followed to an active Edition Line.";
     }
+    line = followed.doc;
   }
   const coverage = await ctx.db
     .query("volumeCoverages")
@@ -728,7 +745,17 @@ export async function contentRefusal(
   ) {
     return "The Release's Volume is not a Volume of the Release's own Series.";
   }
-  if (reading.label !== undefined && !labelsEqual(volume.doc.label, reading.label)) {
+  const namesLine =
+    context !== undefined &&
+    line !== null &&
+    line.seriesId === volumeSeries.doc._id &&
+    line.publisherId === release.publisherId &&
+    line.publisherId === edition.publisherId &&
+    sameWorkTitle(line.name, reading.work) &&
+    reading.label !== undefined &&
+    labelsEqual(edition.linePosition, reading.label);
+  if (!namesSeries && !namesLine) return notSeries;
+  if (!namesLine && reading.label !== undefined && !labelsEqual(volume.doc.label, reading.label)) {
     return `The record is Volume ${reading.label}; the Release is Volume ${volume.doc.label ?? "(unlabeled)"}.`;
   }
   return null;

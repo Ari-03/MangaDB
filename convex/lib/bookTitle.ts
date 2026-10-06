@@ -278,9 +278,11 @@ const MARKER = `(?:Vol(?:ume)?s?\\.?|Volumen|Part|(?<!\\b(?:${BOOK_KINDS})\\s)Bo
  * "Series, Vol. 5: Subtitle" — the first marker whose tail parses. An
  * unseparated tail ("Vol. 10 Another End") counts as a subtitle only when it
  * holds no further marker, so "Rayearth Part 2 Vol. 1" splits at "Vol. 1".
+ * A period and space before the marker separates like a comma ("Inu-Yasha.
+ * vol 28"); a period inside the name ("D.Gray-man", "Dr. Slump") stays.
  */
 const VOLUME_MARKER = new RegExp(
-  `^(.*?\\S)(?:\\s*[,:;]\\s*|\\s+[-–—]\\s+|\\s+)${MARKER}\\s*(${RANGE}|${LABEL})(?:\\s*(?::|\\s[-–—])\\s*(.+?)|\\s+((?!.*\\b(?:vols?|volumes?|book|part)\\b)[\\[A-Z].*))?$`,
+  `^(.*?\\S)(?:\\s*[,:;]\\s*|\\.\\s+|\\s+[-–—]\\s+|\\s+)${MARKER}\\s*(${RANGE}|${LABEL})(?:\\s*(?::|\\s[-–—])\\s*(.+?)|\\s+((?!.*\\b(?:vols?|volumes?|book|part)\\b)[\\[A-Z].*))?$`,
   "i",
 );
 

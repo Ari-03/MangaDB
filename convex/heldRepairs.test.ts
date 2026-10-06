@@ -38,6 +38,7 @@ import {
 } from "./test.sourceFormats";
 import { placementChanged, placementView } from "./placement";
 import { reader, sourceSeries } from "./lib/heldBooks";
+import { contentRefusal, readObservationBook } from "./printings";
 
 const reason = "Exact source/product and complete canonical contents reviewed.";
 const urls = ["https://www.animenewsnetwork.com/encyclopedia/releases.php?id=43552"];
@@ -3373,5 +3374,374 @@ describe("complete by-title work provenance", () => {
     await expect(resolve(observations[2]!)).rejects.toThrow(
       "Resolver candidates exceed the complete bounded scan; incomplete.",
     );
+  });
+});
+
+// Real staging records, 2026-10-06 (r15 line numbering): each source numbers
+// the book on its Edition Line, and the stored linePosition says the same.
+const dbzVol8 = {
+  binding: "paperback",
+  format: "physical",
+  isbn10: "1569319375",
+  isbn13: "9781569319376",
+  key: "/books/OL8693021M",
+  kind: "olEdition",
+  multiVolume: false,
+  publishDate: { month: 5, year: 2003 },
+  publishers: ["VIZ Media LLC"],
+  seriesTitle: "Dragon Ball Z",
+  title: "Dragon Ball Z, Vol. 8",
+  url: "https://openlibrary.org/books/OL8693021M",
+  volumeLabel: "8",
+};
+const sayonara6 = {
+  annId: "49586",
+  date: { day: 26, month: 10, year: 2021 },
+  editionLineHint: false,
+  format: "physical",
+  isbn13: "9781646511006",
+  kind: "annRelease",
+  label: "6",
+  mangaId: "20336",
+  multi: false,
+  page: {
+    date: { day: 26, month: 10, year: 2021 },
+    distributor: "Kodansha Comics",
+    distributorId: "8388",
+    fetchedAt: 1790502964241,
+    isbn10: "164651100X",
+    isbn13: "9781646511006",
+    mangaId: "20336",
+    status: "ok",
+    title: "Sayonara, Football",
+    volume: "GN 6",
+  },
+  title: "Sayonara, Football",
+  url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=49586",
+};
+
+/** A held book whose Release sits on a named Edition Line at the source's own number. */
+async function lineBook(
+  t: TestT,
+  book: {
+    publisher: string;
+    series: { title: string; altTitles: string[] };
+    volume: string;
+    line: string;
+    position: string;
+    isbn13: string;
+    source: { sourceKey: "openlibrary" | "ann"; sourceRecordId: string; snapshot: object };
+    parent?: object;
+  },
+) {
+  await admin(t);
+  return await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: book.publisher });
+    const seriesId = await insertSeries(ctx, book.series);
+    const volumeId = await insertVolume(ctx, {
+      seriesId,
+      label: book.volume,
+      position: Number(book.volume),
+    });
+    const editionLineId = await insertEditionLine(ctx, { seriesId, publisherId, name: book.line });
+    const { editionId, releaseId } = await insertBook(ctx, {
+      publisherId,
+      seriesId,
+      volumeId,
+      edition: { editionLineId, linePosition: book.position },
+      release: { isbn13: book.isbn13, binding: "paperback" },
+    });
+    const parentId = book.parent
+      ? await insertObservation(ctx, {
+          sourceKey: "ann",
+          sourceRecordId: "manga:20336",
+          snapshot: book.parent,
+          recordRef: { type: "series", id: seriesId },
+        })
+      : undefined;
+    const observationId = await insertObservation(ctx, book.source);
+    await ctx.db.insert("placementHolds", {
+      observationId,
+      sourceKey: book.source.sourceKey,
+      kind: "isbn",
+      seriesId,
+      heldAt: 10,
+    });
+    return { publisherId, seriesId, editionLineId, editionId, releaseId, parentId, observationId };
+  });
+}
+
+const dbz = (t: TestT) =>
+  lineBook(t, {
+    publisher: "VIZ Media",
+    series: {
+      title: "Dragon Ball",
+      altTitles: [
+        "DBZ",
+        "Doragon booru",
+        "Doragon bōru",
+        "Dragon Ball Z",
+        "Dragonball",
+        "ドラゴンボール",
+      ],
+    },
+    volume: "24",
+    line: "Dragon Ball Z",
+    position: "8",
+    isbn13: dbzVol8.isbn13,
+    source: { sourceKey: "openlibrary", sourceRecordId: dbzVol8.key, snapshot: dbzVol8 },
+  });
+const sayonara = (t: TestT) =>
+  lineBook(t, {
+    publisher: "Kodansha",
+    series: {
+      title: "Farewell, My Dear Cramer",
+      altTitles: ["Sayonara Watashi no Cramer", "さよなら私のクラマー"],
+    },
+    volume: "4",
+    line: "Sayonara, Football",
+    position: "6",
+    isbn13: sayonara6.isbn13,
+    source: { sourceKey: "ann", sourceRecordId: "release:49586", snapshot: sayonara6 },
+    parent: {
+      kind: "annManga",
+      id: "20336",
+      title: "Farewell, My Dear Cramer",
+      altTitles: ["Sayonara Watashi no Cramer", "さよなら私のクラマー"],
+      url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=20336",
+    },
+  });
+
+describe("a held record numbered on the Release's Edition Line", () => {
+  it("links real DBZ Vol. 8 to Dragon Ball Volume 24 through Line position 8, and only there", async () => {
+    const t = makeT();
+    const s = await dbz(t);
+    const args = {
+      observationId: s.observationId,
+      target: { type: "release" as const, id: s.releaseId },
+    };
+    const preview = await t.query(internal.heldBooks.previewInternal, args);
+    expect(preview.refusal).toBeNull();
+
+    // Another position, another publisher's Line, or a Line of another name
+    // is not this one, and the Volume label decides as before.
+    await t.run((ctx) => ctx.db.patch(s.editionId, { linePosition: "9" }));
+    await refusedLink(t, args, /Volume 8; the Release is Volume 24/);
+    await t.run((ctx) => ctx.db.patch(s.editionId, { linePosition: "8" }));
+    const otherPublisher = await t.run((ctx) =>
+      insertPublisher(ctx, { name: "Other", slug: "other" }),
+    );
+    await t.run((ctx) => ctx.db.patch(s.editionLineId, { publisherId: otherPublisher }));
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).not.toBeNull();
+    await t.run((ctx) =>
+      ctx.db.patch(s.editionLineId, { publisherId: s.publisherId, name: "Dragon Ball" }),
+    );
+    await refusedLink(t, args, /Volume 8; the Release is Volume 24/);
+    await t.run((ctx) => ctx.db.patch(s.editionLineId, { name: "Dragon Ball Z" }));
+
+    // A Line on another Series is not this Volume's.
+    const otherSeries = await t.run((ctx) => insertSeries(ctx, { title: "Dragon Ball Super" }));
+    await t.run((ctx) => ctx.db.patch(s.editionLineId, { seriesId: otherSeries }));
+    await refusedLink(t, args, /Edition Line identity disagrees/);
+    await t.run((ctx) => ctx.db.patch(s.editionLineId, { seriesId: s.seriesId }));
+
+    // Without independent routing (a printing decision) the Line is never read as the name.
+    expect(
+      await t.run(async (ctx) =>
+        contentRefusal(
+          ctx,
+          (await ctx.db.get(s.observationId))!,
+          (await ctx.db.get(s.releaseId))!,
+          [(await ctx.db.get(s.seriesId))!],
+        ),
+      ),
+    ).toMatch(/work "Dragon Ball Z" is not the Release's Series/);
+
+    const fresh = await t.query(internal.heldBooks.previewInternal, args);
+    expect(fresh.refusal).toBeNull();
+    const applied = await t.mutation(internal.heldBooks.executeInternal, {
+      ...args,
+      actor: "ari",
+      operation: "link",
+      expected: fresh.expected!,
+      reason,
+      evidenceUrls: [dbzVol8.url],
+    });
+    expect(applied.status).toBe("applied");
+  });
+
+  it("links real Sayonara, Football ANN release 49586 (label 6) to Farewell, My Dear Cramer Volume 4 through Line position 6", async () => {
+    const t = makeT();
+    const s = await sayonara(t);
+    const reading = await t.run(async (ctx) => {
+      const series = (await ctx.db.get(s.seriesId))!;
+      const names = [series.title, ...(series.altTitles ?? [])];
+      return await readObservationBook(ctx, (await ctx.db.get(s.observationId))!, [series], names, {
+        seriesId: s.seriesId,
+        names,
+        parentTitle: "Farewell, My Dear Cramer",
+      });
+    });
+    expect(reading).toMatchObject({ work: "Sayonara, Football", label: "6", unreadable: [] });
+    const args = {
+      observationId: s.observationId,
+      target: { type: "release" as const, id: s.releaseId },
+    };
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toBeNull();
+
+    await t.run((ctx) => ctx.db.patch(s.editionId, { linePosition: "7" }));
+    await refusedLink(t, args, /work identity|not the Release's Series/);
+    await t.run((ctx) => ctx.db.patch(s.editionId, { linePosition: "6" }));
+
+    // Without the parent's independent routing to this Series, the Line name is no name.
+    await t.run((ctx) => ctx.db.delete(s.parentId!));
+    await refusedLink(t, args, /work identity|not the Release's Series|parent/);
+  });
+});
+
+// Real staging ANN release 33497 (2026-10-06): the line title keeps ANN's
+// designator exactly as its page title does.
+const skipBeat12 = {
+  annId: "33497",
+  date: { day: 3, month: 1, year: 2017 },
+  editionLineHint: true,
+  format: "physical",
+  isbn13: "9781421586281",
+  kind: "annRelease",
+  label: "12",
+  mangaId: "1863",
+  multi: false,
+  page: {
+    date: { day: 3, month: 1, year: 2017 },
+    distributor: "Viz Media",
+    distributorId: "4552",
+    fetchedAt: 1790497964766,
+    isbn10: "1421586282",
+    isbn13: "9781421586281",
+    mangaId: "1863",
+    priceCents: 1499,
+    status: "ok",
+    title: "Skip Beat! [Omnibus] (GN 12)",
+    volume: "GN 12",
+  },
+  title: "Skip Beat! [Omnibus] (GN 12)",
+  url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=33497",
+};
+
+describe("an ANN line title that keeps its designator", () => {
+  it("reads real Skip Beat! [Omnibus] (GN 12) like its page and links it through the reviewed contract", async () => {
+    const t = makeT();
+    await admin(t);
+    const s = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, {
+        title: "Skip Beat!",
+        altTitles: ["Sukippu Bito!", "スキップ・ビート！"],
+      });
+      const volumeIds = [];
+      for (const label of ["34", "35", "36"])
+        volumeIds.push(await insertVolume(ctx, { seriesId, label, position: Number(label) }));
+      const editionLineId = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Omnibus",
+      });
+      const editionId = await insertEdition(ctx, {
+        publisherId,
+        editionLineId,
+        linePosition: "12",
+      });
+      for (const [i, volumeId] of volumeIds.entries())
+        await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9781421586281",
+        isbn10: "1421586282",
+        pubDate: { sort: 20170000, year: 2017 },
+      });
+      await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "manga:1863",
+        snapshot: {
+          kind: "annManga",
+          id: "1863",
+          title: "Skip Beat!",
+          altTitles: ["Sukippu Bito!", "スキップ・ビート！"],
+          url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=1863",
+        },
+        recordRef: { type: "series", id: seriesId },
+      });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:33497",
+        snapshot: skipBeat12,
+        lastSeenAt: 1791148899439,
+      });
+      const holdId = await ctx.db.insert("placementHolds", {
+        observationId,
+        sourceKey: "ann",
+        kind: "packaging",
+        seriesId,
+        heldAt: 1791151863037,
+      });
+      return { publisherId, seriesId, volumeIds, releaseId, observationId, holdId };
+    });
+
+    const reading = await t.run(async (ctx) => {
+      const series = (await ctx.db.get(s.seriesId))!;
+      return await readObservationBook(ctx, (await ctx.db.get(s.observationId))!, [series]);
+    });
+    expect(reading).toMatchObject({ work: "Skip Beat!", label: "12", unreadable: [] });
+    expect(reading.packaging.length).toBeGreaterThan(0);
+
+    const evidence = [
+      "https://www.viz.com/manga-books/manga/skipbeat-3-in-1-edition-volume-12/product/5000",
+      "https://dw9to29mmj727.cloudfront.net/products/1421586282.jpg",
+    ];
+    const args = {
+      observationId: s.observationId,
+      target: { type: "release" as const, id: s.releaseId },
+      reviewed: {
+        isbn13: "9781421586281",
+        seriesId: s.seriesId,
+        publisherId: s.publisherId,
+        volumeIds: s.volumeIds,
+        evidenceUrls: evidence,
+      },
+    };
+    const preview = await t.query(internal.heldBooks.previewInternal, args);
+    expect(preview.refusal).toBeNull();
+    expect(preview.classification).toBe("linkReady");
+
+    // The designator in the title still has to agree with the stored line.
+    await t.run((ctx) =>
+      ctx.db.patch(s.observationId, {
+        snapshot: { ...skipBeat12, title: "Skip Beat! [Omnibus] (GN 11)" },
+      }),
+    );
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toMatch(
+      /says Volume 1[12], .* Volume 1[12]/,
+    );
+    await t.run((ctx) => ctx.db.patch(s.observationId, { snapshot: skipBeat12 }));
+
+    const fresh = await t.query(internal.heldBooks.previewInternal, args);
+    const applied = await t.mutation(internal.heldBooks.executeInternal, {
+      ...args,
+      actor: "ari",
+      operation: "link",
+      expected: fresh.expected!,
+      reason,
+      evidenceUrls: evidence,
+    });
+    expect(applied.status).toBe("applied");
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(s.observationId))!.recordRef).toEqual({
+        type: "release",
+        id: s.releaseId,
+      });
+      expect(await ctx.db.get(s.holdId)).toBeNull();
+    });
   });
 });
