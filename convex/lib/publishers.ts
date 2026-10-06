@@ -216,6 +216,10 @@ export const DUPLICATE_ALIASES: Record<string, string> = {
   dmp: "digital-manga",
   "irodori inc": "irodori-comics",
   "kaiten books llc": "kaiten-books",
+  // One Peace's own catalogs name the company "One Peace Books Inc." at the
+  // trade name's address; OpenLibrary records "One Peace Books, Incorporated".
+  "one peace books incorporated": "one-peace-books",
+  "one peace books inc": "one-peace-books",
   // Deliberately absent: "yen on" and "del rey"/"ballantine" name prose
   // lines (light novels, SF), never their manga siblings.
 };

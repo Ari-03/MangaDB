@@ -8,10 +8,13 @@ import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { RepairEntry } from "./lib/repair/entries";
+import type { EntryOf, RepairEntry } from "./lib/repair/entries";
 import { canonicalLabel, labelNumber, sameLabel } from "./lib/repair/audit";
 import { recordUnplaced } from "./lib/observations";
 import { clusterKey } from "./lib/repair/metrics";
+import { parseEditionJson } from "./lib/openLibrary";
+import type { ReviewedFormat } from "./lib/sourceFormat";
+import { gachaPhysicalGraph } from "./test.sourceFormats";
 import {
   insertCoverage,
   insertEdition,
@@ -1584,5 +1587,249 @@ describe("lines, researched releases, cross-series books", () => {
       status: "skipped",
       reason: expect.stringContaining("0 active volumes"),
     });
+  });
+});
+
+describe("a held book's missing Volume", () => {
+  // Open Library OL53350074M as fetched 2026-10-06 (sha256 19051871…): no
+  // physical_format, so the parser's default reads it as physical.
+  const gacha7Wire =
+    '{"type": {"key": "/type/edition"}, "authors": [{"key": "/authors/OL9869234A"}, {"key": "/authors/OL9869232A"}, {"key": "/authors/OL10042522A"}], "isbn_13": ["9781952241727"], "languages": [{"key": "/languages/eng"}], "publish_date": "2024", "publishers": ["Kaiten Books LLC"], "source_records": ["bwb:9781952241727"], "subjects": ["Comics & graphic novels, general", "Fiction, fantasy, general"], "title": "Gacha Girls Corps Vol. 7 (manga)", "works": [{"key": "/works/OL39187247W"}], "key": "/books/OL53350074M", "latest_revision": 1, "revision": 1, "created": {"type": "/type/datetime", "value": "2024-08-17T23:56:36.807097"}, "last_modified": {"type": "/type/datetime", "value": "2024-08-17T23:56:36.807097"}}';
+  const gacha7Snapshot =
+    '{"format":"physical","isbn13":"9781952241727","key":"/books/OL53350074M","kind":"olEdition","multiVolume":false,"publishDate":{"year":2024},"publishers":["Kaiten Books LLC"],"seriesTitle":"Gacha Girls Corps","title":"Gacha Girls Corps Vol. 7 (manga)","url":"https://openlibrary.org/books/OL53350074M","volumeLabel":"7"}';
+  // The r10 reviewed ebook Format: Kaiten's own page lists this ISBN as the ebook.
+  const gacha7Format: ReviewedFormat = {
+    kind: "olInferredPhysicalToDigital",
+    sourceKey: "openlibrary",
+    from: "physical",
+    to: "digital",
+    key: "/books/OL53350074M",
+    isbn13: "9781952241727",
+    baseSnapshot: gacha7Snapshot,
+    reason: "Exact own publisher ISBN 9781952241727 is an ebook.",
+    publisher: {
+      kind: "publisherOwnIsbnEbook",
+      isbn13: "9781952241727",
+      url: "https://www.kaitenbooks.com/gacha-girls-corps-7",
+      fetchedAt: 1791321677000,
+      bodySha256: "e89600bb76170710e030aeb00639baacb362ba32a504be3f02f83ee711989f63",
+      sectionSha256: "1b6381735d549c5354a8a62e28a2d321b584a5a9cd04b73a517f51d9ba54f515",
+      byteStart: 189501,
+      byteEndExclusive: 189532,
+      excerpt: "ISBN: 978-1-952241-72-7 (ebook)",
+    },
+    ol: {
+      kind: "olPhysicalFormatAbsent",
+      key: "/books/OL53350074M",
+      isbn13: "9781952241727",
+      url: "https://openlibrary.org/books/OL53350074M.json",
+      fetchedAt: 1791321823000,
+      bodySha256: "19051871616859d84271ae6f3c03792c63cb9403e873eef7f8aab197add03f49",
+      physicalFormatAbsent: true,
+      normalizedSnapshot: gacha7Snapshot,
+    },
+  };
+  const sources = [
+    "https://www.kaitenbooks.com/gacha-girls-corps-7",
+    "https://www.kaitenbooks.com/gacha-girls-corps",
+    "https://micromagazine.co.jp/book/?book_no=1356",
+  ];
+
+  /**
+   * Staging Series 1837 as read 2026-10-06: Kaiten Volumes 1-6, each with
+   * its own Edition and physical Release, and the held OL edition of 7.
+   */
+  async function gacha(t: T) {
+    return await t.run(async (ctx) => {
+      await ctx.db.insert("users", {
+        clerkSubject: "admin",
+        username: "Ari",
+        usernameNormalized: "ari",
+        role: "administrator",
+        formatPreference: "both",
+        ownershipVisibility: "private",
+        readingVisibility: "private",
+      });
+      await ctx.db.insert("appConfig", { bootstrapMode: true });
+      const publisherId = await insertPublisher(ctx, gachaPhysicalGraph.publisher);
+      const seriesId = await insertSeries(ctx, {
+        ...gachaPhysicalGraph.series,
+        altTitles: [...gachaPhysicalGraph.series.altTitles],
+      });
+      const isbns = [
+        "9781952241154",
+        "9781952241277",
+        "9781952241307",
+        "9781952241499",
+        "9781952241574",
+        "9781952241697",
+      ];
+      const expectedActiveVolumes = [];
+      for (const [i, isbn13] of isbns.entries()) {
+        const label = String(i + 1);
+        const volumeId = await insertVolume(ctx, { seriesId, label, position: i + 1 });
+        await insertBook(ctx, { publisherId, seriesId, volumeId, release: { isbn13 } });
+        expectedActiveVolumes.push({ volumeId, label });
+      }
+      const at = 1791115239193;
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL53350074M",
+        snapshot: parseEditionJson(JSON.parse(gacha7Wire)),
+        lastSeenAt: at,
+        conflicts: [
+          {
+            field: "placement",
+            reason: 'Series 1837 ("Gacha Girls Corps") has no Volume 7; Kaiten Books publishes it.',
+            offered: null,
+            at,
+          },
+        ],
+      });
+      const holdId = await ctx.db.insert("placementHolds", {
+        observationId,
+        sourceKey: "openlibrary",
+        kind: "volumeMissing",
+        seriesId,
+        heldAt: at,
+      });
+      const entry: EntryOf<"createVolume"> = {
+        kind: "createVolume",
+        key: "held-r10-createVolume-gacha-girls-corps-7-9781952241727",
+        reason: "Kaiten Books publishes Gacha Girls Corps Volume 7 (ebook 9781952241727).",
+        seriesId,
+        seriesTitle: "Gacha Girls Corps",
+        label: "7",
+        expectedActiveVolumes,
+        observationId,
+        holdId,
+        isbn13: "9781952241727",
+        sources,
+      };
+      return { seriesId, observationId, holdId, entry };
+    });
+  }
+
+  const catalog = (t: T) =>
+    t.run(async (ctx) => ({
+      volumes: await ctx.db.query("volumes").collect(),
+      editions: await ctx.db.query("editions").collect(),
+      coverages: await ctx.db.query("volumeCoverages").collect(),
+      releases: await ctx.db.query("releases").collect(),
+      holds: await ctx.db.query("placementHolds").collect(),
+      observations: await ctx.db.query("sourceObservations").collect(),
+      proposals: await ctx.db.query("proposals").collect(),
+      revisions: await ctx.db.query("revisions").collect(),
+    }));
+
+  it("creates Gacha Girls Corps 7 once with its audit, then the native replay files the ebook under it", async () => {
+    const t = makeT();
+    const s = await gacha(t);
+    // The parent's order: the reviewed ebook Format lands first.
+    const formatArgs = { observationId: s.observationId, reviewed: gacha7Format };
+    const formatPreview = await t.query(internal.heldBooks.previewSourceFormatInternal, formatArgs);
+    expect(formatPreview.refusal).toBeNull();
+    expect(
+      await t.mutation(internal.heldBooks.correctSourceFormatInternal, {
+        ...formatArgs,
+        expected: formatPreview.expected!,
+        actor: "ari",
+      }),
+    ).toMatchObject({ status: "applied" });
+    const before = await catalog(t);
+
+    expect(await run(t, [s.entry], true)).toEqual([
+      expect.objectContaining({ key: s.entry.key, status: "applied" }),
+    ]);
+    expect(await catalog(t)).toEqual(before);
+
+    expect(await run(t, [s.entry])).toEqual([
+      expect.objectContaining({ key: s.entry.key, status: "applied" }),
+    ]);
+    const created = await catalog(t);
+    const added = created.volumes.filter((vol) => !before.volumes.some((b) => b._id === vol._id));
+    expect(added).toEqual([
+      expect.objectContaining({
+        seriesId: s.seriesId,
+        label: "7",
+        position: 7,
+        status: "active",
+        bootstrapUnreviewed: true,
+      }),
+    ]);
+    const volume7 = added[0]!;
+    // Nothing else changed: no Edition, coverage, Release, hold or observation.
+    expect(created.volumes.filter((vol) => vol._id !== volume7._id)).toEqual(before.volumes);
+    for (const table of ["editions", "coverages", "releases", "holds", "observations"] as const)
+      expect(created[table]).toEqual(before[table]);
+    const revision = created.revisions.find((r) => r.ref.id === volume7._id)!;
+    expect(revision.changes).toContainEqual({ field: "repairKey", after: s.entry.key });
+    expect(revision.author).toMatchObject({ kind: "user", roleAtAuthorship: "administrator" });
+    const versions = await t.run((ctx) =>
+      ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", revision.proposalId!))
+        .collect(),
+    );
+    expect(versions[0]!.evidence).toEqual([
+      { kind: "observation", observationId: s.observationId },
+      ...sources.map((url) => ({ kind: "url", url })),
+      { kind: "note", text: `One-time data repair plan entry ${s.entry.key}` },
+    ]);
+
+    // A re-run recognizes its own Volume and writes nothing.
+    expect(await run(t, [s.entry])).toEqual([{ key: s.entry.key, status: "alreadyApplied" }]);
+    expect(await catalog(t)).toEqual(created);
+
+    const replayArgs = { observationId: s.observationId, replay: true };
+    const preview = await t.query(internal.heldBooks.previewInternal, replayArgs);
+    expect(preview.refusal).toBeNull();
+    expect(preview.placement).toBe("create");
+    expect(
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...replayArgs,
+        actor: "ari",
+        expected: preview.expected!,
+        operation: "replay",
+        reason: "Fresh guarded ebook placement after the Volume was created.",
+        evidenceUrls: [sources[0]!],
+      }),
+    ).toMatchObject({ status: "applied" });
+    const placed = await catalog(t);
+    expect(placed.holds).toEqual([]);
+    const ebook = placed.releases.find((r) => r.isbn13 === "9781952241727")!;
+    expect(ebook).toMatchObject({ format: "digital", seriesIds: [s.seriesId] });
+    expect(placed.coverages.filter((c) => c.editionId === ebook.editionId)).toEqual([
+      expect.objectContaining({ volumeId: volume7._id, extent: "complete" }),
+    ]);
+    expect(placed.volumes).toEqual(created.volumes);
+  });
+
+  it("refuses a stale Volume list, a gap, a label any Volume already holds, and Open Library alone", async () => {
+    const t = makeT();
+    const s = await gacha(t);
+    const rest = s.entry.expectedActiveVolumes.slice(1);
+    const outcomes = await run(t, [
+      { ...s.entry, key: "stale", expectedActiveVolumes: rest },
+      { ...s.entry, key: "gap", label: "8" },
+      { ...s.entry, key: "ol-only", sources: ["https://openlibrary.org/books/OL53350074M.json"] },
+    ]);
+    expect(outcomes.map((o) => [o.key, o.status, o.reason])).toEqual([
+      ["stale", "skipped", "series' active Volumes differ from the plan"],
+      ["gap", "skipped", "plan error: Volume 8 does not follow Volumes 1-n without a gap"],
+      ["ol-only", "skipped", "plan error: no source beyond Open Library"],
+    ]);
+    // A hidden Volume 7 someone else made still owns the label.
+    await t.run(async (ctx) => {
+      await insertVolume(ctx, { seriesId: s.seriesId, label: "7", position: 7, status: "hidden" });
+    });
+    const before = await catalog(t);
+    expect(await run(t, [s.entry])).toEqual([
+      expect.objectContaining({
+        status: "skipped",
+        reason: expect.stringMatching(/already has hidden Volume 7/),
+      }),
+    ]);
+    expect(await catalog(t)).toEqual(before);
   });
 });

@@ -350,6 +350,31 @@ export const createReleaseEntry = v.object({
 });
 
 /**
+ * Create the one missing numbered backbone Volume a held Open Library
+ * edition names, under its existing Series, once publisher evidence proves
+ * the book. Bootstrap only. `label` must be the next number after
+ * `expectedActiveVolumes` (the Series' active Volumes in position order, as
+ * the plan saw them: drift = skip), and no Volume of the Series may carry it
+ * in any status. The observation and its `volumeMissing` hold must name this
+ * ISBN, Series and label, and the ISBN must have no owner. Writes only the
+ * Volume: the held book's native replay places its Release afterwards. The
+ * creation Revision records the entry key (alreadyApplied on re-run);
+ * `sources` land on the Proposal as URLs, at least one beyond Open Library.
+ */
+export const createVolumeEntry = v.object({
+  kind: v.literal("createVolume"),
+  ...base,
+  seriesId: v.id("series"),
+  seriesTitle: v.string(),
+  label: v.string(),
+  expectedActiveVolumes: v.array(v.object({ volumeId: v.id("volumes"), label: nullableString })),
+  observationId: v.id("sourceObservations"),
+  holdId: v.id("placementHolds"),
+  isbn13: v.string(),
+  sources: v.array(v.string()),
+});
+
+/**
  * A Release Bundle whose members may sit in several Series. Either extends
  * an existing bundle (`bundleId`) or turns a box-set Release into one
  * (`box`: the box's facts become the bundle's, the box Release and, once
@@ -422,6 +447,7 @@ export const repairEntry = v.union(
   splitSeriesEntry,
   hideEditionLineEntry,
   createReleaseEntry,
+  createVolumeEntry,
   releaseBundleEntry,
   setCoverageEntry,
 );

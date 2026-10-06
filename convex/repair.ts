@@ -50,6 +50,12 @@ function evidenceFor(entry: RepairEntry) {
         : [note];
     case "createRelease":
       return [...entry.sources.map((url) => ({ kind: "url" as const, url })), note];
+    case "createVolume":
+      return [
+        { kind: "observation" as const, observationId: entry.observationId },
+        ...entry.sources.map((url) => ({ kind: "url" as const, url })),
+        note,
+      ];
     default:
       return [note];
   }

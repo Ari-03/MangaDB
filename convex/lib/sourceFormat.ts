@@ -4,9 +4,30 @@ import type { Doc } from "../_generated/dataModel";
 import { bookFacts, bindingFacts } from "./bookFacts";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
-import { labelsEqual, sameWorkTitle } from "./matching";
+import { labelsEqual, normalizeTitle, sameWorkTitle } from "./matching";
 import { olEditionValidator, type OlEditionSnapshot } from "./openLibrary";
+import { canonicalPublisherFor } from "./publishers";
 import { nonJsonPath, valueHash } from "./values";
+
+// One literal section of a retained response body, by its exact UTF-8 byte range.
+const capturedSection = {
+  sectionSha256: v.string(),
+  byteStart: v.number(),
+  byteEndExclusive: v.number(),
+  excerpt: v.string(),
+};
+// A primary digital distributor's own product page for the exact ebook SKU,
+// captured whole: final URL, status, body SHA-256 and byte length.
+const distributorCapture = {
+  kind: v.literal("primaryDigitalDistributorOwnSku"),
+  isbn13: v.string(),
+  sku: v.string(),
+  url: v.string(),
+  httpStatus: v.literal(200),
+  fetchedAt: v.number(),
+  bodySha256: v.string(),
+  bodyBytes: v.number(),
+};
 
 export const reviewedFormatValidator = v.object({
   kind: v.literal("olInferredPhysicalToDigital"),
@@ -17,17 +38,30 @@ export const reviewedFormatValidator = v.object({
   isbn13: v.string(),
   baseSnapshot: v.string(),
   reason: v.string(),
-  publisher: v.object({
-    kind: v.literal("publisherOwnIsbnEbook"),
-    isbn13: v.string(),
-    url: v.string(),
-    fetchedAt: v.number(),
-    bodySha256: v.string(),
-    sectionSha256: v.string(),
-    byteStart: v.number(),
-    byteEndExclusive: v.number(),
-    excerpt: v.string(),
-  }),
+  // The ebook evidence: the publisher's own "ISBN: … (ebook)" line, or a
+  // distributor's own SKU metadata (BookWalker JSON-LD Product plus its
+  // BreadcrumbList; OverDrive's mediaItems object), kept as literal sections.
+  publisher: v.union(
+    v.object({
+      kind: v.literal("publisherOwnIsbnEbook"),
+      isbn13: v.string(),
+      url: v.string(),
+      fetchedAt: v.number(),
+      bodySha256: v.string(),
+      ...capturedSection,
+    }),
+    v.object({
+      ...distributorCapture,
+      distributor: v.literal("bookwalker"),
+      product: v.object(capturedSection),
+      breadcrumbs: v.object(capturedSection),
+    }),
+    v.object({
+      ...distributorCapture,
+      distributor: v.literal("overdrive"),
+      mediaItems: v.object(capturedSection),
+    }),
+  ),
   ol: v.object({
     kind: v.literal("olPhysicalFormatAbsent"),
     key: v.string(),
@@ -153,14 +187,18 @@ export function reviewedFormatRefusal(
     return "Known source work, Volume, packaging, binding or scope facts contradict this correction.";
   const p = reviewed.publisher;
   const o = reviewed.ol;
-  const section = /^ISBN:\s*([\d\s-]+)\s*\(ebook\)\s*$/i.exec(p.excerpt);
-  if (
-    p.isbn13 !== reviewed.isbn13 ||
-    !section ||
-    toIsbn13(section[1]) !== reviewed.isbn13 ||
-    p.excerpt.length > 2048
-  )
+  if (p.isbn13 !== reviewed.isbn13)
     return "Publisher excerpt must attach ebook directly to the source's own ISBN.";
+  if (p.kind === "publisherOwnIsbnEbook") {
+    // A literal &nbsp; between the ISBN and "(ebook)" reads as the space it
+    // renders; the stored excerpt and its byte range stay as captured.
+    const section = /^ISBN:\s*([\d\s-]+)\s*\(ebook\)\s*$/i.exec(p.excerpt.replace(/&nbsp;/g, " "));
+    if (!section || toIsbn13(section[1]) !== reviewed.isbn13 || p.excerpt.length > 2048)
+      return "Publisher excerpt must attach ebook directly to the source's own ISBN.";
+  } else {
+    const refusal = distributorRefusal(p, s);
+    if (refusal) return refusal;
+  }
   try {
     const url = new URL(p.url);
     if (
@@ -180,16 +218,187 @@ export function reviewedFormatRefusal(
     o.url !== `https://openlibrary.org${reviewed.key}.json`
   )
     return "Exact OL absence evidence disagrees.";
+  const sections =
+    p.kind === "publisherOwnIsbnEbook"
+      ? [p]
+      : p.distributor === "bookwalker"
+        ? [p.product, p.breadcrumbs]
+        : [p.mediaItems];
+  const bodyBytes = p.kind === "publisherOwnIsbnEbook" ? Number.MAX_SAFE_INTEGER : p.bodyBytes;
   if (
     ![p.fetchedAt, o.fetchedAt].every((time) => Number.isFinite(time) && time > 0) ||
-    ![p.bodySha256, p.sectionSha256, o.bodySha256].every((hash) => /^[a-f\d]{64}$/i.test(hash)) ||
-    !Number.isSafeInteger(p.byteStart) ||
-    !Number.isSafeInteger(p.byteEndExclusive) ||
-    p.byteStart < 0 ||
-    p.byteEndExclusive <= p.byteStart ||
-    p.byteEndExclusive - p.byteStart !== utf8Bytes(p.excerpt)
+    ![p.bodySha256, o.bodySha256, ...sections.map((one) => one.sectionSha256)].every((hash) =>
+      /^[a-f\d]{64}$/i.test(hash),
+    ) ||
+    !Number.isSafeInteger(bodyBytes) ||
+    sections.some(
+      (one) =>
+        !Number.isSafeInteger(one.byteStart) ||
+        !Number.isSafeInteger(one.byteEndExclusive) ||
+        one.byteStart < 0 ||
+        one.byteEndExclusive <= one.byteStart ||
+        one.byteEndExclusive > bodyBytes ||
+        one.byteEndExclusive - one.byteStart !== utf8Bytes(one.excerpt),
+    )
   )
     return "Invalid evidence time, SHA-256 or byte range.";
+  return null;
+}
+
+type DistributorEvidence = Exclude<ReviewedFormat["publisher"], { kind: "publisherOwnIsbnEbook" }>;
+
+/**
+ * The publisher names each distributor states on its own SKU, by canonical
+ * slug. Reviewed per distributor and kept out of DUPLICATE_ALIASES, so they
+ * never resolve a source's publisher string.
+ */
+const DISTRIBUTOR_PUBLISHERS: Record<DistributorEvidence["distributor"], Record<string, string>> = {
+  bookwalker: { "One Peace Books": "one-peace-books" },
+  overdrive: { "One Peace Ebooks": "one-peace-books" },
+};
+
+/** The value at a key path through parsed JSON objects, or undefined. */
+function at(value: unknown, ...path: string[]): unknown {
+  let here = value;
+  for (const key of path) {
+    if (!here || typeof here !== "object" || Array.isArray(here) || !Object.hasOwn(here, key))
+      return undefined;
+    here = (here as Record<string, unknown>)[key];
+  }
+  return here;
+}
+
+/** The literal JSON a section retained, parsed as data; undefined when it is not JSON. */
+function literalJson(excerpt: string): unknown {
+  try {
+    return JSON.parse(excerpt);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A distributor's own SKU proves the source's exact ISBN is an English manga
+ * ebook of the same numbered Volume from the same publisher, read only from
+ * the fields its own metadata attaches to that SKU. A novel, another ISBN on
+ * the page or a related product never qualifies.
+ */
+function distributorRefusal(p: DistributorEvidence, s: OlEditionSnapshot): string | null {
+  const sections = p.distributor === "bookwalker" ? [p.product, p.breadcrumbs] : [p.mediaItems];
+  if (sections.some((one) => utf8Bytes(one.excerpt) > 8 * 1024))
+    return "Distributor evidence section exceeds 8 KiB.";
+  let url: URL;
+  try {
+    url = new URL(p.url);
+  } catch {
+    return "Invalid publisher evidence URL.";
+  }
+  const ownSku =
+    p.distributor === "bookwalker"
+      ? /^[\dA-Z]{12}$/.test(p.sku) &&
+        url.hostname === "bookwalker.com" &&
+        new RegExp(`^/volume/${p.sku}/[a-z\\d-]+$`).test(url.pathname)
+      : /^\d{1,12}$/.test(p.sku) &&
+        /^[a-z\d-]+\.overdrive\.com$/.test(url.hostname) &&
+        url.pathname === `/media/${p.sku}`;
+  if (!ownSku || url.protocol !== "https:" || url.port || url.search || url.hash)
+    return "Supply the distributor's own HTTPS product URL for this SKU.";
+
+  let name: unknown;
+  let stated: unknown;
+  if (p.distributor === "bookwalker") {
+    const product = literalJson(p.product.excerpt);
+    const crumbs = literalJson(p.breadcrumbs.excerpt);
+    const types = at(product, "@type");
+    const trail = at(crumbs, "itemListElement");
+    name = at(product, "name");
+    stated = at(product, "brand", "name");
+    if (
+      !Array.isArray(types) ||
+      !types.includes("Book") ||
+      at(product, "@id") !== `https://bookwalker.com/volume/${p.sku}` ||
+      at(product, "url") !== p.url ||
+      at(product, "isbn") !== p.isbn13 ||
+      at(product, "bookFormat") !== "https://schema.org/EBook" ||
+      at(product, "inLanguage") !== "en"
+    )
+      return "Distributor product must attach the exact ISBN to an English ebook at this SKU.";
+    if (
+      at(crumbs, "@type") !== "BreadcrumbList" ||
+      !Array.isArray(trail) ||
+      trail.length < 2 ||
+      at(trail.at(-1), "item") !== p.url ||
+      at(trail.at(-1), "name") !== name ||
+      !trail.slice(0, -1).some((crumb) => at(crumb, "name") === "Manga") ||
+      trail.some((crumb) => /novel/i.test(String(at(crumb, "name"))))
+    )
+      return "Distributor breadcrumbs must file this SKU under Manga.";
+  } else {
+    const items = literalJson(p.mediaItems.excerpt);
+    const item = at(items, p.sku);
+    const languages = at(item, "languages");
+    const formats = at(item, "formats");
+    const bisac = at(item, "bisacCodes");
+    name = at(item, "title");
+    stated = at(item, "publisher", "name");
+    // Every ISBN any format of this SKU carries, in its own field or its identifiers.
+    const isbns = Array.isArray(formats)
+      ? formats.flatMap((format) => {
+          const ids = at(format, "identifiers");
+          return [
+            ...(at(format, "isbn") === undefined ? [] : [at(format, "isbn")]),
+            ...(Array.isArray(ids) ? ids : [])
+              .filter((id) => at(id, "type") === "ISBN")
+              .map((id) => at(id, "value")),
+          ];
+        })
+      : [];
+    const ebook = Array.isArray(formats)
+      ? formats.filter((format) => at(format, "id") === "ebook-overdrive")
+      : [];
+    const ebookIds = at(ebook[0], "identifiers");
+    if (
+      !items ||
+      typeof items !== "object" ||
+      Object.keys(items).length !== 1 ||
+      at(item, "id") !== p.sku ||
+      at(item, "type", "id") !== "ebook" ||
+      !Array.isArray(languages) ||
+      languages.length !== 1 ||
+      at(languages[0], "id") !== "en" ||
+      ebook.length !== 1 ||
+      at(ebook[0], "isbn") !== p.isbn13 ||
+      !Array.isArray(ebookIds) ||
+      !ebookIds.some((id) => at(id, "type") === "ISBN" && at(id, "value") === p.isbn13) ||
+      isbns.some((isbn) => isbn !== p.isbn13)
+    )
+      return "Distributor product must attach the exact ISBN to an English ebook at this SKU.";
+    if (
+      !Array.isArray(bisac) ||
+      bisac.length === 0 ||
+      !bisac.every((code) => typeof code === "string" && /^CGN004\d{3}$/.test(code)) ||
+      typeof at(item, "detailedSeries", "readingOrder") !== "string" ||
+      !labelsEqual(String(at(item, "detailedSeries", "readingOrder")), s.volumeLabel ?? null)
+    )
+      return "Distributor subjects must file this SKU as manga in its Volume's reading order.";
+  }
+
+  const slug =
+    typeof stated === "string" ? DISTRIBUTOR_PUBLISHERS[p.distributor][stated] : undefined;
+  if (!slug || !s.publishers.every((one) => canonicalPublisherFor(one)?.slug === slug))
+    return "Distributor publisher disagrees with the source's publisher.";
+  if (typeof name !== "string") return "Distributor title must name the source's work and Volume.";
+  const title = parseBookTitle(name);
+  if (
+    title.isNovel ||
+    title.isBox ||
+    title.packaging ||
+    outOfScopeReason(name) ||
+    normalizeTitle(title.seriesTitle) !== normalizeTitle(s.seriesTitle) ||
+    title.volumeLabel === null ||
+    !labelsEqual(title.volumeLabel, s.volumeLabel ?? null)
+  )
+    return "Distributor title must name the source's work and Volume.";
   return null;
 }
 

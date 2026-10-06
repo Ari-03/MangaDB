@@ -29,7 +29,11 @@ import {
   type ReviewedFormat,
 } from "./lib/sourceFormat";
 import { valueHash } from "./lib/values";
-import { sourceFormatEvidence, gachaPhysicalGraph } from "./test.sourceFormats";
+import {
+  distributorFormatEvidence,
+  gachaPhysicalGraph,
+  sourceFormatEvidence,
+} from "./test.sourceFormats";
 import { placementChanged, placementView } from "./placement";
 import { reader, sourceSeries } from "./lib/heldBooks";
 
@@ -2691,14 +2695,26 @@ async function replayGacha(t: TestT, s: Awaited<ReturnType<typeof gachaFormat>>)
   return result;
 }
 
+const sha = async (text: string) =>
+  Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+function refusalFor(row: { wire: string }, reviewed: ReviewedFormat) {
+  const snapshot = parseEditionJson(JSON.parse(row.wire))!;
+  return reviewedFormatRefusal(
+    { sourceKey: "openlibrary", sourceRecordId: snapshot.key, snapshot },
+    reviewed,
+  );
+}
+
 describe("reviewed OL inferred physical-to-digital workflows", () => {
-  it("checks all five saved public bodies and exact own-ISBN excerpts with the actual parser", async () => {
-    const sha = async (text: string) =>
-      Array.from(
-        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))),
-        (byte) => byte.toString(16).padStart(2, "0"),
-      ).join("");
-    expect(sourceFormatEvidence).toHaveLength(5);
+  it("checks all six saved public bodies and exact own-ISBN excerpts with the actual parser", async () => {
+    expect(sourceFormatEvidence).toHaveLength(6);
+    // Yakuza 1's line keeps its literal entity; only the match reads it as a space.
+    expect(sourceFormatEvidence.at(-1)?.reviewed.publisher.excerpt).toBe(
+      "ISBN: 978-1-952241-16-1&nbsp;(ebook)",
+    );
     for (const row of sourceFormatEvidence) {
       const wire: Record<string, unknown> = JSON.parse(row.wire);
       expect(wire.physical_format).toBeUndefined();
@@ -2714,6 +2730,57 @@ describe("reviewed OL inferred physical-to-digital workflows", () => {
         ),
       ).toBeNull();
     }
+  });
+  it("accepts the four One Peace manga ebooks from their distributors' own SKU metadata", async () => {
+    expect(distributorFormatEvidence).toHaveLength(4);
+    for (const row of distributorFormatEvidence) {
+      const wire: Record<string, unknown> = JSON.parse(row.wire);
+      expect(wire.physical_format).toBeUndefined();
+      expect(await sha(row.wire)).toBe(row.reviewed.ol.bodySha256);
+      const p = row.reviewed.publisher;
+      for (const section of p.distributor === "bookwalker"
+        ? [p.product, p.breadcrumbs]
+        : [p.mediaItems])
+        expect(await sha(section.excerpt)).toBe(section.sectionSha256);
+      expect(valueHash(parseEditionJson(wire))).toBe(row.frozen);
+      expect(refusalFor(row, row.reviewed)).toBeNull();
+    }
+  });
+  it("refuses a novel category, another ISBN on the SKU, and another Volume's SKU", () => {
+    const [spear, hina, healing, tendo] = distributorFormatEvidence;
+    const healingProof = healing.reviewed.publisher;
+    if (healingProof.distributor !== "bookwalker") throw new Error("Healing Magic is BookWalker.");
+    const novel = healingProof.breadcrumbs.excerpt.replace('"name":"Manga"', '"name":"Novels"');
+    expect(
+      refusalFor(healing, {
+        ...healing.reviewed,
+        publisher: {
+          ...healingProof,
+          breadcrumbs: { ...healingProof.breadcrumbs, excerpt: novel },
+        },
+      }),
+    ).toMatch(/under Manga/);
+    const tendoProof = tendo.reviewed.publisher;
+    if (tendoProof.distributor !== "overdrive") throw new Error("Tendo is OverDrive.");
+    // The publisher's print ISBN beside the ebook's own on the same SKU.
+    const sibling = tendoProof.mediaItems.excerpt.replace(
+      '{"type":"ASIN","value":"B0FR7MTXMP"}',
+      '{"type":"ISBN","value":"9781642733242"}',
+    );
+    expect(sibling).not.toBe(tendoProof.mediaItems.excerpt);
+    expect(
+      refusalFor(tendo, {
+        ...tendo.reviewed,
+        publisher: { ...tendoProof, mediaItems: { ...tendoProof.mediaItems, excerpt: sibling } },
+      }),
+    ).toMatch(/exact ISBN/);
+    // Spear Hero 7's real SKU offered for Hinamatsuri 15's record.
+    expect(
+      refusalFor(hina, {
+        ...hina.reviewed,
+        publisher: { ...spear.reviewed.publisher, isbn13: hina.reviewed.isbn13 },
+      }),
+    ).toMatch(/exact ISBN/);
   });
   it("audits correction without changing raw facts or the hold, retains equal refetch/backfill, then creates a distinct digital Release", async () => {
     const t = makeT();

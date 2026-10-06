@@ -23,6 +23,10 @@ describe("canonicalPublisherFor", () => {
     expect(canonicalPublisherFor("Dark Horse Manhwa")?.slug).toBe("dark-horse");
     expect(canonicalPublisherFor("Irodori Inc.")?.slug).toBe("irodori-comics");
     expect(canonicalPublisherFor("Kaiten Books LLC")?.slug).toBe("kaiten-books");
+    expect(canonicalPublisherFor("One Peace Books, Incorporated")?.slug).toBe("one-peace-books");
+    expect(canonicalPublisherFor("One Peace Books Inc.")?.slug).toBe("one-peace-books");
+    // Exact legal names only: no corporate suffix is dropped in general.
+    expect(canonicalPublisherFor("Yen Press Inc.")).toBeNull();
   });
 
   it("resolves imprints to their own row, naming the parent company", () => {

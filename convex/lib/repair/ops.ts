@@ -7,6 +7,10 @@
 // loser Volumes after the survivor's, so Volumes are placed by label first.
 
 import { isbnScope } from "../scope";
+import { getBootstrapMode } from "../../importSources";
+import { placeEdition } from "../../openLibrary";
+import type { OlEditionSnapshot } from "../openLibrary";
+import { projectSourceFormat } from "../sourceFormat";
 import { reader, releaseContents, volumesForLabels } from "../heldBooks";
 import { referenceAudit, convertedClaim, conversionState } from "../heldRepair";
 import { ConvexError } from "convex/values";
@@ -15,10 +19,17 @@ import type { Contents } from "../heldBooks";
 import type { MutationCtx } from "../../_generated/server";
 import { type IsbnField, isbn13To10, isbnFieldValue, toIsbn13 } from "../isbn";
 import { followMerges } from "../merges";
-import { linkObservation } from "../observations";
+import { holdOf, linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
-import { assignedIsbnRefusal, primaryIsbnsOf, isbnClaims, claimResolver } from "../releaseIsbns";
+import {
+  assignedIsbnRefusal,
+  primaryIsbnsOf,
+  isbnClaims,
+  claimResolver,
+  statedIsbns,
+  storedClaims,
+} from "../releaseIsbns";
 import { seriesSearchText } from "../searchMatch";
 import {
   OWNERSHIP,
@@ -45,6 +56,7 @@ import {
   createEdition,
   ensureVolume,
   labelNumber,
+  REPAIR_KEY_FIELD,
   refreshReleaseDenorms,
   releasesOf,
   replaceCoverage,
@@ -103,6 +115,8 @@ export async function applyEntry(
       return await hideEditionLine(ctx, audit, entry);
     case "createRelease":
       return await createRelease(ctx, audit, entry);
+    case "createVolume":
+      return await createVolume(ctx, audit, entry);
     case "releaseBundle":
       return await releaseBundle(ctx, audit, entry);
     case "setCoverage":
@@ -2279,7 +2293,7 @@ async function followEdition(
 // ---------- stage 12: series splits ----------
 
 /** Creation-Revision field naming the plan entry that split a Series off. */
-const SPLIT_KEY_FIELD = "repairKey";
+const SPLIT_KEY_FIELD = REPAIR_KEY_FIELD;
 
 /**
  * The Series an earlier run of this split created, or null. Every row the
@@ -2675,6 +2689,140 @@ async function createRelease(
     { field: SPLIT_KEY_FIELD, after: entry.key },
   ]);
   await refreshReleaseDenorms(ctx, editionId);
+  return applied;
+}
+
+/** Why a createVolume entry's sources are not HTTPS pages citing more than Open Library, or null. */
+function sourcesRefusal(sources: string[]): string | null {
+  const hosts: string[] = [];
+  for (const text of sources) {
+    let url: URL;
+    try {
+      url = new URL(text);
+    } catch {
+      return `plan error: source ${JSON.stringify(text)} is not a URL`;
+    }
+    if (url.protocol !== "https:" || !url.hostname)
+      return `plan error: source ${JSON.stringify(text)} is not an HTTPS page`;
+    hosts.push(url.hostname.toLowerCase());
+  }
+  return hosts.some((host) => host !== "openlibrary.org" && !host.endsWith(".openlibrary.org"))
+    ? null
+    : "plan error: no source beyond Open Library";
+}
+
+/**
+ * Create the one numbered backbone Volume a held Open Library edition is
+ * missing. Every fact the plan states is re-read (drift = skip), and the
+ * edition must still place, through the importer's own placeEdition, as
+ * exactly this Series' missing Volume. A re-run finds its own Volume by the
+ * creation Revision's entry key. Only the Volume is written: the hold, the
+ * observation and its Release are left to the held book's native replay.
+ */
+async function createVolume(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"createVolume">,
+): Promise<Result> {
+  if (!(await getBootstrapMode(ctx))) return skip("Bootstrap Mode is off");
+  const series = await ctx.db.get(entry.seriesId);
+  if (!series || series.status !== "active" || series.mergedIntoId !== undefined)
+    return skip("series not active");
+  if (series.locked) return skip("series locked");
+  if (series.title !== entry.seriesTitle)
+    return skip(`series retitled: ${JSON.stringify(series.title)}`);
+  if (!/^[1-9]\d*$/.test(entry.label))
+    return skip("plan error: label is not a plain volume number");
+  const sources = sourcesRefusal(entry.sources);
+  if (sources) return skip(sources);
+
+  // Every Volume of the Series, hidden and merged too: none may hold the label.
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+    .collect();
+  const labelled = volumes.filter((vol) => sameLabel(vol.label, entry.label));
+  const [existing] = labelled;
+  if (
+    labelled.length === 1 &&
+    existing?.status === "active" &&
+    (await createdByEntry(ctx, { type: "volume", id: existing._id }, entry.key))
+  )
+    return already;
+  if (existing)
+    return skip(
+      `series already has ${existing.status} Volume ${entry.label} (${existing.publicId})`,
+    );
+  const active = volumes
+    .filter((vol) => vol.status === "active")
+    .sort((a, b) => a.position - b.position)
+    .map((vol) => ({ volumeId: vol._id, label: vol.label ?? null }));
+  if (!sameValue(active, entry.expectedActiveVolumes))
+    return skip("series' active Volumes differ from the plan");
+  const contiguous = entry.expectedActiveVolumes.every((row, i) => row.label === String(i + 1));
+  if (!contiguous || entry.label !== String(entry.expectedActiveVolumes.length + 1))
+    return skip(`plan error: Volume ${entry.label} does not follow Volumes 1-n without a gap`);
+
+  const hold = await ctx.db.get(entry.holdId);
+  if (
+    !hold ||
+    hold.observationId !== entry.observationId ||
+    hold.sourceKey !== "openlibrary" ||
+    hold.kind !== "volumeMissing" ||
+    hold.seriesId !== series._id ||
+    (await holdOf(ctx, entry.observationId))?._id !== hold._id
+  )
+    return skip("hold no longer names this Series' missing Volume");
+  const observation = await ctx.db.get(entry.observationId);
+  if (
+    !observation ||
+    observation.sourceKey !== "openlibrary" ||
+    observation.withdrawn ||
+    observation.recordRef ||
+    observation.printingIsbn13 !== undefined
+  )
+    return skip("observation is not a present, unlinked Open Library edition");
+  const queued = observation.queuedProposalId
+    ? await ctx.db.get(observation.queuedProposalId)
+    : null;
+  if (queued?.state === "draft" || queued?.state === "inReview")
+    return skip(`observation's Proposal is ${queued.state}`);
+  const effective = projectSourceFormat(observation);
+  if (effective.status === "stale") return skip(effective.reason);
+  const snapshot = effective.snapshot as OlEditionSnapshot;
+  const isbn13 = toIsbn13(entry.isbn13);
+  const stated = new Set(statedIsbns(snapshot).map(toIsbn13));
+  if (
+    isbn13 !== entry.isbn13 ||
+    snapshot.kind !== "olEdition" ||
+    stated.size !== 1 ||
+    !stated.has(isbn13) ||
+    snapshot.seriesTitle !== entry.seriesTitle ||
+    snapshot.volumeLabel !== entry.label ||
+    snapshot.multiVolume ||
+    snapshot.packaging ||
+    snapshot.bareNumber ||
+    snapshot.bareRoman ||
+    snapshot.bareSplit
+  )
+    return skip(
+      "observation does not state this ISBN as an ordinary numbered Volume of the Series",
+    );
+  const placement = await placeEdition(ctx, snapshot);
+  if (
+    placement.kind !== "hold" ||
+    placement.hold.kind !== "volumeMissing" ||
+    placement.hold.seriesId !== series._id
+  )
+    return skip(`observation no longer places as this Series' missing Volume (${placement.kind})`);
+  const scope = await isbnScope(ctx, isbn13);
+  if (scope) return skip(scope);
+  const claims = await storedClaims(ctx, isbn13);
+  if (!claims?.complete || claims.printed || claims.raw.length > 0)
+    return skip(`ISBN ${isbn13} already has an owner`);
+
+  const volume = await ensureVolume(ctx, audit, series._id, entry.label, entry.key);
+  audit.note(`created Volume ${volume.publicId} (${entry.label}) of Series ${series.publicId}`);
   return applied;
 }
 
