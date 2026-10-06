@@ -1,4 +1,4 @@
-// C67-R4-01..03 and C67-R5-01..03: actual OL input -> registered import -> registered decision.
+// C67-R4-01..03 and C67-R5-01..03 and C67-R6-01..02: actual OL input -> registered import -> registered decision.
 // Main title, subtitle and stored fields are independent source statements.
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
@@ -545,3 +545,154 @@ it("keeps a real unheld work-owned Volume word route unchanged", async () => {
   });
   expect(await state(t)).toEqual(before);
 });
+
+const round6 = [
+  "Vol. 1: Includes Volumes 1 (and unknown)",
+  "Vol. 1: Includes Volumes 1 (and ?)",
+  "Vol. 1: Includes Volumes 1 [and unknown]",
+  "Vol. 1: Includes Volumes 1 {and unknown}",
+  "Vol. 1: Includes Volumes 1 (and 2)",
+  "Vol. 1: Includes Volumes 1 [and 2]",
+  "Vol. 1: Includes Volumes 1 (through 2)",
+  "Vol. 1: Includes Volumes 1 (or unknown)",
+  "Vol. 1: Includes Volumes 1, (unknown)",
+  "Vol. 1: Includes Volumes 1 and (unknown)",
+  "Vol. 1: Includes Volumes 1, ((unknown)) and Volume 2",
+  "Vol. 1: Includes Volumes 1 (and Volume 2)",
+  "Vol. 1: Includes Volumes 1 (Paperback) and unknown",
+  "Vol. 1: Includes Volumes 1 (Paperback), unknown",
+  "Vol. 1 (eBook II)",
+  "Vol. 1 (Kindle Edition II)",
+  "Vol. 1: eBook (GN II)",
+  "Vol. 1 (eBook #1)",
+  "Vol. 1 (eBook Volume 2)",
+  "Vol. 1 (Paperback 1.5 Hardcover 2)",
+  "Vol. 1: Digital GN 1 Hardcover 2",
+  "Vol. 1: Includes Volumes 1--1",
+  "Vol. 1 (Paperback 1; Hardcover 2)",
+  "Vol. 1: Includes Volumes 1, 01 and ?",
+  "Vol. 1: Includes Volume 1 and perhaps Volume 2",
+  "Vol. 1: Includes Volume 1 (and unknown), Volume 2",
+  "Vol. 1: Includes Volumes 1 (and unknown); Hardback",
+  "Vol. 1 (Hardback II)",
+  "Vol. 1 (Hardbound II)",
+  "Vol. 1 (Hardcover Edition II)",
+  "Vol. 1: eBook GN II",
+  "Vol. 1: Hardback GN II",
+  "Vol. 1: Includes Volumes 1 (and 2) (Paperback)",
+  "Vol. 1: Includes Volumes 1 ((and unknown))",
+  "Vol. 1: Includes Volumes 1 (Paperback ) and ?",
+  "Vol. 1: Includes Volumes 1 (Paperback 1) and unknown",
+  "Vol. 1: Includes Volumes 1 (Paperback) and 2",
+  "Vol. 1: Includes Volumes 1 (Paperback) and Volume 2",
+  "Vol. 1: Includes Volumes 1 (Paperback); Volume 2",
+  "Vol. 1: Includes Volumes 1 and ((unknown))",
+  "Vol. 1: Includes Volumes 1, (Paperback) and unknown",
+  "Vol. 1: Includes Volumes 1, Paperback and unknown",
+  "Vol. 1: Includes Volumes 1, (and unknown)",
+  "Vol. 1: Includes Volumes 1 (& unknown)",
+  "Vol. 1: Includes Volumes 1 (+ unknown)",
+  "Vol. 1: Includes Volumes 1 (/ unknown)",
+  "Vol. 1: Includes Volumes 1 {- 2}",
+];
+
+// Every R6 source is real parser output with a genuine hold on retained routes.
+describe.each([false, true])(
+  "connected contents and format designators, existing %s",
+  (existing) => {
+    it.each(round6)("freezes R6 clause %s", async (subtitle) => {
+      const fixture = await setup(existing, source("Vagabond, Vol. 1", subtitle));
+      expect(fixture.snapshot.subtitle).toBe(subtitle);
+      await refused(fixture, /Volume|packaging|hardcover|paperback|digital/i);
+    });
+    it.each(
+      [
+        "Vol. 1: Includes Volumes 1 (and 2)",
+        "Vol. 1: Includes Volumes 1 (Paperback) and unknown",
+        "Vol. 1 (eBook II)",
+      ].flatMap((clause) => [
+        { route: "plain", title: "Vagabond", subtitle: clause },
+        { route: "main", title: `Vagabond, ${clause}`, subtitle: undefined },
+      ]),
+    )("freezes R6 $route $title + $subtitle", async ({ title, subtitle }) => {
+      await refused(
+        await setup(existing, source(title, subtitle), "paperback", null),
+        /Volume|packaging|hardcover|paperback|digital|not held/i,
+      );
+    });
+    it.each(
+      boundarySpaces.flatMap((space) =>
+        [
+          ["(", ")"],
+          ["{", "}"],
+          ["((", "))"],
+        ].map(([open, close]) => ({ space, open, close })),
+      ),
+    )(
+      "keeps scope across wrappers $open with whitespace $space",
+      async ({ space, open, close }) => {
+        for (const connector of ["and", "&", "+", "/", "through", "or"]) {
+          const subtitle = `Vol. 1: Includes Volumes 1${space}${open}${space}Paperback II${space}${close}${space}${open}${connector}${space}unresolved component${close}`;
+          const fixture = await setup(existing, source("Vagabond, Vol. 1", subtitle));
+          expect(fixture.snapshot.subtitle).toBe(subtitle);
+          await refused(fixture, /Volume|packaging/i);
+        }
+      },
+    );
+    it.each([
+      "Includes Volumes 1 (Paperback; Softcover) and 2",
+      "Includes Volumes 1 ((Paperback 01; Softbound II)) , unavailable",
+      "Collects Volume 1 (Paperback II) and Volume II",
+      "Contains Volumes 1 (Paperback Edition II), 2 (Paperback)",
+      "Includes Volumes 1 (Paperback (GN II)) and 2",
+      "Includes Volumes 1 {and {2}}",
+      "Includes Volumes 1 (to II)",
+      "Includes Volumes 1 (Paperback) + 2",
+      "Includes Volumes 1 (Paperback) / unavailable",
+    ])("retains neighboring connected %s", async (clause) => {
+      await refused(
+        await setup(existing, source("Vagabond, Vol. 1", `Vol. 1: ${clause}`)),
+        /Volume|packaging/i,
+      );
+    });
+    it.each([
+      "II",
+      "iv",
+      "IX",
+      "XXI",
+      "L",
+      "IIII",
+      "GN unknown",
+      "GN ?",
+      "#unavailable",
+      "GN (unknown)",
+    ])("keeps known format for technical payload %s", async (payload) => {
+      for (const format of ["Hardback", "Kindle Edition"]) {
+        const subtitle = `Vol. 1 (${format} ${payload})`;
+        const fixture = await setup(existing, source("Vagabond, Vol. 1", subtitle));
+        expect(fixture.snapshot.subtitle).toBe(subtitle);
+        await refused(fixture, /hardcover|digital/i);
+      }
+    });
+    it.each([
+      "Vol. 1: Includes Volume 01; Paperback",
+      "Vol. 1: Includes Volumes 1, 1.0",
+      "Vol. 1: Includes Volumes 1 (and Volume 01)",
+      "Vol. 1: Includes Volume 1 (Paperback); An unexpected adventure",
+      "Vol. 1: Includes Volumes 1, 01 and Volume I",
+      "Vol. 1 (Paperback 1)",
+      "Vol. 1 (Paperback Edition 1)",
+      "Vol. 1: The Digital Journey",
+      "Vol. 1: Includes Volume 1; An unexpected adventure",
+      "Vol. 1: Hardcover dreams",
+      "Vol. 1: Includes Volumes 1 ((and 01))",
+      "Vol. 1: Includes Volumes 1 (Paperback II) and 1.0",
+      "Vol. 1: Includes Volumes 1 (Paperback; Softcover) and Volume I",
+      "Vol. 1 (Paperback iv)",
+      "Vol. 1 (Paperback GN unknown)",
+      "Vol. 1: Includes Volume 1 (Paperback (GN II)); Digital adventures",
+    ])("keeps equal contents, equal numbered formats and prose %s", async (subtitle) => {
+      await accepted(await setup(existing, source("Vagabond, Vol. 1", subtitle)), existing);
+    });
+  },
+);

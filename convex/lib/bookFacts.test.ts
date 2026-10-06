@@ -152,3 +152,52 @@ it("retains known format before an unreadable marked contents clause", () => {
   expect(facts.bindings).toEqual(["hardcover"]);
   expect(facts.unreadable.length).toBeGreaterThan(0);
 });
+
+describe("connected contents completion and technical format payloads", () => {
+  it.each(["(", "{", "(("])("keeps components across opening %s", (open) => {
+    const close = open === "{" ? "}" : open === "((" ? "))" : ")";
+    for (const connector of ["and", "&", "+", "/", "through", "or"]) {
+      const known = bookFacts(`Includes Volumes 1 ${open}${connector} 2${close}`);
+      expect(known.labels).toContain("2");
+      const uncertain = bookFacts(`Includes Volumes 1 ${open}${connector} unresolved${close}`);
+      expect(uncertain.unreadable.length).toBeGreaterThan(0);
+    }
+  });
+  it.each([
+    "II",
+    "iv",
+    "IX",
+    "XXI",
+    "L",
+    "IIII",
+    "GN unknown",
+    "GN ?",
+    "#unavailable",
+    "GN (unknown)",
+  ])("retains technical formats without using payload %s as canonical contents", (payload) => {
+    const facts = bookFacts(`Paperback ${payload}; Hardback ${payload}; eBook ${payload}`);
+    expect(facts.bindings).toEqual(["paperback", "hardcover"]);
+    expect(facts.digital).toBe(true);
+    expect(facts.labels).toEqual([]);
+  });
+  it.each([" ", "\t", "\n", "\u00a0"])(
+    "preserves annotation scope through boundary %j",
+    (space) => {
+      const clause = `Includes Volumes 1${space}((Paperback${space};${space}Softcover))${space}and${space}2`;
+      expect(bookFacts(clause)).toMatchObject({
+        labels: ["1", "2"],
+        bindings: ["paperback", "paperback"],
+        unreadable: [],
+      });
+      expect(bookFacts(clause.replace(/2$/, "unknown")).unreadable.length).toBeGreaterThan(0);
+    },
+  );
+  it("allows a genuinely separate prose clause to end contents scope", () => {
+    expect(bookFacts("Includes Volume 1 (Paperback); Digital adventures")).toMatchObject({
+      labels: ["1"],
+      bindings: ["paperback"],
+      digital: false,
+      unreadable: [],
+    });
+  });
+});

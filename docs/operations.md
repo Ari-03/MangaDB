@@ -357,7 +357,11 @@ order:
   Distinct contents, conflicting labels and explicit unreadable Volume
   statements refuse on the single-Volume path. Once an explicit contents list
   begins, an unresolved continuation stays unreadable; a parsed prefix cannot
-  certify one complete Volume. Ranges remain packaging even with equal endpoints;
+  certify one complete Volume. Opening, closing and nested wrappers retain that
+  scope, as do intervening format annotations. Their payload numbers describe
+  format, not canonical contents. A connected component after the annotation
+  must still be read or refused as incomplete. A separate prose clause may end
+  the contents scope; punctuation inside an annotation does not. Ranges remain packaging even with equal endpoints;
   repeated normalized equal list labels remain equal. Technical clauses start at
   punctuation/wrappers or another designation; ordinary display prose and
   words inside the authentic work name are not format facts. Subtitle prose
@@ -376,7 +380,8 @@ order:
   Download/Edition/Version, ebook and Kindle, refuse against a physical
   target. Insignificant whitespace before clause punctuation or wrappers cannot
   erase a known Binding or Digital fact. Numbered format payloads retain the
-  format without certifying a Volume; a following explicit Volume marker remains
+  format without certifying a Volume, including Roman numerals and unreadable
+  explicit technical designators; a following explicit Volume marker remains
   independent evidence. Decision normalization does not rewrite saved raw source
   fields. Conflicting known target Bindings also refuse. A Binding either
   side leaves unstated is left to the person deciding. Anything that reads as
