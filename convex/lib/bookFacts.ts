@@ -64,18 +64,73 @@ const EXPLICIT_VOLUME = new RegExp(
   "i",
 );
 const BINDING_CLAUSE =
-  /^(?:(?:trade|mature)\s+)?(?:hard\s?(?:cover|back|bound)|paper\s?back|soft\s?(?:cover|back|bound))(?:\s+(?:edition|version|binding|format))?\b/i;
+  /^(?:(?:trade|mature)\s+)?(?:hard\s?(?:cover|back|bound)|paper\s?back|soft\s?(?:cover|back|bound))(?:\s+(?:edition|version|binding|format))?(?=\b|\d)/i;
 const DIGITAL_CLAUSE =
-  /^(?:e-?books?|kindle|electronic|digital)(?:\s+(?:edition|version|download|format))?\b/i;
+  /^(?:e-?books?|kindle|electronic|digital)(?:\s+(?:edition|version|download|format))?(?=\b|\d)/i;
 const SEPARATOR = /^[\s.,:;()[\]{}/–—-]*(?:(?:and|or)\s+)?/i;
-const CLAUSE_END = /^(?:$|[.,;:()[\]{}/]|\s+[-–—]\s+|\s+(?:and|or)\b)/i;
+// Boundary whitespace has no lexical meaning. All token gates use the same
+// trimmed tail, including numbered edition/designator payloads.
+const CLAUSE_END = /^(?:$|[.,;:()[\]{}/]|[-–—]\s+|(?:and|or)\b)/i;
+const NUMBERED_FORMAT = /^(?:(?:GN|vol(?:ume)?s?\.?|book|part)\s*)?#?\d+(?:\.\d+)?(?!\w)/i;
+const LIST_CONTINUATION = /^(?:[-–—&,/+]|(?:and|or|to|through)\b)/i;
+const MARKED_CONTENT = new RegExp(
+  `(?:\\b${CONTENTS}?${MARKER}|#)\\s*#?${LABEL}(?!\\w|\\.\\d)`,
+  "gi",
+);
+
+/** Read only a marked statement; its consumed prefix cannot certify its tail. */
+function volumeStatement(text: string) {
+  const volume = VOLUME.exec(text);
+  if (!volume) return null;
+  const stated = [volumeLabel(volume[2]!)];
+  let consumed = volume[0].length;
+  let range = false;
+  let item = LIST_ITEM.exec(text.slice(consumed));
+  while (item) {
+    range ||= /^\s*(?:[-–—]|(?:to|through)\b)/i.test(item[0]);
+    stated.push(volumeLabel(item[1]!));
+    consumed += item[0].length;
+    item = LIST_ITEM.exec(text.slice(consumed));
+  }
+  return {
+    stated,
+    consumed,
+    range,
+    list: volume[1] !== undefined || /^(?:vol(?:ume)?s\.?)/i.test(volume[0]) || stated.length > 1,
+  };
+}
+
+/** The same lexical completion rule applies to Binding and Digital. */
+function formatStatement(text: string) {
+  const binding = BINDING_CLAUSE.exec(text);
+  const token = binding ?? DIGITAL_CLAUSE.exec(text);
+  if (!token) return null;
+  const tail = text.slice(token[0].length);
+  const next = tail.replace(SEPARATOR, "");
+  if (
+    !CLAUSE_END.test(tail.trimStart()) &&
+    !NUMBERED_FORMAT.test(next) &&
+    !EXPLICIT_VOLUME.test(next) &&
+    !BINDING_CLAUSE.test(next) &&
+    !DIGITAL_CLAUSE.test(next)
+  )
+    return null;
+  // A marked Volume remains an independent content fact. Bare numbers and
+  // ANN GN payloads can describe the format without certifying any Volume.
+  const payload = VOLUME.test(next) ? null : NUMBERED_FORMAT.exec(next);
+  return { binding, next: payload ? next.slice(payload[0].length).replace(SEPARATOR, "") : next };
+}
+
+function technicalStart(text: string) {
+  return EXPLICIT_VOLUME.test(text) || formatStatement(text) !== null;
+}
 
 /**
  * Collect each explicit clause, rather than letting the first designation
  * mask later contents. Clause starts are field start, punctuation/wrappers,
  * and another technical statement immediately after a Volume or format.
- * Unknown prose after a statement stays prose; an explicit unreadable Volume
- * statement is uncertainty, not silence. This is not a work-title grammar.
+ * Unknown prose outside a contents clause stays prose. An incomplete explicit
+ * contents list is uncertainty, not silence. This is not a work-title grammar.
  */
 export function bookFacts(value: unknown, names: readonly string[] = []) {
   const labels: string[] = [];
@@ -84,6 +139,19 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
   const unreadable: string[] = [];
   let digital = false;
   if (typeof value !== "string") return { labels, bindings, packaging, unreadable, digital };
+  const keepVolume = (statement: NonNullable<ReturnType<typeof volumeStatement>>, text: string) => {
+    if (statement.range || new Set(statement.stated).size > 1)
+      packaging.push(text.slice(0, statement.consumed));
+    else labels.push(...statement.stated);
+  };
+  const keepMarkedContents = (tail: string) => {
+    const continuation = tail.split(/[;:()[\]{}]|\.(?=\s|$)/, 1)[0]!;
+    for (const marker of continuation.matchAll(MARKED_CONTENT)) {
+      const marked = continuation.slice(marker.index);
+      const statement = volumeStatement(marked);
+      if (statement) keepVolume(statement, marked);
+    }
+  };
   const text = outsideWork(decodeEntities(value), names);
   let consumedThrough = 0;
   const starts = Array.from(
@@ -96,51 +164,49 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
     // Each iteration consumes a nonempty statement, so even malformed input
     // cannot loop. Lists are read before commas become separate clauses.
     while (rest !== "") {
-      const offset = text.length - rest.length;
-      const volume = VOLUME.exec(rest);
+      const volume = volumeStatement(rest);
       if (volume) {
-        const stated = [volumeLabel(volume[2]!)];
-        let consumed = volume[0].length;
-        let item = LIST_ITEM.exec(rest.slice(consumed));
-        while (item) {
-          stated.push(volumeLabel(item[1]!));
-          consumed += item[0].length;
-          item = LIST_ITEM.exec(rest.slice(consumed));
-        }
-        if (new Set(stated).size > 1) packaging.push(rest.slice(0, consumed));
-        else labels.push(...stated);
-        const tail = rest.slice(consumed);
-        if (/^\s*(?:[-–—&/]\s*(?:\d|\?|$)|,\s*\d|\b(?:and|to|through)\s+\d|\+)/i.test(tail)) {
+        keepVolume(volume, rest);
+        const tail = rest.slice(volume.consumed);
+        // Closing a wrapper cannot erase a following list connector. The
+        // next component may itself be wrapped or may remain unresolved.
+        const boundary = tail.trimStart().replace(/^[)\]}\s]+/, "");
+        const next = tail.replace(SEPARATOR, "");
+        // A list connector commits the contents clause to another component.
+        // Never discard an unresolved component as display prose. A clearly
+        // marked next statement can instead begin a new technical clause.
+        const incompleteList =
+          volume.list &&
+          !technicalStart(next) &&
+          (LIST_CONTINUATION.test(boundary) || !CLAUSE_END.test(boundary));
+        if (
+          incompleteList ||
+          /^\s*(?:[-–—&/]\s*(?:\d|\?|$)|,\s*\d|\b(?:and|to|through)\s+\d|\+)/i.test(tail)
+        ) {
           unreadable.push(`the Volume statement "${rest}" has unreadable contents`);
+          // Preserve later marked facts inside this incomplete contents clause,
+          // even when an unreadable additive component precedes them. Ordinary
+          // prose in a separate clause remains outside this scoped scan.
+          keepMarkedContents(tail);
         }
-        rest = tail.replace(SEPARATOR, "");
+        rest = next;
         consumedThrough = text.length - rest.length;
         continue;
       }
       if (EXPLICIT_VOLUME.test(rest)) {
         unreadable.push(`the explicit Volume statement "${rest}" cannot be read`);
+        keepMarkedContents(rest);
         break;
       }
-      const binding = BINDING_CLAUSE.exec(rest);
-      const format = DIGITAL_CLAUSE.exec(rest);
-      const token = binding ?? format;
-      if (token) {
-        const tail = rest.slice(token[0].length);
-        const next = tail.replace(SEPARATOR, "");
-        // "Digital adventures" and "Hardcover dreams" are prose, while
-        // "Hardcover / Paperback" and "Digital, Vol. 1" state known facts.
-        if (
-          CLAUSE_END.test(tail) ||
-          VOLUME.test(next) ||
-          BINDING_CLAUSE.test(next) ||
-          DIGITAL_CLAUSE.test(next)
-        ) {
-          if (binding) bindings.push(...bindingFacts(binding[0]));
-          else digital = true;
-          rest = next;
-          consumedThrough = offset + token[0].length + tail.length - next.length;
-          continue;
-        }
+      // "Digital adventures" and "Hardcover dreams" stay prose. Explicit
+      // wrappers, clause boundaries and numbered format payloads retain facts.
+      const format = formatStatement(rest);
+      if (format) {
+        if (format.binding) bindings.push(...bindingFacts(format.binding[0]));
+        else digital = true;
+        rest = format.next;
+        consumedThrough = text.length - rest.length;
+        continue;
       }
       const clause = rest.split(/[,;:()[\]{}]|\.(?=\s|$)|\s[-–—]\s/, 1)[0]!;
       const parsed = parseBookTitle(`Book, ${clause}`);

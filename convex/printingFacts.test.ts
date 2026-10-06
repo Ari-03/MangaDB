@@ -1,4 +1,4 @@
-// C67-R4-01..03: actual OL input -> registered import -> registered decision.
+// C67-R4-01..03 and C67-R5-01..03: actual OL input -> registered import -> registered decision.
 // Main title, subtitle and stored fields are independent source statements.
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
@@ -64,7 +64,7 @@ async function setup(
   existing: boolean,
   raw: ReturnType<typeof source>,
   binding: string | undefined = "paperback",
-  held = 1,
+  held: number | null = 1,
   workTitle = "Vagabond",
 ) {
   const t = makeT({ transactionLimits: true });
@@ -98,7 +98,7 @@ async function setup(
     });
   }
   const before = await state(t);
-  expect(before.holds).toHaveLength(held);
+  if (held !== null) expect(before.holds).toHaveLength(held);
   expect(before.observations.find((row) => row._id === observation._id)).toMatchObject({
     snapshot: Object.fromEntries(
       Object.entries(snapshot).filter(([, value]) => value !== undefined),
@@ -192,6 +192,77 @@ const witnesses = [
   { title: "Vagabond, Vol. 1", subtitle: "Digital Download" },
 ];
 
+// Exactly 21 raw R5 routes, exercised against both genuine row branches.
+const round5 = [
+  ...[
+    "Vol. 1: Includes Volumes 1, ?, 2",
+    "Vol. 1: Includes Volumes 1, ?",
+    "Vol. 1: Includes Volumes 1, unknown",
+    "Vol. 1: Includes Volumes 1 and unknown",
+    "Vol. 1: Includes Volume 1, plus Volume 2",
+    "Vol. 1: Includes Volume 1 and also Volume 2",
+    "Vol. 1 (Hardback )",
+    "Vol. 1 (Hardbound )",
+    "Vol. 1 (Hardcover Edition )",
+    "Vol. 1: Hardback .",
+    "Vol. 1 (Paperback ; Hardcover )",
+    "Vol. 1 (Digital )",
+    "Vol. 1 (Digital Download )",
+    "Vol. 1: Digital Download .",
+    "Vol. 1 (eBook 1)",
+    "Vol. 1 (Kindle Edition 1)",
+    "Vol. 1: eBook (GN 1)",
+  ].map((subtitle) => ({ title: "Vagabond, Vol. 1", subtitle })),
+  ...["Vol. 1: Includes Volumes 1, ?, 2", "Vol. 1: Includes Volumes 1, ?"].flatMap((clause) => [
+    { title: "Vagabond", subtitle: clause },
+    { title: `Vagabond, ${clause}`, subtitle: undefined },
+  ]),
+];
+
+// Change whitespace at every lexical boundary, without changing any work name.
+const boundarySpaces = [" ", "\t", "\n", "\u00a0"];
+const boundaryClauses = boundarySpaces.flatMap((space) => [
+  `Vol. 1${space}(${space}Hardback${space})`,
+  `Vol. 1${space}[${space}Hardbound${space}]`,
+  `Vol. 1${space}(${space}Hardcover Edition${space})${space}.`,
+  `Vol. 1${space}:${space}Hardback${space}.`,
+  `Vol. 1${space}(${space}Paperback${space};${space}Hardcover${space})`,
+  `Vol. 1${space}(${space}Digital${space})`,
+  `Vol. 1${space}(${space}Digital Download${space})`,
+  `Vol. 1${space}:${space}Digital Download${space}.`,
+  `Vol. 1${space}(${space}eBook${space}1${space})`,
+  `Vol. 1${space}(${space}Kindle Edition${space}1${space})`,
+  `Vol. 1${space}:${space}eBook${space}(${space}GN${space}1${space})`,
+  `Vol. 1${space}:${space}Includes Volumes 1${space},${space}?${space},${space}2`,
+]);
+
+const incompleteContents = [
+  "Includes Volumes 1, unavailable",
+  "Collects Volumes 1 and undecided",
+  "Contains Volumes 1 or unspecified",
+  "Includes Volumes 1,",
+  "Collects Volume 1 plus Volume 2",
+  "Contains Volume 1 and additionally Volume 2",
+  "Includes Volume 1, ?, Contains Volume 2",
+  "Includes Volume 1, unresolved (Vol. 2)",
+  "Vol. 1 (Includes Volumes 1, [?, Volume 2])",
+  "Contains Volume 2; Includes Volume 1, unspecified",
+  "Includes Volumes 1-1",
+  "Includes Volumes 1--2",
+  "Includes Volumes 1-0",
+  "Includes Volumes 1-1.5",
+  "Includes Volumes 1, 3",
+  "Includes Volumes 1, 01, unresolved",
+  "Includes Volumes 1, Paperback dreams",
+  "Includes Volumes 1, Digital adventures",
+  "Vol. 1 (Paperback Volume 2)",
+  "Includes Volumes unknown and Volume 2",
+  "Vol. 1: (Includes Volume 1) and (unknown)",
+  "Vol. 1: ((Collects Volume 1)) , unspecified",
+  "Vol. 1 (Hardback Volumes unknown)",
+  "Vol. 1 (Paperback Includes Volumes unknown)",
+];
+
 const conflicts = [
   "Vol. 1; Collects Volumes 1 and 2",
   "Contains Vols. 1, 2: Vol. 1",
@@ -262,6 +333,50 @@ describe.each([false, true])("all explicit source facts, existing row %s", (exis
       );
     },
   );
+  it.each(round5)("freezes actual R5 witness %j", async ({ title, subtitle }) => {
+    await refused(
+      await setup(existing, source(title, subtitle)),
+      /Volume|packaging|hardcover|paperback|digital/i,
+    );
+  });
+  it.each(
+    [...boundaryClauses, ...incompleteContents].flatMap((clause) => [
+      { route: "retained", title: "Vagabond, Vol. 1", subtitle: clause },
+      { route: "plain", title: "Vagabond", subtitle: clause },
+      { route: "main", title: `Vagabond, ${clause}`, subtitle: undefined },
+    ]),
+  )("freezes $route boundary $title + $subtitle", async ({ route, title, subtitle }) => {
+    const fixture = await setup(
+      existing,
+      source(title, subtitle),
+      "paperback",
+      route === "retained" ? 1 : null,
+    );
+    if (fixture.snapshot.subtitle !== undefined) expect(fixture.snapshot.subtitle).toBe(subtitle);
+    await refused(fixture, /Volume|packaging|hardcover|paperback|digital|not held/i);
+  });
+  it.each(
+    boundarySpaces.flatMap((space) => [
+      `Vol. 1${space}(${space}Paperback${space};${space}Softcover${space})`,
+      `Vol. 1${space}:${space}Collects Volume 01${space};${space}Vol. I${space}.`,
+      `Vol. 1${space}:${space}Includes Volumes 1${space},${space}01${space}and${space}Volume I`,
+      `Vol. 1${space}:${space}Something Sinister`,
+    ]),
+  )("keeps matching facts and prose across boundary %s", async (subtitle) => {
+    await accepted(await setup(existing, source("Vagabond, Vol. 1", subtitle)), existing);
+  });
+  it.each([
+    "Vol. 1 (eBook1)",
+    "Vol. 1 (Kindle Edition1)",
+    "Vol. 1: Digital GN 1",
+    "Vol. 1 (Hardback 1)",
+    "Vol. 1 (Paperback 1 Hardcover 2)",
+  ])("retains a numbered technical format %s", async (subtitle) => {
+    await refused(
+      await setup(existing, source("Vagabond, Vol. 1", subtitle)),
+      /digital|hardcover/i,
+    );
+  });
   it.each(conflicts)("retained subtitle refuses %s", async (subtitle) => {
     await refused(
       await setup(existing, source("Vagabond, Vol. 1", subtitle)),

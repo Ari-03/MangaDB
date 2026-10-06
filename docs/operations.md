@@ -355,7 +355,10 @@ order:
   reads later technical clauses in joined or main titles, including
   includes/collects/contains statements and repeated Volume designations.
   Distinct contents, conflicting labels and explicit unreadable Volume
-  statements refuse on the single-Volume path. Technical clauses start at
+  statements refuse on the single-Volume path. Once an explicit contents list
+  begins, an unresolved continuation stays unreadable; a parsed prefix cannot
+  certify one complete Volume. Ranges remain packaging even with equal endpoints;
+  repeated normalized equal list labels remain equal. Technical clauses start at
   punctuation/wrappers or another designation; ordinary display prose and
   words inside the authentic work name are not format facts. Subtitle prose
   alone does not change work identity; a joined work name stays in the producer's
@@ -371,7 +374,11 @@ order:
   field or clause. Retained raw physical-format text is checked beside its
   normalized Binding. Explicit digital format clauses, including Digital
   Download/Edition/Version, ebook and Kindle, refuse against a physical
-  target. Conflicting known target Bindings also refuse. A Binding either
+  target. Insignificant whitespace before clause punctuation or wrappers cannot
+  erase a known Binding or Digital fact. Numbered format payloads retain the
+  format without certifying a Volume; a following explicit Volume marker remains
+  independent evidence. Decision normalization does not rewrite saved raw source
+  fields. Conflicting known target Bindings also refuse. A Binding either
   side leaves unstated is left to the person deciding. Anything that reads as
   packaging is refused for now: a multi-Volume designator or stored range,
   a line name or packaging word in the title, or any bracketed part ("[1st
