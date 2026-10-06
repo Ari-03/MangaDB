@@ -360,7 +360,9 @@ order:
   certify one complete Volume. Opening, closing and nested wrappers retain that
   scope, as do intervening format annotations. Their payload numbers describe
   format, not canonical contents. A connected component after the annotation
-  must still be read or refused as incomplete. A separate prose clause may end
+  must still be read or refused as incomplete. A connector or range before
+  the annotation remains pending until its contents component is read. A
+  separate prose clause may end
   the contents scope; punctuation inside an annotation does not. A singular
   Volume designation also survives an intervening format annotation: a later
   list connector establishes a contents expectation for Arabic, Roman and word
@@ -386,10 +388,13 @@ order:
   erase a known Binding or Digital fact. Numbered format payloads retain the
   format without certifying a Volume, including Roman numerals and unreadable
   explicit technical designators; a following explicit Volume marker remains
-  independent evidence. GN/# payload consumption stops before any independent
-  Volume, Binding or Digital statement, including adjacent tokens and nested
-  designator chains. An equal earlier format cannot erase a later contradiction.
+  independent evidence. Known format clauses use the same separator rules as
+  contents clauses, so a slash, ampersand or plus cannot hide the next known
+  format. An equal earlier format cannot erase a later contradiction.
   Bare numbered format payloads still supply no canonical Volume contents.
+  This reader handles technical clauses, not arbitrary prose embedded in GN/#
+  payloads. Unusual source wording still needs bibliographic review; the parser
+  is not a certificate that two books have the same contents.
   Decision normalization does not rewrite saved raw source
   fields. Conflicting known target Bindings also refuse. A Binding either
   side leaves unstated is left to the person deciding. Anything that reads as

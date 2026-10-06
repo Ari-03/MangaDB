@@ -68,9 +68,6 @@ const BINDING_CLAUSE =
 const DIGITAL_CLAUSE =
   /^(?:e-?books?|kindle|electronic|digital)(?:\s*(?:edition|version|download|format))?(?=\b|\d)/i;
 const SEPARATOR = /^[\s.,:;()[\]{}/–—-]*(?:(?:and|or)\s+)?/i;
-// Boundary whitespace has no lexical meaning. All token gates use the same
-// trimmed tail, including numbered edition/designator payloads.
-const CLAUSE_END = /^(?:$|[.,;:()[\]{}/]|[-–—]\s+|(?:and|or)\b)/i;
 // Format numbers are designators, not contents. Explicit technical markers
 // retain format even when their payload is unreadable; narrative words do not.
 const FORMAT_NUMBER = /^(?:\d+(?:\.\d+)?|[IVXLCDM]+)(?!\w)/i;
@@ -194,8 +191,9 @@ function formatPrefix(text: string) {
   const next = tail.slice(prefix);
   const designator = formatDesignator(next);
   const number = FORMAT_NUMBER.exec(next);
-  if (!CLAUSE_END.test(tail.trimStart()) && !number && !designator && !technicalStatement(next))
-    return null;
+  const boundary = clauseBoundary(tail);
+  const complete = tail.trim() === "" || boundary.next !== tail.trimStart();
+  if (!complete && !number && !designator && !technicalStatement(next)) return null;
   return { binding, tail, prefix, next, designator, number };
 }
 
@@ -266,17 +264,23 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
     let volumeContext = false;
     let expectedComponent = false;
     let rangeComponent = false;
-    const advance = (tail: string, scope: boolean) => {
+    const advance = (tail: string, scope: boolean, componentConsumed = false) => {
       depth = wrapperDepth(rest.slice(0, rest.length - tail.length), depth);
       const boundary = clauseBoundary(tail, depth);
       depth = boundary.depth;
       contentsScope = scope && !boundary.separate;
       volumeContext &&= !boundary.separate;
-      // Remember a singular Volume through format annotations. A connector
-      // creates a component expectation using the same grammar as any list.
-      expectedComponent = volumeContext && boundary.connected;
+      // A comma may introduce a separate format fact ("Vol. 1, Paperback").
+      // Within contents or an annotation, formats cannot settle a pending item.
+      const separateFormat =
+        !scope && !boundary.range && boundary.depth === 0 && formatPrefix(boundary.next) !== null;
+      expectedComponent =
+        volumeContext &&
+        !boundary.separate &&
+        ((!componentConsumed && expectedComponent) || (boundary.connected && !separateFormat));
       contentsScope ||= expectedComponent;
-      rangeComponent = expectedComponent && boundary.range;
+      rangeComponent =
+        expectedComponent && ((!componentConsumed && rangeComponent) || boundary.range);
       rest = boundary.next;
       consumedThrough = text.length - rest.length;
       if (expectedComponent && rest === "")
@@ -291,14 +295,14 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
         if (rangeComponent) packaging.push(rest.slice(0, volume.consumed));
         const tail = rest.slice(volume.consumed);
         volumeContext = true;
-        advance(tail, contentsScope || volume.list);
+        advance(tail, contentsScope || volume.list, true);
         continue;
       }
       const component = expectedComponent ? CONTENT_LABEL.exec(rest) : null;
       if (component) {
         labels.push(volumeLabel(component[1]!));
         if (rangeComponent) packaging.push(component[0]);
-        advance(rest.slice(component[0].length), true);
+        advance(rest.slice(component[0].length), true, true);
         continue;
       }
       if (EXPLICIT_VOLUME.test(rest)) {
