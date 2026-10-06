@@ -225,9 +225,10 @@ export type Contents = Awaited<ReturnType<typeof releaseContents>>;
 /** Own-ISBN linking may compare complete packaged contents. A Line ID alone supplies no contents. */
 export async function contentMatch(
   ctx: QueryCtx,
-  observation: Doc<"sourceObservations">,
+  state: Awaited<ReturnType<typeof heldState>>,
   target: Contents,
 ) {
+  const observation = state.observation;
   const s = observation.snapshot as {
     title?: string;
     format?: string;
@@ -244,8 +245,9 @@ export async function contentMatch(
   const scope = lineOutOfScope(line, names);
   if (scope) return refuse(scope);
   const segmented = readAnnLineTitle(line.title, { names });
-  if (segmented.kind === "ambiguous" || !names.some((name) => sameWorkTitle(name, segmented.work)))
-    return refuse("ANN work identity is unresolved.");
+  if (segmented.kind === "ambiguous") return refuse("ANN work identity is unresolved.");
+  const series = target.series.find((one) => sameWorkTitle(one.title, segmented.work));
+  if (!series) return refuse("ANN work identity is unresolved.");
   const packageFacts = packagingOf(line, names);
   if (
     !packageFacts ||
@@ -269,6 +271,9 @@ export async function contentMatch(
     target.contents.some((c, i) => !labelsEqual(c.volume.label ?? null, labels[i] ?? null))
   )
     return refuse("Complete ordered canonical contents disagree with ANN.");
+  // Packaging relaxes the printing-only single-Volume rule, while retaining
+  // the same source identity and physical-product checks as reviewed links.
+  await sourceContentsMatch(ctx, state, [target], series, false);
 }
 
 /** Pin free slots and sibling binding before a stored adapter can create anything. */

@@ -85,7 +85,7 @@ export const previewInternal = internalQuery({
             if (args.reviewed) await reviewedMatch(ctx, state, [target]);
             else {
               await publisherMatch(ctx, state.observation, target.publisher._id);
-              await contentMatch(ctx, state.observation, target);
+              await contentMatch(ctx, state, target);
             }
           } else {
             const bundle = state.bundle!;

@@ -1912,3 +1912,255 @@ it("R3 a genuinely unstated box range requires exact contents review without ove
     ).status,
   ).toBe("applied");
 });
+
+it.each(["heldBooks", "printings"] as const)(
+  "packaged Hardcover identity is enforced through %s and matching Hardcover still links",
+  async (route) => {
+    const t = makeT({ transactionLimits: true });
+    await admin(t);
+    const s = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, {
+        name: "Dark Horse Comics",
+        slug: "dark-horse",
+      });
+      const seriesId = await insertSeries(ctx, {
+        title: "H.P. Lovecraft's At the Mountains of Madness",
+      });
+      const editionLineId = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Deluxe Edition",
+      });
+      const editionId = await insertEdition(ctx, { publisherId, editionLineId });
+      for (let n = 1; n <= 2; n++) {
+        const volumeId = await insertVolume(ctx, { seriesId, label: String(n), position: n });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          extent: "complete",
+          order: n,
+        });
+      }
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: lovecraftRecord.isbn13,
+        format: "physical",
+        binding: "paperback",
+      });
+      await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "manga:21831",
+        recordRef: { type: "series", id: seriesId },
+        snapshot: lovecraftParent,
+      });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:49486",
+        snapshot: lovecraftRecord,
+      });
+      await ctx.db.insert("placementHolds", {
+        observationId,
+        sourceKey: "ann",
+        kind: "isbn",
+        seriesId,
+        heldAt: 10,
+      });
+      return { releaseId, observationId };
+    });
+    const args = {
+      observationId: s.observationId,
+      target: { type: "release" as const, id: s.releaseId },
+    };
+    if (route === "heldBooks") {
+      await refusedLink(t, args, /binding/i);
+    } else {
+      const before = await repairState(t);
+      const preview = await t.query(internal.printings.linkHeldStateInternal, s);
+      expect(preview.refusal).toMatch(/binding/i);
+      expect(preview.guard).not.toBeNull();
+      const result = await t.mutation(internal.printings.linkHeldInternal, {
+        ...s,
+        actor: "ari",
+        expected: preview.guard!,
+        reason,
+        evidenceUrls: [lovecraftRecord.url],
+      });
+      expect(result.status).toBe("refused");
+      expect(await repairState(t)).toEqual(before);
+    }
+    await t.run((ctx) => ctx.db.patch(s.releaseId, { binding: "hardcover" }));
+    if (route === "heldBooks") {
+      const preview = await t.query(internal.heldBooks.previewInternal, args);
+      expect(preview.refusal).toBeNull();
+      expect(
+        (
+          await t.mutation(internal.heldBooks.executeInternal, {
+            ...args,
+            actor: "ari",
+            operation: "link",
+            expected: preview.expected!,
+            reason,
+            evidenceUrls: [lovecraftRecord.url],
+          })
+        ).status,
+      ).toBe("applied");
+    } else {
+      const preview = await t.query(internal.printings.linkHeldStateInternal, s);
+      expect(preview.refusal).toBeNull();
+      expect(
+        (
+          await t.mutation(internal.printings.linkHeldInternal, {
+            ...s,
+            actor: "ari",
+            expected: preview.guard!,
+            reason,
+            evidenceUrls: [lovecraftRecord.url],
+          })
+        ).status,
+      ).toBe("linked");
+    }
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(s.observationId))?.recordRef).toEqual({
+        type: "release",
+        id: s.releaseId,
+      });
+      expect(await ctx.db.query("placementHolds").collect()).toHaveLength(0);
+      expect((await ctx.db.get(s.releaseId))?.binding).toBe("hardcover");
+      expect(await ctx.db.query("heldRepairLedger").collect()).toHaveLength(1);
+      expect(await ctx.db.query("proposals").collect()).toHaveLength(1);
+    });
+  },
+);
+
+// Full public ANN snapshots from the October 6 staging inventory.
+const lovecraftRecord = {
+  annId: "49486",
+  coverRange: {
+    from: "1",
+    to: "2",
+  },
+  date: {
+    day: 9.0,
+    month: 7.0,
+    year: 2024.0,
+  },
+  editionLineHint: true,
+  format: "physical",
+  isbn13: "9781506740690",
+  kind: "annRelease",
+  mangaId: "21831",
+  multi: true,
+  page: {
+    date: {
+      day: 9.0,
+      month: 7.0,
+      year: 2024.0,
+    },
+    distributor: "Dark Horse Comics",
+    distributorId: "26",
+    fetchedAt: 1790502902600.0,
+    isbn10: "1506740693",
+    isbn13: "9781506740690",
+    mangaId: "21831",
+    priceCents: 4999.0,
+    status: "ok",
+    title: "H.P. Lovecraft's At the Mountains of Madness Deluxe Edition [Hardcover]",
+    volume: "GN 1-2",
+  },
+  title: "H.P. Lovecraft's At the Mountains of Madness Deluxe Edition [Hardcover]",
+  url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=49486",
+};
+const lovecraftParent = {
+  altTitles: ["Kyōki no Sanmyaku ni te", "狂気の山脈にて"],
+  credits: [
+    {
+      name: "Gou Tanabe",
+      personId: "73966",
+      task: "Story & Art",
+    },
+  ],
+  id: "21831",
+  kind: "annManga",
+  releases: [
+    {
+      annId: "40804",
+      date: {
+        day: 9.0,
+        month: 7.0,
+        year: 2019.0,
+      },
+      editionLineHint: false,
+      format: "digital",
+      isbn13: "9781506710242",
+      label: "1",
+      multi: false,
+      title: "At the Mountains of Madness",
+    },
+    {
+      annId: "40805",
+      date: {
+        day: 3.0,
+        month: 12.0,
+        year: 2019.0,
+      },
+      editionLineHint: false,
+      format: "digital",
+      isbn13: "9781506710259",
+      label: "2",
+      multi: false,
+      title: "At the Mountains of Madness",
+    },
+    {
+      annId: "36043",
+      date: {
+        day: 25.0,
+        month: 6.0,
+        year: 2019.0,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781506710228",
+      label: "1",
+      multi: false,
+      title: "At the Mountains of Madness",
+    },
+    {
+      annId: "36044",
+      date: {
+        day: 3.0,
+        month: 12.0,
+        year: 2019.0,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781506710235",
+      label: "2",
+      multi: false,
+      title: "At the Mountains of Madness",
+    },
+    {
+      annId: "49486",
+      coverRange: {
+        from: "1",
+        to: "2",
+      },
+      date: {
+        day: 9.0,
+        month: 7.0,
+        year: 2024.0,
+      },
+      editionLineHint: true,
+      format: "physical",
+      isbn13: "9781506740690",
+      multi: true,
+      title: "H.P. Lovecraft's At the Mountains of Madness Deluxe Edition [Hardcover]",
+    },
+  ],
+  staff: ["Gou Tanabe"],
+  synopsis:
+    "At the Mountains of Madness is a journey into the core of Lovecraft’s mythos—the deep caverns and even deeper time of the inhospitable continent where the secret history of our planet is preserved—amidst the ruins of its first civilization, built by the alien Elder Things with the help of their bioengineered monstrosities, the shoggoths.",
+  title: "At the Mountains of Madness",
+  url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=21831",
+};
