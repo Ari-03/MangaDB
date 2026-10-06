@@ -9,6 +9,7 @@ import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
 import { bindingFacts, bookFacts } from "./bookFacts";
 import { labelsEqual, sameWorkTitle } from "./matching";
+import { type AnnWorkContext, declaredWorkNames } from "./declaredWork";
 import { holdOf } from "./observations";
 import type { OlEditionSnapshot } from "./openLibrary";
 import { findPublisherByName } from "./pipeline";
@@ -131,10 +132,10 @@ export async function sourceSeries(
   if (observation.sourceKey === "openlibrary") {
     const placement = await placeEdition(ctx, observation.snapshot as OlEditionSnapshot);
     if (placement.kind === "create")
-      return { series: await r.active(placement.series._id), placement };
+      return { series: await r.active(placement.series._id), placement, parent: null };
     if (placement.kind === "hold" && placement.hold.seriesId)
-      return { series: await r.active(placement.hold.seriesId), placement };
-    return { series: null, placement };
+      return { series: await r.active(placement.hold.seriesId), placement, parent: null };
+    return { series: null, placement, parent: null };
   }
   const key =
     observation.sourceKey === "ann" && s.mangaId
@@ -142,7 +143,7 @@ export async function sourceSeries(
       : observation.sourceKey === "kodansha" && s.seriesSlug
         ? `series:${s.seriesSlug}`
         : null;
-  if (!key) return { series: null, placement: null };
+  if (!key) return { series: null, placement: null, parent: null };
   const parents = await r.many(
     ctx.db
       .query("sourceObservations")
@@ -172,7 +173,26 @@ export async function sourceSeries(
     )
       return refuse("Kodansha parent identity disagrees.");
   }
-  return { series: await r.active(parent.recordRef.id), placement: null };
+  return { series: await r.active(parent.recordRef.id), placement: null, parent };
+}
+
+/** Names belong to the verified current survivor, never the ISBN holder or parent aliases. */
+function annWorkContext(
+  state: Awaited<ReturnType<typeof heldState>>,
+  series: Doc<"series">,
+): AnnWorkContext | undefined {
+  if (
+    state.observation.sourceKey !== "ann" ||
+    !state.source.parent ||
+    state.source.series?._id !== series._id
+  )
+    return undefined;
+  const title = (state.source.parent.snapshot as { title?: unknown }).title;
+  return {
+    seriesId: series._id,
+    names: declaredWorkNames(state.source.series),
+    parentTitle: typeof title === "string" ? title : null,
+  };
 }
 
 /** Complete ordered canonical content, including identity dependencies and current revisions. */
@@ -237,16 +257,22 @@ export async function contentMatch(
     imprint?: string;
   };
   if (s.format !== target.release.format) return refuse("Source and target formats disagree.");
-  const ordinary = await contentRefusal(ctx, observation, target.release, target.series);
+  const selected = target.series.find((one) => one._id === state.source.series?._id);
+  const context = selected ? annWorkContext(state, selected) : undefined;
+  const ordinary = await contentRefusal(ctx, observation, target.release, target.series, context);
   if (!ordinary) return;
   if (observation.sourceKey !== "ann") return refuse(ordinary);
   const line = observation.snapshot as AnnReleaseSnapshot;
-  const names = target.series.map((s) => s.title);
+  const names = context?.names ?? target.series.map((s) => s.title);
   const scope = lineOutOfScope(line, names);
   if (scope) return refuse(scope);
   const segmented = readAnnLineTitle(line.title, { names });
   if (segmented.kind === "ambiguous") return refuse("ANN work identity is unresolved.");
-  const series = target.series.find((one) => sameWorkTitle(one.title, segmented.work));
+  const series = context
+    ? names.some((name) => sameWorkTitle(name, segmented.work))
+      ? selected
+      : undefined
+    : target.series.find((one) => sameWorkTitle(one.title, segmented.work));
   if (!series) return refuse("ANN work identity is unresolved.");
   const packageFacts = packagingOf(line, names);
   if (
@@ -374,7 +400,7 @@ export async function heldState(
   );
   const source =
     terminal && !target
-      ? { series: null, placement: null }
+      ? { series: null, placement: null, parent: null }
       : await sourceSeries(ctx, observation, r);
   r.facts.push(source.placement);
   let replayBefore: Awaited<ReturnType<typeof replaySlots>> | null = null;
@@ -529,7 +555,8 @@ export async function bundleMatch(ctx: QueryCtx, state: Awaited<ReturnType<typeo
     return refuse(
       "Bundle source needs explicit contents evidence; this adapter has no complete stored contents reader.",
     );
-  const names = [state.source.series?.title ?? ""];
+  const context = state.source.series ? annWorkContext(state, state.source.series) : undefined;
+  const names = context?.names ?? [state.source.series?.title ?? ""];
   if (!annLinePackaged(s, names) || !/box\s*set/i.test(s.title))
     return refuse("Source does not identify a box set.");
   const scope = lineOutOfScope(s, names);
@@ -624,8 +651,10 @@ async function sourceContentsMatch(
   let position: string | null | undefined;
   if (state.observation.sourceKey === "ann") {
     const line = state.observation.snapshot as AnnReleaseSnapshot;
-    const names = routed ? [series.title, routed.sourceWork] : [series.title];
-    const reading = await readObservationBook(ctx, state.observation, [series], names);
+    const context = routed ? undefined : annWorkContext(state, series);
+    const workNames = context?.names ?? [series.title];
+    const names = routed ? [series.title, routed.sourceWork] : workNames;
+    const reading = await readObservationBook(ctx, state.observation, [series], names, context);
     const named = readAnnLineTitle(line.title, { names });
     // A reviewed Season/Box product can be titled beyond its parent work.
     // Exact title text plus selected IDs cannot excuse an unrelated known work.
@@ -636,11 +665,11 @@ async function sourceContentsMatch(
     const reviewedProduct =
       proof?.sourceTitle === line.title &&
       state.source.series?._id === series._id &&
-      annLinePackaged(line, names) &&
+      annLinePackaged(line, [series.title]) &&
       sameWorkTitle(productWork, series.title);
     if (
       named.kind === "ambiguous" ||
-      (!sameWorkTitle(reading.work, series.title) &&
+      (!workNames.some((name) => sameWorkTitle(reading.work, name)) &&
         !(
           routed &&
           (sameWorkTitle(reading.work, routed.rootWork) || samePartWork(reading.work, series.title))

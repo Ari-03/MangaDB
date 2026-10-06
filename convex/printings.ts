@@ -28,6 +28,7 @@ import { bindingFacts, bookFacts } from "./lib/bookFacts";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
 import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
 import { labelsEqual, sameWorkTitle } from "./lib/matching";
+import type { AnnWorkContext } from "./lib/declaredWork";
 import { canonicalRecord, mergeSurvivor } from "./lib/merges";
 import { holdOf } from "./lib/observations";
 import { findPublisherByName, toPartialDate } from "./lib/pipeline";
@@ -366,6 +367,7 @@ function readAnnLine(
   line: AnnReleaseSnapshot,
   entryName: string,
   names: readonly string[],
+  annContext?: AnnWorkContext,
 ): BookReading {
   const reading: BookReading = {
     work: line.title,
@@ -385,7 +387,7 @@ function readAnnLine(
     reading.packaging.push(`a stated range (${line.coverRange.from}-${line.coverRange.to})`);
   }
   if (line.coverageGapped) reading.packaging.push("a Volume list no range holds");
-  const named = packagingOf(line);
+  const named = packagingOf(line, annContext?.names);
   if (named?.line !== null && named?.line !== undefined)
     reading.packaging.push(`the line name ${named.line.name}`);
   const outOfScope = lineOutOfScope(line);
@@ -578,33 +580,43 @@ export function readTitledRecord(
   return reading;
 }
 
-/** The final source reading, independent of the printing-only one-Volume target rule. */
+/** The final source reading, independent of the printing-only one-Volume target rule.
+ * Held ANN callers supply the pinned parent and its verified canonical declarations.
+ * Other callers retain their existing primary-title context and parent lookup.
+ */
 export async function readObservationBook(
   ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
   series: Array<Doc<"series">>,
-  workTitles = series.map((one) => one.title),
+  workTitles: readonly string[] = series.map((one) => one.title),
+  annContext?: AnnWorkContext,
 ): Promise<BookReading> {
   const s = observation.snapshot as SnapshotFacts;
   const title = typeof s?.title === "string" ? s.title.trim() : "";
 
-  const seriesTitles = workTitles;
+  const seriesTitles =
+    observation.sourceKey === "ann" && annContext ? annContext.names : workTitles;
   const ownWork = (work: string) => seriesTitles.some((t) => sameWorkTitle(t, work));
 
   let reading: BookReading;
   if (observation.sourceKey === "ann" && s?.kind === "annRelease") {
     const line = observation.snapshot as AnnReleaseSnapshot;
-    const entry = await ctx.db
-      .query("sourceObservations")
-      .withIndex("by_source_record", (q) =>
-        q.eq("sourceKey", "ann").eq("sourceRecordId", `manga:${line.mangaId}`),
-      )
-      .unique();
-    const entryTitle = (entry?.snapshot as { title?: unknown } | undefined)?.title;
+    const entry = annContext
+      ? null
+      : await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_source_record", (q) =>
+            q.eq("sourceKey", "ann").eq("sourceRecordId", `manga:${line.mangaId}`),
+          )
+          .unique();
+    const entryTitle = annContext
+      ? annContext.parentTitle
+      : (entry?.snapshot as { title?: unknown } | undefined)?.title;
     reading = readAnnLine(
       line,
       nonEmpty(entryTitle) && ownWork(entryTitle) ? entryTitle : "",
       seriesTitles,
+      annContext,
     );
   } else {
     reading = readTitledRecord(observation.sourceKey, title, s, seriesTitles);
@@ -641,13 +653,18 @@ export async function contentRefusal(
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
   series: Array<Doc<"series">>,
+  annContext?: AnnWorkContext,
 ): Promise<string | null> {
   const title = (observation.snapshot as SnapshotFacts)?.title;
   if (typeof title !== "string" || title.trim() === "")
     return "The record gives no title to read the book from.";
-  const seriesTitles = series.map((one) => one.title);
+  const context =
+    observation.sourceKey === "ann" && series.some((one) => one._id === annContext?.seriesId)
+      ? annContext
+      : undefined;
+  const seriesTitles = context?.names ?? series.map((one) => one.title);
   const ownWork = (work: string) => seriesTitles.some((t) => sameWorkTitle(t, work));
-  const reading = await readObservationBook(ctx, observation, series);
+  const reading = await readObservationBook(ctx, observation, series, seriesTitles, context);
   if (reading.scope.length > 0) {
     return `The record is outside the catalog: ${[...new Set(reading.scope)].join("; ")}.`;
   }
@@ -700,7 +717,8 @@ export async function contentRefusal(
     !("doc" in volumeSeries) ||
     volumeSeries.doc.status !== "active" ||
     volumeSeries.doc.locked ||
-    !series.some((one) => one._id === volumeSeries.doc._id)
+    !series.some((one) => one._id === volumeSeries.doc._id) ||
+    (context && context.seriesId !== volumeSeries.doc._id)
   ) {
     return "The Release's Volume is not a Volume of the Release's own Series.";
   }

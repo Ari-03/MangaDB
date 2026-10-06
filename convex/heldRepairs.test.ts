@@ -18,6 +18,8 @@ import {
 } from "./test.factories";
 import { makeT, type TestT } from "./test.helpers";
 import { insertBook } from "./test.moderation";
+import { sailorMoon, cirque } from "./test.heldAliases";
+import { annContentFacts } from "./lib/ann";
 
 const reason = "Exact source/product and complete canonical contents reviewed.";
 const urls = ["https://www.animenewsnetwork.com/encyclopedia/releases.php?id=43552"];
@@ -115,6 +117,214 @@ const linkArgs = (s: Awaited<ReturnType<typeof dance>>) => ({
 });
 
 describe("guarded held-book workflows", () => {
+  it("links real Sailor Moon through its current declared alias and independent parent, with stale atomic refusal and restoration", async () => {
+    const t = makeT();
+    await admin(t);
+    const s = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: sailorMoon.source.page.distributor });
+      const seriesId = await insertSeries(ctx, sailorMoon.series);
+      const volumeId = await insertVolume(ctx, { seriesId, label: "6", position: 6 });
+      const editionLineId = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Paperback",
+      });
+      const book = await insertBook(ctx, {
+        seriesId,
+        publisherId,
+        volumeId,
+        edition: { editionLineId, linePosition: "6" },
+        release: { isbn13: sailorMoon.release.isbn13, binding: sailorMoon.release.binding },
+      });
+      const parentId = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "manga:1578",
+        snapshot: sailorMoon.parent,
+        recordRef: { type: "series", id: seriesId },
+      });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:19983",
+        snapshot: sailorMoon.source,
+        lastSeenAt: 1791147316483,
+      });
+      const holdId = await ctx.db.insert("placementHolds", {
+        observationId,
+        sourceKey: "ann",
+        kind: "isbn",
+        seriesId,
+        heldAt: 10,
+      });
+      return { ...book, seriesId, parentId, observationId, holdId };
+    });
+    const args = {
+      observationId: s.observationId,
+      target: { type: "release" as const, id: s.releaseId },
+    };
+    const evidenceUrls = [sailorMoon.source.url];
+    const preview = await t.query(internal.heldBooks.previewInternal, args);
+    const old = await t.query(internal.printings.linkHeldStateInternal, {
+      observationId: s.observationId,
+      releaseId: s.releaseId,
+    });
+    expect(preview.refusal).toBeNull();
+    expect(old.refusal).toBeNull();
+    await t.run((ctx) => ctx.db.patch(s.seriesId, { altTitles: [] }));
+    const withoutAlias = await repairState(t);
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toMatch(
+      /work identity/,
+    );
+    expect(
+      (
+        await t.mutation(internal.heldBooks.executeInternal, {
+          ...args,
+          actor: "ari",
+          operation: "link",
+          expected: preview.expected!,
+          reason,
+          evidenceUrls,
+        })
+      ).status,
+    ).toBe("refused");
+    expect(await repairState(t)).toEqual(withoutAlias);
+    await t.run((ctx) => ctx.db.patch(s.seriesId, { altTitles: sailorMoon.series.altTitles }));
+    const otherId = await t.run((ctx) => insertSeries(ctx, sailorMoon.series));
+    await t.run((ctx) => ctx.db.patch(s.parentId, { recordRef: { type: "series", id: otherId } }));
+    const wrongParent = await repairState(t);
+    expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toMatch(
+      /parent Series disagrees/,
+    );
+    expect(
+      (
+        await t.mutation(internal.printings.linkHeldInternal, {
+          actor: "ari",
+          observationId: s.observationId,
+          releaseId: s.releaseId,
+          expected: old.guard!,
+          reason,
+          evidenceUrls,
+        })
+      ).status,
+    ).toBe("refused");
+    expect(await repairState(t)).toEqual(wrongParent);
+    await t.run((ctx) =>
+      ctx.db.patch(s.parentId, { recordRef: { type: "series", id: s.seriesId } }),
+    );
+    const beforeLink = await t.run(async (ctx) => ({
+      observation: await ctx.db.get(s.observationId),
+      hold: await ctx.db.get(s.holdId),
+    }));
+    const fresh = await t.query(internal.heldBooks.previewInternal, args);
+    expect(fresh.refusal).toBeNull();
+    const linked = await t.mutation(internal.heldBooks.executeInternal, {
+      ...args,
+      actor: "ari",
+      operation: "link",
+      expected: fresh.expected!,
+      reason,
+      evidenceUrls,
+    });
+    expect(linked.status).toBe("applied");
+    const ledger = await t.run((ctx) => ctx.db.get(linked.ledgerId!));
+    expect(
+      (
+        await t.mutation(internal.heldBooks.restoreInternal, {
+          actor: "ari",
+          ledgerId: linked.ledgerId!,
+          expectedAfter: ledger!.after,
+          reason: "Restore alias workflow fixture.",
+        })
+      ).status,
+    ).toBe("applied");
+    await t.run(async (ctx) => {
+      const observation = await ctx.db.get(s.observationId);
+      const hold = await ctx.db.query("placementHolds").unique();
+      expect(observation).toEqual(beforeLink.observation);
+      const { _id, _creationTime, ...holdFacts } = hold!;
+      const { _id: originalId, _creationTime: originalTime, ...originalFacts } = beforeLink.hold!;
+      expect(holdFacts).toEqual(originalFacts);
+    });
+    const freshOld = await t.query(internal.printings.linkHeldStateInternal, {
+      observationId: s.observationId,
+      releaseId: s.releaseId,
+    });
+    expect(freshOld.refusal).toBeNull();
+    expect(
+      (
+        await t.mutation(internal.printings.linkHeldInternal, {
+          actor: "ari",
+          observationId: s.observationId,
+          releaseId: s.releaseId,
+          expected: freshOld.guard!,
+          reason,
+          evidenceUrls,
+        })
+      ).status,
+    ).toBe("linked");
+  });
+
+  it("keeps real Cirque du Freak omnibus held when its full source states no contents and the public fixture supplies no canonical coverage", async () => {
+    const t = makeT();
+    await admin(t);
+    const s = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: cirque.source.page.distributor });
+      const seriesId = await insertSeries(ctx, cirque.series);
+      const editionLineId = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Omnibus Edition",
+      });
+      // The supplied public record has no Edition/coverage snapshot. Do not invent its contents.
+      const editionId = await insertEdition(ctx, {
+        publisherId,
+        editionLineId,
+        linePosition: "5",
+        coverageUnmapped: true,
+      });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: cirque.release.isbn13,
+        binding: cirque.release.binding,
+      });
+      await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "manga:8436",
+        snapshot: cirque.parent,
+        recordRef: { type: "series", id: seriesId },
+      });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:57382",
+        snapshot: cirque.source,
+      });
+      await ctx.db.insert("placementHolds", {
+        observationId,
+        sourceKey: "ann",
+        kind: "isbn",
+        seriesId,
+        heldAt: 10,
+      });
+      return { releaseId, observationId, seriesId };
+    });
+    const facts = annContentFacts(cirque.source, [cirque.series.title, ...cirque.series.altTitles]);
+    expect(facts.title).toMatchObject({ work: "Cirque Du Freak" });
+    expect(facts.coverRange).toBeNull();
+    expect(facts.position).toBe("5");
+    const unselected = await t.query(internal.heldBooks.previewInternal, {
+      observationId: s.observationId,
+    });
+    expect(unselected.sourceSeriesId).toBe(s.seriesId);
+    expect(unselected.classification).toBe("needsDisposition");
+    await refusedLink(
+      t,
+      { observationId: s.observationId, target: { type: "release", id: s.releaseId } },
+      /contents are unmapped/,
+    );
+    expect((await t.run((ctx) => ctx.db.get(s.observationId)))?.snapshot).toEqual(cirque.source);
+  });
+
   it("refuses a draft that assigns the real box ISBN to a new Release and a Bundle together", async () => {
     const t = makeT();
     const s = await dance(t);
@@ -1129,6 +1339,9 @@ async function repairState(t: TestT) {
       "proposalVersions",
       "revisions",
       "heldRepairLedger",
+      "series",
+      "editionLines",
+      "publishers",
       "releases",
       "editions",
       "volumes",
