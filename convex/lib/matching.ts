@@ -181,6 +181,13 @@ export type MatchOutcome =
 // backbone entry) must still be found.
 const SEARCH_SCAN = 100;
 
+/**
+ * Series search-index hits for one title query. Importers read the top
+ * SEARCH_SCAN hits by relevance; a held-book guard passes a scan it can
+ * prove complete (lib/heldBooks.ts titleScan).
+ */
+export type TitleScan = (text: string) => Promise<Doc<"series">[]>;
+
 // Merge chains are short (a repair merges into a survivor, rarely twice);
 // the bound only guards against a corrupt cycle.
 const MAX_MERGE_HOPS = 8;
@@ -232,16 +239,19 @@ export async function isbnHolders(
 async function seriesByTitle(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
+  scan?: TitleScan,
 ): Promise<{ active: Doc<"series">[]; hidden: Doc<"series">[] }> {
   const wanted = normalizeTitle(seriesTitle);
   if (wanted === "") return { active: [], hidden: [] };
   const queries = new Set([decodeEntities(seriesTitle), wanted.replace(NOVEL_KEY, "")]);
   const seen = new Map<Id<"series">, Doc<"series">>();
   for (const text of queries) {
-    const hits = await ctx.db
-      .query("series")
-      .withSearchIndex("search_title", (q) => q.search("searchText", text))
-      .take(SEARCH_SCAN);
+    const hits = scan
+      ? await scan(text)
+      : await ctx.db
+          .query("series")
+          .withSearchIndex("search_title", (q) => q.search("searchText", text))
+          .take(SEARCH_SCAN);
     for (const hit of hits) seen.set(hit._id, hit);
   }
   const all = [...seen.values()];
@@ -283,8 +293,9 @@ async function seriesByTitle(
 export async function candidateSeries(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
+  scan?: TitleScan,
 ): Promise<Doc<"series">[]> {
-  return (await seriesByTitle(ctx, seriesTitle)).active;
+  return (await seriesByTitle(ctx, seriesTitle, scan)).active;
 }
 
 /**
@@ -295,8 +306,9 @@ export async function candidateSeries(
 export async function hiddenSeriesTitled(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
+  scan?: TitleScan,
 ): Promise<Doc<"series">[]> {
-  return (await seriesByTitle(ctx, seriesTitle)).hidden;
+  return (await seriesByTitle(ctx, seriesTitle, scan)).hidden;
 }
 
 /** What a source knows about a work beyond its title (ANN's staff and books). */

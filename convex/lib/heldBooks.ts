@@ -4,7 +4,7 @@ import {
   utf8Bytes,
   type ReviewedFormat,
 } from "./sourceFormat";
-import { resolveBaseSeries } from "./catalogTitle";
+import { type ProvisionalTitle, resolveBaseSeries } from "./catalogTitle";
 import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
@@ -15,7 +15,7 @@ import { annContentFacts, annLinePackaged, packagingOf, readAnnLineTitle } from 
 import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
 import { bindingFacts, bookFacts } from "./bookFacts";
-import { labelsEqual, sameWorkTitle } from "./matching";
+import { labelsEqual, sameWorkTitle, type TitleScan } from "./matching";
 import { type AnnWorkContext, declaredWorkNames } from "./declaredWork";
 import { holdOf } from "./observations";
 import type { OlEditionSnapshot } from "./openLibrary";
@@ -140,6 +140,61 @@ function guardedResolverContext(ctx: QueryCtx, r: Reader): QueryCtx {
   return { ...ctx, db: wrap(ctx.db) };
 }
 
+// Convex indexes at most 32 characters of a search term; a longer word proves nothing.
+const MAX_SEARCH_TERM_BYTES = 32;
+
+/**
+ * A complete by-title scan for resolveBaseSeries. The index matches any one
+ * word, so a whole title's hits are bounded only by its commonest word ("Made
+ * in Abyss" shares "in" with hundreds of Series). Each word is scanned alone
+ * instead (a lone term is prefix-matched: every Series holding the word), and
+ * the scans that finish within MAX_JOIN are unioned. A Series with the title
+ * holds its words (seriesByTitle asks with the source's spelling and the
+ * folded key), so it is read unless every word overflows, which refuses.
+ * Each word's hits, or its overflow, is a guard fact.
+ */
+function titleScan(ctx: QueryCtx, r: Reader): TitleScan {
+  const scanned = new Map<string, Doc<"series">[] | null>();
+  return async (text) => {
+    const words = new Set(
+      text
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}]+/u)
+        .filter(Boolean),
+    );
+    const hits = new Map<Id<"series">, Doc<"series">>();
+    let complete = words.size === 0;
+    for (const word of words) {
+      let found = scanned.get(word);
+      if (found === undefined) {
+        const rows =
+          utf8Bytes(word) > MAX_SEARCH_TERM_BYTES
+            ? null
+            : await takeWithin(
+                ctx.db
+                  .query("series")
+                  .withSearchIndex("search_title", (q) => q.search("searchText", word)),
+                MAX_JOIN + 1,
+                r.room,
+              );
+        found = rows && rows.length <= MAX_JOIN ? rows : null;
+        scanned.set(word, found);
+        r.facts.push({ word, found });
+      }
+      if (!found) continue;
+      complete = true;
+      for (const doc of found) hits.set(doc._id, doc);
+    }
+    if (!complete)
+      return refuse("Resolver candidates exceed the complete bounded scan; incomplete.");
+    return [...hits.values()];
+  };
+}
+
+/** resolveBaseSeries with every read a guard fact and every title lookup complete. */
+const guardedBaseSeries = (ctx: QueryCtx, r: Reader, parsed: ProvisionalTitle) =>
+  resolveBaseSeries(guardedResolverContext(ctx, r), parsed, titleScan(ctx, r));
+
 /** Scan one Series under the transaction budget, retaining only requested labels.
  * Long works do not become ineligible merely because unrelated Volumes exceed a join limit.
  */
@@ -182,7 +237,7 @@ export async function sourceSeries(
     const snapshot = projection.snapshot as OlEditionSnapshot;
     // The ISBN ladder can match a Release without resolving the source title.
     // Work provenance must come from the title's independent catalog resolution.
-    const work = await resolveBaseSeries(guardedResolverContext(ctx, r), snapshot);
+    const work = await guardedBaseSeries(ctx, r, snapshot);
     r.facts.push(work);
     const placement = await placeEdition(ctx, snapshot);
     return {
@@ -1036,7 +1091,7 @@ export async function sourceFormatState(
   if (snapshot.publishers.some((name) => REBINDER.test(name)))
     return refuse("Library rebinder metadata cannot establish the publisher's ebook.");
   await r.room();
-  const work = await resolveBaseSeries(resolutionCtx, snapshot);
+  const work = await guardedBaseSeries(ctx, r, snapshot);
   r.facts.push(work, scopeSources);
   await r.room();
   if (work.candidates.length !== 1 || !hold.seriesId)

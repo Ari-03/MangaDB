@@ -31,6 +31,7 @@ import {
 import { valueHash } from "./lib/values";
 import { sourceFormatEvidence, gachaPhysicalGraph } from "./test.sourceFormats";
 import { placementChanged, placementView } from "./placement";
+import { reader, sourceSeries } from "./lib/heldBooks";
 
 const reason = "Exact source/product and complete canonical contents reviewed.";
 const urls = ["https://www.animenewsnetwork.com/encyclopedia/releases.php?id=43552"];
@@ -3157,5 +3158,78 @@ describe("reviewed OL inferred physical-to-digital workflows", () => {
         },
       ),
     ).toMatch(/scope facts contradict/);
+  });
+});
+
+describe("complete by-title work provenance", () => {
+  // Real staging Open Library boxes. On 2026-10-06, 589 staging Series held the
+  // word "in" and 348 held "and", so neither whole title's search can finish
+  // within the held-book bound; their distinctive words hold 1 to 28 Series.
+  const abyssBox = {
+    format: "physical",
+    isbn13: "9798888433256",
+    key: "/books/OL48776855M",
+    kind: "olEdition",
+    multiVolume: true,
+    packaging: {
+      coverRange: { from: "1", to: "5" },
+      lineName: "Box Set",
+      linePosition: "Season 1",
+    },
+    publishDate: { year: 2023 },
+    publishers: ["Seven Seas Entertainment, LLC"],
+    seriesTitle: "Made in Abyss",
+    title: "Made in Abyss - Season 1 Box Set (Vol. 1-5)",
+    url: "https://openlibrary.org/books/OL48776855M",
+  };
+  const soapBox = {
+    format: "physical",
+    isbn13: "9781646518302",
+    key: "/books/OL39767840M",
+    kind: "olEdition",
+    multiVolume: false,
+    packaging: { coverRange: null, lineName: "Box Set", linePosition: "2" },
+    publishDate: { year: 2023 },
+    publishers: ["Kodansha America, Incorporated"],
+    seriesTitle: "Sweat and Soap",
+    title: "Sweat and Soap Manga Box Set 2",
+    url: "https://openlibrary.org/books/OL39767840M",
+  };
+
+  it("resolves real Made in Abyss and Sweat and Soap boxes past their common words, and refuses when every word overflows", async () => {
+    const t = makeT();
+    const { abyss, soap, observations } = await t.run(async (ctx) => {
+      for (let i = 0; i < 81; i++) await insertSeries(ctx, { title: `Shelf ${i} in and` });
+      const abyss = await insertSeries(ctx, { title: "Made in Abyss" });
+      for (const title of [
+        "Made in Abyss Official Anthology - Layer 1: Irredeemable Cave Raiders",
+        "Made in Abyss Official Anthology - Layer 2: A Dangerous Hole",
+      ])
+        await insertSeries(ctx, { title });
+      const soap = await insertSeries(ctx, {
+        title: "Sweat and Soap",
+        altTitles: ["Ase to Sekken", "あせとせっけん"],
+      });
+      const observations = [];
+      for (const snapshot of [abyssBox, soapBox, { ...soapBox, seriesTitle: "In and" }])
+        observations.push(
+          await insertObservation(ctx, {
+            sourceKey: "openlibrary",
+            sourceRecordId: snapshot.key,
+            snapshot,
+          }),
+        );
+      return { abyss, soap, observations };
+    });
+    const resolve = (id: Id<"sourceObservations">) =>
+      t.run(async (ctx) => {
+        const source = await sourceSeries(ctx, (await ctx.db.get(id))!, reader(ctx));
+        return source.series?._id ?? null;
+      });
+    expect(await resolve(observations[0]!)).toBe(abyss);
+    expect(await resolve(observations[1]!)).toBe(soap);
+    await expect(resolve(observations[2]!)).rejects.toThrow(
+      "Resolver candidates exceed the complete bounded scan; incomplete.",
+    );
   });
 });

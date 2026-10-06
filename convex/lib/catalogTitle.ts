@@ -17,7 +17,13 @@ import { getBootstrapMode, getSourceByKey } from "../importSources";
 import { packagingValidator, rangeLabels } from "./bookTitle";
 import { fullDateValidator } from "./dates";
 import { inferCoverage } from "./coverage";
-import { candidateSeries, hiddenSeriesTitled, matchRelease, type ReleaseFact } from "./matching";
+import {
+  candidateSeries,
+  hiddenSeriesTitled,
+  matchRelease,
+  type ReleaseFact,
+  type TitleScan,
+} from "./matching";
 import { linkObservation, recordUnplaced, upsertObservation } from "./observations";
 import {
   type BundleReconcile,
@@ -135,13 +141,15 @@ const lettersOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/g
  * left in place for want of a volume number ("Tower Dungeon 7" from a PRH
  * row without seriesNumber) follows the same rule: whole title first, else
  * an existing base Series takes it as a Volume, else the new work keeps its
- * whole name.
+ * whole name. `scan` replaces the importers' title search for every lookup
+ * (lib/matching.ts TitleScan).
  */
 export async function resolveBaseSeries(
   ctx: QueryCtx | MutationCtx,
   parsed: ProvisionalTitle,
+  scan?: TitleScan,
 ): Promise<{ seriesTitle: string; volumeLabel: string | null; candidates: Doc<"series">[] }> {
-  const named = await candidateSeries(ctx, parsed.seriesTitle);
+  const named = await candidateSeries(ctx, parsed.seriesTitle, scan);
   const plain = {
     seriesTitle: parsed.seriesTitle,
     volumeLabel: parsed.volumeLabel ?? null,
@@ -155,28 +163,28 @@ export async function resolveBaseSeries(
     const tidied = romanWholeName(parsed);
     const wholeName =
       tidied !== null && lettersOf(tidied) !== lettersOf(parsed.title) ? tidied : parsed.title;
-    let whole = await candidateSeries(ctx, parsed.title);
+    let whole = await candidateSeries(ctx, parsed.title, scan);
     if (whole.length === 0 && wholeName !== parsed.title) {
-      whole = await candidateSeries(ctx, wholeName);
+      whole = await candidateSeries(ctx, wholeName, scan);
     }
     if (whole.length > 0 || named.length === 0) {
       return { seriesTitle: whole[0]?.title ?? wholeName, volumeLabel: null, candidates: whole };
     }
     // An Editor hid the work the whole name names: it is never the base's Volume.
     const hidden =
-      (await hiddenSeriesTitled(ctx, parsed.title)).length > 0 ||
-      (wholeName !== parsed.title && (await hiddenSeriesTitled(ctx, wholeName)).length > 0);
+      (await hiddenSeriesTitled(ctx, parsed.title, scan)).length > 0 ||
+      (wholeName !== parsed.title && (await hiddenSeriesTitled(ctx, wholeName, scan)).length > 0);
     if (hidden) return { seriesTitle: wholeName, volumeLabel: null, candidates: [] };
     return plain;
   }
   if (named.length > 0) return plain;
   if (parsed.bareNumber) {
-    const whole = await candidateSeries(ctx, parsed.title);
+    const whole = await candidateSeries(ctx, parsed.title, scan);
     if (whole.length > 0) {
       return { seriesTitle: whole[0]!.title, volumeLabel: null, candidates: whole };
     }
   } else if (parsed.bareSplit) {
-    const base = await candidateSeries(ctx, parsed.bareSplit.seriesTitle);
+    const base = await candidateSeries(ctx, parsed.bareSplit.seriesTitle, scan);
     if (base.length > 0) {
       return {
         seriesTitle: base[0]!.title,
