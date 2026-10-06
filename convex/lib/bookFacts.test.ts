@@ -201,3 +201,156 @@ describe("connected contents completion and technical format payloads", () => {
     });
   });
 });
+
+describe("independent facts at format payload boundaries", () => {
+  it.each(["GN", "#", "GN#", "GNGN", "GN#GN"])(
+    "preserves facts after designator %s",
+    (designator) => {
+      for (const space of ["", " ", "\t", "\n", "\u00a0"]) {
+        for (const token of ["Volume2", "Vol.2", "Vol2", "Book2", "Part2", "Book II", "Part two"]) {
+          const facts = bookFacts(`Vol. 1 (Paperback ${designator}${space}${token} Paperback)`);
+          expect(facts.labels).toEqual(["1", "2"]);
+          expect(facts.bindings).toEqual(["paperback", "paperback"]);
+          expect(facts.unreadable).toEqual([]);
+        }
+        for (const token of ["Hardcover", "Hardback", "HardcoverEdition"]) {
+          expect(bookFacts(`Paperback ${designator}${space}${token} Paperback`)).toEqual({
+            labels: [],
+            bindings: ["paperback", "hardcover", "paperback"],
+            digital: false,
+            packaging: [],
+            unreadable: [],
+          });
+        }
+        for (const token of ["eBook", "Kindle", "Digital", "DigitalDownload"]) {
+          expect(bookFacts(`Paperback ${designator}${space}${token} Paperback`)).toEqual({
+            labels: [],
+            bindings: ["paperback", "paperback"],
+            digital: true,
+            packaging: [],
+            unreadable: [],
+          });
+        }
+        expect(
+          bookFacts(`Paperback ${designator}${space}Volumes unknown`).unreadable.length,
+        ).toBeGreaterThan(0);
+      }
+    },
+  );
+  it.each(["GN", "#", "GN#GN"])(
+    "keeps facts beyond unreadable %s payloads and annotations",
+    (designator) => {
+      for (const payload of ["unknown", "?", "unresolved", "unresolved component"]) {
+        for (const wrapped of [false, true]) {
+          const text = `Paperback ${designator} ${wrapped ? "(" : ""}${payload} Volume 2 Hardcover eBook${wrapped ? ")" : ""}`;
+          expect(bookFacts(text)).toMatchObject({
+            labels: ["2"],
+            bindings: ["paperback", "hardcover"],
+            digital: true,
+          });
+        }
+      }
+    },
+  );
+  it.each(["GN II", "GNII", "GN #2", "GN#2", "#2", "GNGN II", "GN#GN unknown", "GN unknown"])(
+    "format payload %s supplies no Volume labels",
+    (payload) => {
+      expect(bookFacts(`Paperback ${payload}`)).toEqual({
+        labels: [],
+        bindings: ["paperback"],
+        digital: false,
+        packaging: [],
+        unreadable: [],
+      });
+    },
+  );
+  it("does not mistake narrative payload words for technical formats or erase a later marker", () => {
+    expect(
+      bookFacts(
+        "Paperback GN an unavailable component Hardcover dreams Digital adventures Volume 2 eBook",
+      ),
+    ).toEqual({
+      labels: ["2"],
+      bindings: ["paperback"],
+      digital: true,
+      packaging: [],
+      unreadable: [],
+    });
+  });
+});
+
+describe("remembered Volume versus connected component expectation", () => {
+  const words = [
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+    "twenty",
+  ];
+  it.each(words.map((word, i) => ({ word, label: String(i + 1) })))(
+    "reads supported word $word in every connected context",
+    ({ word, label }) => {
+      for (const prefix of ["Volume 1", "Volumes 1", "Includes Volume 1", "Collects Volumes 1"]) {
+        for (const connector of ["and", "or", ",", "/", "&", "+", "through", "to", "-"]) {
+          for (const annotation of ["", "(Paperback)", "((Paperback GN II))"]) {
+            const facts = bookFacts(`${prefix} ${annotation} ${connector} ((${word}))`);
+            expect(facts.labels).toContain(label);
+            expect(facts.unreadable).toEqual([]);
+            if (["through", "to", "-"].includes(connector))
+              expect(facts.packaging.length).toBeGreaterThan(0);
+          }
+        }
+      }
+    },
+  );
+  it.each(["2", "02", "2.0", "II", "ii", "A2", "2+3"])(
+    "uses the same supported label grammar for %s",
+    (label) => {
+      for (const connector of ["and", "or", ",", "/", "&", "+", "through"]) {
+        const facts = bookFacts(`Volume 1 (Paperback GN II) ${connector} ((${label}))`);
+        expect(facts.labels).toContain(label === "A2" || label === "2+3" ? label : "2");
+        expect(facts.unreadable).toEqual([]);
+      }
+    },
+  );
+  it.each(["unknown", "?", "not yet specified", ""])(
+    "cannot discard connected uncertainty %j",
+    (component) => {
+      for (const connector of ["and", "or", ",", "/", "&", "+", "through"]) {
+        expect(
+          bookFacts(`Volume 1 (Paperback GN II) ${connector} ((${component}))`).unreadable.length,
+        ).toBeGreaterThan(0);
+      }
+    },
+  );
+  it.each([
+    "Volume 1 (Paperback) Digital adventures",
+    "Volume 1 (Paperback) Hardcover dreams",
+    "Volume 1 (Paperback); and an adventure",
+    "Volume 1 (Paperback): an adventure",
+    "Volume 1 (Paperback). An adventure",
+  ])("remembered singular Volume alone creates no expectation in %s", (text) => {
+    expect(bookFacts(text)).toEqual({
+      labels: ["1"],
+      bindings: ["paperback"],
+      digital: false,
+      packaging: [],
+      unreadable: [],
+    });
+  });
+});

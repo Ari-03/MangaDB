@@ -64,9 +64,9 @@ const EXPLICIT_VOLUME = new RegExp(
   "i",
 );
 const BINDING_CLAUSE =
-  /^(?:(?:trade|mature)\s+)?(?:hard\s?(?:cover|back|bound)|paper\s?back|soft\s?(?:cover|back|bound))(?:\s+(?:edition|version|binding|format))?(?=\b|\d)/i;
+  /^(?:(?:trade|mature)\s+)?(hard\s?(?:cover|back|bound)|paper\s?back|soft\s?(?:cover|back|bound))(?:\s*(?:edition|version|binding|format))?(?=\b|\d)/i;
 const DIGITAL_CLAUSE =
-  /^(?:e-?books?|kindle|electronic|digital)(?:\s+(?:edition|version|download|format))?(?=\b|\d)/i;
+  /^(?:e-?books?|kindle|electronic|digital)(?:\s*(?:edition|version|download|format))?(?=\b|\d)/i;
 const SEPARATOR = /^[\s.,:;()[\]{}/–—-]*(?:(?:and|or)\s+)?/i;
 // Boundary whitespace has no lexical meaning. All token gates use the same
 // trimmed tail, including numbered edition/designator payloads.
@@ -74,8 +74,49 @@ const CLAUSE_END = /^(?:$|[.,;:()[\]{}/]|[-–—]\s+|(?:and|or)\b)/i;
 // Format numbers are designators, not contents. Explicit technical markers
 // retain format even when their payload is unreadable; narrative words do not.
 const FORMAT_NUMBER = /^(?:\d+(?:\.\d+)?|[IVXLCDM]+)(?!\w)/i;
-const FORMAT_DESIGNATOR = /^(?:GN\b|vol(?:ume)?s?\.?(?=\s|\d|$)|(?:book|part)\b|#)\s*/i;
+const FORMAT_DESIGNATOR = /^(?:GN|#)+\s*/i;
 const CONTENT_LABEL = new RegExp(`^#?(${LABEL})(?!\\w|\\.\\d)`, "i");
+
+/** Independent technical statements cannot be the preceding format's payload. */
+function technicalStatement(text: string) {
+  return (
+    (!text.startsWith("#") && (VOLUME.test(text) || EXPLICIT_VOLUME.test(text))) ||
+    BINDING_CLAUSE.test(text) ||
+    DIGITAL_CLAUSE.test(text)
+  );
+}
+
+function formatDesignator(text: string) {
+  const match = FORMAT_DESIGNATOR.exec(text);
+  if (!match) return null;
+  const after = text.slice(match[0].length);
+  // GN may adjoin a technical statement or another designator, but an
+  // arbitrary word beginning with GN is still prose.
+  if (
+    /^GN/i.test(match[0]) &&
+    /^\w/.test(after) &&
+    /GN$/i.test(match[0]) &&
+    !technicalStatement(after) &&
+    !FORMAT_NUMBER.test(after)
+  )
+    return null;
+  return match;
+}
+
+/** Unknown designator text ends before a later independent technical statement. */
+function unknownFormatPayload(text: string) {
+  const clause = text.split(/[,;:()[\]{}]|\.(?=\s|$)/, 1)[0]!;
+  for (const boundary of clause.matchAll(/\s+(?=\S)/g)) {
+    const start = boundary.index + boundary[0].length;
+    const next = clause.slice(start);
+    if (
+      (!next.startsWith("#") && (VOLUME.test(next) || EXPLICIT_VOLUME.test(next))) ||
+      formatPrefix(next)
+    )
+      return start;
+  }
+  return clause.length;
+}
 
 /** Track annotation nesting so punctuation inside it cannot end contents scope. */
 function wrapperDepth(text: string, depth: number) {
@@ -142,7 +183,7 @@ function volumeStatement(text: string) {
 }
 
 /** The same lexical completion rule applies to Binding and Digital. */
-function formatStatement(text: string) {
+function formatPrefix(text: string) {
   const binding = BINDING_CLAUSE.exec(text);
   const token = binding ?? DIGITAL_CLAUSE.exec(text);
   if (!token) return null;
@@ -151,29 +192,34 @@ function formatStatement(text: string) {
   // A number after a closing wrapper or list connector belongs to the list.
   const prefix = /^[\s([{]*/.exec(tail)![0].length;
   const next = tail.slice(prefix);
-  const designator = FORMAT_DESIGNATOR.exec(next);
+  const designator = formatDesignator(next);
   const number = FORMAT_NUMBER.exec(next);
-  if (
-    !CLAUSE_END.test(tail.trimStart()) &&
-    !number &&
-    !designator &&
-    !EXPLICIT_VOLUME.test(next) &&
-    !BINDING_CLAUSE.test(next) &&
-    !DIGITAL_CLAUSE.test(next)
-  )
+  if (!CLAUSE_END.test(tail.trimStart()) && !number && !designator && !technicalStatement(next))
     return null;
+  return { binding, tail, prefix, next, designator, number };
+}
+
+function formatStatement(text: string) {
+  const token = formatPrefix(text);
+  if (!token) return null;
+  const { binding, tail, prefix, next, designator, number } = token;
   // A marked Volume remains independent contents evidence. Bare Roman or
   // Arabic format numbers never establish canonical Volume coverage.
   let payload = 0;
-  if (!EXPLICIT_VOLUME.test(next)) {
+  if (!technicalStatement(next)) {
     if (designator) {
-      const after = next.slice(designator[0].length);
-      const numbered = FORMAT_NUMBER.exec(after);
-      // An unreadable technical payload is still a format designator. Consume
-      // just its component so later independent technical facts survive.
-      payload =
-        designator[0].length +
-        (numbered?.[0].length ?? /^[^\s,;:()[\]{}]+/.exec(after)?.[0].length ?? 0);
+      let after = next;
+      let marker: ReturnType<typeof formatDesignator> = designator;
+      while (marker) {
+        payload += marker[0].length;
+        after = next.slice(payload);
+        const opening = /^[\s([{]*/.exec(after)![0];
+        payload += opening.length;
+        after = next.slice(payload);
+        marker = !technicalStatement(after) ? formatDesignator(after) : null;
+      }
+      if (!technicalStatement(after))
+        payload += FORMAT_NUMBER.exec(after)?.[0].length ?? unknownFormatPayload(after);
     } else payload = number?.[0].length ?? 0;
   }
   return { binding, tail: payload ? tail.slice(prefix + payload) : tail };
@@ -217,6 +263,7 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
     let rest = text.slice(start).replace(SEPARATOR, "");
     let depth = wrapperDepth(text.slice(0, text.length - rest.length), 0);
     let contentsScope = false;
+    let volumeContext = false;
     let expectedComponent = false;
     let rangeComponent = false;
     const advance = (tail: string, scope: boolean) => {
@@ -224,8 +271,12 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
       const boundary = clauseBoundary(tail, depth);
       depth = boundary.depth;
       contentsScope = scope && !boundary.separate;
-      expectedComponent = contentsScope && boundary.connected;
-      rangeComponent = contentsScope && boundary.range;
+      volumeContext &&= !boundary.separate;
+      // Remember a singular Volume through format annotations. A connector
+      // creates a component expectation using the same grammar as any list.
+      expectedComponent = volumeContext && boundary.connected;
+      contentsScope ||= expectedComponent;
+      rangeComponent = expectedComponent && boundary.range;
       rest = boundary.next;
       consumedThrough = text.length - rest.length;
       if (expectedComponent && rest === "")
@@ -239,9 +290,8 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
         keepVolume(volume, rest);
         if (rangeComponent) packaging.push(rest.slice(0, volume.consumed));
         const tail = rest.slice(volume.consumed);
-        const boundary = clauseBoundary(tail, depth);
-        const numericContinuation = boundary.connected && /^(?:\d|\?|$)/.test(boundary.next);
-        advance(tail, contentsScope || volume.list || numericContinuation);
+        volumeContext = true;
+        advance(tail, contentsScope || volume.list);
         continue;
       }
       const component = expectedComponent ? CONTENT_LABEL.exec(rest) : null;
@@ -260,7 +310,7 @@ export function bookFacts(value: unknown, names: readonly string[] = []) {
       // "Digital adventures" and "Hardcover dreams" remain display prose.
       const format = formatStatement(rest);
       if (format) {
-        if (format.binding) bindings.push(...bindingFacts(format.binding[0]));
+        if (format.binding) bindings.push(...bindingFacts(format.binding[1]));
         else digital = true;
         advance(format.tail, contentsScope);
         continue;

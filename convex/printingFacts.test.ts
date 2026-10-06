@@ -696,3 +696,244 @@ describe.each([false, true])(
     });
   },
 );
+
+// C67-R7-01/02: keep the complete independently reviewed matrix durably.
+const round7 = [
+  "Vol. 1 (and II)",
+  "Vol. 1 (and two)",
+  "Vol. 1 {and II}",
+  "Vol. 1 (through II)",
+  "Vol. 1 (through two)",
+  "Vol. 1 (or II)",
+  "Vol. 1 (Paperback) and II",
+  "Vol. 1 (Paperback) and two",
+  "Vol. 1 (Paperback) and unknown",
+  "Vol. 1 (Paperback) and ?",
+  "Vol. 1 (and #2)",
+  "Vol. 1 (Paperback) and #2",
+  "Vol. 1 (and 2)",
+  "Vol. 1 (and Volume II)",
+  "Vol. 1 and (II)",
+  "Vol. 1 and (two)",
+  "Vol. 1 and ((II))",
+  "Vol. 1, (II)",
+  "Vol. 1 / (II)",
+  "Vol. 1 (Paperback GN Hardcover Paperback)",
+  "Vol. 1 (Paperback GN eBook Paperback)",
+  "Vol. 1 (Paperback GN Volume 2 Paperback)",
+  "Vol. 1 (Paperback #Volume2)",
+  "Vol. 1 (Paperback #Digital)",
+  "Vol. 1 (Paperback #Hardback)",
+
+  "Vol. 1 (Paperback GN Volume 2)",
+  "Vol. 1 (Paperback GN Volume2)",
+  "Vol. 1 (Paperback # Volume 2)",
+  "Vol. 1 (Paperback GN Hardcover)",
+  "Vol. 1 (Paperback GN eBook)",
+  "Vol. 1 (Paperback #Hardcover)",
+  "Vol. 1 (Paperback #eBook)",
+  "Vol. 1 (Paperback GN Hardback)",
+  "Vol. 1 (Paperback GN Digital Download)",
+  "Vol. 1: Includes Volumes 1 (Paperback GN Volume 2)",
+  "Vol. 1: Includes Volumes 1 (Paperback GN unknown) and 2",
+  "Vol. 1: Includes Volumes 1 (Paperback GN 1 and 2)",
+  "Vol. 1: Includes Volumes 1 (Paperback GN 1; and 2)",
+  "Vol. 1: Includes Volumes 1 (Paperback GN 1: and 2)",
+  "Vol. 1: Includes Volumes 1 (Paperback GN 1. and 2)",
+  "Vol. 1: Includes Volumes 1 (Paperback GN 1, 2)",
+  "Vol. 1: Includes Volumes 1 (Paperback) plus 2",
+  "Vol. 1: Includes Volumes 1 (Paperback) also Volume 2",
+  "Vol. 1: Includes Volumes 1 (Paperback) and (2)",
+  "Vol. 1: Includes Volumes 1 (Paperback) and (unknown)",
+  "Vol. 1: Includes Volumes 1 (Paperback; Hardcover) and 2",
+  "Vol. 1: Includes Volumes 1 (Paperback; eBook) and 2",
+  "Vol. 1: Includes Volumes 1 (Paperback: edition) and 2",
+  "Vol. 1: Includes Volumes 1 (Paperback.) and 2",
+  "Vol. 1: Includes Volumes 1 (Paperback) and II",
+  "Vol. 1: Includes Volumes 1 (Paperback) or II",
+  "Vol. 1: Includes Volumes 1 (Paperback) through II",
+  "Vol. 1: Includes Volumes 1 and Paperback and II",
+  "Vol. 1: Includes Volumes 1 Paperback and 2",
+  "Vol. 1 (Paperback (GN Volume 2))",
+  "Vol. 1 (Paperback (GN Hardcover))",
+  "Vol. 1 (Paperback (GN eBook))",
+  "Vol. 1 (Paperback GN Book 2)",
+  "Vol. 1 (Paperback GN Part 2)",
+  "Vol. 1 (Paperback GN Vol. 2)",
+  "Vol. 1 (Paperback GN Vol2)",
+  "Vol. 1 (Paperback GN Digital)",
+  "Vol. 1 (Paperback GN Hardcover Edition II)",
+  "Vol. 1 (Paperback GN eBook II)",
+  "Vol. 1 (Paperback GN ? Volume 2)",
+  "Vol. 1 (Paperback GN ? Hardcover)",
+  "Vol. 1 (Paperback GN ? eBook)",
+  "Vol. 1: Includes Volumes 1 (Paperback GN) and unknown",
+  "Vol. 1: Includes Volumes 1 (Paperback #) and 2",
+  "Vol. 1 (Paperback 1 Hardcover)",
+  "Vol. 1 (Paperback II eBook)",
+  "Vol. 1 (Hardback GN unknown)",
+  "Vol. 1 (Digital GN unknown)",
+  "Vol. 1 (Paperback GN 2 Volume 2)",
+  "Vol. 1 (Paperback GN 1.5 Hardcover)",
+  "Vol. 1: Includes Volumes 1 (Paperback 1) and unknown",
+  "Vol. 1: Includes Volumes 1 and Paperback GN 1, unknown",
+  "Vol. 1: Includes Volumes 1; (Volume 2)",
+  "Vol. 1: Includes Volumes 1. (Volume 2)",
+  "Vol. 1 (eBook IIX)",
+  "Vol. 1 (Hardcover IIX)",
+  "Vol. 1 (Paperback GN 1/Hardcover)",
+  "Vol. 1 (Paperback GN 1+eBook)",
+];
+const round7Positive = [
+  "Vol. 1 (Paperback GN II)",
+  "Vol. 1 (Paperback GN unknown)",
+  "Vol. 1 (Paperback GN #2)",
+  "Vol. 1: Includes Volumes 1 (Paperback) and Volume I",
+  "Vol. 1: Includes Volumes 1 (Paperback) and I",
+  "Vol. 1: Includes Volumes 1 (Paperback; Paperback) and 01",
+  "Vol. 1: Includes Volumes 1 (Paperback) ; An unexpected adventure",
+  "Vol. 1: Includes Volumes 1 (Paperback) : An unexpected adventure",
+  "Vol. 1: Includes Volumes 1 (Paperback). An unexpected adventure",
+  "Vol. 1: Digital adventures",
+];
+const round7Routes = [
+  "Vol. 1 (and II)",
+  "Vol. 1 (and two)",
+  "Vol. 1 (Paperback) and II",
+  "Vol. 1 (Paperback GN Volume 2)",
+  "Vol. 1 (Paperback GN Hardcover)",
+  "Vol. 1 (Paperback GN eBook)",
+];
+describe.each([false, true])(
+  "designator boundaries and singular contents, existing %s",
+  (existing) => {
+    it.each(round7)("freezes R7 retained %s", async (subtitle) => {
+      const fixture = await setup(existing, source("Vagabond, Vol. 1", subtitle));
+      expect(fixture.snapshot.subtitle).toBe(subtitle);
+      await refused(fixture, /Volume|packaging|hardcover|paperback|digital/i);
+    });
+    it.each(
+      round7Routes.flatMap((clause) => [
+        { title: "Vagabond", subtitle: clause },
+        { title: `Vagabond, ${clause}`, subtitle: undefined },
+      ]),
+    )("freezes R7 route $title + $subtitle", async ({ title, subtitle }) => {
+      await refused(
+        await setup(existing, source(title, subtitle), "paperback", null),
+        /Volume|packaging|hardcover|paperback|digital|not held/i,
+      );
+    });
+    it.each(round7Positive)("preserves R7 positive %s", async (subtitle) => {
+      await accepted(await setup(existing, source("Vagabond, Vol. 1", subtitle)), existing);
+    });
+  },
+);
+
+const technicalNeighbors = [
+  "Volume 2",
+  "Volume2",
+  "Vol.2",
+  "Vol2",
+  "Book II",
+  "Book2",
+  "Part two",
+  "Part2",
+  "Volumes unknown",
+  "Hardcover",
+  "Hardback",
+  "HardcoverEdition",
+  "eBook",
+  "DigitalDownload",
+];
+describe.each([false, true])("technical source consumption, existing %s", (existing) => {
+  it.each(technicalNeighbors)(
+    "preserves independent %s after every format designator",
+    async (technical) => {
+      for (const designator of ["GN", "#", "GN#", "GNGN", "GN#GN"]) {
+        for (const space of ["", ...boundarySpaces]) {
+          for (const annotation of [
+            `Paperback ${designator}${space}${technical}`,
+            `Paperback (${designator}${space}${technical}) Paperback`,
+            `Paperback ${designator} unresolved ${technical} Paperback`,
+            `Paperback ${designator} unresolved component ${technical} Paperback`,
+            `Paperback ${designator} an unavailable component Hardcover dreams Digital adventures ${technical} Paperback`,
+          ]) {
+            const clause = `Vol. 1 (${annotation})`;
+            for (const raw of [
+              source("Vagabond, Vol. 1", clause),
+              source("Vagabond", clause),
+              source(`Vagabond, ${clause}`),
+            ]) {
+              const fixture = await setup(existing, raw, "paperback", null);
+              // Joined inputs carry the clause verbatim in title, rather than
+              // fabricating the producer's optional retained subtitle field.
+              if (raw.title === "Vagabond, Vol. 1")
+                expect(fixture.snapshot.subtitle).toBe(raw.subtitle);
+              await refused(fixture, /Volume|packaging|hardcover|paperback|digital|not held/i);
+            }
+          }
+        }
+      }
+    },
+  );
+  it.each(["2", "02", "2.0", "II", "ii", "two", "TWO", "A2", "2+3", "?", "unresolved component"])(
+    "retains supported or uncertain connected component %s",
+    async (component) => {
+      for (const marker of [
+        "Vol.",
+        "Volumes",
+        "Includes Volume",
+        "Collects Volumes",
+        "Contains Volume",
+      ]) {
+        for (const connector of ["and", "or", ",", "/", "&", "+", "through", "to", "-"]) {
+          for (const interposed of ["", "(Paperback)", "((Paperback GN II))"]) {
+            const clause = `${marker} 1 ${interposed} ${connector} ((${component}))`;
+            await refused(
+              await setup(existing, source("Vagabond, Vol. 1", clause)),
+              /Volume|packaging/i,
+            );
+          }
+        }
+      }
+    },
+  );
+  it.each(["1", "01", "1.0", "I", "i", "one"])(
+    "keeps equal connected component %s",
+    async (label) => {
+      for (const prefix of ["Vol. 1", "Volumes 1", "Includes Volume 1"]) {
+        for (const connector of ["and", "or", ",", "/", "&", "+"]) {
+          await accepted(
+            await setup(
+              existing,
+              source("Vagabond, Vol. 1", `${prefix} (Paperback GN II) ${connector} ((${label}))`),
+            ),
+            existing,
+          );
+        }
+        await refused(
+          await setup(
+            existing,
+            source("Vagabond, Vol. 1", `${prefix} (Paperback) through (${label})`),
+          ),
+          /Volume|packaging/i,
+        );
+      }
+    },
+  );
+  it.each([
+    "Vol. 1 (Paperback GNII)",
+    "Vol. 1 (Paperback GN#2)",
+    "Vol. 1 (Paperback #2)",
+    "Vol. 1 (Paperback GN unknown)",
+    "Vol. 1 (Paperback GNGN unknown)",
+    "Vol. 1 (Paperback GN (unresolved)); Digital adventures",
+    "Vol. 1 (Paperback) Something Sinister",
+    "Vol. 1 (Paperback) Hardcover dreams",
+    "Vol. 1 (Paperback); and an unexpected adventure",
+    "Vol. 1 (Paperback): Digital adventures",
+    "Vol. 1 (Paperback). An unexpected adventure",
+  ])("preserves payload or separate prose positive %s", async (subtitle) => {
+    await accepted(await setup(existing, source("Vagabond, Vol. 1", subtitle)), existing);
+  });
+});

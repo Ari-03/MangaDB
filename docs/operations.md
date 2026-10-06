@@ -361,7 +361,11 @@ order:
   scope, as do intervening format annotations. Their payload numbers describe
   format, not canonical contents. A connected component after the annotation
   must still be read or refused as incomplete. A separate prose clause may end
-  the contents scope; punctuation inside an annotation does not. Ranges remain packaging even with equal endpoints;
+  the contents scope; punctuation inside an annotation does not. A singular
+  Volume designation also survives an intervening format annotation: a later
+  list connector establishes a contents expectation for Arabic, Roman and word
+  labels, or unresolved components. Remembering the designation alone does not
+  make unconnected display prose a contents list. Ranges remain packaging even with equal endpoints;
   repeated normalized equal list labels remain equal. Technical clauses start at
   punctuation/wrappers or another designation; ordinary display prose and
   words inside the authentic work name are not format facts. Subtitle prose
@@ -382,7 +386,11 @@ order:
   erase a known Binding or Digital fact. Numbered format payloads retain the
   format without certifying a Volume, including Roman numerals and unreadable
   explicit technical designators; a following explicit Volume marker remains
-  independent evidence. Decision normalization does not rewrite saved raw source
+  independent evidence. GN/# payload consumption stops before any independent
+  Volume, Binding or Digital statement, including adjacent tokens and nested
+  designator chains. An equal earlier format cannot erase a later contradiction.
+  Bare numbered format payloads still supply no canonical Volume contents.
+  Decision normalization does not rewrite saved raw source
   fields. Conflicting known target Bindings also refuse. A Binding either
   side leaves unstated is left to the person deciding. Anything that reads as
   packaging is refused for now: a multi-Volume designator or stored range,
