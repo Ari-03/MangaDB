@@ -929,8 +929,11 @@ export type CreationArgs = {
   /**
    * The Edition Line a packaged Release belongs to ("Omnibus" 7), under the
    * base Series; its coverage is `labels` — the real Volumes it collects.
+   * `id`: the existing line the caller proved the book's
+   * (`namedEditionLine`), which it joins instead of the name's first
+   * active line.
    */
-  editionLine?: { name: string; position: string | null };
+  editionLine?: { name: string; position: string | null; id?: Id<"editionLines"> };
   /**
    * With `editionLine` and no `labels`: create the member as Unmapped
    * Packaging — an Edition with no coverage rows, flagged for a Moderator to
@@ -1116,8 +1119,9 @@ export async function siblingEditions(
  * The active, unlocked one of those siblings (siblingEditions): the
  * Edition a same-packaging Release in another Format/Binding belongs to
  * (spec §2: an Edition is realized by Releases differing only there); an
- * omnibus never joins a single volume's Edition, or vice versa. A placement
- * Proposal's Edition joins it too (lib/proposalCreates.ts).
+ * omnibus never joins a single volume's Edition, or vice versa. Placement
+ * Proposals prove every sibling's canonical identity separately
+ * (lib/proposalCreates.ts storedSibling).
  */
 export async function findSiblingEdition(
   ctx: QueryCtx,
@@ -1154,8 +1158,9 @@ export async function unmappedSiblings(
 }
 
 /**
- * The active, unlocked one of those (unmappedSiblings). A placement
- * Proposal's unmapped Edition joins it too (lib/proposalCreates.ts).
+ * The active, unlocked one of those (unmappedSiblings). Placement
+ * Proposals prove every sibling's canonical identity separately
+ * (lib/proposalCreates.ts storedSibling).
  */
 export async function findUnmappedSibling(
   ctx: QueryCtx,
@@ -1183,17 +1188,111 @@ async function activeEditionLine(
   );
 }
 
-/** Find-or-create the base Series' Edition Line for one publisher (spec §2). */
+/** What the Series' Edition Lines of one name from one publisher are, every state read (`namedEditionLine`). */
+export type NamedLine =
+  | { kind: "none" }
+  | { kind: "line"; line: Doc<"editionLines"> }
+  | { kind: "closed"; reason: string; lineId: Id<"editionLines"> };
+
+/**
+ * The one Edition Line a book naming `name` (any case) under this Series
+ * and publisher may join, read from every line of that name in every
+ * state: `none` when there is no such line at all; `line` when they all
+ * resolve to one active, unlocked line of this Series and publisher (an
+ * active one, and merged ones whose survivor it is); `closed` otherwise,
+ * with why, as a noun phrase, and one line that closes it: one an Editor
+ * hid (a Moderator restores it, never a twin), a merge that resolves to no
+ * active line of this Series and publisher, a locked line, or two
+ * independent lines (an Editor merges them). Insertion order never chooses
+ * among them. The ANN page pass and the Editor's placement both ask this
+ * before a book joins a line, and before one creates it: only `none` lets
+ * a new line of the name be made.
+ */
+export async function namedEditionLine(
+  ctx: QueryCtx,
+  args: { seriesId: Id<"series">; publisherId: Id<"publishers">; name: string },
+): Promise<NamedLine> {
+  const wanted = args.name.toLowerCase();
+  const named = (
+    await ctx.db
+      .query("editionLines")
+      .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
+      .collect()
+  ).filter((line) => line.publisherId === args.publisherId && line.name.toLowerCase() === wanted);
+  if (named.length === 0) return { kind: "none" };
+  const hidden = named.find((line) => line.status === "hidden");
+  if (hidden !== undefined) {
+    return {
+      kind: "closed",
+      reason: `the Series' hidden ${args.name} line: a Moderator restores the line before a book joins it, never a second one`,
+      lineId: hidden._id,
+    };
+  }
+  const resolved = new Map<Id<"editionLines">, Doc<"editionLines">>();
+  for (const line of named) {
+    const survivor = await survivorOf<"editionLines">(ctx, line);
+    if (
+      survivor === null ||
+      survivor.status !== "active" ||
+      survivor.seriesId !== args.seriesId ||
+      survivor.publisherId !== args.publisherId
+    ) {
+      return {
+        kind: "closed",
+        reason: `a ${args.name} line merged into no one active line of this Series and publisher — an Editor places it`,
+        lineId: line._id,
+      };
+    }
+    resolved.set(survivor._id, survivor);
+  }
+  const [line, ...more] = resolved.values();
+  if (line === undefined) return { kind: "none" };
+  if (more.length > 0) {
+    return {
+      kind: "closed",
+      reason: `the Series' ${resolved.size} independent ${args.name} lines from this publisher — an Editor merges them`,
+      lineId: more[0]!._id,
+    };
+  }
+  if (line.locked)
+    return {
+      kind: "closed",
+      reason: `the Series' locked ${line.name} line — an Editor places it`,
+      lineId: line._id,
+    };
+  return { kind: "line", line };
+}
+
+/**
+ * Find-or-create the base Series' Edition Line for one publisher (spec §2).
+ * With `id`, the line a caller already proved the book's
+ * (`namedEditionLine`, in the same transaction): that line, never the
+ * first active one of the name.
+ */
 async function ensureEditionLine(
   ctx: MutationCtx,
   args: {
     seriesId: Id<"series">;
     publisherId: Id<"publishers">;
     name: string;
+    id?: Id<"editionLines">;
     tag: { bootstrapUnreviewed?: boolean };
   },
   created: CreatedRecord[],
 ): Promise<Id<"editionLines">> {
+  if (args.id !== undefined) {
+    const proved = await ctx.db.get(args.id);
+    if (
+      proved?.status !== "active" ||
+      proved.seriesId !== args.seriesId ||
+      proved.publisherId !== args.publisherId
+    ) {
+      throw new Error(
+        "The Edition Line this book was proved to join is not open under its Series.",
+      );
+    }
+    return proved._id;
+  }
   const existing = await activeEditionLine(ctx, args);
   if (existing) return existing._id;
   const id = await ctx.db.insert("editionLines", {
@@ -1375,6 +1474,7 @@ export async function createCanonicalRecords(
                 seriesId,
                 publisherId: publisher.id,
                 name: args.editionLine.name,
+                ...(args.editionLine.id !== undefined ? { id: args.editionLine.id } : {}),
                 tag,
               },
               created,
@@ -1817,6 +1917,8 @@ export type CreationOpsArgs = {
     observationId: Id<"sourceObservations">;
     seriesId: Id<"series">;
     coverage: "labels" | "unmapped" | "pending";
+    /** Which book the source named when the member stated this placement (placement.ts `identity`). */
+    reviewed: string;
   };
 };
 
@@ -1979,7 +2081,13 @@ export async function creationOps(ctx: MutationCtx, args: CreationOpsArgs): Prom
         price: args.release.price,
         description: args.release.description,
         ...(placement !== undefined
-          ? { placement: { observationId: placement.observationId, seriesId: placement.seriesId } }
+          ? {
+              placement: {
+                observationId: placement.observationId,
+                seriesId: placement.seriesId,
+                reviewed: placement.reviewed,
+              },
+            }
           : {}),
       },
     });

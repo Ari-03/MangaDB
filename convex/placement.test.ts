@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { splitReleaseTitle } from "./lib/ann";
 import { recordUnplaced } from "./lib/observations";
 import { parseDumpLine } from "./lib/openLibrary";
 import { reconcileFields } from "./lib/reconcile";
@@ -588,6 +589,220 @@ describe("a book read with today's parser", () => {
       book: { label: null, line: { name: "Definitive Edition", position: "4" } },
       suggestion: null,
       coverage: { kind: "pending" },
+    });
+  });
+
+  // Only the held Series' title owns a line word: an entry named
+  // "Makunouchi Deluxe" does not make the title's "Deluxe" the work's under
+  // Vagabond, so the line is left for the member to choose, never guessed
+  // as Deluxe or VIZBIG.
+  it("never names an ANN book's line by an entry spelling the held Series does not confirm", async () => {
+    const t = makeT();
+    const { vagabondId } = await held(t);
+    const observationId = await t.run(async (ctx) => {
+      await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "manga:89",
+        snapshot: { title: "Makunouchi Deluxe" },
+      });
+      const id = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:6005",
+        snapshot: {
+          kind: "annRelease",
+          annId: "6005",
+          mangaId: "89",
+          url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=6005",
+          title: "Makunouchi Deluxe [VIZBIG Edition]",
+          label: "2",
+          multi: false,
+          format: "physical",
+          editionLineHint: true,
+          isbn13: "9781974700424",
+          page: { status: "ok", fetchedAt: 1, distributor: "VIZ Media", isbn13: "9781974700424" },
+        },
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(id))!,
+        { kind: "packaging", reason: "Held.", seriesId: vagabondId },
+        Date.now(),
+      );
+      return id;
+    });
+    expect((await detail(t, await prepare(t, observationId)))!.placement).toMatchObject({
+      book: { label: null, line: null },
+      line: null,
+      coverage: { kind: "pending" },
+      suggestion: null,
+    });
+  });
+});
+
+// The Draft's line comes from the title read against the Series the book
+// is held under, which the hold already vouches for, and the entry's
+// title where there is one: missing, renamed or relinked, the entry never
+// makes "Makunouchi Deluxe [VIZBIG Edition]" a Deluxe book. A title still
+// unclear leaves the line for the member to choose.
+describe("an ANN book's line, read against its held Series", () => {
+  type Entry = { title: string; linkedTo?: string } | null;
+
+  /**
+   * One ANN line held as packaging under Series `series`, with its manga
+   * entry `entry`. With `designator` the snapshot is the mirror's own
+   * reading of "title (designator)", or (`stale`) that reading without its
+   * title's stored coverage; without it, a GN 2 line flagged packaging.
+   */
+  async function heldAnn(
+    series: string,
+    title: string,
+    entry: Entry,
+    release?: { designator: string; stale?: boolean },
+  ) {
+    const split = release ? splitReleaseTitle(`${title} (${release.designator})`, series) : null;
+    if (release && split === null) throw new Error(`No designator in ${title}`);
+    const { coverRange: _range, coverageGapped: _gapped, ...facts } = split ?? {};
+    const read = split === null ? { label: "2", multi: false } : release?.stale ? facts : split;
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, bob, carol, dave]);
+    const observationId = await t.run(async (ctx) => {
+      await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { title: series });
+      if (entry !== null) {
+        const other =
+          entry.linkedTo !== undefined
+            ? await insertSeries(ctx, { title: entry.linkedTo })
+            : undefined;
+        await insertObservation(ctx, {
+          sourceKey: "ann",
+          sourceRecordId: "manga:88",
+          ...(other !== undefined ? { recordRef: { type: "series" as const, id: other } } : {}),
+          snapshot: { title: entry.title },
+        });
+      }
+      const id = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release:5000",
+        snapshot: {
+          kind: "annRelease",
+          annId: "5000",
+          mangaId: "88",
+          url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=5000",
+          title,
+          format: "physical",
+          ...read,
+          editionLineHint: true,
+          isbn13: "9781421599991",
+          page: { status: "ok", fetchedAt: 1, distributor: "VIZ Media", isbn13: "9781421599991" },
+        },
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(id))!,
+        { kind: "packaging", reason: "Packaging needs review.", seriesId },
+        Date.now(),
+      );
+      return id;
+    });
+    const proposalId = await prepare(t, observationId);
+    const proposal = await t.run((ctx) => ctx.db.get(proposalId));
+    const created = (proposal?.draft?.ops ?? []).flatMap((op) =>
+      op.kind === "create" && op.table === "editionLines" ? [op.fields?.name] : [],
+    );
+    return { created, view: (await detail(t, proposalId))!.placement };
+  }
+
+  it.each<{ why: string; entry: Entry }>([
+    { why: "entry present", entry: { title: "Makunouchi Deluxe" } },
+    { why: "entry absent", entry: null },
+    { why: "entry renamed", entry: { title: "A different entry title" } },
+    { why: "entry relinked", entry: { title: "Makunouchi", linkedTo: "Makunouchi" } },
+    { why: "entry contradicting", entry: { title: "Makunouchi VIZBIG Edition" } },
+  ])("prefills VIZBIG position 2 under Makunouchi Deluxe: $why", async ({ entry }) => {
+    const { created, view } = await heldAnn(
+      "Makunouchi Deluxe",
+      "Makunouchi Deluxe [VIZBIG Edition]",
+      entry,
+    );
+    expect(created).toEqual(["VIZBIG Edition"]);
+    expect(view).toMatchObject({
+      book: { label: null, line: { name: "VIZBIG Edition", position: "2" } },
+      line: { name: "VIZBIG Edition", position: "2", created: true },
+      coverage: { kind: "pending" },
+      suggestion: null,
+    });
+  });
+
+  // The Editor sees what the page pass reads: every statement read whole,
+  // a number beside the line's name the book's, never the line's name.
+  describe.each([false, true])("source facts (stale snapshot: %s)", (stale) => {
+    const alpha = (title: string, designator: string) =>
+      heldAnn("Alpha", title, { title: "Alpha" }, { designator, stale });
+
+    it("shows no range for a subtitle whose second range leaves a gap", async () => {
+      const { view } = await alpha("Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 7-9", "GN 1");
+      expect(view?.book).toMatchObject({
+        statedRange: null,
+        line: { name: "VIZBIG Edition", position: "1" },
+      });
+    });
+
+    it("shows the whole range a subtitle states", async () => {
+      for (const title of [
+        "Alpha VIZBIG Edition 1: Includes Vols. 1-3 plus 4-6",
+        "Alpha [VIZBIG Edition] 1: Includes Vols. 1-3 plus 4-6",
+      ]) {
+        const { view } = await alpha(title, "GN 1");
+        expect(view?.book?.statedRange, title).toEqual({ from: "1", to: "6" });
+      }
+    });
+
+    it.each(["Alpha VIZBIG Edition 1-3-5", "Alpha [VIZBIG Edition Vols. 6-4]"])(
+      "shows no range for %s",
+      async (title) => {
+        const { view } = await alpha(title, "GN 1");
+        expect(view?.book?.statedRange).toBeNull();
+      },
+    );
+
+    it.each([
+      "Alpha [VIZBIG Edition] (Vol. II)",
+      "Alpha [VIZBIG Edition Vol. 2]",
+      "Alpha [VIZBIG Edition 2]",
+    ])("prefills VIZBIG Edition and no position for %s at GN 1, and 2 at GN 2", async (title) => {
+      const conflict = await alpha(title, "GN 1");
+      expect(conflict.created).toEqual(["VIZBIG Edition"]);
+      expect(conflict.view).toMatchObject({
+        book: { line: { name: "VIZBIG Edition", position: null } },
+        line: { name: "VIZBIG Edition", position: null, created: true },
+      });
+      const agreeing = await alpha(title, "GN 2");
+      expect(agreeing.created).toEqual(["VIZBIG Edition"]);
+      expect(agreeing.view).toMatchObject({
+        book: { line: { name: "VIZBIG Edition", position: "2" } },
+        line: { name: "VIZBIG Edition", position: "2", created: true },
+      });
+    });
+
+    it("prefills no position the title states in a way it cannot read", async () => {
+      const { view } = await alpha("Alpha [VIZBIG Edition] (Vol. ii)", "GN 2");
+      expect(view?.book?.line).toEqual({ name: "VIZBIG Edition", position: null });
+    });
+  });
+
+  it.each([
+    // Two lines the title adds: neither is guessed.
+    { series: "Alpha", title: "Alpha [VIZBIG Edition] [Omnibus]" },
+    { series: "Makunouchi", title: "Makunouchi Deluxe [VIZBIG Edition]" },
+  ])("leaves the line of $title under $series unselected", async ({ series, title }) => {
+    const { created, view } = await heldAnn(series, title, null);
+    expect(created).toEqual([]);
+    expect(view).toMatchObject({
+      book: { label: null, line: null },
+      line: null,
+      coverage: { kind: "pending" },
+      suggestion: null,
     });
   });
 });
@@ -1317,6 +1532,12 @@ describe("approval after the book or its hold changed", () => {
       "its Edition's physical slot taken meanwhile",
       "slot for this publisher and format, is already taken",
     ],
+    [
+      "its Edition's physical slot taken meanwhile by a Release an Editor hid",
+      "slot for this publisher and format, is already taken",
+    ],
+    ["retitled by its source", "names the book otherwise"],
+    ["given another publisher by its source", "names the book otherwise"],
   ])("refuses, writing nothing, when the book was %s", async (change, reason) => {
     const { t, alice1, aliceId, vagabondId, publisherId, proposalId } = await submittedAlice();
     await t.run(async (ctx) => {
@@ -1357,7 +1578,7 @@ describe("approval after the book or its hold changed", () => {
         });
         await ctx.db.patch(alice1, { recordRef: { type: "release", id: releaseId } });
       }
-      if (change === "its Edition's physical slot taken meanwhile") {
+      if (change.startsWith("its Edition's physical slot taken meanwhile")) {
         const volumeId = await insertVolume(ctx, { seriesId: aliceId, position: 1, label: "1" });
         const editionId = await insertEdition(ctx, { publisherId });
         await insertCoverage(ctx, { editionId, volumeId });
@@ -1366,6 +1587,20 @@ describe("approval after the book or its hold changed", () => {
           publisherId,
           seriesIds: [aliceId],
           isbn13: "9781974799991",
+          ...(change.endsWith("an Editor hid") ? { status: "hidden" as const } : {}),
+        });
+      }
+      if (change === "retitled by its source" && observation.snapshot?.kind === "olEdition") {
+        await ctx.db.patch(alice1, {
+          snapshot: { ...observation.snapshot, title: "Alice in Borderland: Retry, Vol. 1" },
+        });
+      }
+      if (
+        change === "given another publisher by its source" &&
+        observation.snapshot?.kind === "olEdition"
+      ) {
+        await ctx.db.patch(alice1, {
+          snapshot: { ...observation.snapshot, publishers: ["VIZ Media", "Shogakukan"] },
         });
       }
     });

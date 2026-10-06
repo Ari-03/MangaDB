@@ -31,7 +31,12 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { lineOutOfScope, packagingOf, pageDescriptionText, type AnnReleaseSnapshot } from "./ann";
+import {
+  lineOutOfScope,
+  pageDescriptionText,
+  SOURCE_KEY as ANN,
+  type AnnReleaseSnapshot,
+} from "./ann";
 import { PUBLISHER as KODANSHA } from "./kodansha";
 import { outOfScopeElsewhere, REBINDER } from "./openLibrary";
 import { PUBLISHER as SEVEN_SEAS } from "./sevenSeas";
@@ -40,11 +45,13 @@ import { resolveBaseSeries } from "./lib/catalogTitle";
 import type { DateParts } from "./lib/dates";
 import { fail } from "./lib/errors";
 import type { KodanshaSnapshot } from "./lib/kodansha";
-import { holdOf, type HoldKind } from "./lib/observations";
+import { annLinePackaged, annTitleIdentity, packagingOf, type AnnMangaSnapshot } from "./lib/ann";
+import { getObservation, holdOf, type HoldKind } from "./lib/observations";
 import type { OlEditionSnapshot } from "./lib/openLibrary";
 import {
   creationOps,
   findPublisherByName,
+  namedEditionLine,
   needsEditionLine,
   toPartialDate,
   type CreateOp,
@@ -93,6 +100,13 @@ type BookFacts = {
   description?: string;
   /** Why the adapter's own checks leave the book out of the catalog: prose, a rebinder, a variant. */
   outOfScope: string | null;
+  /** Its source states it two ways no member's choice resolves: an ANN page naming another format. */
+  contradiction?: string;
+  /**
+   * Which book the source names, as a member's placement is reviewed
+   * against it (`identity`): its work and line, and its publisher.
+   */
+  identity: string;
 };
 
 const lineOf = (packaging: Packaging | null | undefined): Line | null =>
@@ -124,14 +138,54 @@ function titleReading(
   };
 }
 
+/**
+ * Which book a source names, for binding a member's placement to what they
+ * reviewed: the work as the adapter reads it (an ANN line's titles by
+ * lib/ann.ts annTitleIdentity, any other source's title, spacing and case
+ * aside) and its publisher names. A placement whose source names another
+ * work, line or publisher at submission or approval than when its coverage
+ * was stated places a book nobody reviewed (`placedOtherwise`). Positions,
+ * coverage and ISBNs are not in it: the member states the first two, and
+ * the ISBNs and format are compared on their own.
+ */
+function identity(work: string, publisherNames: readonly string[]): string {
+  return JSON.stringify([work, publisherNames]);
+}
+
+/** A title as `identity` compares it: spacing and case aside. */
+const titleKey = (title: string) =>
+  title.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+
 /** A label that names one numbered Volume ("4", "7.5"): no words, no range. */
 const PLAIN_LABEL = /^\d+(?:\.\d+)?$/;
 
-/** Read the observation's snapshot, or null for a shape no adapter here writes. */
+/**
+ * Read the observation's snapshot, or null for a shape no adapter here
+ * writes. `heldSeriesTitle`, the title of the Series the book is held under
+ * (already validated by its caller), is the work's own name where a title
+ * reading needs one.
+ */
 async function bookFacts(
   ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
+  heldSeriesTitle: string | null,
 ): Promise<BookFacts | null> {
+  const facts = await sourceFacts(ctx, observation, heldSeriesTitle);
+  if (facts === null) return null;
+  const snapshot: HeldSnapshot = observation.snapshot;
+  const work =
+    snapshot.kind === "annRelease"
+      ? annTitleIdentity(snapshot, heldSeriesTitle !== null ? [heldSeriesTitle] : [])
+      : titleKey(facts.title);
+  return { ...facts, identity: identity(work, facts.publisherNames) };
+}
+
+/** `bookFacts` before its `identity`: each adapter's own reading. */
+async function sourceFacts(
+  ctx: QueryCtx,
+  observation: Doc<"sourceObservations">,
+  heldSeriesTitle: string | null,
+): Promise<Omit<BookFacts, "identity"> | null> {
   const snapshot: HeldSnapshot | null = observation.snapshot ?? null;
   switch (snapshot?.kind) {
     case "olEdition": {
@@ -165,24 +219,47 @@ async function bookFacts(
     }
     case "annRelease": {
       const page = snapshot.page?.status === "ok" ? snapshot.page : undefined;
+      // The facts the page pass reads (lib/ann.ts packagingOf), its current
+      // page included, against the held Series' title as the page pass reads
+      // it: the work's own line words ("Makunouchi Deluxe") never name the
+      // book's line, and an entry's name owning one the Series' does not
+      // leaves it unclear. A title still unclear ("Alpha [VIZBIG Edition]
+      // [Omnibus]", a page titling another work) leaves the line for the
+      // member to choose, and a position or coverage the source states two
+      // ways or not readably is left unknown for the member to state, never
+      // the designator's.
+      const names = heldSeriesTitle !== null ? [heldSeriesTitle] : [];
       const read = titleReading(snapshot.title, {
         multi: snapshot.multi || snapshot.editionLineHint,
       });
+      const packaged = read.packaged || annLinePackaged(snapshot, names);
+      const entry = packaged ? await getObservation(ctx, ANN, `manga:${snapshot.mangaId}`) : null;
+      const entryTitle = (entry?.snapshot as AnnMangaSnapshot | undefined)?.title;
+      const packaging = packaged
+        ? packagingOf(snapshot, names, heldSeriesTitle !== null ? entryTitle : undefined)
+        : null;
       return {
         title: snapshot.title,
         url: snapshot.url,
         isbn13: page?.isbn13 ?? snapshot.isbn13,
         isbn10: page?.isbn10,
-        label: read.packaged ? null : (snapshot.label ?? null),
+        label: packaged ? null : (snapshot.label ?? null),
         ...read,
-        line: read.packaged ? packagingOf(snapshot) : null,
-        statedRange: snapshot.coverRange ?? read.statedRange,
+        packaged,
+        line: packaging?.line ?? null,
+        statedRange:
+          packaging !== null ? packaging.coverRange : (snapshot.coverRange ?? read.statedRange),
         publisherNames: page?.distributor !== undefined ? [page.distributor] : [],
         format: snapshot.format,
         pubDate: page?.date ?? snapshot.date,
         priceCents: page?.priceCents,
         description: pageDescriptionText(page),
-        outOfScope: lineOutOfScope(snapshot),
+        outOfScope: lineOutOfScope(snapshot, names),
+        ...(packaging?.formatConflict
+          ? {
+              contradiction: `Its release page (${page?.volume}) names another format than its ANN line: correct the source's record first.`,
+            }
+          : {}),
       };
     }
     case "prhTitle":
@@ -288,8 +365,14 @@ type Placing = { proposalId: Id<"proposals">; plans: CreatePlan[]; release: Rele
  * and format under the hold's Series in an Edition the ops create or join
  * (never one named by a stored ID), every Volume and line it creates or
  * covers is in that Series, nothing it joins is hidden, locked or merged
- * away, and the Edition it joins has no Release of that format yet (the
- * slot an `isbn` hold guards).
+ * away, the line it joins, by a stored ID or by the line it would create,
+ * is the one line of its name every state resolves to, and a line it
+ * creates has no namesake in any state (`lineOtherwise`), the Edition it
+ * joins is the one member every exact sibling resolves to
+ * (lib/proposalCreates.ts storedSibling) and has no Release of that format
+ * yet in any state (the slot an `isbn` hold guards), and its source still
+ * names the book the member reviewed when they stated the placement
+ * (`identity`).
  */
 async function placeable(
   ctx: MutationCtx,
@@ -310,9 +393,10 @@ async function placeable(
   if (series.status !== "active")
     return no(`The Series it names, "${series.title}", is ${series.status}.`);
   if (series.locked) return no(`The Series it names, "${series.title}", is locked.`);
-  const facts = await bookFacts(ctx, observation);
+  const facts = await bookFacts(ctx, observation, series.title);
   if (facts === null) return no("Prepare placement cannot read this source's records.");
   if (facts.outOfScope !== null) return no(facts.outOfScope);
+  if (facts.contradiction !== undefined) return no(facts.contradiction);
   if (facts.isBox) {
     return no("A box set is a Release Bundle, which a Proposal cannot create.");
   }
@@ -368,13 +452,22 @@ async function placedOtherwise(
   if (release.placement?.seriesId !== series._id) {
     return `The book is held under "${series.title}" now, not the Series this Proposal places it under.`;
   }
+  // The book the member reviewed: a source that now names another work,
+  // line or publisher ("Alpha+ [VIZBIG Edition]" after "Alpha [VIZBIG
+  // Edition]") asks for the placement to be stated again. A placement
+  // written before this was recorded carries none, and is never trusted.
+  if (release.placement.reviewed !== facts.identity) {
+    return "Its source names the book otherwise than when this placement was stated (its work, line or publisher changed): state the placement again so it is reviewed as the source stands.";
+  }
   // Coverage and the slot are checked on the Edition plan, so the Release goes under one.
   if (release.edition.kind === "id") {
     return "Its Release names a stored Edition instead of one this Proposal creates or joins: save the placement again.";
   }
+  const lineWrong = await lineOtherwise(ctx, plans);
+  if (lineWrong !== null) return lineWrong;
   const blocked = unjoinable(plans)[0];
   if (blocked !== undefined) {
-    return `A ${blocked.type} this placement would join is hidden, locked or merged away: a Moderator restores it, or the coverage is restated.`;
+    return `A ${blocked.type} this placement would join is hidden, locked, merged away, or one of two: a Moderator restores or merges it, or the coverage is restated.`;
   }
   for (const plan of plans) {
     const under: Array<Id<"series"> | null> = [];
@@ -387,9 +480,12 @@ async function placedOtherwise(
         if (row.volume.kind === "id")
           under.push((await ctx.db.get(row.volume.id))?.seriesId ?? null);
       }
-      if (plan.editionLine?.kind === "id")
+      if (plan.editionLine?.kind === "id") {
         under.push((await ctx.db.get(plan.editionLine.id))?.seriesId ?? null);
-      // The slot an `isbn` hold guards: one Release per format in an Edition.
+      }
+      // The slot an `isbn` hold guards: a Release of this format already
+      // in the Edition it joins, in any state. One an Editor hid, or one
+      // merged, is still that book's: a Moderator restores or resolves it.
       const joined = plan.existingId !== undefined ? await ctx.db.get(plan.existingId) : null;
       const taken =
         joined !== null &&
@@ -398,11 +494,63 @@ async function placedOtherwise(
             .query("releases")
             .withIndex("by_edition", (q) => q.eq("editionId", joined._id))
             .collect()
-        ).some((other) => other.status === "active" && other.format === format);
+        ).some((other) => other.format === format);
       if (taken) return KEPT_HOLDS.isbn;
     }
     if (under.some((id) => id !== series._id))
       return `Every record a placement creates is under "${series.title}".`;
+  }
+  return null;
+}
+
+/**
+ * How the Edition Line a placement's Edition joins or creates is not the
+ * one its name allows, or null when it is. Whether the plan names a stored
+ * line or a line it creates (a temp reference, which planning resolved to
+ * a stored line or left new), the line is checked as it stands now
+ * (lib/pipeline.ts namedEditionLine): a joined line must be the one line
+ * every line of its name, in every state, resolves to, never the first
+ * active one beside a hidden, locked, unresolved or independent twin; a
+ * new line only when no line of the name exists in any state.
+ */
+async function lineOtherwise(ctx: MutationCtx, plans: CreatePlan[]): Promise<string | null> {
+  for (const plan of plans) {
+    if (plan.table !== "editions" || plan.editionLine === undefined) continue;
+    const ref = plan.editionLine;
+    let wanted: {
+      lineId: Id<"editionLines"> | null;
+      seriesId: Id<"series">;
+      publisherId: Id<"publishers">;
+      name: string;
+    } | null = null;
+    if (ref.kind === "id") {
+      const line = await ctx.db.get(ref.id);
+      if (line !== null) {
+        const { _id, seriesId, publisherId, name } = line;
+        wanted = { lineId: _id, seriesId, publisherId, name };
+      }
+    } else {
+      const created = plans.find(
+        (other): other is Extract<CreatePlan, { table: "editionLines" }> =>
+          other.table === "editionLines" && other.tempId === ref.tempId,
+      );
+      if (created !== undefined && created.series.kind === "id") {
+        wanted = {
+          lineId: created.existingId ?? null,
+          seriesId: created.series.id,
+          publisherId: created.publisherId,
+          name: created.fields.name,
+        };
+      }
+    }
+    if (wanted === null) return "The Edition Line this placement names is gone.";
+    const named = await namedEditionLine(ctx, wanted);
+    if (wanted.lineId === null) {
+      if (named.kind !== "none")
+        return `The Edition Line this placement creates exists now: ${named.kind === "closed" ? named.reason : "save the placement again to join it"}.`;
+    } else if (named.kind !== "line" || named.line._id !== wanted.lineId) {
+      return `The Edition Line this placement joins is not the one open line of its name: ${named.kind === "closed" ? named.reason : "it is gone"}.`;
+    }
   }
   return null;
 }
@@ -438,6 +586,7 @@ async function placementOps(
       observationId: observation._id,
       seriesId: series._id,
       coverage: typeof coverage === "string" ? coverage : "labels",
+      reviewed: facts.identity,
     },
   };
   return await creationOps(ctx, args);
@@ -532,7 +681,12 @@ export const preparePlacement = mutation({
   },
 });
 
-type Placed = { observationId: Id<"sourceObservations">; seriesId: Id<"series"> };
+type Placed = {
+  observationId: Id<"sourceObservations">;
+  seriesId: Id<"series">;
+  /** Which book the member reviewed (`identity`); absent on an older placement. */
+  reviewed?: string;
+};
 
 /** The book a Proposal's ops place, and under which Series: the Release create op's `placement`. */
 export function placedBy(ops: Doc<"proposalVersions">["ops"]): Placed | null {
@@ -540,10 +694,33 @@ export function placedBy(ops: Doc<"proposalVersions">["ops"]): Placed | null {
     if (op.kind !== "create" || op.table !== "releases") continue;
     const placement: Partial<Placed> | undefined = op.fields?.placement;
     if (placement?.observationId !== undefined && placement.seriesId !== undefined) {
-      return { observationId: placement.observationId, seriesId: placement.seriesId };
+      return {
+        observationId: placement.observationId,
+        seriesId: placement.seriesId,
+        ...(typeof placement.reviewed === "string" ? { reviewed: placement.reviewed } : {}),
+      };
     }
   }
   return null;
+}
+
+/**
+ * Whether ops placing a held book place one its source no longer names as
+ * the member reviewed it (`placedOtherwise`'s identity rule), for the
+ * Proposal page's stale flag: approval refuses such a placement, so a
+ * Moderator sees it stale before trying. False for ops placing no book.
+ */
+export async function placementChanged(
+  ctx: QueryCtx,
+  ops: Doc<"proposalVersions">["ops"],
+): Promise<boolean> {
+  const placed = placedBy(ops);
+  if (placed === null) return false;
+  const observation = await ctx.db.get(placed.observationId);
+  const series = await ctx.db.get(placed.seriesId);
+  if (observation === null || series === null) return true;
+  const facts = await bookFacts(ctx, observation, series.title);
+  return facts === null || facts.identity !== placed.reviewed;
 }
 
 /**
@@ -667,7 +844,9 @@ export async function placementView(ctx: QueryCtx, ops: Doc<"proposalVersions">[
   const placed = placedBy(ops);
   if (placed === null) return null;
   const observation = await ctx.db.get(placed.observationId);
-  const facts = observation !== null ? await bookFacts(ctx, observation) : null;
+  const held = await ctx.db.get(placed.seriesId);
+  const facts =
+    observation !== null ? await bookFacts(ctx, observation, held?.title ?? null) : null;
   const created = new Map<string, string | null>();
   // The Series the ops create under: their Volumes' and line's.
   const under: unknown[] = [];

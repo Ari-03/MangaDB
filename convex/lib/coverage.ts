@@ -296,12 +296,39 @@ export function coverageFromText(text: string | undefined): CoverRange | null {
   return blurbCoverage(text, null) ?? null;
 }
 
+/** A title statement read whole: one collect-verb, one Volume list, nothing after it. */
+const WHOLE_STATEMENT = new RegExp(
+  String.raw`^(?:${VERB.source})\s+(?:the\s+)?vol(?:ume)?(s)?\.?\s*(${LIST})\s*\.?$`,
+  "i",
+);
+
 /**
- * Volumes per book when the line NAME guarantees it, per the publishers'
- * own descriptions: every book of these lines collects the same count. Names whose size varies by series — "Deluxe" (1–3 across
- * publishers), "Collector's Edition" (1.3–3), "Perfect Edition", plain
- * "Omnibus" (2 or 3), kanzenban recuts like "Fullmetal Edition" — return
- * null and wait for a blurb or a Moderator.
+ * A title's own coverage statement ("Includes Vols. 1-3 plus 4-6") read
+ * whole by the blurb grammar: undefined when the text has no collect-verb;
+ * the range when it is one verb and one Volume list that reads one way and
+ * holds no gap; null otherwise. A title's statement is evidence, so one
+ * read only in part is no range: "plus 7-9" leaves a gap, "1-3 / 4-6"
+ * reads two ways, "4-6 and Volume 7 of Beta" or a second sentence says more
+ * than the list. Unlike a blurb, the first list does not decide alone. ANN
+ * reads a line title's subtitle and tags with it (lib/ann.ts).
+ */
+export function statementCoverage(text: string): CoverRange | null | undefined {
+  const sentence = plain(text).trim();
+  if (!new RegExp(VERB.source, "i").test(sentence)) return undefined;
+  const whole = WHOLE_STATEMENT.exec(sentence);
+  if (!whole) return null;
+  const found = readings(items(whole[2]!), "", whole[1] !== undefined);
+  return found.length === 1 ? found[0] : null;
+}
+
+/**
+ * Volumes per book when the line NAME implies it, per the publishers' own
+ * descriptions: every book of these lines collects that count except, at
+ * times, a line's last books, which may hold more or fewer
+ * (`coverageFromLine`'s `end`). Names whose size varies by series —
+ * "Deluxe" (1–3 across publishers), "Collector's Edition" (1.3–3),
+ * "Perfect Edition", plain "Omnibus" (2 or 3), kanzenban recuts like
+ * "Fullmetal Edition" — return null and wait for a blurb or a Moderator.
  */
 const FIXED_LINE_SIZES: Array<[RegExp, number]> = [
   [/\bvizbig\b/i, 3], // VIZ: "collects the material from three standard volumes"
@@ -313,9 +340,12 @@ const FIXED_LINE_SIZES: Array<[RegExp, number]> = [
   [/\bdefinitive\s+(?:hardcover\s+)?(?:edition|collection)\b/i, 3], // VIZ Vagabond, Kodansha AoT
 ];
 
+/** A name that states its own size: "3-in-1 Edition". */
+const N_IN_1 = /\b(\d)-in-1\b/i;
+
 export function declaredLineSize(lineName: string | null): number | null {
   if (lineName === null) return null;
-  const nIn1 = /\b(\d)-in-1\b/i.exec(lineName);
+  const nIn1 = N_IN_1.exec(lineName);
   if (nIn1) return Number(nIn1[1]);
   for (const [pattern, size] of FIXED_LINE_SIZES) {
     if (pattern.test(lineName)) return size;
@@ -323,14 +353,38 @@ export function declaredLineSize(lineName: string | null): number | null {
   return null;
 }
 
-/** "3-in-1 Edition" at position 5 → volumes 13–15; null without a declared size or an integer position. */
+/**
+ * "3-in-1 Edition" at position 5 → volumes 13–15; null without a declared
+ * size or an integer position.
+ *
+ * A size the name only implies (FIXED_LINE_SIZES) can break near a line's
+ * end, where the last books may hold more or fewer: VIZ put Inuyasha's 56
+ * Volumes in 18 VIZBIG books, 17 and 18 holding four each (49–52, 53–56),
+ * Vagabond's 37 in 12 and Dragon Ball's 16 in 5, the last holding four.
+ * The odd Volumes reach back at most size − 1 books, so given where the end
+ * is, such a size places a book only when size − 1 books follow it:
+ * `lastVolume`, the Series' highest known Volume, must leave that many
+ * whole books of Volumes after it, and `lastPosition`, the source's own
+ * count of the line's books, that many books. Nothing here knows whether
+ * the Series is finished: a backbone still growing, or a line abandoned
+ * before the Series' end, only leaves more books unsized. An "n-in-1" name
+ * states its own size and is never cut: a shorter last book asks for a
+ * Volume the Series lacks instead. Callers that pass no `end` (every
+ * importer but ANN) get the plain size.
+ */
 export function coverageFromLine(
   lineName: string | null,
   linePosition: string | null,
+  end: { lastVolume?: number; lastPosition?: number } = {},
 ): CoverRange | null {
   const size = declaredLineSize(lineName);
   if (size === null || linePosition === null || !/^\d{1,3}$/.test(linePosition)) return null;
   const position = Number(linePosition);
+  if (lineName !== null && !N_IN_1.test(lineName)) {
+    const reach = position + size - 1;
+    if (end.lastVolume !== undefined && size * reach > end.lastVolume) return null;
+    if (end.lastPosition !== undefined && reach > end.lastPosition) return null;
+  }
   return range(size * (position - 1) + 1, size * position);
 }
 

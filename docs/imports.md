@@ -147,7 +147,8 @@ npx convex run importSources:setBootstrapModeInternal '{"on":true}'
 **Packaging.** Omnibus, deluxe and n-in-1 books become Edition Line members
 of the base Series only with known coverage: the title's own range first,
 then the publisher blurb (`convex/lib/coverage.ts`), then a line name with
-a fixed size (`FIXED_LINE_SIZES`, such as VIZBIG). Box sets become Release
+a fixed size (`FIXED_LINE_SIZES`, such as VIZBIG; ANN uses that size only
+away from the line's end, below). Box sets become Release
 Bundles under the same rule, in Bootstrap Mode only; any other box set is
 held, and Kodansha places none. In Bootstrap Mode a named line's member
 with no usable coverage is created as Unmapped Packaging, which a
@@ -306,7 +307,12 @@ active Volume or fills a gap below it. Every placement shows a caution to
 check that the book is the manga, not a novel of the same title, and that
 its number is its Volume number. A book number on a line is a position in
 the line, so "Vagabond Definitive Edition, Vol. 4" never becomes Volume 4,
-and the line's name never sizes the range. A range that would need more
+and the line's name never sizes the range. An ANN book's line is read as
+the page pass reads it, against the title of the Series it is held under
+and its manga entry's, so a missing, renamed or relinked entry never makes
+"Makunouchi Deluxe [VIZBIG Edition]" a Deluxe book under Makunouchi
+Deluxe; a title still unclear ("Alpha [VIZBIG Edition] [Omnibus]") leaves
+the line unselected for the member to name. A range that would need more
 than 25 ops is refused, as any Proposal over the cap is.
 
 Only `convex/placement.ts` writes a placement: `saveDraft` refuses a
@@ -317,8 +323,25 @@ stated, at submission and at approval. Besides the conditions above, the
 Proposal must be the one the observation's `queuedProposalId` points at,
 its one placed Release must carry the book's ISBN-13, ISBN-10 and format
 under the Series the hold names, every Volume and line it creates or
-covers must be in that Series, and the Edition it joins must not already
-hold a Release in that format (the slot an `isbn` hold guards).
+covers must be in that Series, a line it joins must be the one line of its
+name every state resolves to (`namedEditionLine`, as the page pass
+requires), and the Edition it joins must not already hold a Release in
+that format, in any state (the slot an `isbn` hold guards; one an Editor
+hid is restored, not replaced).
+
+A placement is bound to the book the member reviewed. Stating its
+coverage records which book the source named then (`identity` in
+`convex/placement.ts`: an ANN line's work and line as its title and its
+page's Title read under the held Series, another source's title, and the
+publisher names). Submission and approval read the source again; if it now
+names another work, line or publisher ("Alpha+ [VIZBIG Edition]" after
+"Alpha [VIZBIG Edition]", by the mirror or the page pass), the Proposal
+shows as stale and approval refuses it until the member states the
+placement again (a Moderator's "request changes" returns it to a Draft).
+A position or coverage the source states differently later does not:
+the member stated those. A placement written before this was recorded
+carries none and is refused the same way, never trusted; staging held no
+placement Proposal in a Draft or in review on 2026-10-05.
 
 The observation's `queuedProposalId` points at the Draft. A second click
 by its author, or by anyone once it is in review, opens it; another
@@ -564,8 +587,9 @@ Packaging (an Edition Line member placed by its stated range, else its
 line's size, else as Unmapped Packaging) is created only in Bootstrap Mode
 and held in steady state; box sets only link by ISBN. Lines it cannot
 place are Held Books, except lines no one can place or that are out of
-scope (no ISBN, a variant cover, a prose imprint, a foreign-language
-distributor), which keep only their note. Scope is
+scope (no ISBN, a variant cover, packaging whose title marks a novel, a
+prose imprint, a foreign-language distributor), which keep only their
+note. Scope is
 checked right after the ISBN link, before any other hold, so an
 out-of-scope line is never held for its packaging, its Series or its ISBN.
 
@@ -590,6 +614,203 @@ someone links it. A line already linked keeps its link, since an import
 never moves one. Lines the line-size rule placed before this check are
 not reported; after one mirror their `release:` observations carry
 `coverageGapped: true` beside a `recordRef`, which is how to find them.
+
+A line is packaging when its designator says so ("(Omnibus GN 1-3)",
+"(GN box 2)") or its title names an Edition Line, bracketed or not
+("Vagabond [VIZBIG Edition]", "Attack on Titan [Colossal Edition]",
+"Death Note - Library Edition"). The line names are the shared title
+parser's (`EDITION_LINE_NAME` in `convex/lib/bookTitle.ts`). A line word
+is the work's, not a line, only where the title opens with the work's own
+name spelled out word for word and the word is inside it: "Makunouchi
+Deluxe (GN 2)" is a Volume of Makunouchi Deluxe, while "Makunouchi Deluxe
+[VIZBIG Edition] (GN 1)" and "The Omnibus Club [Colossal Edition] (GN 1)"
+are VIZBIG and Colossal books, and "Alpha [Deluxe] (GN 13)" or "Alpha
+[Omnibus] (GN 1)" are a Deluxe and an Omnibus book whatever the entry or
+Series is called (`readAnnLineTitle` in `convex/lib/ann.ts`). Under a
+Series, the name is the Series' own title: the mirror and the page pass
+read every line against it again (`annLinePackaged`), a line packaging
+by any signal (its stored flags, which a later reading never clears, its
+title, its stored page) adds no Volume to the backbone and never takes a
+single Volume's Release slot, and an entry title the Series does not
+confirm owns no line word. An entry whose name owns a word the Series'
+does not ("Makunouchi Deluxe (GN 2)" from entry Makunouchi Deluxe under
+Series Makunouchi) leaves the work unclear, and the page pass holds the
+line (below). An
+article before the line's name is the line's: "Dark Metro - The Ultimate
+Edition" is Dark Metro's Ultimate Edition, while "The Dark Metro" keeps its
+own. The line adds no Volume to the backbone. The line's name is the
+recognized name alone, with any words its bracket adds that hold no number
+and no marker ("[Side Story VIZBIG Edition]"); a number or a marker beside
+it is never part of it, so "Alpha [VIZBIG Edition Vol. 2]" and "Alpha
+[VIZBIG Edition Vol. thirty]" are VIZBIG Edition. Its book's position is
+every number or upper-case Roman numeral the title states for it: right
+after the line's name or inside its bracket ("Alpha VIZBIG Edition 2",
+"Alpha [VIZBIG Edition] II", "Alpha [VIZBIG Edition Vol. 2]", "One Piece -
+[Omnibus] 33 - Wano"), or marked in a tag ("(Vol. II)", "[Book 3]", "(GN
+12)"), and the designator's single number: "Vagabond [VIZBIG Edition] (GN
+1)" is VIZBIG Edition 1, which the line's size places on Volumes 1–3. A
+designator's range is the book's coverage, never its position, and so is
+any list in the title. Positions that differ ("Alpha VIZBIG Edition 2 (GN
+1)", "Alpha [VIZBIG Edition] (Vol. II) (GN 1)"), or one the grammar cannot
+read, hold the book; the designator's number never stands in for them. Only
+ASCII digits and upper-case Roman numerals are read: another numeral
+("(Vol. ii)", "(Vol. two)", "(Vol. -2)", "(Vol. ２)", "Ⅱ") and any marker
+(Vol., Volume, Book, GN, Part, #) whose number the grammar cannot read
+("(Vol. thirty)", "(Book Thirty)", "(Vol. n/a)", "(Vol. unknown)", "(Vol.
+M)", "(Vol.)", "(Part Two)", like "(Part 2)") is an unknown position,
+inside the line's bracket, in a tag or in a subtitle alike; there is no
+table of number words to extend. The designator is read the same way:
+after its marker, nothing ("(GN)") or ANN's unnumbered letter ("(GN A)")
+is an unnumbered book, and any other payload with no ASCII digit ("(GN
+II)", "(GN thirty)", "(GN n/a)", "(GN -)", "(GN Vol. two)", "(GN ２)") is a
+single book whose number is unread: stored as a rejection
+(`coverageGapped`, no label), so the line is held and no title's position
+or line size stands in for it, and a release page whose Volume field says
+so holds the book the same way. Upper-case Romans are not read in a
+designator ("(GN M)" is no Volume 1000). A line the title names stays that line
+even where the general parser reads no position for it, and the Editor's
+Draft names that line with no position.
+
+What the book collects comes from its explicit coverage first, else from
+its line's size (`packagingOf` in `convex/lib/ann.ts` reads every
+statement together). The statements are the designator's list, a Volume
+statement in brackets at the end of the title ("Rurouni Kenshin - VIZBIG
+Edition [13-15] (GN 5)" is VIZBIG Edition 5 covering 13–15), and every
+statement in the line's own segment, each read whole: a list inside its
+bracket, after its name or in a tag ("Alpha [VIZBIG Edition Vols. 4-6] (GN
+1)", "Alpha VIZBIG Edition 4-6 (GN 1)"), and a collect statement in a
+subtitle or tag, read by the blurb grammar to its end ("Alpha VIZBIG
+Edition 1: Includes Vols. 4-6 (GN 1)" covers 4–6, "...: Includes Vols. 1-3
+plus 4-6" 1–6). A plain multi-volume line's own bracketed range is
+coverage too: "Alpha [1-3] (GN 1-3)" is an Omnibus covering 1–3, unless
+the work's own name ends in that bracket. A statement no range
+holds holds the line as a gapped designator does, whatever other statement
+is valid, and is never replaced by the line's size: a gap ("[1, 3]", "[1
+and Vol. 3]", "Includes Vols. 1-3 plus 7-9"), a dash chain ("VIZBIG
+Edition 1-3-5"), a backwards range ("6-4"), a range Coverage cannot list
+("1.5-3.5", "1-80"), a statement read only in part ("Includes Vols. 4-6
+and Volume 7 of Beta"), two that differ ("[4-6]" or "Includes Vols. 4-6"
+beside "(GN 1-3)"), or a number in the segment read as neither position
+nor coverage ("(Part 2)", "1: The Book of Sand"). Only a reissue or
+binding tag ("[2nd Edition]", "(Hardcover)") and words with no number and
+no marker ("- Wano") are passed over. A box set's name
+("[Box Set - Part 1]") is the bundle's, never read so. The mirror stores
+a rejection in the line's `coverageGapped`, and the page pass reads the
+title again, so a line stored before reads the same; a stored range
+Coverage cannot list is held too, never left unmapped. A valid explicit range places its
+book wherever it falls, a shorter
+last book included ("[7-8]" as the last book of a Series ending at 8). An
+"n-in-1" name states its size and keeps it to the end. Coverage inferred
+only from a size the name implies (VIZBIG 3, Colossal 5 and the other
+`FIXED_LINE_SIZES`) is used only when size − 1 books follow the book, both
+by the Series' highest active Volume and by ANN's own count of the line's
+books when the page gives one ("(GN 5 / 5)"); the last books of a line may
+hold more or fewer. VIZ put Inuyasha's 56 Volumes in 18 VIZBIG books, 17
+and 18 holding four each, so those two, like any book that near the end,
+go unsized. Nothing checks that the Series is finished: a backbone still
+growing, or a line abandoned before the Series' end, only leaves more
+books unsized. Where implied sizing declines, Bootstrap Mode creates the
+book as Unmapped Packaging, and steady state holds it for review, as it
+does every packaging creation. These endpoint checks are ANN's; other
+importers size a line's books from the name alone.
+
+The line's release page is read with it, by the same rules (`packagingOf`
+in `convex/lib/ann.ts`), whenever the page pass or the Editor's placement
+reads the line: its Title is a second title and its Volume field ("GN 2 /
+2", "eBook 1") a second designator. A missing page or field says nothing.
+Its label is a position and its list coverage, which must agree with the
+line's ("GN 2" against "GN 1", "GN 4-6" against "GN 1-3", "GN 1, 3" or "GN
+1-3-5" hold the book); its "/ N" total never stands for its number. A
+Volume field no designator reads holds the book; a Title naming another
+work or another line ("Alpha+ [VIZBIG Edition]") makes its work unclear; a
+Title marking a novel puts packaging out of scope; a Title marking a
+store-exclusive or variant cover puts any line out of scope, as the line's
+own title does; and a Volume field naming another format than the line
+("eBook 1" on a GN line) holds it, never choosing a format. A page that no
+longer restates its line (`pageRestatesLine`) says only that the two
+disagree, not which is newer: the page pass fetches an unlinked line's
+page again before judging it, and a freshly fetched page that still
+disagrees is held as the disagreement it is. A disagreement that persists
+is fetched again on the next pass. A continuation carries the observation
+IDs already processed in its partially completed candidate page, at most
+25, and rereads the remaining rows' eligibility. With unchanged pagination
+membership, it fetches and counts each candidate once across those
+continuations, without treating a recent fetch timestamp as evidence of
+which run processed it. Older queued continuations without that optional
+progress may replay their partial page once; subsequent continuations
+carry progress. On staging every stored page restated its line (17,656 ok
+pages, 2026-10-05); that count
+says nothing of how many books any rule will place.
+
+Before creating a packaged book the page pass reads the line and its
+members as they stand, in the same transaction (`packagedSlot` in
+`convex/ann.ts`), every candidate before deciding, so the order rows were
+inserted in never chooses one. Every line of that name (any case) the
+Series has from that publisher, in every state, must resolve to one
+active, unlocked line (`namedEditionLine` in `convex/lib/pipeline.ts`): a
+hidden one holds until a Moderator restores it (never an active twin, even
+beside an active line), a merged one counts only through one active
+surviving line of the same Series and publisher, and a locked line or two
+independent lines hold. The book is created in exactly that line, never
+in the name's first active one. A member of that line at the book's position,
+or covering any of its Volumes, must be the book itself: the same
+position and exactly those Volumes, or Unmapped Packaging at the same
+known position. Any other member there holds the book, as does Unmapped
+Packaging of unknown position beside any member, and a hidden or locked
+member. In the matching member every Release of the book's format is read,
+in every state, a merged one through its survivor: one an Editor hid, or
+one merged into no active Release of the member, holds as `isbn` until a
+Moderator restores or resolves it. An active one can be the book only in
+English (the language ANN's books are imported in) and with no barcode or
+this one (an ISBN-10 counts by its ISBN-13, so "1974700402" is
+9781974700400); any other is another printing, barcode or language, held
+as `isbn`, never given this ISBN or joined by a second Release. Exactly
+one that can be the book, unlocked, links and takes the ISBN; two (two
+Bindings, say, since ANN states none) hold, never the first. With none,
+the book joins the member as a sibling of its other formats. One Release
+per format is not a catalog rule (format, Binding, language and ISBNs tell
+Releases apart); it is only what ANN, which states no Binding, cannot see
+past.
+
+Some packaging is held as `packaging` for an Editor, never placed:
+
+- A line whose work is not the Series' own. The work is the title before
+  the line's name, every number and mark kept ("Kingdom Hearts II [VIZBIG
+  Edition]" is Kingdom Hearts II, "Alpha 2 [VIZBIG Edition]" Alpha 2), and
+  it must name the Series' title up to case, accents, full-width forms,
+  entities, apostrophe and dash glyphs, "&"/"and" and spacing
+  (`sameWorkTitle` in `convex/lib/matching.ts`): Citrus+ is not Citrus,
+  Bastard!! not Bastard, E'S not ES, and "Dragon Ball Z [VIZBIG Edition]"
+  in ANN's Dragon Ball entry numbers Z's Volumes, stated or not. The
+  entry's own title is no anchor: its Series link may be an old, wrong
+  one. A renamed Series, or another spelling than these, holds too.
+- A line whose title leaves its work unclear: two line names beyond the
+  Series' own ("Makunouchi Deluxe [VIZBIG Edition]" under a Series of
+  another name), a line word its entry's name owns and the Series' does
+  not, a release page titling it otherwise, no work before the line's
+  name, or words after it that no position, tag or subtitle explains.
+- A line whose titles and designators (its own and its page's) name
+  different positions or formats, or whose statements of coverage no range
+  holds or disagree (above).
+- A line whose Edition Line is hidden, locked or merged away, or whose
+  member at that place is another book (above).
+- A line's last book by ANN's count ("(GN 9 / 9)") whose stated range
+  ends before the Series' highest Volume, since the last book takes what
+  is left ("Rurouni Kenshin - VIZBIG Edition [25-27]" collects 25–28). A
+  stated range is never extended.
+
+Packaging whose title or page title marks a novel ("Alpha (Light Novel)
+[VIZBIG Edition]") is out of scope and keeps only its note, whatever its
+distributor. A line with no known size ("[Library Edition]") places as
+Unmapped Packaging. A reissue, binding or variant tag names no line
+("[2nd Edition]", "[2nd Ed]", "[Revised Edition]", "[Hardcover]",
+"[Limited Edition]"), and neither does an anniversary reprint, which ANN
+numbers by Volume ("NANA - [25th Anniversary Edition] (GN 2)"): those
+lines stay single Volumes, and one whose Volume already has the
+publisher's Release in its format is held as a reprint (`isbn`). A line
+held as a reprint before this rule is read again by the next mirror, and
+the page pass after it handles the line as packaging. A line linked to a
+Release before then keeps its link: this rule never moves or unlinks one.
 
 The page's description fills
 a blank Release Description at weak authority, and the pass refetches up
