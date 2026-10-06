@@ -12,6 +12,7 @@ const reason = v.union(
   v.literal("nonEnglish"),
   v.literal("childrensBook"),
   v.literal("audio"),
+  v.literal("libraryRebind"),
 );
 export const stateInternal = internalQuery({
   args: { isbn: v.string() },
@@ -21,7 +22,10 @@ export const stateInternal = internalQuery({
   },
 });
 
-/** One exact-ISBN disposition. childrensBook means picture/board books, never children's manga. */
+/**
+ * Exact ISBN only. childrensBook means picture/board books, never children's manga.
+ * Library rebinds require reviewed product evidence, never a publisher-prefix ban.
+ */
 export const decideInternal = internalMutation({
   args: {
     actor: v.string(),

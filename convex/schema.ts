@@ -728,6 +728,7 @@ export default defineSchema({
       v.literal("nonEnglish"),
       v.literal("childrensBook"),
       v.literal("audio"),
+      v.literal("libraryRebind"),
     ),
     evidenceUrls: v.array(v.string()),
     decidedBy: v.id("users"),

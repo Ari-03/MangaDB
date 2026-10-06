@@ -558,125 +558,163 @@ describe("guarded held-book workflows", () => {
     });
   });
 
-  it("hides the proved Grimgar novel Release while retaining its manga Volume, Edition, comment and historical source IDs", async () => {
-    const t = makeT();
-    const userId = await admin(t);
-    const s = await t.run(async (ctx) => {
-      const publisherId = await insertPublisher(ctx, { name: "Seven Seas Entertainment" });
-      const seriesId = await insertSeries(ctx, { title: "Grimgar of Fantasy and Ash" });
-      const volumeId = await insertVolume(ctx, { seriesId, label: "2", position: 2 });
-      const book = await insertBook(ctx, {
-        publisherId,
-        seriesId,
-        volumeId,
-        release: { isbn13: "9781626926608", isbn10: "1626926603", binding: "paperback" },
-      });
-      const sourceId = await insertObservation(ctx, {
-        sourceKey: "openlibrary",
-        sourceRecordId: "/books/OL27387937M",
-        recordRef: { type: "release", id: book.releaseId },
-        snapshot: {
-          kind: "olEdition",
-          title: "Grimgar of Fantasy and Ash  Vol. 2",
-          isbn13: "9781626926608",
-        },
-      });
-      const commentId = await ctx.db.insert("comments", {
-        userId,
-        seriesId,
-        volumeId,
-        body: "Private comment body",
-        spoiler: true,
-        status: "approved",
-        reportCount: 0,
-        createdAt: 0,
-      });
-      const commentAuditId = await ctx.db.insert("commentAudit", {
-        commentId,
-        action: "approve",
-        actor: { kind: "user", userId },
-        reason: "Private moderation reason",
-      });
-      const commentReportId = await ctx.db.insert("commentReports", {
-        commentId,
-        reporterId: userId,
-        reason: "other",
-        note: "Private report detail",
-        createdAt: 0,
-      });
-      return { ...book, seriesId, volumeId, sourceId, commentId, commentAuditId, commentReportId };
-    });
-    expect(
-      (await t.query(internal.heldRepair.scopedReleaseStateInternal, { releaseId: s.releaseId }))
-        .refusal,
-    ).toMatch(/scope decision/);
-    const scope = await t.query(internal.scope.stateInternal, { isbn: "9781626926608" });
-    const evidenceUrls = ["https://penguinrandomhouselibrary.com/book/?isbn=9781626926608"];
-    await t.mutation(internal.scope.decideInternal, {
-      actor: "ari",
+  it.each([
+    {
+      reason: "novel" as const,
+      publisher: "Seven Seas Entertainment",
+      series: "Grimgar of Fantasy and Ash",
+      label: "2",
       isbn13: "9781626926608",
-      reason: "novel",
-      evidenceUrls,
-      expected: scope.expected,
-    });
-    const preview = await t.query(internal.heldRepair.scopedReleaseStateInternal, {
-      releaseId: s.releaseId,
-    });
-    expect(preview.refusal).toBeNull();
-    expect(JSON.stringify(preview)).not.toContain("Private comment body");
-    expect(JSON.stringify(preview)).not.toContain("Private moderation reason");
-    expect(JSON.stringify(preview)).not.toContain("Private report detail");
-    expect(preview.privateCounts?.commentAudit).toBe(1);
-    expect(preview.privateCounts?.commentReports).toBe(1);
-    const progressId = await t.run((ctx) =>
-      ctx.db.insert("releaseProgress", {
-        userId,
-        releaseId: s.releaseId,
-        seriesId: s.seriesId,
-        percent: 50,
-      }),
-    );
-    const args = {
-      actor: "ari",
-      releaseId: s.releaseId,
-      expected: preview.expected!,
-      reason: "Exact publisher identifies this ISBN as Light Novel; retain the manga structure.",
-      evidenceUrls,
-    };
-    expect((await t.mutation(internal.heldRepair.hideScopedReleaseInternal, args)).status).toBe(
-      "refused",
-    );
-    await t.run(async (ctx) => {
-      expect((await ctx.db.get(s.releaseId))?.status).toBe("active");
-      await ctx.db.delete(progressId);
-    });
-    const fresh = await t.query(internal.heldRepair.scopedReleaseStateInternal, {
-      releaseId: s.releaseId,
-    });
-    expect(
-      (
-        await t.mutation(internal.heldRepair.hideScopedReleaseInternal, {
-          ...args,
-          expected: fresh.expected!,
-        })
-      ).status,
-    ).toBe("applied");
-    await t.run(async (ctx) => {
-      expect((await ctx.db.get(s.releaseId))?.status).toBe("hidden");
-      expect((await ctx.db.get(s.editionId))?.status).toBe("active");
-      expect((await ctx.db.get(s.volumeId))?.status).toBe("active");
-      expect((await ctx.db.get(s.commentId))?.body).toBe("Private comment body");
-      expect((await ctx.db.get(s.commentAuditId))?.commentId).toBe(s.commentId);
-      expect((await ctx.db.get(s.commentReportId))?.commentId).toBe(s.commentId);
-      expect((await ctx.db.get(s.sourceId))?.recordRef).toEqual({
-        type: "release",
-        id: s.releaseId,
+      isbn10: "1626926603",
+      sourceRecordId: "/books/OL27387937M",
+      title: "Grimgar of Fantasy and Ash  Vol. 2",
+      evidenceUrl: "https://penguinrandomhouselibrary.com/book/?isbn=9781626926608",
+    },
+    {
+      reason: "libraryRebind" as const,
+      publisher: "VIZ Media",
+      series: "Pokémon Adventures",
+      label: "18",
+      isbn13: "9781484415894",
+      isbn10: "1484415892",
+      sourceRecordId: "/books/OL39657408M",
+      title: "Pokemon Adventures, Vol. 18",
+      evidenceUrl: "https://grp.isbn-international.org/",
+    },
+  ])(
+    "hides a reviewed $reason Release while retaining manga structure, comments and source IDs",
+    async (bookCase) => {
+      const t = makeT();
+      const userId = await admin(t);
+      const s = await t.run(async (ctx) => {
+        const publisherId = await insertPublisher(ctx, { name: bookCase.publisher });
+        const seriesId = await insertSeries(ctx, { title: bookCase.series });
+        const volumeId = await insertVolume(ctx, {
+          seriesId,
+          label: bookCase.label,
+          position: Number(bookCase.label),
+        });
+        const book = await insertBook(ctx, {
+          publisherId,
+          seriesId,
+          volumeId,
+          release: { isbn13: bookCase.isbn13, isbn10: bookCase.isbn10, binding: "paperback" },
+        });
+        const sourceId = await insertObservation(ctx, {
+          sourceKey: "openlibrary",
+          sourceRecordId: bookCase.sourceRecordId,
+          recordRef: { type: "release", id: book.releaseId },
+          snapshot: {
+            kind: "olEdition",
+            title: bookCase.title,
+            isbn13: bookCase.isbn13,
+          },
+        });
+        const commentId = await ctx.db.insert("comments", {
+          userId,
+          seriesId,
+          volumeId,
+          body: "Private comment body",
+          spoiler: true,
+          status: "approved",
+          reportCount: 0,
+          createdAt: 0,
+        });
+        const commentAuditId = await ctx.db.insert("commentAudit", {
+          commentId,
+          action: "approve",
+          actor: { kind: "user", userId },
+          reason: "Private moderation reason",
+        });
+        const commentReportId = await ctx.db.insert("commentReports", {
+          commentId,
+          reporterId: userId,
+          reason: "other",
+          note: "Private report detail",
+          createdAt: 0,
+        });
+        return {
+          ...book,
+          seriesId,
+          volumeId,
+          sourceId,
+          commentId,
+          commentAuditId,
+          commentReportId,
+        };
       });
-      expect(JSON.stringify(await ctx.db.query("revisions").collect())).not.toContain(
-        "Private comment body",
+      expect(
+        (await t.query(internal.heldRepair.scopedReleaseStateInternal, { releaseId: s.releaseId }))
+          .refusal,
+      ).toMatch(/scope decision/);
+      const scope = await t.query(internal.scope.stateInternal, { isbn: bookCase.isbn13 });
+      const evidenceUrls = [bookCase.evidenceUrl];
+      await t.mutation(internal.scope.decideInternal, {
+        actor: "ari",
+        isbn13: bookCase.isbn13,
+        reason: bookCase.reason,
+        evidenceUrls,
+        expected: scope.expected,
+      });
+      const preview = await t.query(internal.heldRepair.scopedReleaseStateInternal, {
+        releaseId: s.releaseId,
+      });
+      expect(preview.refusal).toBeNull();
+      expect(JSON.stringify(preview)).not.toContain("Private comment body");
+      expect(JSON.stringify(preview)).not.toContain("Private moderation reason");
+      expect(JSON.stringify(preview)).not.toContain("Private report detail");
+      expect(preview.privateCounts?.commentAudit).toBe(1);
+      expect(preview.privateCounts?.commentReports).toBe(1);
+      const progressId = await t.run((ctx) =>
+        ctx.db.insert("releaseProgress", {
+          userId,
+          releaseId: s.releaseId,
+          seriesId: s.seriesId,
+          percent: 50,
+        }),
       );
-    });
-  });
+      const args = {
+        actor: "ari",
+        releaseId: s.releaseId,
+        expected: preview.expected!,
+        reason: `Reviewed exact ISBN is ${bookCase.reason}; retain the manga structure.`,
+        evidenceUrls,
+      };
+      expect((await t.mutation(internal.heldRepair.hideScopedReleaseInternal, args)).status).toBe(
+        "refused",
+      );
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(s.releaseId))?.status).toBe("active");
+        await ctx.db.delete(progressId);
+      });
+      const fresh = await t.query(internal.heldRepair.scopedReleaseStateInternal, {
+        releaseId: s.releaseId,
+      });
+      expect(
+        (
+          await t.mutation(internal.heldRepair.hideScopedReleaseInternal, {
+            ...args,
+            expected: fresh.expected!,
+          })
+        ).status,
+      ).toBe("applied");
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(s.releaseId))?.status).toBe("hidden");
+        expect((await ctx.db.get(s.editionId))?.status).toBe("active");
+        expect((await ctx.db.get(s.volumeId))?.status).toBe("active");
+        expect((await ctx.db.get(s.commentId))?.body).toBe("Private comment body");
+        expect((await ctx.db.get(s.commentAuditId))?.commentId).toBe(s.commentId);
+        expect((await ctx.db.get(s.commentReportId))?.commentId).toBe(s.commentId);
+        expect((await ctx.db.get(s.sourceId))?.recordRef).toEqual({
+          type: "release",
+          id: s.releaseId,
+        });
+        expect(JSON.stringify(await ctx.db.query("revisions").collect())).not.toContain(
+          "Private comment body",
+        );
+      });
+    },
+  );
 
   it("pins the current canonical slot before replaying a stored ANN observation", async () => {
     const t = makeT();
