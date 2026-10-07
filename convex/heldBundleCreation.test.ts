@@ -164,3 +164,46 @@ it("compares a new box position with the package, not the individual member Edit
     ).refusal,
   ).toMatch(/position differs/);
 });
+
+it("reviews a Complete Box Set qualifier only with resolved source work and full member contents", async () => {
+  const { t, args } = await fixture();
+  const snapshot = {
+    kind: "olEdition",
+    key: "/books/OL1M",
+    url: "https://openlibrary.org/books/OL1M",
+    title: "Naruto Complete Box Set",
+    seriesTitle: "Naruto",
+    isbn13: args.isbn13,
+    format: "physical",
+    multiVolume: false,
+    publishers: ["VIZ Media"],
+    packaging: { lineName: "Box Set", linePosition: null, coverRange: null },
+  };
+  await t.run((ctx) =>
+    ctx.db.patch(args.observationId, {
+      sourceKey: "openlibrary",
+      sourceRecordId: snapshot.key,
+      snapshot,
+    }),
+  );
+  const product = { ...args, name: "Naruto Complete Box Set" };
+  const preview = await t.query(internal.heldBundleCreation.previewInternal, product);
+  expect(preview.refusal).toBeNull();
+  expect(
+    await t.mutation(internal.heldBundleCreation.createInternal, {
+      ...product,
+      expected: preview.expected!,
+      actor: "alice",
+      reason: "Publisher exact package and complete member review",
+      dryRun: true,
+    }),
+  ).toEqual({ status: "dryRun" });
+  await t.run((ctx) =>
+    ctx.db.patch(args.observationId, {
+      snapshot: { ...snapshot, title: "Bleach Complete Box Set" },
+    }),
+  );
+  expect((await t.query(internal.heldBundleCreation.previewInternal, product)).refusal).toMatch(
+    /contradict/,
+  );
+});

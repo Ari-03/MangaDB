@@ -1219,10 +1219,26 @@ async function sourceContentsMatch(
       workNames.some((name) =>
         sameWorkTitle(reading.work.replace(/^the\s+/i, ""), name.replace(/^the\s+/i, "")),
       );
+    // Open Library can retain "Complete" in the work portion of a box title.
+    // Only a reviewed package with independently resolved Series context may
+    // treat that trailing word as a package qualifier.
+    const reviewedCompleteBox =
+      state.observation.sourceKey === "openlibrary" &&
+      !!(state.bundle || newBundleName) &&
+      proof?.isbn13 === state.isbn13 &&
+      reading.packaging.length > 0 &&
+      /\bcomplete\s+box\s*set\b/i.test(title) &&
+      /\s+complete$/i.test(reading.work) &&
+      state.source.series?._id === series._id &&
+      !!s.seriesTitle &&
+      workNames.some((name) => sameWorkTitle(s.seriesTitle!, name)) &&
+      workNames.some((name) => sameWorkTitle(reading.work.replace(/\s+complete$/i, ""), name));
     if (
       reading.scope.length ||
       reading.unreadable.length ||
-      (!workNames.some((name) => sameWorkTitle(reading.work, name)) && !reviewedArticle)
+      (!workNames.some((name) => sameWorkTitle(reading.work, name)) &&
+        !reviewedArticle &&
+        !reviewedCompleteBox)
     )
       return refuse("Known source work, scope or unreadable facts contradict review.");
     const parsed = parseBookTitle(title, { subtitle: s.subtitle });
