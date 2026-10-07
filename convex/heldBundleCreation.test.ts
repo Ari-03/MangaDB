@@ -37,7 +37,7 @@ async function fixture() {
         kind: "annRelease",
         annId: "22",
         mangaId: "11",
-        title: "Naruto Box Set",
+        title: "Naruto Box Set 1",
         isbn13: "9781421525822",
         format: "physical",
         multi: true,
@@ -45,7 +45,7 @@ async function fixture() {
         coverRange: { from: "1", to: "2" },
         page: {
           status: "ok",
-          title: "Naruto Box Set",
+          title: "Naruto Box Set 1",
           isbn13: "9781421525822",
           mangaId: "11",
           volume: "GN 1-2",
@@ -67,7 +67,7 @@ async function fixture() {
       memberIds,
       memberIsbn13s,
       volumeIds,
-      name: "Naruto Box Set",
+      name: "Naruto Box Set 1",
       isbn13: "9781421525822",
       evidenceUrls: ["https://www.viz.com/naruto-box-set"],
     };
@@ -150,4 +150,17 @@ it("creates audited ordered members without clearing the hold, then refuses the 
   expect((await t.query(internal.heldBundleCreation.previewInternal, args)).refusal).toMatch(
     /unowned/,
   );
+});
+
+it("compares a new box position with the package, not the individual member Edition Lines", async () => {
+  const { t, args } = await fixture();
+  expect((await t.query(internal.heldBundleCreation.previewInternal, args)).refusal).toBeNull();
+  expect(
+    (
+      await t.query(internal.heldBundleCreation.previewInternal, {
+        ...args,
+        name: "Naruto Box Set 2",
+      })
+    ).refusal,
+  ).toMatch(/position differs/);
 });

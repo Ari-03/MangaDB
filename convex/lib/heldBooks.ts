@@ -948,6 +948,7 @@ export async function reviewedMatch(
   ctx: QueryCtx,
   state: Awaited<ReturnType<typeof heldState>>,
   contents: Contents[],
+  newBundleName?: string,
 ) {
   const proof = state.reviewed ?? refuse("Complete exact-ISBN identity review is required.");
   const actual = contents.flatMap((c) => c.contents);
@@ -961,7 +962,7 @@ export async function reviewedMatch(
   if (state.source.series && state.source.series._id !== proof.seriesId && !routed)
     return refuse("Source parent work disagrees with review.");
   const series = await state.r.active(proof.seriesId);
-  await sourceContentsMatch(ctx, state, contents, series, routed);
+  await sourceContentsMatch(ctx, state, contents, series, routed, newBundleName);
   if (
     routed &&
     (actual.length !== 1 ||
@@ -981,6 +982,7 @@ async function sourceContentsMatch(
   contents: Contents[],
   series: Doc<"series">,
   routed: Awaited<ReturnType<typeof reviewedRouting>>,
+  newBundleName?: string,
 ) {
   const actual = contents.flatMap((content) => content.contents);
   if (state.episode) {
@@ -1259,12 +1261,13 @@ async function sourceContentsMatch(
     (actual.length !== 1 || !labelsEqual(actual[0]!.volume.label ?? null, sourceLabel))
   )
     return refuse("Known single-Volume extent differs.");
-  if (state.bundle && packaged && position) {
-    const targetPosition = parseBookTitle(state.bundle.name).packaging?.linePosition;
+  const bundleName = state.bundle?.name ?? newBundleName;
+  if (bundleName && packaged && position) {
+    const targetPosition = parseBookTitle(bundleName).packaging?.linePosition;
     if (targetPosition && !labelsEqual(targetPosition, position))
       return refuse("Known Bundle position differs.");
   }
-  if (!state.bundle && packaged && lineName) {
+  if (!bundleName && packaged && lineName) {
     const target = contents[0]!;
     if (
       !target.line ||

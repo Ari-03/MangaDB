@@ -117,7 +117,7 @@ async function creationState(ctx: QueryCtx, args: Packet) {
       return refuse("Member printing ownership is incomplete or differs.");
     memberContents.push(content);
   }
-  await reviewedMatch(ctx, state, memberContents);
+  await reviewedMatch(ctx, state, memberContents, args.name);
   const expected = valueHash({ args, held: state.expected, facts: state.r.facts });
   if (bytes(expected) > MAX_GUARD_BYTES) return refuse("Creation guard exceeds 256 KiB.");
   return { expected, state, memberContents, urls };
