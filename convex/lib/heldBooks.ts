@@ -14,7 +14,13 @@ import type { QueryCtx } from "../_generated/server";
 import { type AnnReleaseSnapshot, lineOutOfScope } from "../ann";
 import { placeEdition, REBINDER } from "../openLibrary";
 import { contentRefusal, readObservationBook, readTitledRecord } from "../printings";
-import { annContentFacts, annLinePackaged, packagingOf, readAnnLineTitle } from "./ann";
+import {
+  type AnnRelease,
+  annContentFacts,
+  annLinePackaged,
+  packagingOf,
+  readAnnLineTitle,
+} from "./ann";
 import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
 import { bindingFacts, bookFacts, type DigitalFileFormat, takesFormatSlot } from "./bookFacts";
@@ -748,6 +754,7 @@ export async function heldState(
   if (reviewed?.episodeRouting) {
     if (
       reviewed.umbrellaRouting ||
+      reviewed.collectionRouting ||
       reviewed.titledVolume ||
       replay ||
       bundle ||
@@ -782,22 +789,12 @@ export async function heldState(
       return refuse(error instanceof Error ? error.message : String(error));
     }
   }
-  const expected = valueHash({
-    observationId,
-    target: target ?? null,
-    reviewed: reviewed ?? null,
-    replay,
-    facts: r.facts,
-    bootstrap,
-  });
-  if (new TextEncoder().encode(expected).length > MAX_GUARD_BYTES)
-    return refuse("Guard exceeds 256 KiB; inspect this record separately.");
   const eligible =
     !observation.withdrawn &&
     !observation.recordRef &&
     hold !== null &&
     proposal?.state !== "inReview";
-  return {
+  const state = {
     observation,
     effective,
     hold,
@@ -810,7 +807,7 @@ export async function heldState(
     bundle,
     members,
     memberContents,
-    expected,
+    expected: "",
     eligible,
     r,
     reviewed,
@@ -819,6 +816,32 @@ export async function heldState(
     replayBefore,
     annCreate,
   };
+  if (reviewed?.collectionRouting) {
+    if (!eligible || scopeReason)
+      return refuse(scopeReason ?? "Collection product must remain held and unlinked.");
+    if (
+      !contents ||
+      bundle ||
+      target?.type !== "release" ||
+      target.id !== contents.release._id ||
+      contents.release.editionId !== contents.edition._id
+    )
+      return refuse(
+        "Collection routing requires its own active Release and Edition, without redirects.",
+      );
+    await reviewedMatch(ctx, state, [contents]);
+  }
+  state.expected = valueHash({
+    observationId,
+    target: target ?? null,
+    reviewed: reviewed ?? null,
+    replay,
+    facts: r.facts,
+    bootstrap,
+  });
+  if (new TextEncoder().encode(state.expected).length > MAX_GUARD_BYTES)
+    return refuse("Guard exceeds 256 KiB; inspect this record separately.");
+  return state;
 }
 
 /** Publisher identity uses the source's own resolver. Corporate-family acceptance is deferred. */
@@ -910,6 +933,15 @@ export type ReviewedIdentity = {
   standalone?: StandaloneIdentity;
   titledVolume?: { productTitle: string; volumeTitle: string; productVolumeLabel: string };
   episodeRouting?: EpisodeRouting;
+  collectionRouting?: {
+    sourceTitle: string;
+    productTitle: string;
+    productVolumeLabel: string;
+    productEvidence: { url: string; sha256: string; publisherName: string };
+    parentSeriesId: Id<"series">;
+    parentObservationId: Id<"sourceObservations">;
+    binding: "hardcover" | "paperback";
+  };
   umbrellaRouting?: { sourceTitle: string; productTitle: string; productVolumeLabel: string };
 };
 export async function reviewedMatch(
@@ -935,7 +967,8 @@ export async function reviewedMatch(
     (actual.length !== 1 ||
       !labelsEqual(
         actual[0]!.volume.label ?? null,
-        (proof.episodeRouting ?? proof.umbrellaRouting)!.productVolumeLabel,
+        (proof.episodeRouting ?? proof.collectionRouting ?? proof.umbrellaRouting)!
+          .productVolumeLabel,
       ))
   )
     return refuse("Reviewed product Volume differs from complete canonical contents.");
@@ -993,7 +1026,11 @@ async function sourceContentsMatch(
   let position: string | null | undefined;
   if (state.observation.sourceKey === "ann") {
     const line = state.observation.snapshot as AnnReleaseSnapshot;
-    const context = routed ? undefined : annWorkContext(state, series);
+    const context = state.reviewed?.collectionRouting
+      ? { seriesId: series._id, names: [series.title], parentTitle: series.title }
+      : routed
+        ? undefined
+        : annWorkContext(state, series);
     const workNames = context?.names ?? [series.title];
     const names = routed ? [series.title, routed.sourceWork] : workNames;
     const reading = await readObservationBook(ctx, state.observation, [series], names, context);
@@ -1381,6 +1418,143 @@ function samePartWork(sourceTitle: string, targetTitle: string) {
   );
 }
 
+/** One exact publisher product in its own collection Volume; the ANN parent stays linked. */
+async function collectionRouting(
+  ctx: QueryCtx,
+  state: Awaited<ReturnType<typeof heldState>>,
+  seriesId: Id<"series">,
+) {
+  const proof = state.reviewed!;
+  const route = proof.collectionRouting!;
+  const target = state.contents;
+  const line = state.observation.snapshot as AnnReleaseSnapshot;
+  const series = await state.r.active(seriesId);
+  const parent = state.source.parent;
+  const snapshot = parent?.snapshot as
+    | {
+        kind?: string;
+        id?: string;
+        title?: string;
+        releases?: AnnRelease[];
+      }
+    | undefined;
+  const suffix = /^(.*?) (Full Color Collection|Paperback Collection)( \[Hardcover\])?$/.exec(
+    line.title,
+  );
+  const binding = suffix?.[2] === "Full Color Collection" ? "hardcover" : "paperback";
+  const work = suffix ? `${suffix[1]} ${suffix[2]}` : "";
+  const member = snapshot?.releases?.filter((row) => row.annId === line.annId) ?? [];
+  if (
+    state.observation.sourceKey !== "ann" ||
+    proof.umbrellaRouting ||
+    proof.titledVolume ||
+    !suffix ||
+    !suffix[1] ||
+    /\b(?:part|novel|neo|spinoff)\b/i.test(suffix[1]) ||
+    series.title !== work ||
+    route.sourceTitle !== line.title ||
+    proof.sourceTitle !== line.title ||
+    route.productTitle !== `${work} ${route.productVolumeLabel}` ||
+    !/^\d+$/.test(route.productVolumeLabel) ||
+    route.binding !== binding ||
+    (binding === "paperback" && suffix[3]) ||
+    state.observation.sourceRecordId !== `release:${line.annId}` ||
+    !target ||
+    state.bundle ||
+    target.release.format !== "physical" ||
+    line.format !== "physical" ||
+    target.release.binding !== binding ||
+    line.multi ||
+    line.editionLineHint ||
+    line.coverRange ||
+    line.coverageGapped ||
+    target.line ||
+    target.contents.length !== 1 ||
+    target.series.length !== 1 ||
+    target.series[0]!._id !== seriesId ||
+    target.contents[0]!.work._id !== seriesId ||
+    target.contents[0]!.volume._id !== proof.volumeIds[0] ||
+    proof.volumeIds.length !== 1 ||
+    !labelsEqual(target.contents[0]!.volume.label, route.productVolumeLabel) ||
+    state.claims.owners.size !== 1 ||
+    !state.claims.owners.has(target.release._id) ||
+    !primaryIsbnsOf(target.release).has(proof.isbn13) ||
+    proof.isbn13 !== state.isbn13 ||
+    toIsbn13(line.isbn13) !== proof.isbn13 ||
+    !/^[a-f0-9]{64}$/.test(route.productEvidence.sha256) ||
+    !proof.evidenceUrls.includes(route.productEvidence.url) ||
+    ![route.productEvidence.url].some((url) => {
+      const parsed = new URL(url);
+      return (
+        parsed.protocol === "https:" &&
+        parsed.hostname === "www.penguinrandomhouse.com" &&
+        parsed.pathname.startsWith("/books/") &&
+        parsed.pathname.split("/").filter(Boolean).at(-1) === proof.isbn13
+      );
+    })
+  )
+    return refuse(
+      "Reviewed collection product identity, binding, ISBN owner or complete Volume disagrees.",
+    );
+  if (
+    !parent ||
+    parent._id !== route.parentObservationId ||
+    parent.sourceKey !== "ann" ||
+    parent.sourceRecordId !== `manga:${line.mangaId}` ||
+    snapshot?.kind !== "annManga" ||
+    snapshot.id !== line.mangaId ||
+    parent.recordRef?.type !== "series" ||
+    parent.recordRef.id !== route.parentSeriesId ||
+    state.source.series?._id !== route.parentSeriesId ||
+    snapshot.title !== suffix[1] ||
+    state.source.series.title !== suffix[1] ||
+    member.length !== 1 ||
+    member[0]!.title !== line.title ||
+    toIsbn13(member[0]!.isbn13) !== proof.isbn13 ||
+    !labelsEqual(member[0]!.label ?? null, route.productVolumeLabel) ||
+    member[0]!.format !== "physical" ||
+    member[0]!.multi !== false ||
+    member[0]!.editionLineHint !== false ||
+    member[0]!.coverRange ||
+    member[0]!.coverageGapped
+  )
+    return refuse("Collection parent identity, recordRef or exact product membership disagrees.");
+  const page = line.page;
+  if (
+    page?.status !== "ok" ||
+    page.title !== line.title ||
+    page.distributor !== route.productEvidence.publisherName ||
+    page.mangaId !== line.mangaId ||
+    toIsbn13(page.isbn13) !== proof.isbn13 ||
+    (page.isbn10 && toIsbn13(page.isbn10) !== proof.isbn13) ||
+    page.volume !== `GN ${route.productVolumeLabel}` ||
+    !labelsEqual(line.label ?? null, route.productVolumeLabel)
+  )
+    return refuse("Collection source page ISBN, title, parent or GN label disagrees.");
+  await publisherMatch(guardedResolverContext(ctx, state.r), state.observation, proof.publisherId);
+  return { sourceWork: work, rootWork: suffix[1]! };
+}
+
+/** Preview and execution share this Series-review contract. Collection checks are also hashed by heldState. */
+export async function validateSeriesReview(
+  ctx: QueryCtx,
+  state: Awaited<ReturnType<typeof heldState>>,
+  seriesId: Id<"series">,
+) {
+  if (!state.eligible || state.scopeReason)
+    return refuse(state.scopeReason ?? "Book must remain held and unlinked.");
+  const series = await state.r.active(seriesId);
+  if (state.reviewed && state.reviewed.seriesId !== series._id)
+    return refuse("Reviewed Series and proposed routing differ.");
+  if (!state.source.series && !state.reviewed)
+    return refuse("No source parent: supply exact product identity/contents review.");
+  const routed = await reviewedRouting(ctx, state, series._id);
+  if (state.source.series && state.source.series._id !== series._id && !routed)
+    return refuse("Source parent points elsewhere; repair its link before changing the hold.");
+  if (state.contents && state.reviewed) await reviewedMatch(ctx, state, [state.contents]);
+  return series;
+}
+
 /** An explicitly reviewed member of a multi-Part ANN parent; never changes that parent. */
 export async function reviewedRouting(
   ctx: QueryCtx,
@@ -1391,6 +1565,7 @@ export async function reviewedRouting(
     if (state.reviewed?.seriesId !== seriesId) return refuse("Episode routing Series differs.");
     return state.episode;
   }
+  if (state.reviewed?.collectionRouting) return collectionRouting(ctx, state, seriesId);
   const route = state.reviewed?.umbrellaRouting;
   if (!route) return false;
   if (state.observation.sourceKey !== "ann")

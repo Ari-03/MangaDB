@@ -22,6 +22,7 @@ import {
   publisherMatch,
   reviewedMatch,
   reviewedRouting,
+  validateSeriesReview,
   refuse,
 } from "./lib/heldBooks";
 import {
@@ -55,6 +56,17 @@ export const reviewedIdentityValidator = v.object({
     v.object({ productTitle: v.string(), volumeTitle: v.string(), productVolumeLabel: v.string() }),
   ),
   episodeRouting: v.optional(episodeRoutingValidator),
+  collectionRouting: v.optional(
+    v.object({
+      sourceTitle: v.string(),
+      productTitle: v.string(),
+      productVolumeLabel: v.string(),
+      productEvidence: v.object({ url: v.string(), sha256: v.string(), publisherName: v.string() }),
+      parentSeriesId: v.id("series"),
+      parentObservationId: v.id("sourceObservations"),
+      binding: v.union(v.literal("hardcover"), v.literal("paperback")),
+    }),
+  ),
   umbrellaRouting: v.optional(
     v.object({ sourceTitle: v.string(), productTitle: v.string(), productVolumeLabel: v.string() }),
   ),
@@ -205,6 +217,24 @@ export const previewInternal = internalQuery({
   },
 });
 
+/** Validate the complete proposed Series route before its audited hold update. */
+export const previewSeriesReviewInternal = internalQuery({
+  args: {
+    observationId: v.id("sourceObservations"),
+    target: targetValidator,
+    reviewed: reviewedIdentityValidator,
+  },
+  handler: async (ctx, args) => {
+    try {
+      const state = await heldState(ctx, args.observationId, args.target, args.reviewed);
+      await validateSeriesReview(ctx, state, args.reviewed.seriesId);
+      return { ready: true, expected: state.expected, refusal: null };
+    } catch (error) {
+      return { ready: false, expected: null, refusal: heldError(error) };
+    }
+  },
+});
+
 const operation = v.union(
   v.literal("refreshSource"),
   v.literal("reviewSeries"),
@@ -329,25 +359,14 @@ export const applyInternal = internalMutation({
       if (args.operation === "reviewSeries") {
         if (!args.seriesId)
           return refuse("Supply the researched source Series, not an ISBN-derived guess.");
-        const series = await state.r.active(args.seriesId);
-        if (args.reviewed && args.reviewed.seriesId !== series._id)
-          return refuse("Reviewed Series and proposed routing differ.");
-        if (!state.source.series && !args.reviewed)
-          return refuse("No source parent: supply exact product identity/contents review.");
-        const routed = await reviewedRouting(ctx, state, series._id);
-        if (args.reviewed?.episodeRouting) {
-          if (
-            !state.contents ||
+        const series = await validateSeriesReview(ctx, state, args.seriesId);
+        if (
+          args.reviewed?.episodeRouting &&
+          (!state.contents ||
             state.claims.owners.size !== 1 ||
-            !state.claims.owners.has(state.contents.release._id)
-          )
-            return refuse("Episode review target must be the sole ISBN owner.");
-          await reviewedMatch(ctx, state, [state.contents]);
-        }
-        if (state.source.series && series._id !== state.source.series._id && !routed)
-          return refuse(
-            "Source parent points elsewhere; repair its link before changing the hold.",
-          );
+            !state.claims.owners.has(state.contents.release._id))
+        )
+          return refuse("Episode review target must be the sole ISBN owner.");
         if (state.hold!.seriesId === series._id) return { status: "alreadyApplied" };
         await ctx.db.patch(state.hold!._id, { seriesId: series._id });
       } else if (args.operation === "link") {
@@ -434,7 +453,16 @@ export const applyInternal = internalMutation({
       args.observationId,
       args.reason.trim(),
       urls,
-      args.reviewed?.standalone ? valueHash(args.reviewed) : undefined,
+      args.reviewed?.standalone
+        ? valueHash(args.reviewed)
+        : args.reviewed?.collectionRouting
+          ? JSON.stringify({
+              reviewed: args.reviewed,
+              target: args.target,
+              priorConflicts: state.observation.conflicts ?? [],
+              priorHold: state.hold,
+            })
+          : undefined,
     );
     let createdStructure: Doc<"heldRepairLedger">["createdStructure"];
     if (releaseId) {
