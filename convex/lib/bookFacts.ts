@@ -53,6 +53,60 @@ export function bindingFacts(value: unknown): KnownBinding[] {
   );
 }
 
+/**
+ * Dedicated format metadata has no narrative/work-name exemption. Read every
+ * token, including compound file descriptions; an unknown remainder cannot
+ * certify a physical product. Display titles continue to use bookFacts.
+ */
+export function dedicatedFormatFacts(value: unknown) {
+  const bindings: KnownBinding[] = [];
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === ""))
+    return { bindings, digital: false, physical: false, unreadable: false };
+  if (typeof value !== "string")
+    return { bindings, digital: false, physical: false, unreadable: true };
+  const text = decodeEntities(value)
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\u2010-\u2015]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Match digital tokens anywhere in a dedicated field, even after a physical
+  // binding. EPUB/PDF are file evidence, never physical binding evidence.
+  let digital = false;
+  let physical = false;
+  const remainder = text
+    .replace(
+      /\b(?:e[ -]?books?|kindle|electronic|digital|epub|pdf|mobi|azw3?|kf8|online)\b/g,
+      () => {
+        digital = true;
+        return " ";
+      },
+    )
+    .replace(
+      /\b(?:hard[ -]?(?:cover|back|bound)|paper[ -]?back|soft[ -]?(?:cover|back|bound))\b/g,
+      (token) => {
+        bindings.push(token.startsWith("hard") ? "hardcover" : "paperback");
+        physical = true;
+        return " ";
+      },
+    )
+    .replace(/\b(?:physical|print(?:ed)?)\b/g, () => {
+      physical = true;
+      return " ";
+    })
+    .replace(
+      /\b(?:trade|mass[ -]market|mature|edition|version|binding|format|books?|resource|download|file|fixed layout|reflowable|fxl|manga|rtl|and|or)\b/g,
+      " ",
+    )
+    .replace(/[\s.,:;()[\]{}/&+-]/g, "");
+  return {
+    bindings,
+    digital,
+    physical,
+    unreadable: remainder !== "" || (!digital && !physical) || (digital && physical),
+  };
+}
+
 const key = (text: string) =>
   decodeEntities(text).normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
 

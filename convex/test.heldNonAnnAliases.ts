@@ -396,7 +396,7 @@ export const nonAnnAliasCases = [
       format: "physical",
       language: "en",
     },
-    ready: false,
+    ready: true,
   },
   {
     source: {

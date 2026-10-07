@@ -25,7 +25,7 @@ import { type AnnReleaseSnapshot, lineOutOfScope } from "./ann";
 import { getSourceByKey } from "./importSources";
 import { packagingOf, readAnnLineTitle, splitReleaseTitle } from "./lib/ann";
 import { nestedLimits, platformStop } from "./lib/bounded";
-import { bindingFacts, bookFacts } from "./lib/bookFacts";
+import { bindingFacts, bookFacts, dedicatedFormatFacts } from "./lib/bookFacts";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
 import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
 import { labelsEqual, sameWorkTitle } from "./lib/matching";
@@ -520,12 +520,12 @@ function readAnnLine(
  * stands, and is checked against the Release like any other. An explicit
  * title or retained subtitle stating another Volume contradicts it.
  * A Binding is stated by a dedicated
- * field, a peeled format tag, or an explicit technical clause. A retained
- * subtitle is read separately for explicit Volume, Binding, packaging and
- * scope facts, so a preferred label cannot hide any later technical clause. Its
- * prose is never appended to work identity here; the producer already
- * retains joined work names in `title`. Legacy missing subtitles supply no
- * new facts, and their stored Volume continues to stand.
+ * field, a peeled format tag, or an explicit technical clause. Retained
+ * subtitles and contextual colon suffixes are read separately for explicit
+ * Volume, Binding, packaging and scope facts, so a preferred label cannot hide
+ * a later technical clause. Only independently resolved work context licenses
+ * `Work N: Subtitle`; prose never becomes a work alias. Legacy missing
+ * subtitles supply no new facts, and their stored Volume continues to stand.
  */
 export function readTitledRecord(
   sourceKey: string,
@@ -535,22 +535,27 @@ export function readTitledRecord(
   workContext?: WorkContext,
 ): BookReading {
   const parsed = parseBookTitle(title);
-  // Only independently resolved source names license a whole trailing integer.
+  // Only independently resolved source names license an integer and optional subtitle.
   // Target names and the ISBN owner alone never establish this context.
   const titleKey = (text: string) =>
     decodeEntities(text).normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
-  const bare = /^(.+?)\s+([0-9]+)$/.exec(title.trim());
+  const bare = /^(.+?)\s+([0-9]+)(?:\s*:\s*(.+))?$/.exec(title.trim());
   const contextualVolume =
     workContext &&
     bare &&
-    !/\b(?:part|episode)\s+[0-9]+$/i.test(title.trim()) &&
+    !/\b(?:part|episode)$/i.test(bare[1]!.trim()) &&
+    // Bracketed designators need their existing packaging/contents reader.
+    !BRACKETED.test(bare[3] ?? "") &&
     !workContext.names.some((name) => titleKey(name) === titleKey(title)) &&
     workContext.names.some((name) => titleKey(name) === titleKey(bare[1]!))
-      ? { work: bare[1]!, label: canonicalLabel(bare[2]!) }
+      ? { work: bare[1]!, label: canonicalLabel(bare[2]!), subtitle: bare[3]?.trim() }
       : undefined;
   const subtitle = nonEmpty(s?.subtitle) ? s.subtitle.trim() : "";
   const titleFacts = bookFacts(title, names);
-  const subtitleFacts = bookFacts(subtitle);
+  // A contextual display subtitle owns no work words. Read it separately so
+  // target declarations cannot swallow its technical facts; retain raw text.
+  const subtitles = [...new Set([subtitle, contextualVolume?.subtitle].filter(nonEmpty))];
+  const subtitleReadings = subtitles.map((text) => ({ text, facts: bookFacts(text) }));
   const reading: BookReading = {
     work: contextualVolume?.work ?? parsed.seriesTitle,
     label: undefined,
@@ -560,28 +565,70 @@ export function readTitledRecord(
     scope: [],
     unreadable: [],
   };
+  const dedicatedFormats = [
+    { where: "its stored binding", facts: dedicatedFormatFacts(s?.binding) },
+    { where: "its physical format", facts: dedicatedFormatFacts(s?.physicalFormat) },
+  ];
   agreedBinding(reading, [
+    ...(contextualVolume
+      ? dedicatedFormats.flatMap(({ where, facts }) =>
+          facts.bindings.map((text) => ({ where, text })),
+        )
+      : []),
     { where: "its stored binding", text: s?.binding },
     { where: "its physical format", text: s?.physicalFormat },
     ...titleBindings(`its title "${title}"`, parsed.formatTags),
     ...titleFacts.bindings.map((text) => ({ where: `its title "${title}"`, text })),
-    ...subtitleFacts.bindings.map((text) => ({ where: `its subtitle "${subtitle}"`, text })),
+    ...subtitleReadings.flatMap(({ text: subtitle, facts }) =>
+      facts.bindings.map((text) => ({ where: `its subtitle "${subtitle}"`, text })),
+    ),
   ]);
   agreedLabel(reading, [
     { where: `its title "${title}"`, label: parsed.volumeLabel },
     { where: "its title in the resolved source work", label: contextualVolume?.label },
     { where: "its stored reading", label: nonEmpty(s?.volumeLabel) ? s.volumeLabel : undefined },
     ...titleFacts.labels.map((label) => ({ where: `its title "${title}"`, label })),
-    ...subtitleFacts.labels.map((label) => ({ where: `its subtitle "${subtitle}"`, label })),
+    ...subtitleReadings.flatMap(({ text: subtitle, facts }) =>
+      facts.labels.map((label) => ({ where: `its subtitle "${subtitle}"`, label })),
+    ),
   ]);
-  reading.unreadable.push(...titleFacts.unreadable, ...subtitleFacts.unreadable);
-  reading.packaging.push(...titleFacts.packaging, ...subtitleFacts.packaging);
-  if (parsed.packaging !== null || parsed.isBox) reading.packaging.push(`its title "${title}"`);
-  if (BRACKETED.test(subtitle)) reading.packaging.push(`its subtitle "${subtitle}"`);
-  if (subtitle !== "") {
+  reading.unreadable.push(...titleFacts.unreadable);
+  reading.packaging.push(...titleFacts.packaging);
+  for (const { text: subtitle, facts } of subtitleReadings) {
+    reading.unreadable.push(...facts.unreadable);
+    reading.packaging.push(...facts.packaging);
+    if (BRACKETED.test(subtitle)) reading.packaging.push(`its subtitle "${subtitle}"`);
     const scope = outOfScopeReason(subtitle);
     if (scope !== null) reading.scope.push(`its subtitle reads ${scope}`);
   }
+  // Contextual numbering must retain every explicit format counterfact. Read
+  // dedicated fields and both subtitle sources independently, without letting
+  // work declarations consume them or treating narrative prose as a format.
+  if (contextualVolume) {
+    const formatStatements = [
+      { where: `its title "${title}"`, facts: bookFacts(title, workContext?.names) },
+      ...subtitleReadings.map(({ text, facts }) => ({
+        where: `its subtitle "${text}"`,
+        facts,
+      })),
+    ];
+    for (const { where, facts } of formatStatements) {
+      if (facts.digital && s?.format !== "digital")
+        reading.unreadable.push(`${where} says digital, its stored format does not`);
+      if (facts.bindings.length > 0 && s?.format === "digital")
+        reading.unreadable.push(`${where} says physical, its stored format is digital`);
+    }
+  }
+  if (contextualVolume) {
+    for (const { where, facts } of dedicatedFormats) {
+      if (facts.unreadable) reading.unreadable.push(`${where} has an unresolved or mixed format`);
+      if (facts.digital && s?.format !== "digital")
+        reading.unreadable.push(`${where} says digital, its stored format does not`);
+      if (facts.physical && s?.format === "digital")
+        reading.unreadable.push(`${where} says physical, its stored format is digital`);
+    }
+  }
+  if (parsed.packaging !== null || parsed.isBox) reading.packaging.push(`its title "${title}"`);
   if (s?.multiVolume === true) reading.packaging.push("its stored multi-volume flag");
   if (s?.packaging !== undefined && s.packaging !== null) {
     reading.packaging.push("its stored packaging");

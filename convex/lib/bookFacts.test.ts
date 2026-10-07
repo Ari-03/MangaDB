@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bookFacts } from "./bookFacts";
+import { bookFacts, dedicatedFormatFacts } from "./bookFacts";
 
 describe("technical facts outside the complete work name", () => {
   it.each([
@@ -222,5 +222,73 @@ describe("annotations preserve pending contents", () => {
     });
     expect(bookFacts("Paperback/eBook").digital).toBe(true);
     expect(bookFacts("Hardcover dreams").bindings).toEqual([]);
+  });
+});
+
+describe("dedicated format metadata", () => {
+  it.each([
+    "Hardcover",
+    "Hardback",
+    "Hard bound",
+    "Paper-back",
+    "Trade Paperback",
+    "Mass-market paperback",
+    "Softbound",
+    "Soft cover",
+    "Paper&#98;ack",
+  ])("reads complete physical %s", (value) => {
+    expect(dedicatedFormatFacts(value)).toMatchObject({
+      physical: true,
+      digital: false,
+      unreadable: false,
+    });
+    expect(dedicatedFormatFacts(value).bindings).toHaveLength(1);
+  });
+  it.each([
+    "Electronic resource",
+    "eBook EPUB",
+    "Kindle Edition",
+    "EPUB FXL Manga RTL",
+    "PDF",
+    "MOBI",
+    "AZW3",
+    "e–book (PDF)",
+    "e&#66;ook&nbsp;EPUB",
+    "ＥＰＵＢ",
+  ])("reads complete digital %s", (value) => {
+    expect(dedicatedFormatFacts(value)).toMatchObject({
+      physical: false,
+      digital: true,
+      unreadable: false,
+    });
+  });
+  it.each([
+    "Paperback / eBook EPUB",
+    "EPUB; Hardcover",
+    "Unknown",
+    "Paperback unresolved",
+    "Electronic resource unknown",
+    "Digital adventures",
+    "???",
+    0,
+    false,
+    [],
+  ])("retains uncertainty in %j", (value) => {
+    expect(dedicatedFormatFacts(value).unreadable).toBe(true);
+  });
+  it.each([undefined, null, "", "  "])("absent %j asserts no format", (value) => {
+    expect(dedicatedFormatFacts(value)).toEqual({
+      bindings: [],
+      digital: false,
+      physical: false,
+      unreadable: false,
+    });
+  });
+  it("keeps display prose and dedicated metadata distinct", () => {
+    expect(bookFacts("Digital adventures").digital).toBe(false);
+    expect(dedicatedFormatFacts("Digital adventures")).toMatchObject({
+      digital: true,
+      unreadable: true,
+    });
   });
 });
