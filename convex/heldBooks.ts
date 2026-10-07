@@ -129,7 +129,7 @@ export const previewInternal = internalQuery({
         isbn13: state.isbn13,
         hold: state.hold,
         sourceSeriesId: state.source.series?._id ?? null,
-        placement: state.source.placement?.kind ?? null,
+        placement: state.source.placement?.kind ?? (state.annCreate ? "create" : null),
         owners: [...state.claims.owners.values()].map((o) => ({
           kind: o.kind,
           id: o.doc._id,

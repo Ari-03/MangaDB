@@ -15,7 +15,7 @@ import { contentRefusal, readObservationBook, readTitledRecord } from "../printi
 import { annContentFacts, annLinePackaged, packagingOf, readAnnLineTitle } from "./ann";
 import { parseBookTitle, rangeLabels, outOfScopeReason } from "./bookTitle";
 import { toIsbn13 } from "./isbn";
-import { bindingFacts, bookFacts, takesFormatSlot } from "./bookFacts";
+import { bindingFacts, bookFacts, type DigitalFileFormat, takesFormatSlot } from "./bookFacts";
 import { labelsEqual, sameWorkTitle, type TitleScan } from "./matching";
 import { type WorkContext, declaredWorkNames } from "./declaredWork";
 import { holdOf } from "./observations";
@@ -26,6 +26,7 @@ import {
   claimResolver,
   isbnClaims,
   MAX_DOCUMENT_BYTES,
+  primaryIsbnsOf,
   readRoom,
   statedIsbns,
   takeWithin,
@@ -475,19 +476,57 @@ async function replaySlots(ctx: QueryCtx, series: Doc<"series">, r: Reader) {
   };
 }
 
-/** Ordinary OL creation uses the same sibling ownership rules as member placement.
- * Hidden and merged Releases reserve their format; only the selected Volume needs readiness.
- * Another file format frees the slot only where both Releases' file formats are known.
+/**
+ * A hidden Release whose every primary ISBN has a current, approved exact-ISBN
+ * libraryRebind decision with evidence, and is that ISBN's sole owner: a
+ * reviewed library copy. It keeps its Edition, Volume, coverage, sources and
+ * ISBN, but not the publisher's ordinary format slot. Every read joins the
+ * guard, so a revoked decision or a changed claim invalidates a preview.
+ * Status and ISBN prefixes alone never qualify a Release.
  */
-async function olReplaySlot(
+async function reviewedLibraryCopy(ctx: QueryCtx, release: Doc<"releases">, r: Reader) {
+  if (release.status !== "hidden") return false;
+  const keys = primaryIsbnsOf(release);
+  if (!keys.size) return false;
+  for (const isbn of keys) {
+    const scope = await scopeState(ctx, isbn);
+    r.facts.push(scope);
+    if (scope.active?.reason !== "libraryRebind" || !scope.active.evidenceUrls.length) return false;
+    if ((await r.read(scope.active.proposalId))?.state !== "approved") return false;
+    const claims = await isbnClaims(ctx, isbn, {
+      resolver: claimResolver(ctx, { room: r.room }),
+      room: r.room,
+    });
+    if (
+      !claims?.complete ||
+      claims.unresolved.length ||
+      claims.owners.size !== 1 ||
+      !claims.owners.has(release._id)
+    )
+      return false;
+    r.facts.push([...claims.owners.values()]);
+  }
+  return true;
+}
+
+/**
+ * The publisher's ordinary single-Volume slot a replay would fill, using the
+ * sibling ownership rules of member placement: `free`, taken by an `active`
+ * Release, or `reserved` by a hidden or merged one. Only a reviewed library
+ * copy (reviewedLibraryCopy) leaves it free. Another file format frees it only
+ * where both Releases' file formats are known. A free slot has at most one
+ * surviving active, unlocked sibling Edition, which createCanonicalRecords
+ * reuses (findSiblingEdition).
+ */
+async function replayFormatSlot(
   ctx: QueryCtx,
-  placement: Extract<Awaited<ReturnType<typeof placeEdition>>, { kind: "create" }>,
-  snapshot: Pick<OlEditionSnapshot, "format" | "digitalFileFormat">,
+  slot: { series: Doc<"series">; volumeLabel: string | null; publisher: Doc<"publishers"> },
+  fact: { format: "physical" | "digital"; digitalFileFormat?: DigitalFileFormat },
   r: Reader,
-) {
-  const volumes = await volumesForLabels(ctx, placement.series._id, [placement.volumeLabel], r);
+): Promise<"free" | "active" | "reserved"> {
+  const volumes = await volumesForLabels(ctx, slot.series._id, [slot.volumeLabel], r);
   // labelsEqual treats an absent label as the ordinary unlabeled Volume.
-  const selected = volumes.filter((v) => labelsEqual(v.label, placement.volumeLabel));
+  const selected = volumes.filter((v) => labelsEqual(v.label, slot.volumeLabel));
   const active = selected.filter((v) => v.status === "active");
   if (active.length !== 1) return refuse("Replay Volume is absent or ambiguous.");
   const volume = await r.active(active[0]!._id);
@@ -497,12 +536,13 @@ async function olReplaySlot(
   }
   const siblings = await siblingEditions(
     guardedResolverContext(ctx, r),
-    placement.publisher._id,
+    slot.publisher._id,
     [volume._id],
     null,
   );
   const exact = new Set(siblings.map((edition) => edition._id));
   const survivors = new Set<Id<"editions">>();
+  let taken: "free" | "active" | "reserved" = "free";
   for (const sibling of siblings) {
     const edition = await r.active(sibling._id);
     if (!exact.has(edition._id)) return refuse("Replay Edition merged outside this slot.");
@@ -510,15 +550,39 @@ async function olReplaySlot(
     const releases = await r.many(
       ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", sibling._id)),
     );
-    // An unclassified digital sibling, hidden and merged ones included, keeps the slot.
-    if (
-      releases.some((release) =>
-        takesFormatSlot(release, snapshot.format, snapshot.digitalFileFormat),
-      )
-    )
-      return refuse("Replay format slot is occupied; restore or resolve its existing Release.");
+    for (const release of releases) {
+      if (!takesFormatSlot(release, fact.format, fact.digitalFileFormat)) continue;
+      if (release.status === "active") taken = taken === "free" ? "active" : taken;
+      else if (!(await reviewedLibraryCopy(ctx, release, r))) taken = "reserved";
+    }
   }
   if (survivors.size > 1) return refuse("Replay Edition ownership is ambiguous.");
+  return taken;
+}
+
+/**
+ * ANN's ordinary single-Volume creation (ann.applyReleasePage), proved before
+ * the stored adapter runs: an in-scope, unpackaged line of the parent's
+ * Series, its page's own ISBN and an existing publisher. Returns the slot that
+ * line would fill, or null where the adapter holds or packages it instead.
+ */
+function annReplaySlot(
+  line: AnnReleaseSnapshot,
+  isbn13: string | undefined,
+  series: Doc<"series">,
+  publisher: Doc<"publishers">,
+) {
+  const names = [series.title];
+  if (
+    line.page?.status !== "ok" ||
+    !isbn13 ||
+    toIsbn13(line.page.isbn13 ?? line.isbn13) !== isbn13 ||
+    line.coverageGapped ||
+    lineOutOfScope(line, names) !== null ||
+    annLinePackaged(line, names)
+  )
+    return null;
+  return { series, volumeLabel: line.label ?? null, publisher };
 }
 
 /** One source record and target per transaction. Expected includes every source, hold and graph fact read. */
@@ -577,13 +641,16 @@ export async function heldState(
       : await sourceSeries(ctx, observation, r);
   r.facts.push(source.placement);
   let replayBefore: Awaited<ReturnType<typeof replaySlots>> | null = null;
+  let annCreate = false;
   if (replay) {
     if (target || terminal || !source.series)
       return refuse("Replay needs an unlinked source with a resolved canonical work.");
     replayBefore = await replaySlots(ctx, source.series, r);
     if (source.placement?.kind === "create") {
       await r.active(source.placement.publisher._id);
-      await olReplaySlot(ctx, source.placement, effective.snapshot as OlEditionSnapshot, r);
+      const snapshot = effective.snapshot as OlEditionSnapshot;
+      if ((await replayFormatSlot(ctx, source.placement, snapshot, r)) !== "free")
+        return refuse("Replay format slot is occupied; restore or resolve its existing Release.");
     } else {
       const snapshot = observation.snapshot as AnnReleaseSnapshot;
       const publisher = snapshot.page?.distributor
@@ -591,6 +658,12 @@ export async function heldState(
         : null;
       if (!publisher) return refuse("Replay publisher is unresolved.");
       await r.active(publisher._id);
+      // An active occupant stays the adapter's own link-or-hold decision.
+      const slot = annReplaySlot(snapshot, isbn13, source.series, publisher);
+      const taken = slot && (await replayFormatSlot(ctx, slot, snapshot, r));
+      if (taken === "reserved")
+        return refuse("Replay format slot is occupied; restore or resolve its existing Release.");
+      annCreate = taken === "free";
     }
   }
   const heldSeries = hold?.seriesId && !terminal ? await r.active(hold.seriesId) : null;
@@ -672,6 +745,7 @@ export async function heldState(
     reviewed,
     heldSeries,
     replayBefore,
+    annCreate,
   };
 }
 

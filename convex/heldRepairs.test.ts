@@ -716,6 +716,221 @@ describe("guarded held-book workflows", () => {
     },
   );
 
+  // R23 cohort records: the genuine VIZ book held behind VIZ's own Edition's
+  // library copy. Only a current approved libraryRebind decision frees the slot.
+  it.each([
+    {
+      label: "18",
+      libraryIsbn13: "9781484415894",
+      sourceKey: "ann" as const,
+      sourceRecordId: "release:23378",
+      snapshot: {
+        kind: "annRelease",
+        annId: "23378",
+        mangaId: "7781",
+        title: "Pokémon Adventures - Ruby & Sapphire",
+        isbn13: "9781421535524",
+        label: "18",
+        format: "physical",
+        multi: false,
+        editionLineHint: false,
+        date: { day: 3, month: 9, year: 2013 },
+        url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=23378",
+        page: {
+          status: "ok",
+          volume: "GN 18",
+          title: "Pokémon Adventures - Ruby & Sapphire",
+          distributor: "Viz Media",
+          distributorId: "4552",
+          isbn10: "1421535521",
+          isbn13: "9781421535524",
+          mangaId: "7781",
+          priceCents: 999,
+          date: { day: 3, month: 9, year: 2013 },
+          fetchedAt: 1790493019368,
+        },
+      },
+    },
+    {
+      label: "11",
+      libraryIsbn13: "9781484430064",
+      sourceKey: "openlibrary" as const,
+      sourceRecordId: "/books/OL27127022M",
+      snapshot: {
+        kind: "olEdition",
+        key: "/books/OL27127022M",
+        title: "Pokémon Adventures, Volume 11",
+        seriesTitle: "Pokémon Adventures",
+        volumeLabel: "11",
+        format: "physical",
+        multiVolume: false,
+        isbn10: "1421535459",
+        isbn13: "9781421535456",
+        publishers: ["VIZ Media"],
+        publishDate: { year: 2011 },
+        description:
+          "Crystal encounters Suicune, a legendary Pokémon, as she continues her quest to fill Professor Oak's Pokédex, but in order to tame it, Crystal must first weaken it.",
+        url: "https://openlibrary.org/books/OL27127022M",
+      },
+    },
+  ])(
+    "replays real VIZ Pokémon Adventures $label from $sourceKey into the slot a reviewed hidden library copy leaves, keeping that copy",
+    async (bookCase) => {
+      const t = makeT();
+      await admin(t);
+      const s = await t.run(async (ctx) => {
+        const publisherId = await insertPublisher(ctx, { name: "VIZ Media" });
+        const seriesId = await insertSeries(ctx, { title: "Pokémon Adventures" });
+        const volumeId = await insertVolume(ctx, {
+          seriesId,
+          label: bookCase.label,
+          position: Number(bookCase.label),
+        });
+        const library = await insertBook(ctx, {
+          publisherId,
+          seriesId,
+          volumeId,
+          release: { isbn13: bookCase.libraryIsbn13 },
+        });
+        if (bookCase.sourceKey === "ann")
+          await insertObservation(ctx, {
+            sourceKey: "ann",
+            sourceRecordId: "manga:7781",
+            snapshot: { kind: "annManga", title: "Pokémon Adventures" },
+            recordRef: { type: "series", id: seriesId },
+          });
+        const observationId = await insertObservation(ctx, {
+          sourceKey: bookCase.sourceKey,
+          sourceRecordId: bookCase.sourceRecordId,
+          snapshot: bookCase.snapshot,
+          conflicts: [
+            {
+              field: "placement",
+              reason: `Volume ${bookCase.label} already has a physical VIZ Media Release (ISBN ${bookCase.libraryIsbn13}).`,
+              offered: null,
+              at: 1,
+            },
+          ],
+        });
+        await ctx.db.insert("placementHolds", {
+          observationId,
+          sourceKey: bookCase.sourceKey,
+          kind: "isbn",
+          seriesId,
+          heldAt: 10,
+        });
+        return { ...library, seriesId, volumeId, observationId };
+      });
+      const evidenceUrls = ["https://grp.isbn-international.org/"];
+      const decide = async () => {
+        const state = await t.query(internal.scope.stateInternal, { isbn: bookCase.libraryIsbn13 });
+        return await t.mutation(internal.scope.decideInternal, {
+          actor: "ari",
+          isbn13: bookCase.libraryIsbn13,
+          reason: "libraryRebind",
+          evidenceUrls,
+          expected: state.expected,
+        });
+      };
+      const revoke = async (decisionId: Id<"scopeDecisions">) => {
+        const state = await t.query(internal.scope.stateInternal, { isbn: bookCase.libraryIsbn13 });
+        await t.mutation(internal.scope.revokeInternal, {
+          actor: "ari",
+          decisionId,
+          reason: "Re-review the library copy.",
+          expected: state.expected,
+        });
+      };
+      const replay = { observationId: s.observationId, replay: true };
+      const execute = (expected: string) =>
+        t.mutation(internal.heldBooks.executeInternal, {
+          ...replay,
+          actor: "ari",
+          operation: "replay",
+          expected,
+          reason: "Genuine VIZ book replays after its library copy was hidden.",
+          evidenceUrls: [bookCase.snapshot.url],
+        });
+
+      // The active library copy holds the slot.
+      expect((await t.query(internal.heldBooks.previewInternal, replay)).placement).not.toBe(
+        "create",
+      );
+      const first = await decide();
+      const hide = await t.query(internal.heldRepair.scopedReleaseStateInternal, {
+        releaseId: s.releaseId,
+      });
+      expect(
+        (
+          await t.mutation(internal.heldRepair.hideScopedReleaseInternal, {
+            actor: "ari",
+            releaseId: s.releaseId,
+            expected: hide.expected!,
+            reason: "Reviewed exact ISBN is a library rebind; retain the manga structure.",
+            evidenceUrls,
+          })
+        ).status,
+      ).toBe("applied");
+      const stale = await t.query(internal.heldBooks.previewInternal, replay);
+      expect(stale.refusal).toBeNull();
+      expect(stale.placement).toBe("create");
+      expect(stale.owners).toEqual([]);
+
+      // Revocation leaves an ordinary hidden Release: it reserves the slot again,
+      // so the earlier guard executes nothing.
+      await revoke(first.decisionId);
+      const before = await t.run(async (ctx) => ({
+        releases: await ctx.db.query("releases").collect(),
+        ledgers: await ctx.db.query("heldRepairLedger").collect(),
+        observation: await ctx.db.get(s.observationId),
+      }));
+      const refused = await execute(stale.expected!);
+      expect(refused.status).toBe("refused");
+      expect(refused.reason).toMatch(/slot is occupied/);
+      expect((await t.query(internal.heldBooks.previewInternal, replay)).refusal).toMatch(
+        /slot is occupied/,
+      );
+      expect(
+        await t.run(async (ctx) => ({
+          releases: await ctx.db.query("releases").collect(),
+          ledgers: await ctx.db.query("heldRepairLedger").collect(),
+          observation: await ctx.db.get(s.observationId),
+        })),
+      ).toEqual(before);
+
+      await decide();
+      const fresh = await t.query(internal.heldBooks.previewInternal, replay);
+      expect(fresh.refusal).toBeNull();
+      expect(fresh.placement).toBe("create");
+      const applied = await execute(fresh.expected!);
+      expect(applied.status).toBe("applied");
+      await t.run(async (ctx) => {
+        const created = (await ctx.db.get(applied.releaseId!))!;
+        expect(created.isbn13).toBe(bookCase.snapshot.isbn13);
+        expect(created.editionId).toBe(s.editionId);
+        const library = (await ctx.db.get(s.releaseId))!;
+        expect(library.status).toBe("hidden");
+        expect(library.isbn13).toBe(bookCase.libraryIsbn13);
+        expect(library.editionId).toBe(s.editionId);
+        expect((await ctx.db.get(s.observationId))?.recordRef).toEqual({
+          type: "release",
+          id: created._id,
+        });
+        expect(await ctx.db.query("editions").collect()).toHaveLength(1);
+        expect(await ctx.db.query("volumes").collect()).toHaveLength(1);
+        expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(1);
+        const ledger = await ctx.db.get(applied.ledgerId!);
+        expect(ledger?.createdStructure).toMatchObject({
+          editionId: s.editionId,
+          newEdition: false,
+          newVolumeIds: [],
+          newCoverageIds: [],
+          sharedEdition: true,
+        });
+      });
+    },
+  );
+
   it("pins the current canonical slot before replaying a stored ANN observation", async () => {
     const t = makeT();
     const s = await dance(t);
@@ -733,7 +948,8 @@ describe("guarded held-book workflows", () => {
       evidenceUrls: urls,
     });
     expect(result.status).toBe("refused");
-    expect(result.reason).toMatch(/changed/);
+    // The replay slot reads its Volume as an active, unlocked dependency.
+    expect(result.reason).toMatch(/unlocked/);
     await t.run(async (ctx) => {
       expect((await ctx.db.get(s.observationId))?.recordRef).toBeUndefined();
       expect((await ctx.db.get(s.holdId))?.heldAt).toBe(10);
