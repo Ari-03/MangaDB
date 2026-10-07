@@ -1,3 +1,4 @@
+import { episodeRoute, type EpisodeRouting } from "./episodeRouting";
 import {
   projectSourceFormat,
   reviewedFormatRefusal,
@@ -711,6 +712,44 @@ export async function heldState(
     await r.active(reviewed.publisherId);
     for (const id of reviewed.volumeIds) await r.active(id);
   }
+  let episode: ReturnType<typeof episodeRoute> | null = null;
+  if (reviewed?.episodeRouting) {
+    if (
+      reviewed.umbrellaRouting ||
+      reviewed.titledVolume ||
+      replay ||
+      bundle ||
+      !contents ||
+      contents.series.length !== 1 ||
+      contents.series[0]!._id !== reviewed.seriesId ||
+      contents.publisher._id !== reviewed.publisherId ||
+      contents.contents.length !== 1 ||
+      contents.contents[0]!.volume._id !== reviewed.volumeIds[0] ||
+      reviewed.volumeIds.length !== 1 ||
+      contents.contents[0]!.work._id !== reviewed.seriesId ||
+      contents.line ||
+      effective.status !== "raw"
+    )
+      return refuse(
+        "Episode routing requires one exact existing complete local Volume and no other routing proof.",
+      );
+    try {
+      episode = episodeRoute({
+        observation,
+        parent: source.parent,
+        umbrella: source.series,
+        isbn13: isbn13 ?? null,
+        proof: reviewed.episodeRouting,
+        evidenceUrls: reviewed.evidenceUrls,
+        series: contents.series[0]!,
+        publisher: contents.publisher,
+        release: contents.release,
+        volume: contents.contents[0]!.volume,
+      });
+    } catch (error) {
+      return refuse(error instanceof Error ? error.message : String(error));
+    }
+  }
   const expected = valueHash({
     observationId,
     target: target ?? null,
@@ -743,6 +782,7 @@ export async function heldState(
     eligible,
     r,
     reviewed,
+    episode,
     heldSeries,
     replayBefore,
     annCreate,
@@ -836,6 +876,7 @@ export type ReviewedIdentity = {
   evidenceUrls: string[];
   sourceTitle?: string;
   titledVolume?: { productTitle: string; volumeTitle: string; productVolumeLabel: string };
+  episodeRouting?: EpisodeRouting;
   umbrellaRouting?: { sourceTitle: string; productTitle: string; productVolumeLabel: string };
 };
 export async function reviewedMatch(
@@ -859,7 +900,10 @@ export async function reviewedMatch(
   if (
     routed &&
     (actual.length !== 1 ||
-      !labelsEqual(actual[0]!.volume.label ?? null, proof.umbrellaRouting!.productVolumeLabel))
+      !labelsEqual(
+        actual[0]!.volume.label ?? null,
+        (proof.episodeRouting ?? proof.umbrellaRouting)!.productVolumeLabel,
+      ))
   )
     return refuse("Reviewed product Volume differs from complete canonical contents.");
 }
@@ -873,6 +917,20 @@ async function sourceContentsMatch(
   routed: Awaited<ReturnType<typeof reviewedRouting>>,
 ) {
   const actual = contents.flatMap((content) => content.contents);
+  if (state.episode) {
+    // episodeRoute checked every original title, page, parent, SKU, format and local/global fact
+    // before the expected guard was computed. Never rewrite the source or suppress reader flags.
+    if (
+      contents.length !== 1 ||
+      actual.length !== 1 ||
+      actual[0]!.work._id !== series._id ||
+      actual[0]!.volume._id !== state.reviewed?.volumeIds[0] ||
+      actual[0]!.extent !== "complete" ||
+      actual[0]!.volume.label !== state.episode.localLabel
+    )
+      return refuse("Episode complete canonical contents changed.");
+    return { packaged: false, hasKnownRange: false };
+  }
   if (actual.some((content) => content.work._id !== series._id))
     return refuse("Complete canonical contents belong to another work.");
   const proof = state.reviewed;
@@ -1146,6 +1204,10 @@ export async function reviewedRouting(
   state: Awaited<ReturnType<typeof heldState>>,
   seriesId: Id<"series">,
 ) {
+  if (state.episode) {
+    if (state.reviewed?.seriesId !== seriesId) return refuse("Episode routing Series differs.");
+    return state.episode;
+  }
   const route = state.reviewed?.umbrellaRouting;
   if (!route) return false;
   if (state.observation.sourceKey !== "ann")

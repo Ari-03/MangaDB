@@ -1,3 +1,4 @@
+import { episodeRoutingValidator } from "./lib/episodeRouting";
 import { subtitleRefreshProof, subtitleRefreshState } from "./lib/olSubtitleRefresh";
 import { sourceFormatState } from "./lib/heldBooks";
 import { reviewedFormatValidator, utf8Bytes, formatContext } from "./lib/sourceFormat";
@@ -51,10 +52,46 @@ export const reviewedIdentityValidator = v.object({
   titledVolume: v.optional(
     v.object({ productTitle: v.string(), volumeTitle: v.string(), productVolumeLabel: v.string() }),
   ),
+  episodeRouting: v.optional(episodeRoutingValidator),
   umbrellaRouting: v.optional(
     v.object({ sourceTitle: v.string(), productTitle: v.string(), productVolumeLabel: v.string() }),
   ),
 });
+/** Run the same Episode/contents guard as final linking before selecting the held work. */
+export const previewReviewSeriesInternal = internalQuery({
+  args: {
+    observationId: v.id("sourceObservations"),
+    target: v.object({ type: v.literal("release"), id: v.id("releases") }),
+    reviewed: reviewedIdentityValidator,
+  },
+  handler: async (ctx, args) => {
+    try {
+      const state = await heldState(ctx, args.observationId, args.target, args.reviewed);
+      if (!state.eligible || state.scopeReason)
+        refuse(state.scopeReason ?? "Book must remain held, present and outside review.");
+      if (!state.episode || !state.contents)
+        refuse("This preview requires the strict Episode route.");
+      if (state.claims.owners.size !== 1 || !state.claims.owners.has(state.contents!.release._id))
+        refuse("Episode review target must be the sole ISBN owner.");
+      await reviewedMatch(ctx, state, [state.contents!]);
+      return { expected: state.expected, refusal: null, classification: "reviewSeriesReady" };
+    } catch (error) {
+      return {
+        expected: null,
+        refusal:
+          error instanceof ConvexError
+            ? String(
+                error.data && typeof error.data === "object" && "held" in error.data
+                  ? error.data.held
+                  : error.data,
+              )
+            : String(error),
+        classification: "blocked",
+      };
+    }
+  },
+});
+
 const previewArgs = {
   observationId: v.id("sourceObservations"),
   target: v.optional(targetValidator),
@@ -296,6 +333,15 @@ export const applyInternal = internalMutation({
         if (!state.source.series && !args.reviewed)
           return refuse("No source parent: supply exact product identity/contents review.");
         const routed = await reviewedRouting(ctx, state, series._id);
+        if (args.reviewed?.episodeRouting) {
+          if (
+            !state.contents ||
+            state.claims.owners.size !== 1 ||
+            !state.claims.owners.has(state.contents.release._id)
+          )
+            return refuse("Episode review target must be the sole ISBN owner.");
+          await reviewedMatch(ctx, state, [state.contents]);
+        }
         if (state.source.series && series._id !== state.source.series._id && !routed)
           return refuse(
             "Source parent points elsewhere; repair its link before changing the hold.",
