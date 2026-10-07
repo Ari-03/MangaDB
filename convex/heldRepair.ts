@@ -1,4 +1,11 @@
 import {
+  unmappedProductArgs,
+  unmappedProductExecuteArgs,
+  unmappedProductState,
+  applyUnmappedProduct,
+  type UnmappedResult,
+} from "./lib/unmappedProduct";
+import {
   digitalSiblingArgs,
   digitalSiblingState,
   createDigitalSibling,
@@ -536,4 +543,40 @@ export const createDigitalSiblingInternal = internalMutation({
 export const createDigitalSiblingOneInternal = internalMutation({
   args: createDigitalSiblingArgs,
   handler: async (ctx, args): Promise<SiblingResult> => createDigitalSibling(ctx, args),
+});
+
+// Exact batch-051 product review, independent of unproved chapter/Volume coverage.
+export const previewUnmappedProductInternal = internalQuery({
+  args: unmappedProductArgs,
+  handler: async (ctx, args) => {
+    try {
+      const state = await unmappedProductState(ctx, args.observationId, args.proof);
+      return {
+        expected: state.expected,
+        refusal: null,
+        action: state.already ? "alreadyApplied" : state.release ? "link" : "create",
+        releaseId: state.release?._id ?? null,
+      };
+    } catch (error) {
+      return { expected: null, refusal: heldError(error), action: null, releaseId: null };
+    }
+  },
+});
+export const placeUnmappedProductInternal = internalMutation({
+  args: unmappedProductExecuteArgs,
+  handler: async (ctx, args): Promise<UnmappedResult> => {
+    if (utf8Bytes(args.expected) > MAX_GUARD_BYTES)
+      return { status: "refused", reason: "Guard exceeds 256 KiB." };
+    try {
+      return await ctx.runMutation(internal.heldRepair.placeUnmappedProductOneInternal, args, {
+        transactionLimits: await nestedLimits(ctx),
+      });
+    } catch (error) {
+      return { status: "refused", reason: heldError(error) };
+    }
+  },
+});
+export const placeUnmappedProductOneInternal = internalMutation({
+  args: unmappedProductExecuteArgs,
+  handler: applyUnmappedProduct,
 });
