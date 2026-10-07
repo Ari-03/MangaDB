@@ -136,3 +136,49 @@ export async function syscallLoad(body: () => Promise<unknown>) {
   }
   return { peak, calls };
 }
+
+/**
+ * Run `body` (a `t.run`, say) and tally its reads where the runtime meets
+ * the backend: `ranges` counts the queries opened per index
+ * ("releases.by_status_date", or the table for a full scan), `gets` each
+ * `db.get` per document id, found or not. Swaps convex-test's global as
+ * `syscallLoad` does.
+ */
+export async function readTally(body: () => Promise<unknown>) {
+  const holder = globalThis as unknown as { Convex: ConvexGlobal };
+  const real = holder.Convex;
+  const ranges = new Map<string, number>();
+  const gets = new Map<string, number>();
+  const bump = (tally: Map<string, number>, key: string) =>
+    tally.set(key, (tally.get(key) ?? 0) + 1);
+  holder.Convex = {
+    get syscall() {
+      const call = real.syscall as (op: string, args: string) => string;
+      return (op: string, args: string) => {
+        if (op === "1.0/queryStream") {
+          const { query } = JSON.parse(args) as {
+            query: { source: { indexName?: string; tableName?: string } };
+          };
+          bump(ranges, query.source.indexName ?? query.source.tableName ?? "");
+        }
+        return call(op, args);
+      };
+    },
+    get jsSyscall() {
+      return real.jsSyscall;
+    },
+    get asyncSyscall() {
+      const call = real.asyncSyscall;
+      return async (op: string, args: string) => {
+        if (op === "1.0/get") bump(gets, (JSON.parse(args) as { id: string }).id);
+        return await call(op, args);
+      };
+    },
+  };
+  try {
+    await body();
+  } finally {
+    holder.Convex = real;
+  }
+  return { ranges, gets };
+}
