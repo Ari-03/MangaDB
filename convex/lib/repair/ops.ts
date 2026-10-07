@@ -3526,10 +3526,11 @@ async function seriesFamily(
     );
     family = (await ctx.db.get(id))!;
   }
-  for (const series of rows) {
-    if (series.familyId === family._id) continue;
+  for (const [i, series] of rows.entries()) {
+    if (series.familyId === family._id && series.familyPosition === i + 1) continue;
     await updateRecord(ctx, audit, { type: "series", id: series._id }, series, {
       familyId: family._id,
+      familyPosition: i + 1,
     });
   }
   return audit.wrote ? applied : already;

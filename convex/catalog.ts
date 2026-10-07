@@ -380,6 +380,32 @@ function nearMissCards(ctx: QueryCtx, misses: Awaited<ReturnType<typeof nearMiss
 }
 
 /**
+ * Search hits with each Series Family kept together in reading order
+ * (`familyPosition`), at the place of its best-ranked member: "jojo" lists
+ * Part 1, Part 2, … rather than the index's relevance order among Parts.
+ * Series outside a Family keep their rank.
+ */
+export function familiesTogether<T extends Pick<Doc<"series">, "familyId" | "familyPosition">>(
+  ranked: ReadonlyArray<T>,
+): T[] {
+  const byFamily = new Map<string, T[]>();
+  for (const doc of ranked) {
+    if (doc.familyId) byFamily.set(doc.familyId, [...(byFamily.get(doc.familyId) ?? []), doc]);
+  }
+  const placed = new Set<string>();
+  return ranked.flatMap((doc) => {
+    if (!doc.familyId) return [doc];
+    if (placed.has(doc.familyId)) return [];
+    placed.add(doc.familyId);
+    return [...byFamily.get(doc.familyId)!].sort(
+      (a, b) =>
+        (a.familyPosition ?? Number.MAX_SAFE_INTEGER) -
+        (b.familyPosition ?? Number.MAX_SAFE_INTEGER),
+    );
+  });
+}
+
+/**
  * v1 search (spec §8): Series only, matched through the title + alt-titles
  * search index (`searchText` is both concatenated on write), hits containing
  * every typed word first, each with its jacket from the Series library;
@@ -411,9 +437,11 @@ export const search = query({
       authorHits(ctx, trimmed, SEARCH_AUTHORS, showMature),
     ]);
     const wholeIds = new Set(hits.whole.map((doc) => doc._id));
-    const ranked = [...hits.whole, ...hits.active.filter((doc) => !wholeIds.has(doc._id))].slice(
-      0,
-      SEARCH_LIMIT,
+    const ranked = familiesTogether(
+      [...hits.whole, ...hits.active.filter((doc) => !wholeIds.has(doc._id))].slice(
+        0,
+        SEARCH_LIMIT,
+      ),
     );
     const [series, didYouMean] = await Promise.all([
       Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
@@ -459,7 +487,7 @@ export const suggest = query({
         ? await nearMisses(ctx, trimmed, hits.active, showMature)
         : [];
     const better = hits.whole.length > 0 || misses.length > 0 || names || authors.length > 0;
-    const shown = better ? hits.whole : hits.active;
+    const shown = familiesTogether(better ? hits.whole : hits.active);
     const [series, didYouMean] = await Promise.all([
       Promise.all(
         shown.slice(0, SUGGEST_LIMIT).map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
@@ -607,8 +635,13 @@ async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
   }
   return {
     name: familyDoc.name,
+    // Reading order (familyPosition), then age; unplaced Series last.
     members: members
-      .sort((a, b) => a.publicId - b.publicId)
+      .sort(
+        (a, b) =>
+          (a.familyPosition ?? Number.MAX_SAFE_INTEGER) -
+            (b.familyPosition ?? Number.MAX_SAFE_INTEGER) || a.publicId - b.publicId,
+      )
       .map((m) => ({ publicId: m.publicId, title: m.title })),
     relationships,
   };

@@ -546,8 +546,10 @@ export const splitEditionEntry = v.object({
 
 /**
  * Group Series in a Series Family (CONTEXT.md), creating the Family by
- * `name` when no active one has it. Each Series states the title the plan
- * saw (drift = skip); one already in another Family is skipped whole.
+ * `name` when no active one has it, in reading order: each Series' place on
+ * the Family's shelf (`familyPosition`) is its place in `series`. Each
+ * Series states the title the plan saw (drift = skip); one already in
+ * another Family is skipped whole.
  */
 export const seriesFamilyEntry = v.object({
   kind: v.literal("seriesFamily"),

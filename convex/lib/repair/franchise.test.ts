@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { internal } from "../../_generated/api";
+import { api, internal } from "../../_generated/api";
 import {
   insertCoverage,
   insertEdition,
@@ -18,6 +18,8 @@ import {
   insertVolume,
 } from "../../test.factories";
 import { makeT, seedRegistry, type TestT as T } from "../../test.helpers";
+import type { Id } from "../../_generated/dataModel";
+import { familiesTogether } from "../../catalog";
 import type { RepairEntry } from "./entries";
 
 async function run(t: T, entries: RepairEntry[]) {
@@ -101,9 +103,20 @@ describe("franchise repairs", () => {
     await t.run(async (ctx) => {
       const [one] = await ctx.db.query("seriesFamilies").collect();
       expect(one?.name).toBe("JoJo's Bizarre Adventure");
-      expect((await ctx.db.get(seriesId))?.familyId).toBe(one?._id);
-      expect((await ctx.db.get(part4))?.familyId).toBe(one?._id);
+      expect(await ctx.db.get(seriesId)).toMatchObject({ familyId: one?._id, familyPosition: 1 });
+      expect(await ctx.db.get(part4)).toMatchObject({ familyId: one?._id, familyPosition: 2 });
     });
+
+    // Listed in another order, the Parts take their new places on the shelf.
+    const reordered: RepairEntry = {
+      ...family,
+      key: "jojo-family-order",
+      series: [...family.series].reverse(),
+    };
+    expect((await run(t, [reordered]))[0]).toMatchObject({ status: "applied" });
+    const publicId = await t.run(async (ctx) => (await ctx.db.get(seriesId))!.publicId);
+    const page = await t.query(api.catalog.seriesPage, { publicId });
+    expect(page?.family?.members.map((m) => m.title)).toEqual([PART_4, "JoJo's Bizarre Adventure"]);
   });
 
   it("creates an unmapped line member, and moves an Edition off its Volume into one", async () => {
@@ -263,5 +276,17 @@ describe("franchise repairs", () => {
     });
     expect(await apply()).toMatchObject({ status: "linked", releaseId });
     expect(await t.run((ctx) => ctx.db.query("placementHolds").collect())).toEqual([]);
+  });
+});
+
+describe("familiesTogether", () => {
+  it("keeps a Family together in reading order where its best hit ranks", () => {
+    const hit = (id: string, familyId?: string, familyPosition?: number) => ({
+      id,
+      ...(familyId ? { familyId: familyId as Id<"seriesFamilies"> } : {}),
+      ...(familyPosition ? { familyPosition } : {}),
+    });
+    const ranked = [hit("p3", "jojo", 3), hit("other"), hit("p1", "jojo", 1), hit("p2", "jojo", 2)];
+    expect(familiesTogether(ranked).map((h) => h.id)).toEqual(["p1", "p2", "p3", "other"]);
   });
 });

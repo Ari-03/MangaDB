@@ -502,6 +502,9 @@ export default defineSchema({
     // title + altTitles concatenated on write; search indexes take one field.
     searchText: v.string(),
     familyId: v.optional(v.id("seriesFamilies")),
+    // Its place on its Series Family's shelf (JoJo Part 1, Part 2, …): the
+    // reading order, which neither titles nor IDs give. Unset sorts last.
+    familyPosition: v.optional(v.number()),
     // What the Series is about, shown under its title; absent until a source
     // or an Editor supplies one.
     synopsis: v.optional(v.string()),
