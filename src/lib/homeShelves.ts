@@ -25,9 +25,12 @@ const SERIES_SHELF_MIN = 4;
 export type Jacket = { coverUrl: string | null; coverIsbns: ReadonlyArray<string> };
 
 /**
- * ISBNs whose jacket the cover store holds, or null when it could not be
- * asked (no bucket bound) — then an ISBN counts as art, as it does on every
- * other page.
+ * ISBNs that count as art: those whose jacket the cover store holds, plus
+ * those it could not rule out in time (a failed read, or one not answered
+ * within its budget), so only a jacket known to be absent keeps a book off.
+ * Null when the store could not be asked at all (no bucket bound, or the
+ * call failed); then every ISBN counts as art, as it does on every other
+ * page.
  */
 export type CoversOnFile = ReadonlySet<string> | null;
 

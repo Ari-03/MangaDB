@@ -499,6 +499,51 @@ The catalog is checked only when all four passes reach `isDone` with no
 `incomplete` finding, and clean when there is also no `violation`. It
 checks ownership and evidence, never whether two books are the same.
 
+## Reading Server-Timing
+
+App pages and server-function calls answer with a `Server-Timing` header
+(`src/server/timing.ts`). It holds span names, fixed outcome words and
+integers only:
+
+```
+curl -s -o /dev/null -D - https://mangadb-staging.mangadb.workers.dev/ | grep -i server-timing
+```
+
+| Span | What it covers |
+|---|---|
+| `app` | The Start handler, from the call until it returns its Response. Time before the Worker runs our code, the rest of a streaming body, and transfer are not in it. |
+| `auth` | Clerk's middleware, until it hands the request on. Absent when Clerk is not configured or answered with a handshake redirect. |
+| `cat` | The home page's catalog reads, on a server render. |
+| `cov` | The home jacket check: `complete`, `failed` (every read answered, one or more by throwing), `partial` (its 300 ms budget ran out with reads still out or unsent), or `unbound` (no bucket). It ends when the check answers; reads still out then, and its warm-ups, run after it. |
+| `covr2` | R2 heads that check sent; 0 when the isolate's memo answered. An ISBN on two shelves is one head. |
+
+A Worker's clock moves only across I/O, so spans are elapsed times as
+that clock saw them; CPU time between I/O is not reliably in or out of
+them. Render CPU is in Workers Observability. A
+slow first byte with a short `app` was spent outside the measured
+handler: before it (platform dispatch, a cold isolate) or in transfer.
+Cloudflare may add its own entries (`cfL4`, `cfExtPri`) to the header.
+
+### Checking the jacket budget in workerd
+
+`npm test` checks the jacket check's logic under fake timers. Whether
+reads still out at the budget survive the response, as `waitUntil` should
+make them, only a real Worker runtime shows. `scripts/check-cover-budget.mjs`
+runs both the helper and the compiled app in a local workerd, with a
+stand-in R2 whose reads answer late on purpose:
+
+```
+VITE_CONVEX_URL=https://convex.invalid npm run build
+node scripts/check-cover-budget.mjs --root "$PWD" --dist "$PWD/dist"
+```
+
+It is not part of `npm test` or CI: it starts workerd and takes about
+15 s. It sends nothing off the machine, refuses to run on a `dist` built
+for a real Convex deployment, and stops with an error if Miniflare,
+esbuild or workerd is missing from `node_modules`. Its stand-in R2 proves
+request lifetimes, not R2's latency. Run `npm run build` again afterwards
+for a deployable `dist`.
+
 ## Account deletion
 
 A user's request (`users.deleteAccount`) sets `deletingSince` on their
