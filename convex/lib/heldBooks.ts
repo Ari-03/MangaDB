@@ -1144,6 +1144,30 @@ async function sourceContentsMatch(
       )
         return refuse("Reviewed titled product does not identify this exact complete Volume.");
     }
+    // An exact product review may identify ANN's space-separated 3-in-1 suffix.
+    // The stored reader's numeric, format and conflict facts still apply.
+    const threeInOne = /^(.*?)\s+3 in 1 Edition$/i.exec(line.title);
+    const reviewedThreeInOne =
+      !routed &&
+      !state.bundle &&
+      proof?.sourceTitle === line.title &&
+      proof.evidenceUrls.length > 0 &&
+      line.page?.status === "ok" &&
+      line.page.title === line.title &&
+      toIsbn13(line.page.isbn13) === proof.isbn13 &&
+      state.source.series?._id === series._id &&
+      parent?.kind === "annManga" &&
+      parent.id === line.mangaId &&
+      parent.title !== undefined &&
+      workNames.some((name) => sameWorkTitle(parent.title!, name)) &&
+      threeInOne !== null &&
+      workNames.some((name) => sameWorkTitle(threeInOne[1]!, name)) &&
+      contents.length === 1 &&
+      contents[0]!.line?.name === "Omnibus" &&
+      actual.length === 3 &&
+      actual.every((row) => row.extent === "complete") &&
+      reading.label !== undefined &&
+      labelsEqual(contents[0]!.edition.linePosition ?? null, reading.label);
     // A reviewed Season/Box product can be titled beyond its parent work.
     // Exact title text plus selected IDs cannot excuse an unrelated known work.
     const productWork = (
@@ -1174,7 +1198,8 @@ async function sourceContentsMatch(
         !reviewedProduct &&
         !reviewedSubtitle &&
         !reviewedEditionTag &&
-        !reviewedTitled) ||
+        !reviewedTitled &&
+        !reviewedThreeInOne) ||
       reading.scope.length ||
       reading.unreadable.length
     )
@@ -1190,10 +1215,10 @@ async function sourceContentsMatch(
     )
       return refuse("Known ANN content/position/format conflict.");
     ranges.push(facts.coverRange);
-    packaged = !reviewedEditionTag && reading.packaging.length > 0;
+    packaged = reviewedThreeInOne || (!reviewedEditionTag && reading.packaging.length > 0);
     sourceLabel = reading.label;
     sourceBinding = reading.binding;
-    lineName = facts.lineName;
+    lineName = reviewedThreeInOne ? "3 in 1 Edition" : facts.lineName;
     position = facts.position;
     if (proof?.standalone) {
       await standaloneMatch(ctx, state, contents, series, reading, facts, routed);
@@ -1305,9 +1330,22 @@ async function sourceContentsMatch(
   }
   if (!bundleName && packaged && lineName) {
     const target = contents[0]!;
+    // ANN's 3-in-1 name can identify an Omnibus member after exact product
+    // review. Keep its position and all three independently reviewed whole
+    // Volumes binding; this does not infer coverage from the member number.
+    const reviewedThreeInOne =
+      state.observation.sourceKey === "ann" &&
+      proof?.sourceTitle === s.title &&
+      state.source.series?._id === series._id &&
+      contents.length === 1 &&
+      /^3[ -]in[ -]1(?: Edition)?$/i.test(lineName) &&
+      target.line?.name === "Omnibus" &&
+      !!position &&
+      actual.length === 3 &&
+      actual.every((row) => row.extent === "complete");
     if (
       !target.line ||
-      !sameWorkTitle(target.line.name, lineName) ||
+      (!sameWorkTitle(target.line.name, lineName) && !reviewedThreeInOne) ||
       (position && !labelsEqual(target.edition.linePosition ?? null, position))
     )
       return refuse("Known Edition Line name or position differs.");
