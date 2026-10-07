@@ -129,6 +129,29 @@ it("rejects duplicate members, incomplete contents and claimed package ISBNs", a
   );
 });
 
+it("bounds repeated large work facts while refusing a changed dependency", async () => {
+  const { t, args } = await fixture();
+  await t.run((ctx) => ctx.db.patch(args.seriesId, { synopsis: "a".repeat(40_000) }));
+  const preview = await t.query(internal.heldBundleCreation.previewInternal, args);
+  expect(preview.refusal).toBeNull();
+  expect(new TextEncoder().encode(preview.expected!).length).toBeLessThan(256 * 1024);
+  const execution = {
+    ...args,
+    expected: preview.expected!,
+    actor: "alice",
+    reason: "Reviewed large work dependencies",
+    dryRun: true,
+  };
+  expect(await t.mutation(internal.heldBundleCreation.createInternal, execution)).toEqual({
+    status: "dryRun",
+  });
+  await t.run((ctx) => ctx.db.patch(args.seriesId, { synopsis: "b".repeat(40_000) }));
+  expect(
+    await t.mutation(internal.heldBundleCreation.createInternal, { ...execution, dryRun: false }),
+  ).toMatchObject({ status: "refused", reason: expect.stringMatching(/dependencies changed/) });
+  expect(await t.run((ctx) => ctx.db.query("releaseBundles").collect())).toEqual([]);
+});
+
 it("creates audited ordered members without clearing the hold, then refuses the occupied package ISBN", async () => {
   const { t, args } = await fixture();
   const preview = await t.query(internal.heldBundleCreation.previewInternal, args);

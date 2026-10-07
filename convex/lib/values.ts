@@ -41,6 +41,17 @@ export function valueHash(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
+/** Keep every distinct dependency value once, including absent rows and query results. */
+export function distinctGuardFacts(facts: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  return facts.filter((fact) => {
+    const key = valueHash(fact);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** First non-JSON value that valueHash cannot distinguish exactly. */
 export function nonJsonPath(value: unknown, path = "snapshot"): string | null {
   if (value === null || typeof value === "string" || typeof value === "boolean") return null;

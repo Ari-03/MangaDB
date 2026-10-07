@@ -40,7 +40,7 @@ import {
   takeWithin,
 } from "./releaseIsbns";
 import { evidenceUrls, isbnScope, scopeState } from "./scope";
-import { nonJsonPath, valueHash } from "./values";
+import { distinctGuardFacts, nonJsonPath, valueHash } from "./values";
 
 export const MAX_GUARD_BYTES = 256 * 1024;
 const MAX_JOIN = 80;
@@ -836,7 +836,7 @@ export async function heldState(
     target: target ?? null,
     reviewed: reviewed ?? null,
     replay,
-    facts: r.facts,
+    facts: target?.type === "bundle" ? distinctGuardFacts(r.facts) : r.facts,
     bootstrap,
   });
   if (new TextEncoder().encode(state.expected).length > MAX_GUARD_BYTES)

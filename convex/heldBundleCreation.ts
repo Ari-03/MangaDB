@@ -18,7 +18,7 @@ import { allocatePublicId } from "./lib/publicIds";
 import { claimResolver, isbnClaims } from "./lib/releaseIsbns";
 import { createAudit, resolveActor } from "./lib/repair/audit";
 import { evidenceUrls, isbnScope, scopeState } from "./lib/scope";
-import { valueHash } from "./lib/values";
+import { distinctGuardFacts, valueHash } from "./lib/values";
 
 const packet = v.object({
   observationId: v.id("sourceObservations"),
@@ -118,7 +118,11 @@ async function creationState(ctx: QueryCtx, args: Packet) {
     memberContents.push(content);
   }
   await reviewedMatch(ctx, state, memberContents, args.name);
-  const expected = valueHash({ args, held: state.expected, facts: state.r.facts });
+  // The reader includes the original held-state facts plus every member read.
+  // Retain held metadata and all distinct facts without embedding the same read set twice.
+  const held: Record<string, unknown> = JSON.parse(state.expected);
+  delete held.facts;
+  const expected = valueHash({ args, held, facts: distinctGuardFacts(state.r.facts) });
   if (bytes(expected) > MAX_GUARD_BYTES) return refuse("Creation guard exceeds 256 KiB.");
   return { expected, state, memberContents, urls };
 }
