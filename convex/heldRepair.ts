@@ -1,4 +1,8 @@
-import { canonicalDigitalProof, canonicalDigitalState } from "./lib/canonicalDigital";
+import {
+  canonicalDigitalProof,
+  canonicalDigitalProofs,
+  canonicalDigitalState,
+} from "./lib/canonicalDigital";
 import { utf8Bytes } from "./lib/sourceFormat";
 import { sameValue } from "./lib/values";
 import { heldPackageContentsState, packageLedgerState } from "./lib/heldPackageContents";
@@ -418,9 +422,11 @@ export const previewCanonicalDigitalInternal = internalQuery({
   handler: async (ctx, args) => {
     try {
       const state = await canonicalDigitalState(ctx, args.releaseId, args.observationId);
-      return { expected: state.expected, refusal: null, proof: canonicalDigitalProof };
+      return { expected: state.expected, refusal: null, proof: state.proof };
     } catch (error) {
-      return { expected: null, refusal: heldError(error), proof: canonicalDigitalProof };
+      const release = await ctx.db.get(args.releaseId);
+      const proof = release?.isbn13 ? canonicalDigitalProofs[release.isbn13] : undefined;
+      return { expected: null, refusal: heldError(error), proof: proof ?? null };
     }
   },
 });
@@ -440,10 +446,12 @@ export const correctCanonicalDigitalInternal = internalMutation({
     const audit = createAudit(
       ctx,
       await resolveActor(ctx, args.actor),
-      "Correct exact own-ISBN Farming Life Volume 10 ebook format. No printing relationship asserted.",
+      state.proof === canonicalDigitalProof
+        ? "Correct exact own-ISBN Farming Life Volume 10 ebook format. No printing relationship asserted."
+        : `Correct exact own-ISBN ${state.proof.title} ebook format. No printing relationship asserted.`,
       [
-        { kind: "url", url: canonicalDigitalProof.url },
-        { kind: "note", text: valueHash(canonicalDigitalProof) },
+        { kind: "url", url: state.proof.url },
+        { kind: "note", text: valueHash(state.proof) },
       ],
     );
     await state.r.room();
