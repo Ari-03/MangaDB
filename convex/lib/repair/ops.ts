@@ -128,6 +128,8 @@ export async function applyEntry(
       return await seriesFamily(ctx, audit, entry);
     case "splitEdition":
       return await splitEdition(ctx, audit, entry);
+    case "addVolume":
+      return await addVolume(ctx, audit, entry);
   }
 }
 
@@ -1750,7 +1752,7 @@ async function conversionMembers(
       releaseId = exact[0]!._id;
     }
     if (releaseId === boxId) skip("Box must not be its own member.");
-    const content = await releaseContents(ctx, releaseId, r);
+    const content = await releaseContents(ctx, releaseId, r, true);
     if (content.publisher._id !== publisherId || content.release.format !== format)
       skip("Member publisher or format differs from Bundle.");
     selected.push({ release: content.release, contents: content.contents, order: member.order });
@@ -3238,10 +3240,34 @@ async function releaseBundle(
       await boxConversionPreflight(ctx, box, bundle?._id, entry.retireVolumeIds);
       await conversionClaims(ctx, box, bundle);
     }
-  } else skip("plan error: name either a bundle or a box set");
+  } else if (entry.create && entry.bundleId === null && entry.box === null) {
+    // A box set no Release stands for: the Bundle is made from its stated
+    // facts, or found again by the entry that made it.
+    const isbn13 = toIsbn13(entry.create.isbn13);
+    if (!isbn13) return skip("plan error: the box set's ISBN is not an ISBN");
+    const existing = await ctx.db
+      .query("releaseBundles")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .unique();
+    if (
+      existing &&
+      !(await createdByEntry(ctx, { type: "releaseBundle", id: existing._id }, entry.key))
+    )
+      return skip(`ISBN ${isbn13} is already Bundle ${existing.publicId}`);
+    if (!existing) {
+      const claims = await isbnClaims(ctx, isbn13, {
+        resolver: claimResolver(ctx, { room: r.room }),
+        room: r.room,
+      });
+      if (!claims?.complete || claims.owners.size > 0)
+        return skip(`ISBN ${isbn13} is claimed: convert its box Release instead`);
+    }
+    bundle = existing;
+    isbns = { isbn13, ...(entry.create.isbn10 ? { isbn10: entry.create.isbn10 } : {}) };
+  } else skip("plan error: name a bundle, a box set, or a box set to create");
 
-  const publisherId = bundle?.publisherId ?? box!.publisherId;
-  const format = bundle?.format ?? box!.format;
+  const publisherId = bundle?.publisherId ?? box?.publisherId ?? entry.create!.publisherId;
+  const format = bundle?.format ?? box?.format ?? entry.create!.format;
   const selected = await conversionMembers(ctx, entry.members, publisherId, format, box?._id);
   const current = bundle
     ? await r.many(
@@ -3274,34 +3300,37 @@ async function releaseBundle(
   // Every dependency and personal reference has been read before the first effect.
   if (!bundle) {
     await audit.meta();
+    const created = entry.create;
     const fields = {
       status: "active" as const,
       publicId: await allocatePublicId(ctx, "bundle"),
-      name: entry.box!.name,
+      name: box ? entry.box!.name : created!.name,
       publisherId,
       format,
       isbn13: isbns.isbn13,
       isbn10: isbns.isbn10,
-      pubDate: box!.pubDate,
-      price: box!.price,
-      description: box!.description,
-      coverImage: box!.coverImage,
+      pubDate: box ? box.pubDate : (created!.pubDate ?? undefined),
+      price: box ? box.price : (created!.price ?? undefined),
+      description: box ? box.description : undefined,
+      coverImage: box ? box.coverImage : undefined,
       bootstrapUnreviewed: true,
     };
     const id = await ctx.db.insert("releaseBundles", fields);
-    await ctx.db.insert("repairBundleOrigins", {
-      bundleId: id,
-      releaseId: box!._id,
-      entryKey: entry.key,
-      proposalId: (await audit.meta()).proposalId,
-    });
+    if (box) {
+      await ctx.db.insert("repairBundleOrigins", {
+        bundleId: id,
+        releaseId: box._id,
+        entryKey: entry.key,
+        proposalId: (await audit.meta()).proposalId,
+      });
+    }
     audit.op({ kind: "create", table: "releaseBundles", tempId: id, fields });
-    await audit.revise(
-      { type: "releaseBundle", id },
-      Object.entries(fields)
+    await audit.revise({ type: "releaseBundle", id }, [
+      ...Object.entries(fields)
         .filter(([, after]) => after !== undefined)
         .map(([field, after]) => ({ field, after })),
-    );
+      ...(box ? [] : [{ field: SPLIT_KEY_FIELD, after: entry.key }]),
+    ]);
     bundle = await ctx.db.get(id);
   }
   if (!bundle) return skip("bundle vanished");
@@ -3371,10 +3400,13 @@ async function setCoverage(
   if (entry.unmapped) return await unmapIntoLine(ctx, audit, entry, edition, rows.length);
   if (rows.length === 0) return skip("plan error: empty coverage");
 
+  if (entry.clearLine && entry.line !== null)
+    return skip("plan error: clearLine takes the Edition out of its line, so states none");
   const current = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
   const done =
     current.length === rows.length &&
-    current.every((c, i) => c.volumeId === rows[i]?.volumeId && c.extent === rows[i]?.extent);
+    current.every((c, i) => c.volumeId === rows[i]?.volumeId && c.extent === rows[i]?.extent) &&
+    !(entry.clearLine && edition.editionLineId !== undefined);
   if (
     !done &&
     !sameValue(
@@ -3391,6 +3423,7 @@ async function setCoverage(
     await replaceCoverage(ctx, audit, edition._id, rows);
     await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
       coverageUnmapped: undefined,
+      ...(entry.clearLine ? { editionLineId: undefined, linePosition: undefined } : {}),
     });
 
     if (entry.line) {
@@ -3584,4 +3617,37 @@ async function splitEdition(
   await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
   if (moves.unfinished) return partial;
   return audit.wrote ? applied : already;
+}
+
+/** Add one numbered or named extra Volume to a Series (entries.ts addVolumeEntry). */
+async function addVolume(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"addVolume">,
+): Promise<Result> {
+  const series = await ctx.db.get(entry.seriesId);
+  if (!series || series.status !== "active") return skip("series not active");
+  if (series.locked) return skip(`series ${series.publicId} is locked`);
+  if (series.title !== entry.seriesTitle)
+    return skip(`series ${series.publicId} title drifted: ${JSON.stringify(series.title)}`);
+  const volumes = await activeVolumes(ctx, series._id);
+  const label = canonicalLabel(entry.label);
+  if (label === null) return skip("plan error: a Volume to add needs a label");
+  if (volumes.some((v) => sameLabel(v.label, label))) return already;
+  await audit.meta();
+  const fields = {
+    status: "active" as const,
+    publicId: await allocatePublicId(ctx, "volume"),
+    seriesId: series._id,
+    label,
+    position: labelNumber(label) ?? volumes.reduce((max, v) => Math.max(max, v.position), 0) + 1,
+    bootstrapUnreviewed: true,
+  };
+  const id = await ctx.db.insert("volumes", fields);
+  audit.op({ kind: "create", table: "volumes", tempId: id, fields });
+  await audit.revise({ type: "volume", id }, [
+    ...Object.entries(fields).map(([field, after]) => ({ field, after })),
+    { field: SPLIT_KEY_FIELD, after: entry.key },
+  ]);
+  return applied;
 }

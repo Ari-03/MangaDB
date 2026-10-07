@@ -25,7 +25,7 @@ import {
   MissingVolume,
   type EditionGroup,
 } from "~/lib/seriesShelf";
-import { plural } from "~/lib/format";
+import { formatPartialDate, plural } from "~/lib/format";
 import { SeriesVisibilityControls } from "~/lib/sharing";
 import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
@@ -34,8 +34,9 @@ import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
  * Convex. The Series' Editions are grouped into reading paths — the standard
  * run per publisher, then each Edition Line (Omnibus, Deluxe, …); the picker
  * shows each path's first book and `?edition=` opens that path as a shelf of
- * its books, with gaps in a standard run marked. Releases, Variants and
- * Bundles live on each book's Edition page.
+ * its books, with gaps in a standard run marked. Box sets holding its books
+ * get a shelf of their own; Releases and Variants live on each book's
+ * Edition page.
  *
  * The hero: the cover (and its date span) on the left with the viewer's
  * take under it (TakePanel: Rating, Review, Follow, Favorite), the facts on
@@ -371,6 +372,8 @@ function SeriesPage() {
         </section>
       ) : null}
 
+      {page.boxSets.length > 0 ? <BoxSetsSection boxSets={page.boxSets} /> : null}
+
       {family ? <FamilySection family={family} self={series} /> : null}
 
       {FEATURES.publicReviews ? (
@@ -449,6 +452,55 @@ function EditionPicker({
         );
       })}
     </nav>
+  );
+}
+
+/**
+ * The box sets holding this Series' books (Release Bundles): each its own
+ * cover and what it holds here, linking to its Bundle page, where its books
+ * are listed. A box set's books stay on their own reading paths above.
+ */
+function BoxSetsSection({ boxSets }: { boxSets: SeriesPageData["boxSets"] }) {
+  return (
+    <section className="section series-box-sets">
+      <div className="section-head">
+        <h2 className="section-title">Box sets</h2>
+        <p className="section-note">
+          Sold as one package; each book inside keeps its place in the reading paths above.
+        </p>
+      </div>
+      <div className="shelf">
+        {boxSets.map((boxSet) => {
+          const date = formatPartialDate(boxSet.pubDate);
+          return (
+            <div className="shelf-item" key={boxSet.publicId}>
+              <div className="cover-wrap">
+                <Link
+                  className="cover-link"
+                  to="/bundle/$publicId/$slug"
+                  params={slugParams(boxSet.publicId, boxSet.name)}
+                  aria-label={boxSet.name}
+                >
+                  <Cover src={boxSet.coverUrl} isbn13={boxSet.isbn13} title={boxSet.name} />
+                </Link>
+              </div>
+              <div className="caption">
+                <Link
+                  className="caption-title"
+                  to="/bundle/$publicId/$slug"
+                  params={slugParams(boxSet.publicId, boxSet.name)}
+                >
+                  {boxSet.name}
+                </Link>
+                <div className="caption-meta">
+                  {[boxSet.contents, date].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

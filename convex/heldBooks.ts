@@ -34,7 +34,7 @@ import {
   snapshotSha256,
 } from "./lib/observations";
 import { resolveActor } from "./lib/repair/audit";
-import { claimResolver, isbnClaims, primaryIsbnsOf } from "./lib/releaseIsbns";
+import { claimResolver, isbnClaims, observedIsbn13, primaryIsbnsOf } from "./lib/releaseIsbns";
 import { evidenceUrls } from "./lib/scope";
 import { sameWorkTitle } from "./lib/matching";
 import { isbnScope } from "./lib/scope";
@@ -795,6 +795,108 @@ export const dismissOneInternal = internalMutation({
       after,
     });
     return { status: "applied", proposalId, ledgerId };
+  },
+});
+
+const linkByIsbnArgs = {
+  actor: v.string(),
+  observationId: v.id("sourceObservations"),
+  /** The kind the caller saw it held as; a hold that moved since is refused. */
+  expectedKind: holdKind,
+  reason: v.string(),
+  evidenceUrls: v.array(v.string()),
+  /**
+   * Release fields the source gets wrong, made Human Overrides so its later
+   * syncs never write them (a feed calling a hardcover a paperback).
+   */
+  protectFields: v.optional(v.array(v.literal("binding"))),
+};
+type LinkedByIsbn = {
+  status: "applied";
+  target: { type: "release" | "releaseBundle"; id: string };
+  proposalId: Id<"proposals">;
+  ledgerId: Id<"heldRepairLedger">;
+};
+/**
+ * Link a held book to the one active Release or Release Bundle that owns its
+ * own ISBN (lib/releaseIsbns.ts isbnClaims), changing nothing on it: a box
+ * set's record onto its Bundle, or a record whose source misstates a field
+ * onto its Release. The ISBN is the identity; nothing else of the record is
+ * read onto the target. Refused, writing nothing, unless the book is held
+ * as `expectedKind`, unlinked, in scope, and its ISBN has exactly one owner.
+ * One approved Proposal and a ledger entry record it.
+ *
+ *   npx convex run heldBooks:linkByIsbnInternal '{"actor": "ari",
+ *     "observationId": "…", "expectedKind": "packaging", "reason": "…",
+ *     "evidenceUrls": ["https://…"]}'
+ */
+export const linkByIsbnInternal = internalMutation({
+  args: linkByIsbnArgs,
+  handler: async (ctx, args): Promise<LinkedByIsbn> => {
+    return await ctx.runMutation(internal.heldBooks.linkByIsbnOneInternal, args, {
+      transactionLimits: await nestedLimits(ctx),
+    });
+  },
+});
+export const linkByIsbnOneInternal = internalMutation({
+  args: linkByIsbnArgs,
+  handler: async (ctx, args): Promise<LinkedByIsbn> => {
+    const actor = await resolveActor(ctx, args.actor);
+    if (!args.reason.trim() || args.reason.length > 4000) return refuse("Supply a short reason.");
+    const observation = await ctx.db.get(args.observationId);
+    if (!observation) return refuse("No such source record.");
+    if (observation.recordRef || observation.withdrawn)
+      return refuse("The record is linked or withdrawn.");
+    const hold = await holdOf(ctx, observation._id);
+    if (!hold) return refuse("The book is not held.");
+    if (hold.kind !== args.expectedKind)
+      return refuse(`The book is held as ${hold.kind}, not ${args.expectedKind}.`);
+    const isbn13 = observedIsbn13(observation.snapshot);
+    if (!isbn13) return refuse("The record states no ISBN.");
+    const scope = await isbnScope(ctx, isbn13);
+    if (scope) return refuse(scope);
+    const claims = await isbnClaims(ctx, isbn13, { resolver: claimResolver(ctx) });
+    if (!claims?.complete || claims.unresolved.length > 0 || claims.owners.size !== 1)
+      return refuse(`ISBN ${isbn13} has no single owner.`);
+    const owner = [...claims.owners.values()][0]!;
+    if (owner.doc.status !== "active" || owner.doc.locked)
+      return refuse("The ISBN's owner is not active and unlocked.");
+    const target =
+      owner.kind === "release"
+        ? { type: "release" as const, id: owner.doc._id }
+        : { type: "releaseBundle" as const, id: owner.doc._id };
+    const before = JSON.stringify({ observation, hold });
+    if (utf8Bytes(before) > MAX_GUARD_BYTES) return refuse("Ledger exceeds 256 KiB.");
+    const proposalId = await audit(
+      ctx,
+      actor,
+      observation._id,
+      `Linked by its own ISBN ${isbn13}: ${args.reason}`,
+      evidenceUrls(args.evidenceUrls),
+    );
+    if (owner.kind === "release" && args.protectFields?.length) {
+      const overriddenFields = [
+        ...new Set([...(owner.doc.overriddenFields ?? []), ...args.protectFields]),
+      ];
+      await ctx.db.patch(owner.doc._id, { overriddenFields });
+    }
+    await linkObservation(ctx, observation._id, target);
+    await clearHold(ctx, observation._id);
+    const after = valueHash({
+      observation: await ctx.db.get(observation._id),
+      hold: await holdOf(ctx, observation._id),
+    });
+    const ledgerId = await ctx.db.insert("heldRepairLedger", {
+      observationId: observation._id,
+      operation: "linkByIsbn",
+      proposalId,
+      before,
+      after,
+      ...(target.type === "release"
+        ? { target: { type: "release" as const, id: target.id } }
+        : { target: { type: "bundle" as const, id: target.id } }),
+    });
+    return { status: "applied", target, proposalId, ledgerId };
   },
 });
 

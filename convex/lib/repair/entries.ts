@@ -441,7 +441,10 @@ export const createVolumeEntry = v.object({
  * (`box`: the box's facts become the bundle's, the box Release and, once
  * empty, its Edition are hidden). Members are named by ISBN and keep the
  * plan's order; `retireVolumeIds` (the box's own placeholder Volumes) merge
- * into the first member's Volume once nothing covers them.
+ * into the first member's Volume once nothing covers them. Or (`create`)
+ * makes a Bundle of a box set no Release stands for. A member may be
+ * Unmapped Packaging or cover its Volumes partially: the box set holds it
+ * whatever it collects.
  */
 export const releaseBundleEntry = v.object({
   kind: v.literal("releaseBundle"),
@@ -451,6 +454,19 @@ export const releaseBundleEntry = v.object({
   box: v.union(v.object({ releaseId: v.id("releases"), name: v.string() }), v.null()),
   members: v.array(v.object({ isbn13: v.string(), order: v.number() })),
   retireVolumeIds: v.array(v.id("volumes")),
+  // With `bundleId` and `box` both null: a box set no Release stands for,
+  // made a Bundle from these stated facts. Its ISBN must be unclaimed.
+  create: v.optional(
+    v.object({
+      name: v.string(),
+      isbn13: v.string(),
+      isbn10: nullableString,
+      publisherId: v.id("publishers"),
+      format: releaseFormat,
+      pubDate: v.union(partialDate, v.null()),
+      price: v.union(money, v.null()),
+    }),
+  ),
 });
 
 /**
@@ -480,6 +496,23 @@ export const setCoverageEntry = v.object({
   // Make the Edition Unmapped Packaging in `line` instead: `coverage` is
   // empty, its coverage rows are removed, and `coverageUnmapped` is set.
   unmapped: v.optional(v.boolean()),
+  // With `line` null: also take the Edition out of the line it is in now
+  // (a book filed in another Series' line).
+  clearLine: v.optional(v.boolean()),
+});
+
+/**
+ * Add one Volume to a Series: a numbered one the backbone lacks, or a
+ * published extra with no number, labelled by its name ("Adventures of the
+ * Mini-Goddesses"), which sorts after the last Volume. A Volume with the
+ * label already is this one, so a re-run adds nothing.
+ */
+export const addVolumeEntry = v.object({
+  kind: v.literal("addVolume"),
+  ...base,
+  seriesId: v.id("series"),
+  seriesTitle: v.string(),
+  label: v.string(),
 });
 
 /**
@@ -558,6 +591,7 @@ export const repairEntry = v.union(
   setCoverageEntry,
   seriesFamilyEntry,
   splitEditionEntry,
+  addVolumeEntry,
 );
 
 export type RepairEntry = Infer<typeof repairEntry>;

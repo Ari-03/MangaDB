@@ -12,6 +12,7 @@
 // Edition Description, Volume Synopsis) instead of printing every Release's
 // stored Release Description on its row.
 
+import { type BoxSetPart, boxSetContents } from "./lib/boxSets";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
@@ -497,9 +498,33 @@ export async function bundleMembers(ctx: QueryCtx, bundle: Doc<"releaseBundles">
     const coverage = await editionCoverage(ctx, edition);
     if (coverage.mature) mature = true;
     if (release.status !== "active" || edition.status !== "active") continue;
-    members.push({ membership, release, edition, title: coverage.title });
+    members.push({
+      membership,
+      release,
+      edition,
+      title: coverage.title,
+      parts: boxSetParts(coverage, edition),
+    });
   }
   return { publisher, mature, members };
+}
+
+/** A member Edition as lib/boxSets.ts reads it: its covered Volumes per Series, else its line position. */
+function boxSetParts(
+  coverage: Awaited<ReturnType<typeof editionCoverage>>,
+  edition: Doc<"editions">,
+): BoxSetPart[] {
+  const line = coverage.lineName
+    ? { name: coverage.lineName, position: edition.linePosition ?? null }
+    : null;
+  if (coverage.coverage.length === 0) {
+    return coverage.series ? [{ seriesTitle: coverage.series.title, labels: [], line }] : [];
+  }
+  const bySeries = new Map<string, Array<string | null>>();
+  for (const row of coverage.coverage) {
+    bySeries.set(row.series.title, [...(bySeries.get(row.series.title) ?? []), row.label]);
+  }
+  return [...bySeries].map(([seriesTitle, labels]) => ({ seriesTitle, labels, line }));
 }
 
 /**
@@ -558,6 +583,11 @@ export const bundlePage = query({
         description: bundle.description ?? null,
         publisher: publisherLink(publisher),
         coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
+        /** What it holds in words (lib/boxSets.ts), "" when no member says. */
+        contents: boxSetContents(
+          resolved.flatMap((member) => member.parts),
+          true,
+        ),
       },
       /** Art hidden from viewers who have not opted in (lib/mature.ts). */
       mature,

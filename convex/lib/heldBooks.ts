@@ -327,8 +327,18 @@ function annWorkContext(
   };
 }
 
-/** Complete ordered canonical content, including identity dependencies and current revisions. */
-export async function releaseContents(ctx: QueryCtx, id: Id<"releases">, r: Reader) {
+/**
+ * Complete ordered canonical content, including identity dependencies and
+ * current revisions. `lenient` (a box set's member, lib/repair/ops.ts
+ * releaseBundle) also takes an Unmapped Packaging member, with no contents,
+ * and partial coverage: a box set holds the book whatever it collects.
+ */
+export async function releaseContents(
+  ctx: QueryCtx,
+  id: Id<"releases">,
+  r: Reader,
+  lenient = false,
+) {
   const release = await r.active(id);
   const edition = await r.active(release.editionId);
   const publisher = await r.active(release.publisherId);
@@ -339,7 +349,7 @@ export async function releaseContents(ctx: QueryCtx, id: Id<"releases">, r: Read
   const line = edition.editionLineId ? await r.active(edition.editionLineId) : null;
   if (line && (!series.some((s) => s._id === line.seriesId) || line.publisherId !== publisher._id))
     return refuse("Edition Line identity disagrees.");
-  if (edition.coverageUnmapped) return refuse("Edition contents are unmapped.");
+  if (edition.coverageUnmapped && !lenient) return refuse("Edition contents are unmapped.");
   const rows = (
     await r.many(
       ctx.db
@@ -347,12 +357,13 @@ export async function releaseContents(ctx: QueryCtx, id: Id<"releases">, r: Read
         .withIndex("by_edition", (q) => q.eq("editionId", edition._id)),
     )
   ).sort((a, b) => a.order - b.order);
-  if (!rows.length) return refuse("Edition has no contents.");
+  if (!rows.length && !(lenient && edition.coverageUnmapped))
+    return refuse("Edition has no contents.");
   const contents = [];
   for (const row of rows) {
     const volume = await r.active(row.volumeId);
     const work = await r.active(volume.seriesId);
-    if (row.extent !== "complete" || !series.some((s) => s._id === work._id))
+    if ((row.extent !== "complete" && !lenient) || !series.some((s) => s._id === work._id))
       return refuse("Contents are partial or belong to another work.");
     contents.push({ volume, work, extent: row.extent, order: row.order });
   }

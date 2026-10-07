@@ -44,7 +44,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
     const path = bundlePath(bundle.publicId, bundle.name);
     const facts = [
       bundle.publisher ? `from ${bundle.publisher.name}` : null,
-      `the ${members.length} books inside`,
+      bundle.contents ? `holding ${bundle.contents}` : `the ${members.length} books inside`,
       bundle.pubDate ? `released ${isoPartialDate(bundle.pubDate)}` : null,
       bundle.isbn13 ? `box set ISBN ${bundle.isbn13}` : null,
     ].filter((fact) => fact !== null);
@@ -114,6 +114,7 @@ function BundlePage() {
             <span className="chip">
               {members.length === 1 ? "1 book inside" : `${members.length} books inside`}
             </span>
+            {bundle.contents ? <span className="chip">{bundle.contents}</span> : null}
           </p>
 
           <p className="release-line detail-line">
