@@ -1,4 +1,5 @@
 import { episodeRoute, type EpisodeRouting } from "./episodeRouting";
+import { standalonePassageContradicts, type StandaloneIdentity } from "./standaloneIdentity";
 import {
   projectSourceFormat,
   reviewedFormatRefusal,
@@ -711,6 +712,37 @@ export async function heldState(
     await r.active(reviewed.seriesId);
     await r.active(reviewed.publisherId);
     for (const id of reviewed.volumeIds) await r.active(id);
+    if (reviewed.standalone) {
+      if (observation.sourceKey !== "ann" || target?.type !== "release")
+        return refuse("Standalone review requires an ANN own-release target.");
+      // Pin every row, including hidden/merged history, before constructing expected.
+      // New active content units invalidate the preview even outside target coverage.
+      const workVolumes = await r.many(
+        ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", reviewed.seriesId)),
+      );
+      for (const ref of [
+        { type: "series" as const, id: reviewed.seriesId },
+        { type: "publisher" as const, id: reviewed.publisherId },
+        ...workVolumes.map((volume) => ({ type: "volume" as const, id: volume._id })),
+      ]) {
+        r.facts.push(
+          await takeWithin(
+            ctx.db
+              .query("revisions")
+              .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id))
+              .order("desc"),
+            1,
+            r.room,
+          ),
+        );
+      }
+      for (const name of [
+        reviewed.standalone.publisherName,
+        (observation.snapshot as AnnReleaseSnapshot).page?.distributor,
+      ]) {
+        if (name) await findPublisherByName(guardedResolverContext(ctx, r), name);
+      }
+    }
   }
   let episode: ReturnType<typeof episodeRoute> | null = null;
   if (reviewed?.episodeRouting) {
@@ -875,6 +907,7 @@ export type ReviewedIdentity = {
   volumeIds: Id<"volumes">[];
   evidenceUrls: string[];
   sourceTitle?: string;
+  standalone?: StandaloneIdentity;
   titledVolume?: { productTitle: string; volumeTitle: string; productVolumeLabel: string };
   episodeRouting?: EpisodeRouting;
   umbrellaRouting?: { sourceTitle: string; productTitle: string; productVolumeLabel: string };
@@ -1081,7 +1114,10 @@ async function sourceContentsMatch(
     sourceBinding = reading.binding;
     lineName = facts.lineName;
     position = facts.position;
-    if (!packaged && reading.needsLabel && !sourceLabel)
+    if (proof?.standalone) {
+      await standaloneMatch(ctx, state, contents, series, reading, facts, routed);
+    }
+    if (!packaged && reading.needsLabel && !sourceLabel && !proof?.standalone)
       return refuse("ANN states no Volume; exact contents remain unknown.");
   } else {
     const title = state.observation.sourceKey === "kodansha" ? s.seriesTitle : s.title;
@@ -1175,6 +1211,153 @@ async function sourceContentsMatch(
       return refuse("Known ordered source contents differ.");
   }
   return { packaged, hasKnownRange: ranges.some(Boolean) };
+}
+
+/** The reviewed exception supplies only missing extent. Every raw contradiction
+ * and the independently resolved work remain binding; no source fact is rewritten.
+ */
+async function standaloneMatch(
+  ctx: QueryCtx,
+  state: Awaited<ReturnType<typeof heldState>>,
+  contents: Contents[],
+  series: Doc<"series">,
+  reading: Awaited<ReturnType<typeof readObservationBook>>,
+  facts: ReturnType<typeof annContentFacts>,
+  routed: Awaited<ReturnType<typeof reviewedRouting>>,
+) {
+  const review = state.reviewed!;
+  const proof = review.standalone!;
+  const line = state.observation.snapshot as AnnReleaseSnapshot;
+  const page = line.page;
+  const parent = state.source.parent;
+  const parentSnapshot = parent?.snapshot as
+    | { kind?: string; id?: string; title?: string; releases?: AnnReleaseSnapshot[] }
+    | undefined;
+  const entries = parentSnapshot?.releases?.filter((entry) => entry.annId === line.annId) ?? [];
+  const entry = entries[0];
+  const target = contents[0];
+  const actual = contents.flatMap((c) => c.contents);
+  const names = declaredWorkNames(series);
+  const product = parseBookTitle(proof.productTitle);
+  const productFacts = bookFacts(proof.productTitle);
+  const active = (
+    await state.r.many(
+      ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", series._id)),
+    )
+  ).filter((volume) => volume.status === "active");
+  const publisher = await findPublisherByName(ctx, proof.publisherName);
+  const sourcePublisher =
+    page?.status === "ok" && page.distributor
+      ? await findPublisherByName(ctx, page.distributor)
+      : null;
+  if (
+    state.observation.sourceKey !== "ann" ||
+    routed ||
+    state.bundle ||
+    review.titledVolume ||
+    review.umbrellaRouting ||
+    !parent ||
+    parent._id !== proof.parentObservationId ||
+    parentSnapshot?.kind !== "annManga" ||
+    parentSnapshot.id !== line.mangaId ||
+    !parentSnapshot.title ||
+    !names.some((name) => sameWorkTitle(parentSnapshot.title!, name)) ||
+    entries.length !== 1 ||
+    entry?.isbn13 !== proof.isbn13 ||
+    entry.title !== line.title ||
+    entry.label !== undefined ||
+    entry.multi ||
+    entry.editionLineHint ||
+    entry.coverRange ||
+    entry.coverageGapped ||
+    entry.format !== proof.format ||
+    state.source.series?._id !== series._id ||
+    review.sourceTitle !== line.title ||
+    proof.isbn13 !== state.isbn13 ||
+    proof.isbn13 !== review.isbn13 ||
+    page?.status !== "ok" ||
+    page.isbn13 !== proof.isbn13 ||
+    page.mangaId !== line.mangaId ||
+    state.observation.sourceRecordId !== `release:${line.annId}` ||
+    !target ||
+    contents.length !== 1 ||
+    target.release._id !== proof.releaseId ||
+    target.release.seriesIds.length !== 1 ||
+    target.release.seriesIds[0] !== series._id ||
+    !primaryIsbnsOf(target.release).has(proof.isbn13) ||
+    [target.release.isbn13, target.release.isbn10].some(
+      (isbn) => isbn !== undefined && toIsbn13(isbn) !== proof.isbn13,
+    ) ||
+    state.claims.owners.size !== 1 ||
+    !state.claims.owners.has(proof.releaseId) ||
+    !publisher ||
+    !sourcePublisher ||
+    publisher._id !== review.publisherId ||
+    sourcePublisher._id !== review.publisherId ||
+    (reading.binding && reading.binding !== proof.binding) ||
+    proof.format !== line.format ||
+    proof.format !== target.release.format ||
+    (proof.format === "digital"
+      ? proof.binding !== undefined || target.release.binding !== undefined
+      : !proof.binding || target.release.binding !== proof.binding) ||
+    page.volume !== (proof.format === "digital" ? "eBook" : "GN") ||
+    line.label !== undefined ||
+    reading.label !== undefined ||
+    reading.packaging.length > 0 ||
+    reading.scope.length > 0 ||
+    reading.unreadable.length > 0 ||
+    line.multi ||
+    line.editionLineHint ||
+    line.coverRange ||
+    line.coverageGapped ||
+    facts.coverRange ||
+    facts.coverageGapped ||
+    facts.lineName ||
+    facts.position ||
+    target.line ||
+    target.edition.linePosition !== undefined ||
+    target.edition.coverageUnmapped ||
+    actual.length !== 1 ||
+    review.volumeIds.length !== 1 ||
+    review.volumeIds[0] !== proof.volumeId ||
+    actual[0]?.volume._id !== proof.volumeId ||
+    actual[0]?.extent !== "complete" ||
+    actual[0]?.volume.label !== undefined ||
+    active.length !== 1 ||
+    active[0]?._id !== proof.volumeId ||
+    active[0]?.locked ||
+    !names.some((name) => sameWorkTitle(product.seriesTitle, name)) ||
+    product.volumeLabel ||
+    product.packaging ||
+    product.isBox ||
+    product.isNovel ||
+    productFacts.labels.length ||
+    productFacts.packaging.length ||
+    productFacts.unreadable.length ||
+    productFacts.bindings.length ||
+    productFacts.digital ||
+    outOfScopeReason(proof.productTitle) ||
+    // Standalone work names cannot use this path to route chapter/Part products.
+    [line.title, page.title, parentSnapshot.title, proof.productTitle, proof.extentStatement].some(
+      (text) => !!text && /\b(?:chapter|part|episode|novel)\b/i.test(text),
+    ) ||
+    standalonePassageContradicts(proof) ||
+    outOfScopeReason(proof.extentStatement) ||
+    !review.evidenceUrls.includes(proof.evidenceUrl) ||
+    !proof.extentStatement.trim() ||
+    proof.extentStatement.length > 4000 ||
+    !Number.isFinite(proof.capture.fetchedAt) ||
+    proof.capture.fetchedAt <= 0 ||
+    !/^[a-f0-9]{64}$/.test(proof.capture.bodySha256) ||
+    proof.capture.excerpt.length > 16000 ||
+    !proof.capture.excerpt.includes(proof.isbn13) ||
+    !proof.capture.excerpt.includes(proof.productTitle) ||
+    !proof.capture.excerpt.includes(proof.extentStatement)
+  )
+    return refuse(
+      "Reviewed standalone proof does not identify this exact whole unlabeled manga product.",
+    );
+  evidenceUrls([proof.evidenceUrl]);
 }
 
 /** The manga discriminator changes spelling, not the root work's identity. */

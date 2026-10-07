@@ -1,4 +1,5 @@
 import { episodeRoutingValidator } from "./lib/episodeRouting";
+import { standaloneIdentityValidator } from "./lib/standaloneIdentity";
 import { subtitleRefreshProof, subtitleRefreshState } from "./lib/olSubtitleRefresh";
 import { sourceFormatState } from "./lib/heldBooks";
 import { reviewedFormatValidator, utf8Bytes, formatContext } from "./lib/sourceFormat";
@@ -49,6 +50,7 @@ export const reviewedIdentityValidator = v.object({
   volumeIds: v.array(v.id("volumes")),
   evidenceUrls: v.array(v.string()),
   sourceTitle: v.optional(v.string()),
+  standalone: v.optional(standaloneIdentityValidator),
   titledVolume: v.optional(
     v.object({ productTitle: v.string(), volumeTitle: v.string(), productVolumeLabel: v.string() }),
   ),
@@ -426,7 +428,14 @@ export const applyInternal = internalMutation({
     const afterHold = await holdOf(ctx, args.observationId);
     const after = valueHash({ observation: afterObservation, hold: afterHold });
     if (before === after) return { status: "alreadyApplied" };
-    const proposalId = await audit(ctx, actor, args.observationId, args.reason.trim(), urls);
+    const proposalId = await audit(
+      ctx,
+      actor,
+      args.observationId,
+      args.reason.trim(),
+      urls,
+      args.reviewed?.standalone ? valueHash(args.reviewed) : undefined,
+    );
     let createdStructure: Doc<"heldRepairLedger">["createdStructure"];
     if (releaseId) {
       const release = (await ctx.db.get(releaseId)) ?? refuse("Replayed Release vanished.");

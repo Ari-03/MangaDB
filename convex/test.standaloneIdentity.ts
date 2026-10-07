@@ -1,0 +1,450 @@
+// Retained ANN snapshots and publisher text from batches 017, 019, 020.
+// Body hashes identify original artifacts; retrieval times come from the original capture manifests.
+export const standaloneFixtures = [
+  {
+    snapshot: {
+      annId: "17445",
+      date: {
+        day: 30,
+        month: 11,
+        year: 2010,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9780759531871",
+      kind: "annRelease",
+      mangaId: "13658",
+      multi: false,
+      page: {
+        date: {
+          day: 30,
+          month: 11,
+          year: 2010,
+        },
+        distributor: "Yen Press",
+        distributorId: "6612",
+        fetchedAt: 1790489305881,
+        isbn10: "0759531870",
+        isbn13: "9780759531871",
+        mangaId: "13658",
+        priceCents: 1099,
+        status: "ok",
+        title: "Not Love But Delicious Foods Make Me So Happy!",
+        volume: "GN",
+      },
+      title: "Not Love But Delicious Foods Make Me So Happy!",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=17445",
+    },
+    series: {
+      title: "Not Love But Delicious Foods",
+      altTitles: [
+        "Not Love But Delicious Foods Make Me So Happy!",
+        "Ai ga Nakutemo Kutte Yukemasu",
+        "愛がなくても喰ってゆけます。",
+      ],
+    },
+    parentSnapshot: {
+      altTitles: ["Ai ga Nakutemo Kutte Yukemasu", "愛がなくても喰ってゆけます。"],
+      credits: [
+        {
+          name: "Fumi Yoshinaga",
+          personId: "37027",
+          task: "Story & Art",
+        },
+      ],
+      id: "13658",
+      kind: "annManga",
+      releases: [
+        {
+          annId: "17445",
+          date: {
+            day: 30,
+            month: 11,
+            year: 2010,
+          },
+          editionLineHint: false,
+          format: "physical",
+          isbn13: "9780759531871",
+          multi: false,
+          title: "Not Love But Delicious Foods Make Me So Happy!",
+        },
+      ],
+      staff: ["Fumi Yoshinaga"],
+      title: "Not Love But Delicious Foods Make Me So Happy!",
+      url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=13658",
+    },
+    productTitle: "Not Love But Delicious Foods",
+    extentStatement:
+      "Cover Title Page Contents #1 #2 #3 #4 #5 #6 #7 #8 #9 #10 #11 #12 #13 #14 #15 Copyright",
+    evidenceUrl: "https://yenpress.com/titles/9780759531871-not-love-but-delicious-foods",
+    capture: {
+      fetchedAt: 1791345207807,
+      bodySha256: "e43bfaf4b50723f83d25bd73bff618031a65a4da0ac3534fbe0f9871bf51d60c",
+      excerpt:
+        "Not Love But Delicious Foods\n9780759531871\nCover Title Page Contents #1 #2 #3 #4 #5 #6 #7 #8 #9 #10 #11 #12 #13 #14 #15 Copyright",
+    },
+    originalArtifacts: [
+      "/home/ari/mangadb-audit/queue-clear-20261007/batches/batch-017.json",
+      "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-017/delicious.html",
+    ],
+  },
+  {
+    snapshot: {
+      annId: "48314",
+      date: {
+        day: 29,
+        month: 6,
+        year: 2021,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781975321253",
+      kind: "annRelease",
+      mangaId: "24543",
+      multi: false,
+      page: {
+        date: {
+          day: 29,
+          month: 6,
+          year: 2021,
+        },
+        distributor: "Yen Press",
+        distributorId: "6612",
+        fetchedAt: 1790502457322,
+        isbn10: "1975321251",
+        isbn13: "9781975321253",
+        mangaId: "24543",
+        status: "ok",
+        title: "Farewell to My Alter: Nakatani Nio Short Story Collection",
+        volume: "GN",
+      },
+      title: "Farewell to My Alter: Nakatani Nio Short Story Collection",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=48314",
+    },
+    series: {
+      title: "Farewell to My Alter: Nakatani Nio Short Story Collection",
+      altTitles: ["Farewell to My Alter", "Sayonara Alter", "さよならオルタ"],
+    },
+    parentSnapshot: {
+      altTitles: ["Sayonara Alter", "さよならオルタ"],
+      credits: [
+        {
+          name: "Nio Nakatani",
+          personId: "146331",
+          task: "Story & Art",
+        },
+      ],
+      id: "24543",
+      kind: "annManga",
+      releases: [
+        {
+          annId: "48314",
+          date: {
+            day: 29,
+            month: 6,
+            year: 2021,
+          },
+          editionLineHint: false,
+          format: "physical",
+          isbn13: "9781975321253",
+          multi: false,
+          title: "Farewell to My Alter: Nakatani Nio Short Story Collection",
+        },
+      ],
+      staff: ["Nio Nakatani"],
+      synopsis:
+        "Identical twins continually swap places until one of them dies, two women debate buying a house with a double bed, a pair of students navigate the intricacies of mourning and more in this short story collection from Bloom Into You creator Nio Nakatani.",
+      title: "Farewell to My Alter",
+      url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=24543",
+    },
+    productTitle: "Farewell to My Alter: Nakatani Nio Short Story Collection",
+    extentStatement: "collection of short stories that span her whole career.",
+    evidenceUrl: "https://yenpress.com/titles/9781975321253-farewell-to-my-alter",
+    capture: {
+      fetchedAt: 1791345384071,
+      bodySha256: "9b5afb554556f99e6ccf9abb3ffde52197eb4424518699cc4d0ecaed5307db28",
+      excerpt:
+        "Farewell to My Alter: Nakatani Nio Short Story Collection\n9781975321253\ncollection of short stories that span her whole career.\n9781975321260",
+    },
+    originalArtifacts: [
+      "/home/ari/mangadb-audit/queue-clear-20261007/batches/batch-019.json",
+      "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-019/alter.html",
+    ],
+  },
+  {
+    snapshot: {
+      annId: "54050",
+      date: {
+        day: 29,
+        month: 8,
+        year: 2023,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781975366421",
+      kind: "annRelease",
+      mangaId: "27160",
+      multi: false,
+      page: {
+        date: {
+          day: 29,
+          month: 8,
+          year: 2023,
+        },
+        distributor: "Yen Press",
+        distributorId: "6612",
+        fetchedAt: 1790504181103,
+        isbn10: "1975366425",
+        isbn13: "9781975366421",
+        mangaId: "27160",
+        status: "ok",
+        title: "I Don't Need a Happy Ending: A collection of short stories",
+        volume: "GN",
+      },
+      title: "I Don't Need a Happy Ending: A collection of short stories",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=54050",
+    },
+    series: {
+      title: "I Don't Need a Happy Ending: A collection of short stories",
+      altTitles: [
+        "I Don't Need a Happy Ending",
+        "Happy End wa Iranai",
+        "Mikanuji Tanpenshū Happy End wa Iranai",
+        "ハッピーエンドはいらない",
+        "みかん氏短編集 ハッピーエンドはいらない",
+      ],
+    },
+    parentSnapshot: {
+      altTitles: [
+        "Happy End wa Iranai",
+        "Mikanuji Tanpenshū Happy End wa Iranai",
+        "ハッピーエンドはいらない",
+        "みかん氏短編集 ハッピーエンドはいらない",
+      ],
+      credits: [
+        {
+          name: "Mikanuji",
+          personId: "226683",
+          task: "Story & Art",
+        },
+      ],
+      id: "27160",
+      kind: "annManga",
+      releases: [
+        {
+          annId: "54050",
+          date: {
+            day: 29,
+            month: 8,
+            year: 2023,
+          },
+          editionLineHint: false,
+          format: "physical",
+          isbn13: "9781975366421",
+          multi: false,
+          title: "I Don't Need a Happy Ending: A collection of short stories",
+        },
+      ],
+      staff: ["Mikanuji"],
+      title: "I Don't Need a Happy Ending",
+      url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=27160",
+    },
+    productTitle: "I Don't Need a Happy Ending: A collection of short stories",
+    extentStatement: "these five stories by the author of Assorted Entanglements",
+    evidenceUrl: "https://yenpress.com/titles/9781975366421-i-don-t-need-a-happy-ending",
+    capture: {
+      fetchedAt: 1791345589562,
+      bodySha256: "f3a15b08bf41507d4989d1c1bb72e2e0e3eb181e6005a77767c60613dc7cab9c",
+      excerpt:
+        "I Don't Need a Happy Ending: A collection of short stories\n9781975366421\nthese five stories by the author of Assorted Entanglements",
+    },
+    originalArtifacts: [
+      "/home/ari/mangadb-audit/queue-clear-20261007/batches/batch-020.json",
+      "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-020/9781975366421-publisher.html",
+    ],
+  },
+  {
+    snapshot: {
+      annId: "54546",
+      date: {
+        day: 1,
+        month: 7,
+        year: 2025,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781506746326",
+      kind: "annRelease",
+      mangaId: "18518",
+      multi: false,
+      page: {
+        date: {
+          day: 1,
+          month: 7,
+          year: 2025,
+        },
+        distributor: "Dark Horse Comics",
+        distributorId: "26",
+        fetchedAt: 1790504341529,
+        isbn10: "1506746322",
+        isbn13: "9781506746326",
+        mangaId: "18518",
+        status: "ok",
+        title: "H.P. Lovecraft's The Colour Out of Space",
+        volume: "GN",
+      },
+      title: "H.P. Lovecraft's The Colour Out of Space",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=54546",
+    },
+    series: {
+      title: "H.P. Lovecraft's The Colour Out of Space",
+      altTitles: [
+        "The Colour Out of Space",
+        "Isekai no Shikisai",
+        "Isekai no Shikisai - Lovecraft Kessakushū",
+        "異世界の色彩 ラヴクラフト傑作集",
+      ],
+    },
+    parentSnapshot: {
+      altTitles: [
+        "Isekai no Shikisai",
+        "Isekai no Shikisai - Lovecraft Kessakushū",
+        "異世界の色彩 ラヴクラフト傑作集",
+      ],
+      credits: [
+        {
+          name: "Gou Tanabe",
+          personId: "73966",
+          task: "Story & Art",
+        },
+        {
+          name: "H.P. Lovecraft",
+          personId: "73967",
+          task: "Original creator",
+        },
+      ],
+      id: "18518",
+      kind: "annManga",
+      releases: [
+        {
+          annId: "54546",
+          date: {
+            day: 1,
+            month: 7,
+            year: 2025,
+          },
+          editionLineHint: false,
+          format: "physical",
+          isbn13: "9781506746326",
+          multi: false,
+          title: "H.P. Lovecraft's The Colour Out of Space",
+        },
+      ],
+      staff: ["Gou Tanabe", "H.P. Lovecraft"],
+      title: "The Colour Out of Space",
+      url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=18518",
+    },
+    productTitle: "H.P. Lovecraft's The Colour Out of Space (Manga)",
+    extentStatement: "The complete story in one volume",
+    evidenceUrl: "https://prhcomics.com/book/?isbn=9781506746326",
+    capture: {
+      fetchedAt: 1791345590067,
+      bodySha256: "981a080df94b97e40d3a90c33238b8b00cab8573afc0b154a768282681c7e67d",
+      excerpt:
+        "H.P. Lovecraft's The Colour Out of Space (Manga)\n9781506746326\nThe complete story in one volume",
+    },
+    originalArtifacts: [
+      "/home/ari/mangadb-audit/queue-clear-20261007/batches/batch-020.json",
+      "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-020/9781506746326-prh.html",
+    ],
+  },
+  {
+    snapshot: {
+      annId: "56238",
+      coverRange: {
+        from: "1",
+        to: "2",
+      },
+      date: {
+        day: 23,
+        month: 12,
+        year: 2025,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781506746340",
+      kind: "annRelease",
+      mangaId: "27351",
+      multi: true,
+      page: {
+        date: {
+          day: 23,
+          month: 12,
+          year: 2025,
+        },
+        distributor: "Dark Horse Comics",
+        distributorId: "26",
+        fetchedAt: 1790504783362,
+        isbn10: "1506746349",
+        isbn13: "9781506746340",
+        mangaId: "27351",
+        status: "ok",
+        title: "H.P. Lovecraft's The Shadow Out of Time",
+        volume: "GN 1-2",
+      },
+      title: "H.P. Lovecraft's The Shadow Out of Time",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=56238",
+    },
+    series: {
+      title: "H.P. Lovecraft's The Shadow Out of Time",
+      altTitles: ["The Shadow Out of Time", "Toki o Koeru Kage", "時を超える影"],
+    },
+    parentSnapshot: {
+      altTitles: ["Toki o Koeru Kage", "時を超える影"],
+      credits: [
+        {
+          name: "Gou Tanabe",
+          personId: "73966",
+          task: "Story & Art",
+        },
+      ],
+      id: "27351",
+      kind: "annManga",
+      releases: [
+        {
+          annId: "56238",
+          coverRange: {
+            from: "1",
+            to: "2",
+          },
+          date: {
+            day: 23,
+            month: 12,
+            year: 2025,
+          },
+          editionLineHint: false,
+          format: "physical",
+          isbn13: "9781506746340",
+          multi: true,
+          title: "H.P. Lovecraft's The Shadow Out of Time",
+        },
+      ],
+      staff: ["Gou Tanabe"],
+      title: "The Shadow Out of Time",
+      url: "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=27351",
+    },
+    productTitle: "H.P. Lovecraft's The Shadow Out of Time (Manga)",
+    extentStatement: "this is the complete story in one volume",
+    evidenceUrl: "https://prhcomics.com/book/?isbn=9781506746340",
+    capture: {
+      fetchedAt: 1791345384224,
+      bodySha256: "2158ed7e657f78b71120ce7bfe39e857a858647be418354b0dbb7f72acd63b29",
+      excerpt:
+        "H.P. Lovecraft's The Shadow Out of Time (Manga)\n9781506746340\nthis is the complete story in one volume",
+    },
+    originalArtifacts: [
+      "/home/ari/mangadb-audit/queue-clear-20261007/batches/batch-019.json",
+      "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-019/out-of-time.html",
+    ],
+  },
+] as const;
