@@ -1,7 +1,8 @@
 // Splitting a franchise into Series (the held-book category pass,
 // 2026-10): a split that only adds a Part's backbone Volumes, a Series
 // Family grouping the Parts, an Edition Line member no source maps
-// (created, or moved off its Volume), and ANN's one manga entry for the
+// (created, or moved off its Volume), two books of one Edition split
+// apart, and ANN's one manga entry for the
 // franchise linking a Part's line by ISBN once the Parts share a Family.
 
 import { describe, expect, it } from "vitest";
@@ -156,6 +157,45 @@ describe("franchise repairs", () => {
         .unique();
       expect(created?.seriesIds).toEqual([seriesId]);
       expect((await ctx.db.get(releaseId))?.seriesIds).toEqual([seriesId]);
+    });
+  });
+
+  it("moves one book out of a shared Edition onto another Series' Volume", async () => {
+    const t = makeT();
+    const { publisherId, seriesId, editionId, releaseId } = await seed(t);
+    const { part1, ebookId } = await t.run(async (ctx) => ({
+      part1: await insertSeries(ctx, { title: "JoJo's Bizarre Adventure: Part 1--Phantom Blood" }),
+      // The Part 3 ebook of vol 5, imported into the hardcover's Edition.
+      ebookId: await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9781421578873",
+        format: "digital",
+      }),
+    }));
+    const entry: RepairEntry = {
+      kind: "splitEdition",
+      key: "jojo-split-5",
+      reason: "The hardcover is another Part's book.",
+      editionId,
+      releaseIds: [releaseId],
+      keepReleaseIds: [ebookId],
+      coverage: [{ seriesId: part1, label: "1", extent: "complete" }],
+      line: null,
+    };
+    expect((await run(t, [entry]))[0]).toMatchObject({ status: "applied" });
+    expect((await run(t, [entry]))[0]).toMatchObject({ status: "alreadyApplied" });
+    await t.run(async (ctx) => {
+      const moved = await ctx.db.get(releaseId);
+      expect(moved?.editionId).not.toBe(editionId);
+      expect(moved?.seriesIds).toEqual([part1]);
+      expect((await ctx.db.get(ebookId))?.editionId).toBe(editionId);
+      const [cover] = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", moved!.editionId))
+        .collect();
+      expect(await ctx.db.get(cover!.volumeId)).toMatchObject({ seriesId: part1, label: "1" });
     });
   });
 

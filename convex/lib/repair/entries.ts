@@ -483,6 +483,35 @@ export const setCoverageEntry = v.object({
 });
 
 /**
+ * Move some of an Edition's Releases to a new Edition of the same publisher:
+ * two books an import put in one Edition (a Part's hardcover and another
+ * Part's ebook of the same number). The new Edition covers `coverage` (each
+ * Volume named by Series + label, created when missing) or, with
+ * `unmapped`, none, as an Unmapped Packaging member of `line`. The Edition
+ * must hold exactly `releaseIds` and `keepReleaseIds` now (drift = skip),
+ * and keeps the latter. A re-run finds the moved Releases' Edition.
+ */
+export const splitEditionEntry = v.object({
+  kind: v.literal("splitEdition"),
+  ...base,
+  editionId: v.id("editions"),
+  releaseIds: v.array(v.id("releases")),
+  keepReleaseIds: v.array(v.id("releases")),
+  coverage: v.array(
+    v.object({
+      seriesId: v.id("series"),
+      label: nullableString,
+      extent: v.union(v.literal("complete"), v.literal("partial")),
+    }),
+  ),
+  line: v.union(
+    v.object({ seriesId: v.id("series"), name: v.string(), position: nullableString }),
+    v.null(),
+  ),
+  unmapped: v.optional(v.boolean()),
+});
+
+/**
  * Group Series in a Series Family (CONTEXT.md), creating the Family by
  * `name` when no active one has it. Each Series states the title the plan
  * saw (drift = skip); one already in another Family is skipped whole.
@@ -528,6 +557,7 @@ export const repairEntry = v.union(
   releaseBundleEntry,
   setCoverageEntry,
   seriesFamilyEntry,
+  splitEditionEntry,
 );
 
 export type RepairEntry = Infer<typeof repairEntry>;

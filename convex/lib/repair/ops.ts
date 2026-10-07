@@ -126,6 +126,8 @@ export async function applyEntry(
       return await setCoverage(ctx, audit, entry);
     case "seriesFamily":
       return await seriesFamily(ctx, audit, entry);
+    case "splitEdition":
+      return await splitEdition(ctx, audit, entry);
   }
 }
 
@@ -3497,5 +3499,89 @@ async function seriesFamily(
       familyId: family._id,
     });
   }
+  return audit.wrote ? applied : already;
+}
+
+/** Move the planned Releases out of an Edition into a new one (entries.ts splitEditionEntry). */
+async function splitEdition(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"splitEdition">,
+): Promise<Result> {
+  const unmapped = entry.unmapped === true;
+  if (entry.releaseIds.length === 0 || entry.keepReleaseIds.length === 0)
+    return skip("plan error: a split moves some Releases and keeps some");
+  if (unmapped ? entry.coverage.length > 0 || entry.line === null : entry.coverage.length === 0)
+    return skip("plan error: state coverage, or a line and no coverage when unmapped");
+  const edition = await ctx.db.get(entry.editionId);
+  if (!edition || edition.status !== "active") return skip("edition not active");
+  if (edition.locked) return skip(`edition ${edition.publicId} is locked`);
+
+  const moving: Array<Doc<"releases">> = [];
+  for (const id of entry.releaseIds) {
+    const release = await ctx.db.get(id);
+    if (!release || release.status !== "active") return skip(`release ${id} not active`);
+    moving.push(release);
+  }
+  const elsewhere = new Set(moving.map((r) => r.editionId).filter((id) => id !== edition._id));
+  if (elsewhere.size > 1) return skip("the planned Releases sit in several Editions");
+  const kept = (await releasesOf(ctx, edition._id)).filter((r) => r.status === "active");
+  const expected =
+    elsewhere.size === 0 ? [...entry.keepReleaseIds, ...entry.releaseIds] : entry.keepReleaseIds;
+  if (!sameValue(idSet(kept.map((r) => r._id)), idSet(expected)))
+    return skip(
+      `edition ${edition.publicId} releases drifted: now ${kept.map((r) => r.isbn13 ?? r._id).join(", ")}`,
+    );
+
+  const moves = newMoves(entry.key);
+  let targetId = [...elsewhere][0];
+  await carryingTracking(
+    ctx,
+    audit,
+    moves,
+    { editionIds: [edition._id, ...(targetId ? [targetId] : [])] },
+    async () => {
+      if (!targetId) {
+        targetId = await createEdition(ctx, audit, {
+          status: "active",
+          publisherId: edition.publisherId,
+          bootstrapUnreviewed: true,
+          ...(unmapped ? { coverageUnmapped: true } : {}),
+        });
+        for (const release of moving) {
+          await updateRecord(ctx, audit, { type: "release", id: release._id }, release, {
+            editionId: targetId,
+          });
+        }
+      }
+      const rows: Parameters<typeof replaceCoverage>[3] = [];
+      for (const row of entry.coverage) {
+        rows.push({
+          volumeId: (await ensureVolume(ctx, audit, row.seriesId, row.label))._id,
+          extent: row.extent,
+        });
+      }
+      await replaceCoverage(ctx, audit, targetId, rows);
+      if (entry.line) {
+        const target = await ctx.db.get(targetId);
+        if (!target) return skip("new edition vanished");
+        const lineId = await findOrCreateLine(
+          ctx,
+          audit,
+          entry.line.seriesId,
+          target.publisherId,
+          entry.line.name,
+        );
+        await updateRecord(ctx, audit, { type: "edition", id: targetId }, target, {
+          editionLineId: lineId,
+          linePosition: entry.line.position ?? undefined,
+        });
+      }
+      await refreshReleaseDenorms(ctx, targetId);
+      await refreshReleaseDenorms(ctx, edition._id);
+    },
+  );
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  if (moves.unfinished) return partial;
   return audit.wrote ? applied : already;
 }
