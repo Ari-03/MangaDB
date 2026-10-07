@@ -635,14 +635,30 @@ async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
   }
   return {
     name: familyDoc.name,
-    // Reading order (familyPosition), then age; unplaced Series last.
-    members: members
-      .sort(
-        (a, b) =>
-          (a.familyPosition ?? Number.MAX_SAFE_INTEGER) -
-            (b.familyPosition ?? Number.MAX_SAFE_INTEGER) || a.publicId - b.publicId,
-      )
-      .map((m) => ({ publicId: m.publicId, title: m.title })),
+    // Reading order (familyPosition), then age; unplaced Series last. Each
+    // with its jacket from the Series library, as search shows it, and
+    // whether its art is Mature (the shelf conceals it per cover).
+    members: await Promise.all(
+      members
+        .sort(
+          (a, b) =>
+            (a.familyPosition ?? Number.MAX_SAFE_INTEGER) -
+              (b.familyPosition ?? Number.MAX_SAFE_INTEGER) || a.publicId - b.publicId,
+        )
+        .map(async (m) => {
+          const stats = await ctx.db
+            .query("seriesStats")
+            .withIndex("by_series", (q) => q.eq("seriesId", m._id))
+            .first();
+          return {
+            publicId: m.publicId,
+            title: m.title,
+            mature: m.mature === true,
+            coverUrl: stats?.coverUrl ?? null,
+            coverIsbn: statsCoverIsbns(stats),
+          };
+        }),
+    ),
     relationships,
   };
 }

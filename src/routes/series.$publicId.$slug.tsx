@@ -505,8 +505,8 @@ function BoxSetsSection({ boxSets }: { boxSets: SeriesPageData["boxSets"] }) {
 }
 
 /**
- * The Series Family shelf: sibling Series stand next to this one, each
- * keeping its own Volume sequence. The typed relationships are spelled out
+ * The Series Family shelf: sibling Series stand next to this one in reading
+ * order, each with its jacket and keeping its own Volume sequence. The typed relationships are spelled out
  * underneath as sentences — the edge is stored once, whichever end this
  * Series is.
  */
@@ -528,11 +528,17 @@ function FamilySection({
       <div className="shelf">
         {family.members.map((member) => {
           const isSelf = member.publicId === self.publicId;
+          // A Mature sibling's art stays hidden for viewers who have not opted in.
+          const cover = (
+            <ConcealArt mature={member.mature} notice={false}>
+              <Cover src={member.coverUrl} isbn13={member.coverIsbn} title={member.title} />
+            </ConcealArt>
+          );
           return (
             <div className="shelf-item" key={member.publicId}>
               <div className="cover-wrap">
                 {isSelf ? (
-                  <Cover title={member.title} />
+                  cover
                 ) : (
                   <Link
                     className="cover-link"
@@ -540,7 +546,7 @@ function FamilySection({
                     params={slugParams(member.publicId, member.title)}
                     aria-label={member.title}
                   >
-                    <Cover title={member.title} />
+                    {cover}
                   </Link>
                 )}
               </div>

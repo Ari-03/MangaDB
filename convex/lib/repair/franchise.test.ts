@@ -117,6 +117,21 @@ describe("franchise repairs", () => {
     const publicId = await t.run(async (ctx) => (await ctx.db.get(seriesId))!.publicId);
     const page = await t.query(api.catalog.seriesPage, { publicId });
     expect(page?.family?.members.map((m) => m.title)).toEqual([PART_4, "JoJo's Bizarre Adventure"]);
+
+    // Each member carries its jacket from the Series library (built by the
+    // library rebuild), as search does, and whether its art is Mature.
+    // (The rebuild derives `mature`, so the flag is set after it.)
+    await t.mutation(internal.seriesBrowse.rebuildBatch, { afterPublicId: null, rebuiltAt: 1 });
+    await t.run((ctx) => ctx.db.patch(seriesId, { mature: true }));
+    const withCovers = await t.query(api.catalog.seriesPage, { publicId });
+    expect(withCovers?.family?.members).toEqual([
+      expect.objectContaining({ title: PART_4, mature: false, coverIsbn: [] }),
+      expect.objectContaining({
+        title: "JoJo's Bizarre Adventure",
+        mature: true,
+        coverIsbn: ["9781421591711"],
+      }),
+    ]);
   });
 
   it("creates an unmapped line member, and moves an Edition off its Volume into one", async () => {
