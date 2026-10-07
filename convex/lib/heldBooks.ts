@@ -1072,6 +1072,41 @@ async function sourceContentsMatch(
       reading.label !== undefined &&
       labelsEqual(actual[0]!.volume.label ?? null, reading.label) &&
       sameWorkTitle(reading.work, title);
+    // An ordinal edition tag belongs to this exact Edition Line, not the work name.
+    // Keep the raw reader's volume, scope, binding and format facts in force.
+    const secondEdition = /^(.*?)\s+[-–—]\s+\[2nd Ed\.?\]$/i.exec(line.title);
+    const reviewedEditionTag =
+      !routed &&
+      !state.bundle &&
+      proof?.sourceTitle === line.title &&
+      proof.evidenceUrls.length > 0 &&
+      line.page?.status === "ok" &&
+      line.page.title === line.title &&
+      toIsbn13(line.page.isbn13) === proof.isbn13 &&
+      state.source.series?._id === series._id &&
+      parent?.kind === "annManga" &&
+      parent.id === line.mangaId &&
+      parent.title !== undefined &&
+      workNames.some((name) => sameWorkTitle(parent.title!, name)) &&
+      secondEdition !== null &&
+      workNames.some((name) => sameWorkTitle(secondEdition[1]!, name)) &&
+      contents.length === 1 &&
+      contents[0]!.line?.name === "Second Edition" &&
+      actual.length === 1 &&
+      actual[0]!.extent === "complete" &&
+      reading.label !== undefined &&
+      labelsEqual(actual[0]!.volume.label ?? null, reading.label) &&
+      labelsEqual(contents[0]!.edition.linePosition ?? null, reading.label) &&
+      !line.multi &&
+      !line.editionLineHint &&
+      !line.coverRange &&
+      !line.coverageGapped &&
+      reading.packaging.every(
+        (fact) =>
+          fact === `ANN's page title "${line.title}"` ||
+          fact === `the bracketed part of "${line.title}"`,
+      ) &&
+      sameWorkTitle(reading.work, line.title);
     // Exact own-ISBN product review identifies a titled member, never a Series alias.
     // The existing ANN reader still owns all numeric, scope and format statements.
     const titled = proof?.titledVolume;
@@ -1130,6 +1165,7 @@ async function sourceContentsMatch(
         ) &&
         !reviewedProduct &&
         !reviewedSubtitle &&
+        !reviewedEditionTag &&
         !reviewedTitled) ||
       reading.scope.length ||
       reading.unreadable.length
@@ -1146,7 +1182,7 @@ async function sourceContentsMatch(
     )
       return refuse("Known ANN content/position/format conflict.");
     ranges.push(facts.coverRange);
-    packaged = reading.packaging.length > 0;
+    packaged = !reviewedEditionTag && reading.packaging.length > 0;
     sourceLabel = reading.label;
     sourceBinding = reading.binding;
     lineName = facts.lineName;
