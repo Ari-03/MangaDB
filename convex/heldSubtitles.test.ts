@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { internal } from "./_generated/api";
 import { makeT } from "./test.helpers";
 import { insertBook } from "./test.moderation";
-import { insertPublisher, insertSeries, insertVolume, insertObservation } from "./test.factories";
+import {
+  insertPublisher,
+  insertSeries,
+  insertVolume,
+  insertObservation,
+  insertEditionLine,
+} from "./test.factories";
 import { readObservationBook } from "./printings";
 const cases = [
   {
@@ -170,6 +176,55 @@ describe("reviewed ANN book subtitles from retained staging records", () => {
       expect(reviewed.refusal).toBeNull();
       expect(reviewed.classification).toBe("linkReady");
       expect(reviewed.expected).toBeTruthy();
+      if (row.name === "fushigi") {
+        const lineId = await t.run((ctx) =>
+          insertEditionLine(ctx, {
+            seriesId: ids.seriesId,
+            publisherId: ids.publisherId,
+            name: "Second edition",
+          }),
+        );
+        await t.run((ctx) =>
+          ctx.db.patch(ids.editionId, { editionLineId: lineId, linePosition: "10" }),
+        );
+        const title = `${row.snapshot.title} [2nd Edition]`;
+        const snapshot = { ...row.snapshot, title, page: { ...row.snapshot.page, title } };
+        await t.run((ctx) => ctx.db.patch(ids.observationId, { snapshot }));
+        const secondArgs = { ...args, reviewed: { ...args.reviewed, sourceTitle: title } };
+        expect((await t.query(internal.heldBooks.previewInternal, secondArgs)).classification).toBe(
+          "linkReady",
+        );
+        await t.run((ctx) => ctx.db.patch(ids.editionId, { linePosition: "11" }));
+        expect(
+          (await t.query(internal.heldBooks.previewInternal, secondArgs)).refusal,
+        ).toBeTruthy();
+        await t.run((ctx) => ctx.db.patch(ids.editionId, { linePosition: "10" }));
+        await t.run((ctx) => ctx.db.patch(lineId, { name: "First edition" }));
+        expect(
+          (await t.query(internal.heldBooks.previewInternal, secondArgs)).refusal,
+        ).toBeTruthy();
+        await t.run((ctx) => ctx.db.patch(lineId, { name: "Second edition" }));
+        for (const tag of ["1st Edition", "2nd Edition] [Hardcover", "2nd Edition] [1-3"]) {
+          const changed = `${row.snapshot.title} [${tag}]`;
+          await t.run((ctx) =>
+            ctx.db.patch(ids.observationId, {
+              snapshot: { ...snapshot, title: changed, page: { ...snapshot.page, title: changed } },
+            }),
+          );
+          expect(
+            (
+              await t.query(internal.heldBooks.previewInternal, {
+                ...args,
+                reviewed: { ...args.reviewed, sourceTitle: changed },
+              })
+            ).refusal,
+          ).toBeTruthy();
+        }
+        await t.run((ctx) =>
+          ctx.db.patch(ids.editionId, { editionLineId: undefined, linePosition: undefined }),
+        );
+        await t.run((ctx) => ctx.db.patch(ids.observationId, { snapshot: row.snapshot }));
+      }
       expect(
         (
           await t.query(internal.heldBooks.previewInternal, {

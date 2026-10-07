@@ -1065,7 +1065,13 @@ async function sourceContentsMatch(
       subtitle !== null &&
       workNames.some((name) => sameWorkTitle(subtitle[1]!, name)) &&
       !/\b(?:part|episode|novel)\b/i.test(subtitle[2]!) &&
-      !contents.some((content) => content.line) &&
+      (!contents.some((content) => content.line) ||
+        (contents.length === 1 &&
+          /^second edition$/i.test(contents[0]!.line?.name ?? "") &&
+          parseBookTitle(line.title).formatTags.length === 1 &&
+          /^2nd Edition$/i.test(parseBookTitle(line.title).formatTags[0]!) &&
+          reading.label !== undefined &&
+          labelsEqual(contents[0]!.edition.linePosition ?? null, reading.label))) &&
       !line.multi &&
       !line.editionLineHint &&
       !line.coverRange &&
