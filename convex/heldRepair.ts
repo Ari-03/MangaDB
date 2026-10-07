@@ -6,6 +6,13 @@ import {
   type UnmappedResult,
 } from "./lib/unmappedProduct";
 import {
+  unmappedLinkArgs,
+  unmappedLinkExecuteArgs,
+  unmappedLinkState,
+  applyUnmappedLink,
+  type UnmappedLinkResult,
+} from "./lib/unmappedLink";
+import {
   digitalSiblingArgs,
   digitalSiblingState,
   createDigitalSibling,
@@ -579,4 +586,40 @@ export const placeUnmappedProductInternal = internalMutation({
 export const placeUnmappedProductOneInternal = internalMutation({
   args: unmappedProductExecuteArgs,
   handler: applyUnmappedProduct,
+});
+
+// G1: identity-only link to the sole exact-ISBN owner whose contents stay unmapped.
+export const previewUnmappedLinkInternal = internalQuery({
+  args: unmappedLinkArgs,
+  handler: async (ctx, args) => {
+    try {
+      const state = await unmappedLinkState(ctx, args);
+      return {
+        expected: state.expected,
+        refusal: null,
+        action: state.already ? "alreadyApplied" : "link",
+        sourceFacts: state.facts,
+      };
+    } catch (error) {
+      return { expected: null, refusal: heldError(error), action: null, sourceFacts: null };
+    }
+  },
+});
+export const linkUnmappedProductInternal = internalMutation({
+  args: unmappedLinkExecuteArgs,
+  handler: async (ctx, args): Promise<UnmappedLinkResult> => {
+    if (utf8Bytes(args.expected) > MAX_GUARD_BYTES)
+      return { status: "refused", reason: "Guard exceeds 256 KiB." };
+    try {
+      return await ctx.runMutation(internal.heldRepair.linkUnmappedProductOneInternal, args, {
+        transactionLimits: await nestedLimits(ctx),
+      });
+    } catch (error) {
+      return { status: "refused", reason: heldError(error) };
+    }
+  },
+});
+export const linkUnmappedProductOneInternal = internalMutation({
+  args: unmappedLinkExecuteArgs,
+  handler: applyUnmappedLink,
 });

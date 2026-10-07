@@ -33,19 +33,65 @@ export const publisherParentEntry = v.object({
 });
 
 /**
- * Move an Edition (and its Releases' denorm) to another publisher row. With
- * `imprint`, the target must be that PRH imprint's row and an imprint of the
- * edition's current company.
+ * One Edition's whole-Edition publisher move, as the reviewer saw it. The move
+ * rewrites every Release of the Edition, so it only applies with
+ * `expectedReleaseIds`: exactly the Edition's Releases, any status.
+ * `otherReleases` is the number of those Releases without evidence among
+ * `observationIds`: for an imprint move, the Releases with no validated
+ * own-ISBN PRH record listed; with `imprint` null (the legacy owner repair),
+ * the Releases none of the observations is linked to.
+ */
+const editionMove = {
+  editionId: v.id("editions"),
+  observationIds: v.array(v.id("sourceObservations")),
+  otherReleases: v.number(),
+  expectedReleaseIds: v.optional(v.array(v.id("releases"))),
+};
+
+/**
+ * Move an Edition (and its Releases' denorm) to another publisher row.
+ *
+ * With `imprint`, `to` must be that imprint's row, an imprint whose parent is
+ * the company `from` names, and every observation must be PRH's own record of
+ * one of the Edition's Releases stating exactly `imprint` (ops.ts
+ * imprintEvidence). PRH's own record of any other Release stating an imprint
+ * of another publisher refuses. With `imprint` null the observations are
+ * only counted, as the 2026-09 owner repair did.
+ *
+ * Either way a locked Edition, a publisher Human Override, a Release in
+ * another publisher's Bundle, or a Release with Other Printing or Alternate
+ * Ebook ISBN rows refuses. The 2026-09 plan generators filled
+ * `otherReleases` inconsistently (active siblings of one release, or a
+ * constant 0) and nothing read it; such entries without
+ * `expectedReleaseIds` only report alreadyApplied, they never move an
+ * Edition.
  */
 export const editionPublisherEntry = v.object({
   kind: v.literal("editionPublisher"),
   ...base,
-  editionId: v.id("editions"),
+  ...editionMove,
   fromPublisherId: v.id("publishers"),
   toPublisherId: v.id("publishers"),
   imprint: nullableString,
-  observationIds: v.array(v.id("sourceObservations")),
-  otherReleases: v.number(),
+});
+
+/**
+ * Move an Edition Line and its member Editions to an imprint of the line's
+ * company in one transaction: the line's `publisherId` with an editionLine
+ * Revision, each member as an editionPublisher imprint move would. `editions`
+ * must list exactly the line's active members, each with its own closure and
+ * PRH evidence; a hidden member must already be on `to`, since nothing here
+ * evidences it. Reports alreadyApplied when the line and every member are on
+ * `to`.
+ */
+export const editionLinePublisherEntry = v.object({
+  kind: v.literal("editionLinePublisher"),
+  ...base,
+  lineId: v.id("editionLines"),
+  fromPublisherId: v.id("publishers"),
+  toPublisherId: v.id("publishers"),
+  imprint: v.string(),
+  editions: v.array(v.object(editionMove)),
 });
 
 // ---------- stage 2: scope ----------
@@ -445,6 +491,7 @@ export const repairEntry = v.union(
   publisherMergeEntry,
   publisherParentEntry,
   editionPublisherEntry,
+  editionLinePublisherEntry,
   hideSeriesEntry,
   hideReleaseEntry,
   restoreRecordEntry,

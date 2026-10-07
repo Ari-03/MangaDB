@@ -1088,8 +1088,45 @@ function statedCoverage(
 // Edition", "3-in-1 Edition", "Omnibus") is never coverage.
 const EBOOK_MARKER = /\be-?book\b/i;
 const PRINT_MARKERS = [/\bO?GN\b/, /graphic novels?/i];
-/** A qualifier between the marker and its number: "GN box 2", "eBook ex 3". */
+/**
+ * A qualifier between the marker and its number: "GN box 2", "eBook ex 3".
+ * The parser keeps reading "ex N" as N so stored lines stay as imported;
+ * decisions ask `designatesExtra` and never take that N for a Volume.
+ */
 const QUALIFIER = /^\s*(?:box(?:ed)?(?:\s+set)?|ex)\b/i;
+
+/**
+ * Whether a designator numbers an extra chapter ("eBook ex 1": Yen Press's
+ * Handa-kun Extra Chapter 1), never the whole Volume its number names.
+ */
+export function designatesExtra(designator: string | undefined): boolean {
+  return designator !== undefined && /\b(?:e-?book|O?GN)\s+ex\b/i.test(designator);
+}
+
+/** ANN's "[NOOK]": the store that listed an ebook ISBN, not an edition or package. */
+const STOREFRONT_TAG = /\s+\[NOOK\]$/i;
+const BRACKETED_TEXT = /[[\]]/;
+
+/**
+ * The line's title without its storefront tag, or null when the tag is
+ * absent or cannot be read as one: only a digital line whose ok page
+ * restates the same title with an eBook designator. A physical "[NOOK]"
+ * line keeps the bracket, so it still reads as packaging.
+ */
+export function storefrontTitle(line: PackagingInput): string | null {
+  const page = currentPage(line);
+  const bare = line.title.replace(STOREFRONT_TAG, "");
+  if (
+    bare === line.title ||
+    BRACKETED_TEXT.test(bare) ||
+    line.format !== "digital" ||
+    !page ||
+    page.title !== line.title ||
+    readDesignator(page.volume ?? "")?.format !== "digital"
+  )
+    return null;
+  return bare;
+}
 /** The release page's "of N" total after the coverage: "GN 4 / 8". */
 const TOTAL = /\s*\/\s*\d+\s*$/;
 /** One Volume, with a letter it may carry: "GN 1A" is Volume 1. */

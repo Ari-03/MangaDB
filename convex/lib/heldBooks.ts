@@ -844,29 +844,41 @@ export async function heldState(
   return state;
 }
 
+/**
+ * The publisher names a source record states about itself: ANN's distributor,
+ * Open Library's publishers, Seven Seas' own name, or a store's imprint.
+ * kodansha.us states none: it lists Vertical's books too and names no
+ * imprint. Used by publisherMatch and G1's unmapped link (lib/unmappedLink.ts).
+ */
+export function sourcePublisherNames(sourceKey: string, snapshot: unknown): string[] {
+  const s = snapshot as {
+    publishers?: unknown;
+    imprint?: unknown;
+    page?: { distributor?: unknown };
+  };
+  const names =
+    sourceKey === "ann"
+      ? [s.page?.distributor]
+      : sourceKey === "openlibrary"
+        ? Array.isArray(s.publishers)
+          ? s.publishers
+          : []
+        : sourceKey === "sevenseas"
+          ? ["Seven Seas Entertainment"]
+          : [s.imprint];
+  return names.filter((name): name is string => typeof name === "string" && name !== "");
+}
+
 /** Publisher identity uses the source's own resolver. Corporate-family acceptance is deferred. */
 export async function publisherMatch(
   ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
   publisherId: Id<"publishers">,
 ) {
-  const s = observation.snapshot as {
-    publishers?: string[];
-    imprint?: string;
-    page?: { distributor?: string };
-  };
-  const names =
-    observation.sourceKey === "ann"
-      ? [s.page?.distributor]
-      : observation.sourceKey === "openlibrary"
-        ? s.publishers
-        : observation.sourceKey === "sevenseas"
-          ? ["Seven Seas Entertainment"]
-          : [s.imprint];
-  if (!names?.some(Boolean))
+  const names = sourcePublisherNames(observation.sourceKey, observation.snapshot);
+  if (!names.length)
     return refuse("Source publisher identity is unknown; exact-ISBN review is required.");
   for (const name of names) {
-    if (!name) continue;
     const pub = await findPublisherByName(ctx, name);
     if (pub) {
       if (pub._id !== publisherId)
@@ -1080,9 +1092,11 @@ async function sourceContentsMatch(
       reading.label !== undefined &&
       labelsEqual(actual[0]!.volume.label ?? null, reading.label) &&
       sameWorkTitle(reading.work, title);
-    // An ordinal edition tag belongs to this exact Edition Line, not the work name.
-    // Keep the raw reader's volume, scope, binding and format facts in force.
-    const secondEdition = /^(.*?)\s+[-–—]\s+\[2nd Ed\.?\]$/i.exec(line.title);
+    // A bracketed edition descriptor ("[Authentic Relaunch]", "[2nd Ed]") names
+    // this exact Edition Line, not the work. Keep the raw reader's volume,
+    // scope, binding and format facts in force.
+    const tagged = /^(.*?)(?:\s+[-–—])?\s+\[([^[\]]+)\]$/.exec(line.title);
+    const descriptor = tagged ? editionDescriptor(tagged[2]!) : null;
     const reviewedEditionTag =
       !routed &&
       !state.bundle &&
@@ -1096,10 +1110,12 @@ async function sourceContentsMatch(
       parent.id === line.mangaId &&
       parent.title !== undefined &&
       workNames.some((name) => sameWorkTitle(parent.title!, name)) &&
-      secondEdition !== null &&
-      workNames.some((name) => sameWorkTitle(secondEdition[1]!, name)) &&
+      tagged !== null &&
+      descriptor !== null &&
+      workNames.some((name) => sameWorkTitle(tagged[1]!, name)) &&
       contents.length === 1 &&
-      contents[0]!.line?.name === "Second Edition" &&
+      contents[0]!.line?.seriesId === series._id &&
+      sameWorkTitle(contents[0]!.line.name, descriptor) &&
       actual.length === 1 &&
       actual[0]!.extent === "complete" &&
       reading.label !== undefined &&
@@ -1188,6 +1204,39 @@ async function sourceContentsMatch(
       state.source.series?._id === series._id &&
       annLinePackaged(line, [series.title]) &&
       sameWorkTitle(productWork, series.title);
+    // An exact package review may read the words between the work and "Box Set"
+    // as the box's own qualifier ("Claymore - Complete Box Set", "One Piece -
+    // East Blue and Baroque Works Box Set"), never as another work. ANN's
+    // parent and stated range, the reviewed Volumes and the ordered members
+    // must all agree (the range is compared below); "Complete" must also be
+    // every active Volume of the work.
+    const boxed = /^(.*?)\s+[-–—]\s+(.+?)\s+Box\s+Set$/i.exec(line.title);
+    const qualifier = boxed ? boxQualifier(boxed[2]!) : null;
+    const reviewedQualifier =
+      boxed !== null &&
+      qualifier !== null &&
+      !routed &&
+      !!(state.bundle || newBundleName) &&
+      // A creation packet's product name, then the Bundle it created, is
+      // its reviewed source title.
+      (proof?.sourceTitle ?? newBundleName ?? state.bundle?.name) === line.title &&
+      proof?.isbn13 === state.isbn13 &&
+      proof.evidenceUrls.length > 0 &&
+      line.page?.status === "ok" &&
+      line.page.title === line.title &&
+      toIsbn13(line.page.isbn13) === proof.isbn13 &&
+      state.source.series?._id === series._id &&
+      parent?.kind === "annManga" &&
+      parent.id === line.mangaId &&
+      parent.title !== undefined &&
+      workNames.some((name) => sameWorkTitle(parent.title!, name)) &&
+      workNames.some((name) => sameWorkTitle(boxed[1]!, name)) &&
+      line.format === "physical" &&
+      line.multi &&
+      !!line.coverRange &&
+      !line.coverageGapped &&
+      reading.label === undefined &&
+      (await qualifierAgrees(ctx, state.r, series, qualifier, boxed[2]!, boxed[1]!, actual));
     if (
       named.kind === "ambiguous" ||
       (!workNames.some((name) => sameWorkTitle(reading.work, name)) &&
@@ -1199,7 +1248,8 @@ async function sourceContentsMatch(
         !reviewedSubtitle &&
         !reviewedEditionTag &&
         !reviewedTitled &&
-        !reviewedThreeInOne) ||
+        !reviewedThreeInOne &&
+        !reviewedQualifier) ||
       reading.scope.length ||
       reading.unreadable.length
     )
@@ -1277,7 +1327,11 @@ async function sourceContentsMatch(
       workNames.some((name) =>
         sameWorkTitle(withoutArticle(s.seriesTitle!), withoutArticle(name)),
       ) &&
-      workNames.some((name) => sameWorkTitle(withoutArticle(packageWork), withoutArticle(name)));
+      workNames.some((name) => sameWorkTitle(withoutArticle(packageWork), withoutArticle(name))) &&
+      // Reconciling a leading article still needs the exact source title pinned,
+      // as reviewedArticle does: the reviewed sourceTitle, else the Bundle's own name.
+      ((proof.sourceTitle ?? newBundleName ?? state.bundle?.name) === title ||
+        workNames.some((name) => sameWorkTitle(packageWork, name)));
     if (
       reading.scope.length ||
       reading.unreadable.length ||
@@ -1508,6 +1562,99 @@ async function standaloneMatch(
       "Reviewed standalone proof does not identify this exact whole unlabeled manga product.",
     );
   evidenceUrls([proof.evidenceUrl]);
+}
+
+/**
+ * The Edition Line a bracketed descriptor names ("Authentic Relaunch"; "2nd
+ * Ed" is "Second Edition"), or null when the bracket states anything else:
+ * a number, range, binding, format, package, Part, store or out-of-scope word.
+ */
+function editionDescriptor(text: string): string | null {
+  const ordinal = /^(1st|2nd|3rd)\s+Ed(?:\.|ition)?$/i.exec(text.trim())?.[1]?.toLowerCase();
+  const name = ordinal
+    ? `${{ "1st": "First", "2nd": "Second", "3rd": "Third" }[ordinal]} Edition`
+    : text.trim();
+  const facts = bookFacts(name);
+  if (
+    !name ||
+    /[\d[\]()]/.test(name) ||
+    /\b(?:part|season|episode|novel|vol(?:ume)?s?|book|box(?:ed)?|set|omnibus|nook|kindle|e-?book|digital)\b/i.test(
+      name,
+    ) ||
+    facts.labels.length ||
+    facts.packaging.length ||
+    facts.unreadable.length ||
+    facts.bindings.length ||
+    facts.digital ||
+    outOfScopeReason(name)
+  )
+    return null;
+  return name;
+}
+
+/**
+ * A box title's qualifier as a package reads it: "Complete", an anniversary,
+ * or a plain arc name. Null for words that state contents, a variant printing
+ * (collector's, deluxe, premium, limited, special) or another product kind.
+ */
+function boxQualifier(text: string): "complete" | "anniversary" | "arc" | null {
+  const trimmed = text.trim();
+  if (/^complete$/i.test(trimmed)) return "complete";
+  if (/^\d+(?:st|nd|rd|th)\s+anniversary$/i.test(trimmed)) return "anniversary";
+  const facts = bookFacts(trimmed);
+  if (
+    /[\d[\]()]/.test(trimmed) ||
+    /\b(?:part|season|episode|novel|vol(?:ume)?s?|book|box(?:ed)?|set|edition|omnibus|collection|collector'?s|deluxe|premium|limited|special|variant|hardcover|complete|anniversary|art\s*books?|artbooks?|illustrations?|posters?|fan\s*books?|guide(?:\s*books?)?|data\s*books?|character\s*books?|anime|dvds?|blu-?rays?|soundtracks?|stickers?|figures?|bonus|extras?|exclusive|gift|slipcase)\b/i.test(
+      trimmed,
+    ) ||
+    facts.labels.length ||
+    facts.packaging.length ||
+    facts.unreadable.length ||
+    facts.bindings.length ||
+    facts.digital ||
+    outOfScopeReason(trimmed)
+  )
+    return null;
+  return "arc";
+}
+
+/**
+ * Whether the qualifier agrees with the work: "Complete" members are every
+ * active Volume, and an arc name is no other Series' title, alone or after
+ * the work ("Naruto - Boruto" is never a Naruto box). Every read is a fact.
+ */
+async function qualifierAgrees(
+  ctx: QueryCtx,
+  r: Reader,
+  series: Doc<"series">,
+  qualifier: "complete" | "anniversary" | "arc",
+  arc: string,
+  work: string,
+  actual: Contents["contents"],
+) {
+  if (qualifier === "anniversary") return true;
+  if (qualifier === "complete") {
+    const active: Id<"volumes">[] = [];
+    await r.room();
+    for await (const volume of ctx.db
+      .query("volumes")
+      .withIndex("by_series", (q) => q.eq("seriesId", series._id))) {
+      if (volume.status === "active") active.push(volume._id);
+      if (active.length > MAX_JOIN) return refuse("Complete box Volumes exceed 80; incomplete.");
+      await r.room();
+    }
+    r.facts.push(active);
+    const members = new Set(actual.map((row) => row.volume._id));
+    return members.size === active.length && active.every((id) => members.has(id));
+  }
+  const others = (await titleScan(ctx, r)(arc)).filter((one) => one._id !== series._id);
+  return !others.some((other) =>
+    [other.title, ...other.altTitles].some(
+      (title) =>
+        [arc, `${work} - ${arc}`, `${work}: ${arc}`].some((name) => sameWorkTitle(title, name)) ||
+        sameWorkTitle(title.split(/:\s|\s[-–—]\s/)[0]!, arc),
+    ),
+  );
 }
 
 /** The manga discriminator changes spelling, not the root work's identity. */

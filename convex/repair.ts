@@ -40,6 +40,16 @@ function evidenceFor(entry: RepairEntry) {
   switch (entry.kind) {
     case "unlinkObservation":
       return [{ kind: "observation" as const, observationId: entry.observationId }, note];
+    case "editionLinePublisher":
+      return [
+        ...entry.editions.flatMap((move) =>
+          move.observationIds.map((observationId) => ({
+            kind: "observation" as const,
+            observationId,
+          })),
+        ),
+        note,
+      ];
     case "editionPublisher":
     case "splitSeries":
       return [

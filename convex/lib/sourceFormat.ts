@@ -8,6 +8,14 @@ import { toIsbn13 } from "./isbn";
 import { labelsEqual, normalizeTitle, sameWorkTitle } from "./matching";
 import { olEditionValidator, type OlEditionSnapshot } from "./openLibrary";
 import { canonicalPublisherFor } from "./publishers";
+import {
+  dayStart,
+  editionsDump,
+  MAX_DUMP_LINE_BYTES,
+  olDateTime,
+  readDumpLine,
+  sha256Hex,
+} from "./olDump";
 import { nonJsonPath, valueHash } from "./values";
 
 // One literal section of a retained response body, by its exact UTF-8 byte range.
@@ -79,16 +87,50 @@ export const reviewedFormatValidator = v.object({
       publishDate: fullDateValidator,
     }),
   ),
-  ol: v.object({
-    kind: v.literal("olPhysicalFormatAbsent"),
-    key: v.string(),
-    isbn13: v.string(),
-    url: v.string(),
-    fetchedAt: v.number(),
-    bodySha256: v.string(),
-    physicalFormatAbsent: v.literal(true),
-    normalizedSnapshot: v.string(),
-  }),
+  // Open Library's own record has no physical_format: either a retained live
+  // response for the exact key, or one line of a dated monthly editions dump.
+  ol: v.union(
+    v.object({
+      kind: v.literal("olPhysicalFormatAbsent"),
+      key: v.string(),
+      isbn13: v.string(),
+      url: v.string(),
+      fetchedAt: v.number(),
+      bodySha256: v.string(),
+      physicalFormatAbsent: v.literal(true),
+      normalizedSnapshot: v.string(),
+    }),
+    // The dump line is kept whole, so every projection re-hashes it and
+    // re-reads it with the deployed parser. It dates the record (revision,
+    // last_modified) and the snapshot (the dump's date), never a fetch.
+    v.object({
+      kind: v.literal("olDumpEditionPhysicalFormatAbsent"),
+      key: v.string(),
+      isbn13: v.string(),
+      /** The dated file's official archive.org origin. */
+      url: v.string(),
+      dump: v.object({
+        file: v.string(),
+        date: v.string(),
+        // Recorded by the reviewer on retrieval; a line cannot re-verify them.
+        archiveMd5: v.string(),
+        streamedSha256: v.string(),
+        retrievedAt: v.number(),
+      }),
+      line: v.string(),
+      lineSha256: v.string(),
+      revision: v.number(),
+      lastModified: v.string(),
+      physicalFormatAbsent: v.literal(true),
+      /**
+       * Fields the snapshot schema gained after this observation was stored,
+       * which the line's reparse states and the stored snapshot lacks. Every
+       * other field must be equal.
+       */
+      schemaAddedFields: v.array(v.literal("subtitle")),
+      normalizedSnapshot: v.string(),
+    }),
+  ),
 });
 export const sourceFormatDecisionValidator = reviewedFormatValidator.extend({
   proposalId: v.id("proposals"),
@@ -126,7 +168,11 @@ function olSnapshot(value: unknown): value is OlEditionSnapshot {
   );
 }
 
-/** Eligibility is deliberately restricted to an ordinary, explicitly numbered product. */
+/**
+ * Why a reviewed physical-to-digital reading of an OL record is refused, or
+ * null. The publisher half is always required; the OL half only shows that
+ * Open Library itself never stated a physical format.
+ */
 export function reviewedFormatRefusal(
   observation: Pick<Doc<"sourceObservations">, "sourceKey" | "sourceRecordId" | "snapshot">,
   reviewed: ReviewedFormat,
@@ -134,10 +180,14 @@ export function reviewedFormatRefusal(
   const s: unknown = observation.snapshot;
   if (observation.sourceKey !== "openlibrary" || !olSnapshot(s))
     return "Not a recognized OL edition.";
+  const o = reviewed.ol;
+  const dumpLine = o.kind === "olDumpEditionPhysicalFormatAbsent" ? o.line : "";
   if (
     utf8Bytes(reviewed.baseSnapshot) > 32 * 1024 ||
     utf8Bytes(valueHash(reviewed)) > 64 * 1024 ||
-    utf8Bytes(valueHash({ publisher: reviewed.publisher, ol: reviewed.ol })) > 16 * 1024
+    utf8Bytes(valueHash({ publisher: reviewed.publisher, ol: { ...o, line: undefined } })) >
+      16 * 1024 ||
+    utf8Bytes(dumpLine) > MAX_DUMP_LINE_BYTES
   )
     return "Reviewed source Format evidence exceeds its bounds.";
   if (!reviewed.reason.trim() || reviewed.reason.length > 4000)
@@ -157,11 +207,84 @@ export function reviewedFormatRefusal(
     (s.isbn10 !== undefined && toIsbn13(s.isbn10) !== reviewed.isbn13)
   )
     return "Exact source ISBN identity disagrees.";
-  if (
-    valueHash(s) !== reviewed.baseSnapshot ||
-    reviewed.ol.normalizedSnapshot !== reviewed.baseSnapshot
-  )
+  if (valueHash(s) !== reviewed.baseSnapshot || o.normalizedSnapshot !== reviewed.baseSnapshot)
     return "Reviewed raw base differs from the current source.";
+  const ineligible = ordinaryVolumeRefusal(s);
+  if (ineligible) return ineligible;
+  const p = reviewed.publisher;
+  if (p.isbn13 !== reviewed.isbn13)
+    return "Publisher excerpt must attach ebook directly to the source's own ISBN.";
+  if (p.kind === "publisherOwnIsbnEbook") {
+    // A literal &nbsp; between the ISBN and "(ebook)" reads as the space it
+    // renders; the stored excerpt and its byte range stay as captured.
+    const section = /^ISBN:\s*([\d\s-]+)\s*\(ebook\)\s*$/i.exec(p.excerpt.replace(/&nbsp;/g, " "));
+    if (!section || toIsbn13(section[1]) !== reviewed.isbn13 || p.excerpt.length > 2048)
+      return "Publisher excerpt must attach ebook directly to the source's own ISBN.";
+  } else {
+    const refusal =
+      p.kind === "publisherOwnShopifySkuEbook" ? shopifyRefusal(p, s) : distributorRefusal(p, s);
+    if (refusal) return refusal;
+  }
+  try {
+    const url = new URL(p.url);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      p.url.length > 2048 ||
+      url.hostname === "openlibrary.org"
+    )
+      return "Supply the publisher's own HTTPS evidence URL.";
+  } catch {
+    return "Invalid publisher evidence URL.";
+  }
+  if (o.key !== reviewed.key || o.isbn13 !== reviewed.isbn13)
+    return "Exact OL absence evidence disagrees.";
+  if (o.kind === "olDumpEditionPhysicalFormatAbsent") {
+    const refusal = dumpRefusal(o, s);
+    if (refusal) return refusal;
+  } else if (o.url !== `https://openlibrary.org${reviewed.key}.json`)
+    return "Exact OL absence evidence disagrees.";
+  const sections =
+    p.kind === "publisherOwnIsbnEbook"
+      ? [p]
+      : p.kind === "publisherOwnShopifySkuEbook"
+        ? [p.product]
+        : p.distributor === "bookwalker"
+          ? [p.product, p.breadcrumbs]
+          : [p.mediaItems];
+  const bodyBytes = p.kind === "publisherOwnIsbnEbook" ? Number.MAX_SAFE_INTEGER : p.bodyBytes;
+  const olCapture = o.kind === "olPhysicalFormatAbsent" ? [o] : [];
+  if (
+    ![p.fetchedAt, ...olCapture.map((one) => one.fetchedAt)].every(
+      (time) => Number.isFinite(time) && time > 0,
+    ) ||
+    ![
+      p.bodySha256,
+      ...olCapture.map((one) => one.bodySha256),
+      ...sections.map((one) => one.sectionSha256),
+    ].every((hash) => /^[a-f\d]{64}$/i.test(hash)) ||
+    !Number.isSafeInteger(bodyBytes) ||
+    sections.some(
+      (one) =>
+        !Number.isSafeInteger(one.byteStart) ||
+        !Number.isSafeInteger(one.byteEndExclusive) ||
+        one.byteStart < 0 ||
+        one.byteEndExclusive <= one.byteStart ||
+        one.byteEndExclusive > bodyBytes ||
+        one.byteEndExclusive - one.byteStart !== utf8Bytes(one.excerpt),
+    )
+  )
+    return "Invalid evidence time, SHA-256 or byte range.";
+  return null;
+}
+
+/**
+ * Eligibility is deliberately restricted to an ordinary, explicitly numbered
+ * product. Applied to the stored snapshot, and to a dump line's reparse when
+ * it states a field the stored snapshot predates.
+ */
+function ordinaryVolumeRefusal(s: OlEditionSnapshot): string | null {
   if (
     s.format !== "physical" ||
     s.digitalFileFormat !== undefined ||
@@ -204,66 +327,85 @@ export function reviewedFormatRefusal(
     parsed.formatTags.some((tag) => bindingFacts(tag).length)
   )
     return "Known source work, Volume, packaging, binding or scope facts contradict this correction.";
-  const p = reviewed.publisher;
-  const o = reviewed.ol;
-  if (p.isbn13 !== reviewed.isbn13)
-    return "Publisher excerpt must attach ebook directly to the source's own ISBN.";
-  if (p.kind === "publisherOwnIsbnEbook") {
-    // A literal &nbsp; between the ISBN and "(ebook)" reads as the space it
-    // renders; the stored excerpt and its byte range stay as captured.
-    const section = /^ISBN:\s*([\d\s-]+)\s*\(ebook\)\s*$/i.exec(p.excerpt.replace(/&nbsp;/g, " "));
-    if (!section || toIsbn13(section[1]) !== reviewed.isbn13 || p.excerpt.length > 2048)
-      return "Publisher excerpt must attach ebook directly to the source's own ISBN.";
-  } else {
-    const refusal =
-      p.kind === "publisherOwnShopifySkuEbook" ? shopifyRefusal(p, s) : distributorRefusal(p, s);
-    if (refusal) return refusal;
-  }
-  try {
-    const url = new URL(p.url);
-    if (
-      url.protocol !== "https:" ||
-      url.username ||
-      url.password ||
-      p.url.length > 2048 ||
-      url.hostname === "openlibrary.org"
-    )
-      return "Supply the publisher's own HTTPS evidence URL.";
-  } catch {
-    return "Invalid publisher evidence URL.";
-  }
+  return null;
+}
+
+type DumpEvidence = Extract<ReviewedFormat["ol"], { kind: "olDumpEditionPhysicalFormatAbsent" }>;
+
+/**
+ * A monthly dump line proves Open Library's record states no physical_format
+ * when it is the exact retained line (its SHA-256), from an official dated
+ * dump, of the exact key and only the source's ISBN, at a revision no later
+ * than the dump, and the deployed parser reads it as the stored snapshot.
+ * Only a declared schema-added field may differ, and only by being stated
+ * in the line and absent from the stored snapshot; that reading must then
+ * pass the same eligibility. A changed title, ISBN or publisher refuses:
+ * a raw refresh is its own reviewed operation, never read through here.
+ * No ordering is required against the observation's lastSeenAt: that dates
+ * ingestion, while last_modified dates the record and survives unchanged.
+ */
+function dumpRefusal(o: DumpEvidence, s: OlEditionSnapshot): string | null {
+  const official = editionsDump(o.dump.date);
+  const dumpDay = dayStart(o.dump.date);
+  if (dumpDay === null || o.dump.file !== official.file || o.url !== official.url)
+    return "Cite the official dated archive.org file of an Open Library monthly editions dump.";
   if (
-    o.key !== reviewed.key ||
-    o.isbn13 !== reviewed.isbn13 ||
-    o.url !== `https://openlibrary.org${reviewed.key}.json`
+    !/^[a-f\d]{32}$/.test(o.dump.archiveMd5) ||
+    !/^[a-f\d]{64}$/.test(o.dump.streamedSha256) ||
+    !/^[a-f\d]{64}$/.test(o.lineSha256)
   )
-    return "Exact OL absence evidence disagrees.";
-  const sections =
-    p.kind === "publisherOwnIsbnEbook"
-      ? [p]
-      : p.kind === "publisherOwnShopifySkuEbook"
-        ? [p.product]
-        : p.distributor === "bookwalker"
-          ? [p.product, p.breadcrumbs]
-          : [p.mediaItems];
-  const bodyBytes = p.kind === "publisherOwnIsbnEbook" ? Number.MAX_SAFE_INTEGER : p.bodyBytes;
+    return "Invalid dump or line digest.";
+  if (!Number.isFinite(o.dump.retrievedAt) || o.dump.retrievedAt < dumpDay)
+    return "Dump retrieval cannot precede the dump's own date.";
+  if (sha256Hex(o.line) !== o.lineSha256) return "Dump line SHA-256 disagrees.";
+  const line = readDumpLine(o.line);
+  if (typeof line === "string") return line;
+  const { edition } = line;
+  if (line.type !== "/type/edition" || at(edition, "type", "key") !== "/type/edition")
+    return "Dump line is not an Open Library edition record.";
+  if (line.key !== o.key || edition.key !== o.key)
+    return "Dump line key disagrees with the exact OL record.";
   if (
-    ![p.fetchedAt, o.fetchedAt].every((time) => Number.isFinite(time) && time > 0) ||
-    ![p.bodySha256, o.bodySha256, ...sections.map((one) => one.sectionSha256)].every((hash) =>
-      /^[a-f\d]{64}$/i.test(hash),
-    ) ||
-    !Number.isSafeInteger(bodyBytes) ||
-    sections.some(
-      (one) =>
-        !Number.isSafeInteger(one.byteStart) ||
-        !Number.isSafeInteger(one.byteEndExclusive) ||
-        one.byteStart < 0 ||
-        one.byteEndExclusive <= one.byteStart ||
-        one.byteEndExclusive > bodyBytes ||
-        one.byteEndExclusive - one.byteStart !== utf8Bytes(one.excerpt),
-    )
+    !Number.isSafeInteger(o.revision) ||
+    o.revision < 1 ||
+    line.revision !== String(o.revision) ||
+    edition.revision !== o.revision ||
+    (Object.hasOwn(edition, "latest_revision") && edition.latest_revision !== o.revision)
   )
-    return "Invalid evidence time, SHA-256 or byte range.";
+    return "Dump line revision disagrees.";
+  const modified = olDateTime(o.lastModified);
+  if (
+    modified === null ||
+    line.lastModified !== o.lastModified ||
+    at(edition, "last_modified", "value") !== o.lastModified
+  )
+    return "Dump line last_modified disagrees.";
+  if (modified >= dumpDay + 24 * 60 * 60 * 1000)
+    return "Record revision postdates the dump that carries it.";
+  // Only an absent field is absence: null, empty or any value is stated.
+  if (Object.hasOwn(edition, "physical_format"))
+    return "Dump record states physical_format; only an absent field qualifies.";
+  const listed = ["isbn_13", "isbn_10"].flatMap((field) => {
+    const value = edition[field];
+    return value === undefined ? [] : Array.isArray(value) ? value : [value];
+  });
+  if (
+    listed.length === 0 ||
+    listed.some((isbn) => typeof isbn !== "string" || toIsbn13(isbn) !== o.isbn13)
+  )
+    return "Every ISBN the dump record lists must be the source's own ISBN.";
+  const parsed = line.snapshot;
+  if (!parsed) return "The deployed parser reads the dump line as out of scope.";
+  const added = new Set<string>(o.schemaAddedFields);
+  if (
+    added.size !== o.schemaAddedFields.length ||
+    [...added].some((field) => Object.hasOwn(s, field) || typeof at(parsed, field) !== "string")
+  )
+    return "A declared schema-added field must be stated by the dump and absent from the stored snapshot.";
+  const compared = Object.fromEntries(Object.entries(parsed).filter(([key]) => !added.has(key)));
+  if (valueHash(compared) !== valueHash(s))
+    return "Dump record differs from the stored snapshot; refresh the raw source by review instead.";
+  if (added.size) return ordinaryVolumeRefusal(parsed);
   return null;
 }
 

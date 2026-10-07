@@ -3,12 +3,15 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { money, partialDate } from "./schema";
+import { bindingFacts } from "./lib/bookFacts";
 import { nestedLimits } from "./lib/bounded";
 import {
   bundleEnvelope,
+  type Contents,
   guardedResolverContext,
   heldState,
   MAX_GUARD_BYTES,
+  type Reader,
   refuse,
   releaseContents,
   reviewedMatch,
@@ -30,6 +33,8 @@ const packet = v.object({
   memberIsbn13s: v.array(v.string()),
   volumeIds: v.array(v.id("volumes")),
   evidenceUrls: v.array(v.string()),
+  /** The source's exact title when the Bundle's name is the publisher's ("Claymore - Complete Box Set"). */
+  sourceTitle: v.optional(v.string()),
   pubDate: v.optional(partialDate),
   price: v.optional(money),
 });
@@ -53,6 +58,8 @@ async function creationState(ctx: QueryCtx, args: Packet) {
     return refuse("Each member needs its distinct reviewed printing ISBN.");
   if (!args.volumeIds.length || new Set(args.volumeIds).size !== args.volumeIds.length)
     return refuse("Reviewed complete contents must be nonempty and distinct.");
+  if (args.sourceTitle !== undefined && (!args.sourceTitle.trim() || args.sourceTitle.length > 500))
+    return refuse("Supply a bounded exact source title.");
   const urls = evidenceUrls(args.evidenceUrls);
   if (!urls.length || urls.length > 40)
     return refuse("Supply bounded primary product/member evidence.");
@@ -62,6 +69,7 @@ async function creationState(ctx: QueryCtx, args: Packet) {
     publisherId: args.publisherId,
     volumeIds: args.volumeIds,
     evidenceUrls: urls,
+    ...(args.sourceTitle !== undefined ? { sourceTitle: args.sourceTitle } : {}),
   };
   const state = await heldState(ctx, args.observationId, undefined, reviewed);
   if (!state.eligible || state.scopeReason || state.isbn13 !== args.isbn13)
@@ -77,6 +85,7 @@ async function creationState(ctx: QueryCtx, args: Packet) {
     return refuse("Review the current canonical publisher ID.");
   const memberContents = [];
   const resolver = claimResolver(guardedResolverContext(ctx, state.r));
+  const ends: MergeEnds = new Map();
   for (const [index, memberId] of args.memberIds.entries()) {
     const content = await releaseContents(ctx, memberId, state.r);
     if (
@@ -115,6 +124,10 @@ async function creationState(ctx: QueryCtx, args: Packet) {
       [...claims.owners.values()][0]?.doc._id !== memberId
     )
       return refuse("Member printing ownership is incomplete or differs.");
+    if (await rivalPrinting(ctx, state.r, content, ends))
+      return refuse(
+        "Another current printing of a member's Volume could be the packed copy; the exact member is unknown.",
+      );
     memberContents.push(content);
   }
   await reviewedMatch(ctx, state, memberContents, args.name);
@@ -126,6 +139,101 @@ async function creationState(ctx: QueryCtx, args: Packet) {
   if (bytes(expected) > MAX_GUARD_BYTES) return refuse("Creation guard exceeds 256 KiB.");
   return { expected, state, memberContents, urls };
 }
+
+/** Bindings agree unless both are stated and differ ("hardcover" vs "paperback"). */
+function compatibleBinding(a: string | undefined, b: string | undefined) {
+  const left = bindingFacts(a);
+  const right = bindingFacts(b);
+  return !left.length || !right.length || left.some((one) => right.includes(one));
+}
+
+/**
+ * Whether another printing could stand at a single-Volume member's position:
+ * an active same-publisher English physical Release (locked or not) of an Edition
+ * collecting only that whole Volume, in the member's Edition Line, whose
+ * Binding is the member's or unknown (Vampire Knight 19 and its limited
+ * printing). The member's own Edition counts too: a second compatible Release
+ * there is just as ambiguous. Publisher and Line references are compared
+ * through their merge chains, so a rival still pointing at a merged-away
+ * duplicate is not missed; a chain that cannot be followed refuses. A
+ * publisher's ordered range then names no exact member. Every read is a
+ * guard fact; a multi-Volume member is not compared here.
+ */
+async function rivalPrinting(ctx: QueryCtx, r: Reader, member: Contents, ends: MergeEnds) {
+  if (member.contents.length !== 1) return false;
+  const volumeId = member.contents[0]!.volume._id;
+  const publisherId = member.publisher._id;
+  const lineId = member.line?._id;
+  const samePublisher = async (id: Id<"publishers">) =>
+    id === publisherId || (await mergeEnd(r, ends, id)) === publisherId;
+  const coverages = await r.many(
+    ctx.db.query("volumeCoverages").withIndex("by_volume", (q) => q.eq("volumeId", volumeId)),
+  );
+  for (const coverage of coverages) {
+    if (coverage.extent !== "complete") continue;
+    const edition = await r.read(coverage.editionId);
+    if (
+      !edition ||
+      edition.status !== "active" ||
+      edition.coverageUnmapped ||
+      !(await samePublisher(edition.publisherId)) ||
+      (edition.editionLineId === undefined
+        ? lineId !== undefined
+        : edition.editionLineId !== member.edition.editionLineId &&
+          (await mergeEnd(r, ends, edition.editionLineId)) !== lineId)
+    )
+      continue;
+    const rows = await r.many(
+      ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", edition._id)),
+    );
+    if (rows.length !== 1) continue;
+    const releases = await r.many(
+      ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", edition._id)),
+    );
+    for (const release of releases)
+      if (
+        release._id !== member.release._id &&
+        release.status === "active" &&
+        release.format === "physical" &&
+        release.language === "en" &&
+        compatibleBinding(release.binding, member.release.binding) &&
+        (await samePublisher(release.publisherId))
+      )
+        return true;
+  }
+  return false;
+}
+
+/** Merge-chain survivors already followed while comparing rivals, keyed by starting ID. */
+type MergeEnds = Map<string, Promise<string>>;
+
+/**
+ * The record a Publisher or Edition Line reference ends at after its merges,
+ * whatever that record's status (a locked or hidden survivor is still the
+ * same identity). A missing record, a cycle or more than eight hops refuses:
+ * the guard cannot say whose printing the rival is.
+ */
+function mergeEnd(r: Reader, ends: MergeEnds, id: Id<"publishers"> | Id<"editionLines">) {
+  let end = ends.get(id);
+  if (!end) {
+    end = (async () => {
+      let current: Id<"publishers"> | Id<"editionLines"> = id;
+      for (let hop = 0; hop <= 8; hop++) {
+        const doc = await r.read(current);
+        if (!doc) break;
+        if (doc.status !== "merged") return doc._id;
+        if (!doc.mergedIntoId) break;
+        current = doc.mergedIntoId;
+      }
+      return refuse("A rival printing's publisher or line merge chain cannot be followed.");
+    })();
+    ends.set(id, end);
+  }
+  return end;
+}
+
 function errorReason(error: unknown) {
   if (
     error instanceof ConvexError &&

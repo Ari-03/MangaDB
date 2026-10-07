@@ -579,6 +579,11 @@ export const applySourceFormatInternal = internalMutation({
     if (state.observation.reviewedSourceFormat) return { status: "alreadyApplied" };
     const before = valueHash({ observation: state.observation, hold: state.hold });
     const decidedAt = Date.now();
+    if (
+      args.reviewed.ol.kind === "olDumpEditionPhysicalFormatAbsent" &&
+      args.reviewed.ol.dump.retrievedAt > decidedAt
+    )
+      return refuse("Dump evidence retrieval cannot be after the correction decision.");
     // Reserve the complete observation, both ledger states, evidence and audit tail before writing.
     const estimatedDecision = { ...args.reviewed, decidedAt, proposalId: "reserved-proposal-id" };
     const estimatedObservation = { ...state.observation, reviewedSourceFormat: estimatedDecision };

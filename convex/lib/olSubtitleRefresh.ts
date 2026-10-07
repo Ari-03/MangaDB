@@ -100,7 +100,9 @@ export async function subtitleRefreshState(
   if (!raw || typeof raw !== "object" || Object.hasOwn(raw, "physical_format"))
     return refuse("Current OL raw body has physical_format.");
   const reviewed: ReviewedFormat = proof.reviewed;
+  // The refresh rests on its own live capture; a dump line cannot stand in for it.
   if (
+    reviewed.ol.kind !== "olPhysicalFormatAbsent" ||
     reviewed.ol.bodySha256 !== proof.ol.bodySha256 ||
     reviewed.ol.key !== proof.key ||
     reviewed.ol.isbn13 !== proof.isbn13 ||

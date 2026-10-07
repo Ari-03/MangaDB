@@ -20,7 +20,7 @@ import type { MutationCtx } from "../../_generated/server";
 import type { DigitalFileFormat } from "../bookFacts";
 import { type IsbnField, isbn13To10, isbnFieldValue, toIsbn13 } from "../isbn";
 import { followMerges } from "../merges";
-import { holdOf, linkObservation } from "../observations";
+import { getObservation, holdOf, linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
 import {
@@ -90,6 +90,8 @@ export async function applyEntry(
       return await publisherParent(ctx, audit, entry);
     case "editionPublisher":
       return await editionPublisher(ctx, audit, entry);
+    case "editionLinePublisher":
+      return await editionLinePublisher(ctx, audit, entry);
     case "hideSeries":
       return await hideSeries(ctx, audit, entry);
     case "hideRelease":
@@ -336,6 +338,229 @@ function companySlug(slug: string): string {
   return DUPLICATE_SLUGS[slug] ?? slug;
 }
 
+/**
+ * PRH's prose imprint shares Vertical's name; the PRH importer keeps it out of
+ * scope (lib/prh.ts DENIED_IMPRINTS), so it is never manga imprint evidence.
+ */
+const PRH_PROSE_IMPRINT = /^\s*vertical\s*$/i;
+
+type EditionMove = Pick<
+  EntryOf<"editionPublisher">,
+  "observationIds" | "otherReleases" | "expectedReleaseIds"
+>;
+
+/**
+ * The plan's publisher rows for a move. With `imprint`, `to` must be exactly
+ * that known imprint's row and name `from`'s company as its parent, in the
+ * catalog as in lib/publishers.ts.
+ */
+async function movePublishers(
+  ctx: MutationCtx,
+  fromId: Id<"publishers">,
+  toId: Id<"publishers">,
+  imprint: string | null,
+) {
+  const from = await ctx.db.get(fromId);
+  const to = await ctx.db.get(toId);
+  if (!from || !to || to.status !== "active") return skip("publisher rows missing");
+  if (imprint === null) return { from, to };
+  // Owner rule: PRH's imprint outranks Seven Seas/OpenLibrary attribution
+  // to the parent, but only toward a known imprint of the same company.
+  if (PRH_PROSE_IMPRINT.test(imprint)) skip(`"${imprint}" is PRH's prose imprint`);
+  const resolved = canonicalPublisherFor(imprint);
+  if (!resolved || resolved.parentSlug === undefined) skip(`"${imprint}" is not a known imprint`);
+  if (companySlug(resolved!.slug) !== to.slug)
+    skip(`"${imprint}" resolves to ${resolved!.slug}, not ${to.slug}`);
+  if (resolved!.parentSlug !== companySlug(from.slug)) {
+    skip(`${resolved!.slug} is not an imprint of ${companySlug(from.slug)}`);
+  }
+  const parent = to.parentPublisherId ? await ctx.db.get(to.parentPublisherId) : null;
+  if (!parent || companySlug(parent.slug) !== companySlug(from.slug))
+    skip(`${to.slug} does not name ${companySlug(from.slug)} as its parent`);
+  return { from, to };
+}
+
+/** Skip unless a record's publisher row is the company the plan expected to move it from. */
+async function expectOnCompany(
+  ctx: MutationCtx,
+  what: string,
+  publisherId: Id<"publishers">,
+  from: Doc<"publishers">,
+) {
+  const current = await ctx.db.get(publisherId);
+  if (!current) return skip(`${what}'s publisher row is missing`);
+  if (companySlug(current.slug) !== companySlug(from.slug))
+    skip(`${what} is on ${current.slug}, plan expected ${from.slug}`);
+}
+
+/**
+ * The Edition's Releases, any status (refreshReleaseDenorms rewrites them
+ * all), when they are exactly `expected`. Read in the same transaction as the
+ * write, so an added, removed or moved Release refuses.
+ */
+async function expectReleaseClosure(
+  ctx: MutationCtx,
+  editionId: Id<"editions">,
+  expected: Id<"releases">[] | undefined,
+) {
+  if (expected === undefined)
+    return skip("expectedReleaseIds is required to move an Edition's publisher");
+  const expectedSet = new Set(expected);
+  if (expectedSet.size !== expected.length) skip("expectedReleaseIds lists a Release twice");
+  const releases = await releasesOf(ctx, editionId);
+  const actual = new Set(releases.map((release) => release._id));
+  const added = [...actual].filter((id) => !expectedSet.has(id));
+  const missing = expected.filter((id) => !actual.has(id));
+  if (added.length > 0 || missing.length > 0) {
+    skip(
+      `edition releases drifted: unexpected [${added.join(", ")}], missing [${missing.join(", ")}]`,
+    );
+  }
+  return releases;
+}
+
+/** The Releases among `releases` that one of `observationIds` is linked to (legacy evidence). */
+async function linkedReleases(
+  ctx: MutationCtx,
+  releases: Doc<"releases">[],
+  observationIds: Id<"sourceObservations">[],
+) {
+  const ids = new Set(releases.map((release) => release._id));
+  const evidenced = new Set<Id<"releases">>();
+  for (const observationId of observationIds) {
+    const ref = (await ctx.db.get(observationId))?.recordRef;
+    if (ref?.type === "release" && ids.has(ref.id)) evidenced.add(ref.id);
+  }
+  return evidenced;
+}
+
+/**
+ * The Releases an imprint move's observations evidence. Each must be PRH's
+ * own record of a Release in `releases`: linked to it, not withdrawn, not
+ * the record of an Other Printing, with its record ID, snapshot ISBN and the
+ * Release's ISBN all one ISBN, stating exactly `imprint`. Any other
+ * observation refuses the entry rather than being ignored.
+ */
+async function imprintEvidence(
+  ctx: MutationCtx,
+  releases: Doc<"releases">[],
+  observationIds: Id<"sourceObservations">[],
+  imprint: string,
+) {
+  if (observationIds.length === 0) skip("an imprint move needs PRH evidence");
+  const byId = new Map(releases.map((release) => [release._id as string, release]));
+  const evidenced = new Set<Id<"releases">>();
+  for (const observationId of new Set(observationIds)) {
+    const observation = await ctx.db.get(observationId);
+    if (!observation) return skip(`observation ${observationId} is missing`);
+    const ref = observation.recordRef;
+    const release = ref?.type === "release" ? byId.get(ref.id) : undefined;
+    const snapshot: { isbn13?: unknown; imprint?: unknown } = observation.snapshot ?? {};
+    const refusal =
+      observation.sourceKey !== "prh"
+        ? `is a ${observation.sourceKey} record, not PRH's`
+        : release === undefined
+          ? "is not linked to a Release of the Edition"
+          : observation.withdrawn
+            ? "is withdrawn"
+            : observation.printingIsbn13 !== undefined
+              ? `records Other Printing ${observation.printingIsbn13}`
+              : release.isbn13 === undefined ||
+                  observation.sourceRecordId !== release.isbn13 ||
+                  snapshot.isbn13 !== release.isbn13
+                ? `is not the Release's own ISBN record (${observation.sourceRecordId}, release ${release.isbn13 ?? "no ISBN"})`
+                : snapshot.imprint !== imprint
+                  ? `states ${JSON.stringify(snapshot.imprint)}, not "${imprint}"`
+                  : null;
+    if (refusal !== null) skip(`observation ${observationId} ${refusal}`);
+    evidenced.add(release!._id);
+  }
+  return evidenced;
+}
+
+/**
+ * Refuse when PRH's own record of any Release's ISBN states an imprint that
+ * is not `imprint` and does not resolve to `to`, linked or not: the move
+ * would contradict the publisher's own statement for that book.
+ */
+async function expectNoContraryImprint(
+  ctx: MutationCtx,
+  releases: Doc<"releases">[],
+  imprint: string,
+  to: Doc<"publishers">,
+) {
+  for (const release of releases) {
+    if (release.isbn13 === undefined) continue;
+    const observation = await getObservation(ctx, "prh", release.isbn13);
+    if (!observation || observation.withdrawn) continue;
+    const stated: unknown = observation.snapshot?.imprint;
+    if (typeof stated !== "string" || stated === imprint) continue;
+    const resolved = canonicalPublisherFor(stated);
+    if (resolved && companySlug(resolved.slug) === to.slug) continue;
+    skip(`PRH states "${stated}" for ${release.isbn13}, not ${to.slug}`);
+  }
+}
+
+/**
+ * Everything a whole-Edition publisher move must hold before it writes,
+ * shared by editionPublisher and editionLinePublisher: the Edition unlocked
+ * with no publisher Human Override, its exact Release closure and evidence
+ * count, no contrary PRH imprint, no Release in another publisher's Bundle,
+ * and no Other Printing or Alternate Ebook ISBN rows (their publisher would
+ * move with no evidence for them).
+ */
+async function expectEditionMove(
+  ctx: MutationCtx,
+  edition: Doc<"editions">,
+  move: EditionMove,
+  to: Doc<"publishers">,
+  imprint: string | null,
+) {
+  if (edition.locked) skip(`edition ${edition.publicId} is locked`);
+  if ((edition.overriddenFields ?? []).includes("publisherId"))
+    skip(`edition ${edition.publicId} has a publisher override`);
+  const releases = await expectReleaseClosure(ctx, edition._id, move.expectedReleaseIds);
+  const evidenced =
+    imprint === null
+      ? await linkedReleases(ctx, releases, move.observationIds)
+      : await imprintEvidence(ctx, releases, move.observationIds, imprint);
+  const others = releases.length - evidenced.size;
+  if (others !== move.otherReleases)
+    skip(
+      `edition ${edition.publicId} has ${others} releases without evidence, plan expected ${move.otherReleases}`,
+    );
+  if (imprint !== null) await expectNoContraryImprint(ctx, releases, imprint, to);
+  for (const release of releases) {
+    const printing = await ctx.db
+      .query("releaseIsbns")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .first();
+    if (printing) skip(`release ${release._id} has other ISBN ${printing.isbn13}`);
+    const memberships = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .collect();
+    for (const membership of memberships) {
+      const bundle = await ctx.db.get(membership.bundleId);
+      if (bundle && bundle.publisherId !== to._id)
+        skip(`release ${release._id} is in bundle ${bundle.publicId} of another publisher`);
+    }
+  }
+}
+
+/** Write a checked move: the Edition's publisher with its Revision, then its Releases' denorm. */
+async function moveEdition(
+  ctx: MutationCtx,
+  audit: Audit,
+  edition: Doc<"editions">,
+  to: Doc<"publishers">,
+) {
+  await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
+    publisherId: to._id,
+  });
+  await refreshReleaseDenorms(ctx, edition._id);
+}
+
 async function editionPublisher(
   ctx: MutationCtx,
   audit: Audit,
@@ -344,49 +569,100 @@ async function editionPublisher(
   const edition = await ctx.db.get(entry.editionId);
   if (!edition || edition.status !== "active") return skip("edition not active");
   if (edition.publisherId === entry.toPublisherId) return already;
-  const current = await ctx.db.get(edition.publisherId);
-  const from = await ctx.db.get(entry.fromPublisherId);
-  const to = await ctx.db.get(entry.toPublisherId);
-  if (!current || !from || !to || to.status !== "active") return skip("publisher rows missing");
-  if (companySlug(current.slug) !== companySlug(from.slug)) {
-    skip(`edition is on ${current.slug}, plan expected ${from.slug}`);
-  }
-  if (entry.imprint !== null) {
-    // Owner rule: PRH's imprint outranks Seven Seas/OpenLibrary attribution
-    // to the parent, but only toward a known imprint of the same company.
-    const resolved = canonicalPublisherFor(entry.imprint);
-    if (!resolved || resolved.parentSlug === undefined)
-      skip(`"${entry.imprint}" is not a known imprint`);
-    if (companySlug(resolved!.slug) !== to.slug)
-      skip(`"${entry.imprint}" resolves to ${resolved!.slug}, not ${to.slug}`);
-    if (resolved!.parentSlug !== companySlug(from.slug)) {
-      skip(`${resolved!.slug} is not an imprint of ${companySlug(from.slug)}`);
-    }
-    const releaseIds = new Set((await releasesOf(ctx, edition._id)).map((r) => r._id));
-    let stillEvidenced = false;
-    for (const observationId of entry.observationIds) {
-      const observation = await ctx.db.get(observationId);
-      const ref = observation?.recordRef;
-      const snapshot: { imprint?: unknown } | undefined = observation?.snapshot;
-      if (
-        ref?.type === "release" &&
-        releaseIds.has(ref.id) &&
-        snapshot?.imprint === entry.imprint
-      ) {
-        stillEvidenced = true;
-      }
-    }
-    if (!stillEvidenced) skip("the PRH imprint evidence is no longer linked");
-  }
+  const { from, to } = await movePublishers(
+    ctx,
+    entry.fromPublisherId,
+    entry.toPublisherId,
+    entry.imprint,
+  );
+  await expectOnCompany(ctx, "edition", edition.publisherId, from);
+  await expectEditionMove(ctx, edition, entry, to, entry.imprint);
   if (edition.editionLineId) {
     const line = await ctx.db.get(edition.editionLineId);
     if (line && line.publisherId !== to._id)
       skip("edition sits in another publisher's edition line");
   }
-  await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
-    publisherId: to._id,
+  await moveEdition(ctx, audit, edition, to);
+  return applied;
+}
+
+/**
+ * Move an Edition Line and its members to an imprint in one transaction
+ * (entries.ts editionLinePublisherEntry). Every non-merged member is read:
+ * an active one the entry omits, a hidden one not already on `to`, or a
+ * listed Edition outside the line refuses; merged members are tombstones.
+ */
+async function editionLinePublisher(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"editionLinePublisher">,
+): Promise<Result> {
+  const line = await ctx.db.get(entry.lineId);
+  if (!line || line.status !== "active") return skip("edition line not active");
+  const listed = new Map(entry.editions.map((move) => [move.editionId as string, move]));
+  if (listed.size !== entry.editions.length) skip("the entry lists an Edition twice");
+  const members = await ctx.db
+    .query("editions")
+    .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+    .collect();
+  const byId = new Map(members.map((member) => [member._id as string, member]));
+  for (const member of members) {
+    if (member.status === "merged" || listed.has(member._id)) continue;
+    if (member.status === "active")
+      skip(`active line member edition ${member.publicId} is not in the entry`);
+    if (member.publisherId !== entry.toPublisherId)
+      skip(`hidden line member edition ${member.publicId} is on another publisher`);
+  }
+  for (const id of listed.keys()) {
+    const member = byId.get(id);
+    if (!member) skip(`edition ${id} is not in line "${line.name}"`);
+    if (member!.status !== "active") skip(`edition ${member!.publicId} is not active`);
+  }
+  const moving = entry.editions.flatMap((move) => {
+    const edition = byId.get(move.editionId)!;
+    return edition.publisherId === entry.toPublisherId ? [] : [{ edition, move }];
   });
-  await refreshReleaseDenorms(ctx, edition._id);
+  // Members already on `to` are not re-checked, so their Releases' denorm
+  // must already agree, or the rerun would report alreadyApplied over it.
+  for (const member of members) {
+    if (member.status === "merged" || member.publisherId !== entry.toPublisherId) continue;
+    const stale = (await releasesOf(ctx, member._id)).find(
+      (release) => release.publisherId !== member.publisherId,
+    );
+    if (stale)
+      skip(`line member edition ${member.publicId} has release ${stale._id} on another publisher`);
+  }
+  if (moving.length === 0) {
+    if (line.publisherId === entry.toPublisherId) return already;
+    // Only a moving member's PRH evidence is checked; none means nothing evidences the line.
+    skip(`no listed member of line "${line.name}" moves, so nothing evidences the line's move`);
+  }
+
+  const { from, to } = await movePublishers(
+    ctx,
+    entry.fromPublisherId,
+    entry.toPublisherId,
+    entry.imprint,
+  );
+  if (line.locked) skip(`edition line "${line.name}" is locked`);
+  if ((line.overriddenFields ?? []).includes("publisherId"))
+    skip(`edition line "${line.name}" has a publisher override`);
+  if (line.publisherId !== to._id)
+    await expectOnCompany(ctx, "edition line", line.publisherId, from);
+  for (const { edition, move } of moving) {
+    await expectOnCompany(ctx, `edition ${edition.publicId}`, edition.publisherId, from);
+    await expectEditionMove(ctx, edition, move, to, entry.imprint);
+  }
+
+  if (line.publisherId !== to._id) {
+    await audit.meta();
+    await ctx.db.patch(line._id, { publisherId: to._id });
+    const ref = { type: "editionLine" as const, id: line._id };
+    const changes = [{ field: "publisherId", before: line.publisherId, after: to._id }];
+    audit.op({ kind: "update", ref, changes });
+    await audit.revise(ref, changes);
+  }
+  for (const { edition } of moving) await moveEdition(ctx, audit, edition, to);
   return applied;
 }
 

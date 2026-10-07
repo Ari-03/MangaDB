@@ -18,7 +18,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { type AnnReleaseSnapshot, lineOutOfScope } from "./ann";
 import { getSourceByKey } from "./importSources";
-import { packagingOf, readAnnLineTitle, splitReleaseTitle } from "./lib/ann";
+import {
+  designatesExtra,
+  packagingOf,
+  readAnnLineTitle,
+  splitReleaseTitle,
+  storefrontTitle,
+} from "./lib/ann";
 import { nestedLimits, platformStop } from "./lib/bounded";
 import { bindingFacts, bookFacts, dedicatedFormatFacts } from "./lib/bookFacts";
 import { canonicalLabel, isNovelTitle, outOfScopeReason, parseBookTitle } from "./lib/bookTitle";
@@ -416,6 +422,11 @@ function readAnnLine(
         }
       }
       if (fresh.multi) reading.packaging.push(`the designator "${page.volume}"`);
+      // "eBook ex 1" is an extra chapter: its number names no whole Volume.
+      if (designatesExtra(page.volume))
+        reading.unreadable.push(
+          `ANN's designator "${page.volume}" numbers an extra chapter, not a whole Volume`,
+        );
       labels.push({ where: `ANN's designator "${page.volume}"`, label: fresh.label });
     }
   }
@@ -667,7 +678,12 @@ export async function readObservationBook(
   const s = (
     projection.status === "stale" ? observation.snapshot : projection.snapshot
   ) as SnapshotFacts;
-  const title = typeof s?.title === "string" ? s.title.trim() : "";
+  // A digital ANN line's "[NOOK]" names the store, not the book: read without it.
+  const storefront =
+    observation.sourceKey === "ann" && s?.kind === "annRelease"
+      ? storefrontTitle(observation.snapshot as AnnReleaseSnapshot)
+      : null;
+  const title = storefront ?? (typeof s?.title === "string" ? s.title.trim() : "");
 
   const seriesTitles =
     observation.sourceKey === "ann" && annContext ? annContext.names : workTitles;
@@ -675,7 +691,15 @@ export async function readObservationBook(
 
   let reading: BookReading;
   if (observation.sourceKey === "ann" && s?.kind === "annRelease") {
-    const line = observation.snapshot as AnnReleaseSnapshot;
+    const stored = observation.snapshot as AnnReleaseSnapshot;
+    const line =
+      storefront === null
+        ? stored
+        : {
+            ...stored,
+            title: storefront,
+            page: stored.page && { ...stored.page, title: storefront },
+          };
     const entry = annContext
       ? null
       : await ctx.db

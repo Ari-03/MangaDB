@@ -117,3 +117,140 @@ it("reviews an exact second-edition tag while refusing changed work, edition and
   );
   expect((await t.query(internal.heldBooks.previewInternal, args)).refusal).toBeTruthy();
 });
+
+it("reviews a bracketed descriptor only against the target's exact Edition Line and position", async () => {
+  const t = makeT();
+  // Sorcerer Hunters [Authentic Relaunch] (Tokyopop, GN 7): line "Authentic Relaunch", position 7.
+  const title = "Sorcerer Hunters [Authentic Relaunch]";
+  const snapshot = {
+    kind: "annRelease",
+    annId: "9007",
+    mangaId: "1577",
+    title,
+    isbn13: "9781595325006",
+    format: "physical",
+    label: "7",
+    multi: false,
+    editionLineHint: false,
+    page: {
+      status: "ok",
+      title,
+      isbn13: "9781595325006",
+      mangaId: "1577",
+      volume: "GN 7",
+      distributor: "Tokyopop",
+    },
+  };
+  const ids = await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: "Tokyopop", slug: "tokyopop" });
+    const seriesId = await insertSeries(ctx, { title: "Sorcerer Hunters" });
+    const volumeId = await insertVolume(ctx, { seriesId, label: "7", position: 7 });
+    const lineId = await insertEditionLine(ctx, {
+      seriesId,
+      publisherId,
+      name: "Authentic Relaunch",
+    });
+    const book = await insertBook(ctx, {
+      seriesId,
+      publisherId,
+      volumeId,
+      release: { isbn13: snapshot.isbn13, binding: "paperback" },
+    });
+    await ctx.db.patch(book.editionId, { editionLineId: lineId, linePosition: "7" });
+    const parentId = await insertObservation(ctx, {
+      sourceKey: "ann",
+      sourceRecordId: "manga:1577",
+      snapshot: { kind: "annManga", id: "1577", title: "Sorcerer Hunters" },
+      recordRef: { type: "series", id: seriesId },
+    });
+    const observationId = await insertObservation(ctx, {
+      sourceKey: "ann",
+      sourceRecordId: "release:9007",
+      snapshot,
+    });
+    await ctx.db.insert("placementHolds", {
+      observationId,
+      sourceKey: "ann",
+      kind: "isbn",
+      seriesId,
+      heldAt: 1,
+    });
+    return { ...book, publisherId, seriesId, volumeId, lineId, observationId, parentId };
+  });
+  const reviewed = {
+    isbn13: snapshot.isbn13,
+    seriesId: ids.seriesId,
+    publisherId: ids.publisherId,
+    volumeIds: [ids.volumeId],
+    sourceTitle: title,
+    evidenceUrls: ["https://www.animenewsnetwork.com/encyclopedia/releases.php?id=9007"],
+  };
+  const target = { type: "release" as const, id: ids.releaseId };
+  const refusal = async (review = reviewed) =>
+    (
+      await t.query(internal.heldBooks.previewInternal, {
+        observationId: ids.observationId,
+        target,
+        reviewed: review,
+      })
+    ).refusal;
+
+  // Without an exact-ISBN review the bracket stays part of an unknown work.
+  expect(
+    (
+      await t.query(internal.heldBooks.previewInternal, {
+        observationId: ids.observationId,
+        target,
+      })
+    ).refusal,
+  ).toBeTruthy();
+  expect(await refusal()).toBeNull();
+
+  // Another line name or position is another product.
+  for (const name of ["Authentic", "Second Edition", "Sorcerer Hunters"]) {
+    await t.run((ctx) => ctx.db.patch(ids.lineId, { name }));
+    expect(await refusal(), name).toBeTruthy();
+  }
+  await t.run((ctx) => ctx.db.patch(ids.lineId, { name: "Authentic Relaunch" }));
+  await t.run((ctx) => ctx.db.patch(ids.editionId, { linePosition: "6" }));
+  expect(await refusal()).toBeTruthy();
+  await t.run((ctx) => ctx.db.patch(ids.editionId, { linePosition: "7" }));
+
+  // A descriptor never stands in for a work, number, binding, store or package.
+  for (const [changed, lineName] of [
+    ["Other Work [Authentic Relaunch]", "Authentic Relaunch"],
+    ["Sorcerer Hunters [Authentic Relaunch] [Hardcover]", "Authentic Relaunch"],
+    ["Sorcerer Hunters [Hardcover]", "Hardcover"],
+    ["Sorcerer Hunters [NOOK]", "NOOK"],
+    ["Sorcerer Hunters [Box Set]", "Box Set"],
+    ["Sorcerer Hunters [7]", "7"],
+    ["Sorcerer Hunters [2nd Ed]", "Action Edition"],
+  ] as const) {
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.lineId, { name: lineName });
+      await ctx.db.patch(ids.observationId, {
+        snapshot: { ...snapshot, title: changed, page: { ...snapshot.page, title: changed } },
+      });
+    });
+    expect(await refusal({ ...reviewed, sourceTitle: changed }), changed).toBeTruthy();
+  }
+  await t.run(async (ctx) => {
+    await ctx.db.patch(ids.lineId, { name: "Authentic Relaunch" });
+    await ctx.db.patch(ids.observationId, { snapshot });
+  });
+
+  // The ANN page must state Volume 7, and ANN's parent must be this work.
+  await t.run((ctx) =>
+    ctx.db.patch(ids.observationId, {
+      snapshot: { ...snapshot, label: "8", page: { ...snapshot.page, volume: "GN 8" } },
+    }),
+  );
+  expect(await refusal()).toBeTruthy();
+  await t.run((ctx) => ctx.db.patch(ids.observationId, { snapshot }));
+  await t.run((ctx) =>
+    ctx.db.patch(ids.parentId, {
+      snapshot: { kind: "annManga", id: "1577", title: "Sorcerer Hunters: Second Season" },
+    }),
+  );
+  expect(await refusal()).toBeTruthy();
+});

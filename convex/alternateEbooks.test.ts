@@ -267,6 +267,100 @@ describe("alternateEbooks.recordInternal", () => {
     });
   });
 
+  it("reads a digital line's [NOOK] as its store, never a physical line's or another ISBN owner's", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const ids = await t.run(async (ctx) => {
+      const base = await logHorizon(ctx);
+      const nook = async (isbn13: string, format: "digital" | "physical", volume: string) => {
+        const observationId = await holdAnnLine(ctx, base.seriesId, isbn13, { format });
+        const observation = (await ctx.db.get(observationId))!;
+        const snapshot = observation.snapshot as { page: Record<string, unknown> };
+        const title = "Log Horizon: The West Wind Brigade [NOOK]";
+        await ctx.db.patch(observationId, {
+          snapshot: { ...snapshot, title, page: { ...snapshot.page, title, volume } },
+        });
+        return observationId;
+      };
+      const digital = await nook(HELD, "digital", "eBook 11 / 11");
+      const physical = await nook("9781975384142", "physical", "GN 11");
+      // ANN calls the line digital, but its page's designator is print.
+      const mixed = await nook("9781975384159", "digital", "GN 11");
+      const claimedIsbn = "9781975384166";
+      const claimed = await nook(claimedIsbn, "digital", "eBook 11 / 11");
+      const otherEdition = await insertEdition(ctx, { publisherId: base.publisherId });
+      await insertCoverage(ctx, { editionId: otherEdition, volumeId: base.volumeId });
+      await insertRelease(ctx, {
+        editionId: otherEdition,
+        publisherId: base.publisherId,
+        seriesIds: [base.seriesId],
+        format: "digital",
+        isbn13: claimedIsbn,
+      });
+      return { ...base, digital, physical, mixed, claimed };
+    });
+    const preview = (observationId: Id<"sourceObservations">) =>
+      t.query(internal.alternateEbooks.previewInternal, {
+        observationId,
+        releaseId: ids.releaseId,
+        evidence: annListing,
+      });
+    expect(await preview(ids.digital)).toEqual({
+      status: "ready",
+      isbn13: HELD,
+      reason: "ANN-listed alternate ebook ISBN",
+    });
+    expect(
+      await t.query(internal.alternateEbooks.previewInternal, {
+        observationId: ids.physical,
+        releaseId: ids.releaseId,
+        evidence: {
+          kind: "retailerListing",
+          sourceName: "Barnes & Noble NOOK",
+          url: "https://www.barnesandnoble.com/w/log-horizon/2?ean=9781975384142",
+        },
+      }),
+    ).toMatchObject({ status: "refused", reason: expect.stringMatching(/reads as packaging/) });
+    expect(await preview(ids.mixed)).toMatchObject({ status: "refused" });
+    expect(await preview(ids.claimed)).toMatchObject({
+      status: "refused",
+      reason: expect.stringMatching(/belongs to/),
+    });
+    // The raw title stays as ANN wrote it until a decision is recorded.
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(ids.digital))!.snapshot).toMatchObject({
+        title: "Log Horizon: The West Wind Brigade [NOOK]",
+      });
+      expect(await ctx.db.query("releaseIsbns").collect()).toEqual([]);
+    });
+    expect(await record(t, ids.digital, ids.releaseId)).toMatchObject({ status: "recorded" });
+  });
+
+  it("refuses an extra chapter ANN numbers like the Volume it follows", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const ids = await t.run(async (ctx) => {
+      const base = await logHorizon(ctx);
+      // Handa-kun's Extra Chapter 1 (ANN "eBook ex 1") is stored with label 1.
+      const extra = await holdAnnLine(ctx, base.seriesId, HELD);
+      const observation = (await ctx.db.get(extra))!;
+      const snapshot = observation.snapshot as { page: Record<string, unknown> };
+      await ctx.db.patch(extra, {
+        snapshot: { ...snapshot, page: { ...snapshot.page, volume: "eBook ex 11" } },
+      });
+      return { ...base, extra };
+    });
+    const result = await record(t, ids.extra, ids.releaseId);
+    expect(result).toMatchObject({
+      status: "refused",
+      reason: expect.stringMatching(/extra chapter, not a whole Volume/),
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releaseIsbns").collect()).toEqual([]);
+      expect(await ctx.db.query("placementHolds").collect()).toHaveLength(1);
+    });
+  });
+
   it("moves an alternate ebook ISBN in a merge only onto a digital Release", async () => {
     const t = makeT();
     await seedRegistry(t);
