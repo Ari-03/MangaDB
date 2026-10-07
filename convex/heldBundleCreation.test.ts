@@ -230,3 +230,58 @@ it("reviews a Complete Box Set qualifier only with resolved source work and full
     /contradict/,
   );
 });
+
+it.each(["The Naruto Complete Box Set", "Naruto Manga Box Set 1"])(
+  "reviews %s without changing raw source facts or accepting another work",
+  async (title) => {
+    const { t, args } = await fixture();
+    const snapshot = {
+      kind: "olEdition",
+      key: "/books/OL1M",
+      url: "https://openlibrary.org/books/OL1M",
+      title,
+      seriesTitle: "Naruto",
+      isbn13: args.isbn13,
+      format: "physical",
+      multiVolume: false,
+      publishers: ["VIZ Media"],
+      packaging: {
+        lineName: "Box Set",
+        linePosition: title.endsWith("1") ? "1" : null,
+        coverRange: null,
+      },
+    };
+    await t.run((ctx) =>
+      ctx.db.patch(args.observationId, {
+        sourceKey: "openlibrary",
+        sourceRecordId: snapshot.key,
+        snapshot,
+      }),
+    );
+    const product = { ...args, name: title };
+    const preview = await t.query(internal.heldBundleCreation.previewInternal, product);
+    expect(preview.refusal).toBeNull();
+    expect(
+      await t.mutation(internal.heldBundleCreation.createInternal, {
+        ...product,
+        expected: preview.expected!,
+        actor: "alice",
+        reason: "Reviewed exact box and ordered contents",
+        dryRun: true,
+      }),
+    ).toEqual({ status: "dryRun" });
+    expect((await t.run((ctx) => ctx.db.get(args.observationId)))!.snapshot).toEqual(snapshot);
+    for (const changed of [
+      { ...snapshot, seriesTitle: "Bleach" },
+      { ...snapshot, title: title.replace("Naruto", "Bleach") },
+      { ...snapshot, title: title.replace("Naruto", "Naruto Novel") },
+      { ...snapshot, coverageGapped: true },
+    ]) {
+      await t.run((ctx) => ctx.db.patch(args.observationId, { snapshot: changed }));
+      expect(
+        (await t.query(internal.heldBundleCreation.previewInternal, product)).refusal,
+        JSON.stringify(changed),
+      ).not.toBeNull();
+    }
+  },
+);

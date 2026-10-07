@@ -1219,26 +1219,40 @@ async function sourceContentsMatch(
       workNames.some((name) =>
         sameWorkTitle(reading.work.replace(/^the\s+/i, ""), name.replace(/^the\s+/i, "")),
       );
-    // Open Library can retain "Complete" in the work portion of a box title.
-    // Only a reviewed package with independently resolved Series context may
-    // treat that trailing word as a package qualifier.
-    const reviewedCompleteBox =
+    // Open Library can retain "Complete" or "Manga" in a box's work name.
+    // Reconcile only a trailing package qualifier or leading article after
+    // independent Series context and all ordered member contents agree.
+    const packageWork = reading.work.replace(/\s+(?:complete|manga)$/i, "");
+    const withoutArticle = (name: string) => name.replace(/^the\s+/i, "");
+    if (
+      state.observation.sourceKey === "openlibrary" &&
+      (state.bundle || newBundleName) &&
+      reading.packaging.length > 0 &&
+      s.seriesTitle &&
+      !workNames.some((name) => sameWorkTitle(withoutArticle(s.seriesTitle!), withoutArticle(name)))
+    )
+      return refuse("Known source Series title contradicts package work.");
+    const reviewedBoxWork =
       state.observation.sourceKey === "openlibrary" &&
       !!(state.bundle || newBundleName) &&
       proof?.isbn13 === state.isbn13 &&
       reading.packaging.length > 0 &&
-      /\bcomplete\s+box\s*set\b/i.test(title) &&
-      /\s+complete$/i.test(reading.work) &&
+      /\bbox\s*set\b/i.test(title) &&
+      (!/\s+(?:complete|manga)$/i.test(reading.work) ||
+        /\b(?:complete|manga)\s+box\s*set\b/i.test(title)) &&
       state.source.series?._id === series._id &&
       !!s.seriesTitle &&
-      workNames.some((name) => sameWorkTitle(s.seriesTitle!, name)) &&
-      workNames.some((name) => sameWorkTitle(reading.work.replace(/\s+complete$/i, ""), name));
+      sameWorkTitle(withoutArticle(s.seriesTitle), withoutArticle(packageWork)) &&
+      workNames.some((name) =>
+        sameWorkTitle(withoutArticle(s.seriesTitle!), withoutArticle(name)),
+      ) &&
+      workNames.some((name) => sameWorkTitle(withoutArticle(packageWork), withoutArticle(name)));
     if (
       reading.scope.length ||
       reading.unreadable.length ||
       (!workNames.some((name) => sameWorkTitle(reading.work, name)) &&
         !reviewedArticle &&
-        !reviewedCompleteBox)
+        !reviewedBoxWork)
     )
       return refuse("Known source work, scope or unreadable facts contradict review.");
     const parsed = parseBookTitle(title, { subtitle: s.subtitle });
