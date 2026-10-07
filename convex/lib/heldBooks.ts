@@ -1049,11 +1049,27 @@ async function sourceContentsMatch(
     const names = routed ? [series.title, routed.sourceWork] : workNames;
     const reading = await readObservationBook(ctx, state.observation, [series], names, context);
     const named = readAnnLineTitle(line.title, { names });
-    // Only an exact-ISBN publisher review may identify this one book's subtitle.
-    // Keep the raw reader's binding, labels, scope and technical clauses intact.
     const parent = state.source.parent?.snapshot as
       | { kind?: string; id?: string; title?: string }
       | undefined;
+    // Shared by the reviewed readings below: an exact own-ISBN review of this
+    // ANN line under its own parent and Series, one target Edition, no route.
+    const exactLine =
+      !routed &&
+      !state.bundle &&
+      contents.length === 1 &&
+      proof?.sourceTitle === line.title &&
+      proof.evidenceUrls.length > 0 &&
+      line.page?.status === "ok" &&
+      line.page.title === line.title &&
+      toIsbn13(line.page.isbn13) === proof.isbn13 &&
+      state.source.series?._id === series._id &&
+      parent?.kind === "annManga" &&
+      parent.id === line.mangaId &&
+      parent.title !== undefined &&
+      workNames.some((name) => sameWorkTitle(parent.title!, name));
+    // Only an exact-ISBN publisher review may identify this one book's subtitle.
+    // Keep the raw reader's binding, labels, scope and technical clauses intact.
     const title = parseBookTitle(line.title).seriesTitle;
     const subtitle = /^(.*?)\s+[-–—]\s+(.+)$/.exec(title);
     const reviewedSubtitle =
@@ -1237,9 +1253,40 @@ async function sourceContentsMatch(
       !line.coverageGapped &&
       reading.label === undefined &&
       (await qualifierAgrees(ctx, state.r, series, qualifier, boxed[2]!, boxed[1]!, actual));
+    // The ANN grammar can leave an edition descriptor in the work when a line
+    // word follows it ("No Longer Human Complete Edition Omnibus" reads work
+    // "No Longer Human Complete Edition", line "Omnibus"). An exact review may
+    // read the descriptor as the line's, only when the rest is a declared work
+    // name, the ANN parent is that work, and descriptor plus line word is the
+    // target's own Edition Line name. Numbers, scope and ranges stay binding.
+    const qualifiedWork =
+      exactLine && named.kind === "line" && named.lineName
+        ? workNames.find((name) => reading.work.toLowerCase().startsWith(`${name.toLowerCase()} `))
+        : undefined;
+    const lineDescriptor =
+      qualifiedWork !== undefined
+        ? editionDescriptor(reading.work.slice(qualifiedWork.length))
+        : null;
+    const reviewedLineDescriptor =
+      lineDescriptor !== null &&
+      // This compound grammar recognizes "Complete Edition Omnibus" only.
+      // The generic bracket descriptor reader accepts arbitrary words, which
+      // cannot prove that a work suffix is an edition rather than another work.
+      /^Complete Edition$/i.test(lineDescriptor) &&
+      named.kind === "line" &&
+      named.lineName === "Omnibus" &&
+      parent?.kind === "annManga" &&
+      parent.id === line.mangaId &&
+      parent.title !== undefined &&
+      sameWorkTitle(parent.title, qualifiedWork!) &&
+      contents[0]!.line?.seriesId === series._id &&
+      sameWorkTitle(contents[0]!.line.name, `${lineDescriptor} ${named.lineName}`)
+        ? `${lineDescriptor} ${named.lineName}`
+        : null;
     if (
       named.kind === "ambiguous" ||
       (!workNames.some((name) => sameWorkTitle(reading.work, name)) &&
+        !reviewedLineDescriptor &&
         !(
           routed &&
           (sameWorkTitle(reading.work, routed.rootWork) || samePartWork(reading.work, series.title))
@@ -1256,7 +1303,44 @@ async function sourceContentsMatch(
       return refuse(
         `Known ANN work "${reading.work}", scope or unreadable facts contradict review: ${reading.unreadable.join("; ")}`,
       );
-    const facts = annContentFacts(line, names);
+    let facts = annContentFacts(line, names);
+    // ANN's grammar holds an English number word unread ("Book One"). An exact
+    // review may read the one "Book <word>" as its digit only when that
+    // re-read is conflict-free, changes nothing else, and the shared title
+    // parser and the stored reader state the same position.
+    const word = /\bBook\s+(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve)\b/;
+    const spelled = word.exec(line.title)?.[1];
+    if (exactLine && facts.positionConflict && spelled && line.title.split(word).length === 3) {
+      const digit = String(
+        [
+          "One",
+          "Two",
+          "Three",
+          "Four",
+          "Five",
+          "Six",
+          "Seven",
+          "Eight",
+          "Nine",
+          "Ten",
+          "Eleven",
+          "Twelve",
+        ].indexOf(spelled) + 1,
+      );
+      const title = line.title.replace(word, `Book ${digit}`);
+      const reread = annContentFacts({ ...line, title, page: { ...line.page!, title } }, names);
+      if (
+        !reread.positionConflict &&
+        reread.position === digit &&
+        reading.label === digit &&
+        parseBookTitle(line.title).packaging?.linePosition === digit &&
+        reread.lineName === facts.lineName &&
+        reread.coverageGapped === facts.coverageGapped &&
+        reread.formatConflict === facts.formatConflict &&
+        JSON.stringify(reread.coverRange) === JSON.stringify(facts.coverRange)
+      )
+        facts = reread;
+    }
     if (
       facts.coverageGapped ||
       facts.positionConflict ||
@@ -1268,7 +1352,7 @@ async function sourceContentsMatch(
     packaged = reviewedThreeInOne || (!reviewedEditionTag && reading.packaging.length > 0);
     sourceLabel = reading.label;
     sourceBinding = reading.binding;
-    lineName = reviewedThreeInOne ? "3 in 1 Edition" : facts.lineName;
+    lineName = reviewedThreeInOne ? "3 in 1 Edition" : (reviewedLineDescriptor ?? facts.lineName);
     position = facts.position;
     if (proof?.standalone) {
       await standaloneMatch(ctx, state, contents, series, reading, facts, routed);

@@ -20,6 +20,7 @@ import type * as follows from "../follows.js";
 import type * as heldBooks from "../heldBooks.js";
 import type * as heldBundleCreation from "../heldBundleCreation.js";
 import type * as heldRepair from "../heldRepair.js";
+import type * as heldSourceParents from "../heldSourceParents.js";
 import type * as importSources from "../importSources.js";
 import type * as imports from "../imports.js";
 import type * as kodansha from "../kodansha.js";
@@ -149,6 +150,7 @@ declare const fullApi: ApiFromModules<{
   heldBooks: typeof heldBooks;
   heldBundleCreation: typeof heldBundleCreation;
   heldRepair: typeof heldRepair;
+  heldSourceParents: typeof heldSourceParents;
   importSources: typeof importSources;
   imports: typeof imports;
   kodansha: typeof kodansha;
