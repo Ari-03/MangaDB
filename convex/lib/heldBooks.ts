@@ -107,7 +107,7 @@ export type Reader = ReturnType<typeof reader>;
 /** Capture resolver dependencies, including rejected candidates and merge/redirect hops.
  * A resolver's ordinary scan cap cannot certify a complete held-book guard.
  */
-function guardedResolverContext(ctx: QueryCtx, r: Reader): QueryCtx {
+export function guardedResolverContext(ctx: QueryCtx, r: Reader): QueryCtx {
   const wrap = <T extends object>(target: T): T =>
     new Proxy(target, {
       get(on, prop) {

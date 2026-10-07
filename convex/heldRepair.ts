@@ -1,4 +1,10 @@
 import {
+  digitalSiblingArgs,
+  digitalSiblingState,
+  createDigitalSibling,
+  type SiblingResult,
+} from "./lib/digitalSibling";
+import {
   canonicalDigitalProof,
   canonicalDigitalProofs,
   canonicalDigitalState,
@@ -501,4 +507,33 @@ export const correctCanonicalDigitalInternal = internalMutation({
     });
     return { status: "applied", releaseId: args.releaseId, proposalId, ledgerId };
   },
+});
+
+export const previewDigitalSiblingInternal = internalQuery({
+  args: digitalSiblingArgs,
+  handler: async (ctx, args) => {
+    try {
+      const state = await digitalSiblingState(ctx, args);
+      return { expected: state.expected, refusal: null };
+    } catch (error) {
+      return { expected: null, refusal: heldError(error) };
+    }
+  },
+});
+const createDigitalSiblingArgs = { ...digitalSiblingArgs, actor: v.string(), expected: v.string() };
+export const createDigitalSiblingInternal = internalMutation({
+  args: createDigitalSiblingArgs,
+  handler: async (ctx, args): Promise<SiblingResult> => {
+    try {
+      return await ctx.runMutation(internal.heldRepair.createDigitalSiblingOneInternal, args, {
+        transactionLimits: await nestedLimits(ctx),
+      });
+    } catch (error) {
+      return { status: "refused", reason: heldError(error) };
+    }
+  },
+});
+export const createDigitalSiblingOneInternal = internalMutation({
+  args: createDigitalSiblingArgs,
+  handler: async (ctx, args): Promise<SiblingResult> => createDigitalSibling(ctx, args),
 });
