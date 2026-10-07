@@ -124,6 +124,8 @@ export async function applyEntry(
       return await releaseBundle(ctx, audit, entry);
     case "setCoverage":
       return await setCoverage(ctx, audit, entry);
+    case "seriesFamily":
+      return await seriesFamily(ctx, audit, entry);
   }
 }
 
@@ -2742,8 +2744,14 @@ async function splitSeries(
   const source = await ctx.db.get(entry.sourceSeriesId);
   if (!source || source.status !== "active") return skip("source series not active");
   if (source.locked) return skip("source series locked");
-  if (entry.volumes.length + entry.editions.length + entry.observationIds.length === 0) {
-    return skip("the split moves no volume, edition, or observation");
+  if (
+    entry.volumes.length +
+      entry.editions.length +
+      entry.observationIds.length +
+      entry.placeholderLabels.length ===
+    0
+  ) {
+    return skip("the split moves no volume, edition, or observation, and adds no volume");
   }
 
   let target = await splitTarget(ctx, entry);
@@ -2974,9 +2982,12 @@ async function createRelease(
     if (!volume || volume.status !== "active") return skip(`volume ${row.volumeId} not active`);
     volumes.push(volume);
   }
-  const first = volumes[0];
-  if (!first) return skip("plan error: no coverage");
-  const series = await ctx.db.get(first.seriesId);
+  const unmapped = entry.unmappedSeriesId !== undefined;
+  if (unmapped && (volumes.length > 0 || entry.line === null))
+    return skip("plan error: an unmapped member states a line and no coverage");
+  const seriesId = entry.unmappedSeriesId ?? volumes[0]?.seriesId;
+  if (!seriesId) return skip("plan error: no coverage");
+  const series = await ctx.db.get(seriesId);
   if (!series || series.status !== "active") return skip("series not active");
 
   const line = entry.line;
@@ -2984,6 +2995,7 @@ async function createRelease(
     status: "active",
     publisherId: entry.publisherId,
     bootstrapUnreviewed: true,
+    ...(unmapped ? { coverageUnmapped: true } : {}),
     ...(line
       ? {
           editionLineId: await findOrCreateLine(
@@ -3010,7 +3022,7 @@ async function createRelease(
     ...(entry.pubDate === null ? {} : { pubDate: entry.pubDate }),
     ...(entry.price === null ? {} : { price: entry.price }),
     publisherId: entry.publisherId,
-    seriesIds: [...new Set(volumes.map((v) => v.seriesId))],
+    seriesIds: unmapped ? [series._id] : [...new Set(volumes.map((v) => v.seriesId))],
     bootstrapUnreviewed: true,
   };
   const id = await ctx.db.insert("releases", fields);
@@ -3354,6 +3366,7 @@ async function setCoverage(
     }
     rows.push({ volumeId: volume._id, extent: row.extent });
   }
+  if (entry.unmapped) return await unmapIntoLine(ctx, audit, entry, edition, rows.length);
   if (rows.length === 0) return skip("plan error: empty coverage");
 
   const current = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
@@ -3395,5 +3408,94 @@ async function setCoverage(
   await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
   if (moves.unfinished) return partial;
   await retireVolumes(ctx, audit, entry.retireVolumeIds, rows[0]!.volumeId);
+  return audit.wrote ? applied : already;
+}
+
+/**
+ * setCoverage's `unmapped` form: the Edition becomes Unmapped Packaging in
+ * the planned line, its coverage removed and `coverageUnmapped` set. The
+ * coverage it has now must be the plan's `before` (drift = skip).
+ */
+async function unmapIntoLine(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"setCoverage">,
+  edition: Doc<"editions">,
+  plannedRows: number,
+): Promise<Result> {
+  if (plannedRows > 0 || entry.line === null)
+    return skip("plan error: an unmapped member states a line and no coverage");
+  const { seriesId, name, position } = entry.line;
+  const current = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
+  const line = edition.editionLineId ? await ctx.db.get(edition.editionLineId) : null;
+  const done =
+    current.length === 0 &&
+    edition.coverageUnmapped === true &&
+    line?.seriesId === seriesId &&
+    line.name === name &&
+    (edition.linePosition ?? null) === position;
+  if (done) return already;
+  if (
+    !sameValue(
+      current.map((c) => c.volumeId),
+      entry.before,
+    )
+  ) {
+    skip(`edition ${edition.publicId} coverage drifted`);
+  }
+  const moves = newMoves(entry.key);
+  await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
+    const lineId = await findOrCreateLine(ctx, audit, seriesId, edition.publisherId, name);
+    await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
+      editionLineId: lineId,
+      linePosition: position ?? undefined,
+      coverageUnmapped: true,
+    });
+    await replaceCoverage(ctx, audit, edition._id, []);
+    await refreshReleaseDenorms(ctx, edition._id);
+  });
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  if (moves.unfinished) return partial;
+  await retireVolumes(ctx, audit, entry.retireVolumeIds, null);
+  return audit.wrote ? applied : already;
+}
+
+/** Group the plan's Series in one Series Family, created by name when none is active. */
+async function seriesFamily(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"seriesFamily">,
+): Promise<Result> {
+  const rows: Array<Doc<"series">> = [];
+  for (const planned of entry.series) {
+    const series = await ctx.db.get(planned.seriesId);
+    if (!series || series.status !== "active") return skip(`series ${planned.seriesId} not active`);
+    if (series.title !== planned.title)
+      return skip(`series ${series.publicId} title drifted: ${JSON.stringify(series.title)}`);
+    rows.push(series);
+  }
+  const families = await ctx.db.query("seriesFamilies").collect();
+  let family = families.find((one) => one.status === "active" && one.name === entry.name);
+  for (const series of rows) {
+    if (series.familyId !== undefined && series.familyId !== family?._id)
+      return skip(`series ${series.publicId} is already in another family`);
+  }
+  if (!family) {
+    await audit.meta();
+    const fields = { status: "active" as const, name: entry.name, bootstrapUnreviewed: true };
+    const id = await ctx.db.insert("seriesFamilies", fields);
+    audit.op({ kind: "create", table: "seriesFamilies", tempId: id, fields });
+    await audit.revise(
+      { type: "seriesFamily", id },
+      Object.entries(fields).map(([field, after]) => ({ field, after })),
+    );
+    family = (await ctx.db.get(id))!;
+  }
+  for (const series of rows) {
+    if (series.familyId === family._id) continue;
+    await updateRecord(ctx, audit, { type: "series", id: series._id }, series, {
+      familyId: family._id,
+    });
+  }
   return audit.wrote ? applied : already;
 }

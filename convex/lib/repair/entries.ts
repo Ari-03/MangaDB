@@ -404,6 +404,10 @@ export const createReleaseEntry = v.object({
   ),
   line: v.union(v.object({ name: v.string(), position: nullableString }), v.null()),
   sources: v.array(v.string()),
+  // An Edition Line member no source maps to Volumes (CONTEXT.md Unmapped
+  // Packaging): `coverage` is empty, `line` names the member's line in this
+  // Series, and the Edition is created with `coverageUnmapped`.
+  unmappedSeriesId: v.optional(v.id("series")),
 });
 
 /**
@@ -473,6 +477,21 @@ export const setCoverageEntry = v.object({
     v.null(),
   ),
   retireVolumeIds: v.array(v.id("volumes")),
+  // Make the Edition Unmapped Packaging in `line` instead: `coverage` is
+  // empty, its coverage rows are removed, and `coverageUnmapped` is set.
+  unmapped: v.optional(v.boolean()),
+});
+
+/**
+ * Group Series in a Series Family (CONTEXT.md), creating the Family by
+ * `name` when no active one has it. Each Series states the title the plan
+ * saw (drift = skip); one already in another Family is skipped whole.
+ */
+export const seriesFamilyEntry = v.object({
+  kind: v.literal("seriesFamily"),
+  ...base,
+  name: v.string(),
+  series: v.array(v.object({ seriesId: v.id("series"), title: v.string() })),
 });
 
 /**
@@ -508,6 +527,7 @@ export const repairEntry = v.union(
   createVolumeEntry,
   releaseBundleEntry,
   setCoverageEntry,
+  seriesFamilyEntry,
 );
 
 export type RepairEntry = Infer<typeof repairEntry>;

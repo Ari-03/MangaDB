@@ -137,8 +137,15 @@ import { withExceptionCapture } from "./lib/posthog";
 import { pairKeyOf } from "./lib/qa";
 
 export const SOURCE_KEY = "ann";
-/** Compare canonical work IDs; stored merged IDs retain their identity. */
+/**
+ * Whether `release` sits under the Series `seriesId` names, or under another
+ * Series of its Series Family: ANN files one manga entry for a franchise a
+ * publisher splits into Series ("JoJo's Bizarre Adventure" holds every Part
+ * VIZ numbers on its own), so an ISBN of the entry links on any of them.
+ * Compares canonical work IDs; stored merged IDs retain their identity.
+ */
 async function releaseUnderSeries(ctx: QueryCtx, release: Doc<"releases">, seriesId: Id<"series">) {
+  const familyId = (await ctx.db.get(seriesId))?.familyId;
   for (const id of release.seriesIds) {
     const seen = new Set<string>();
     let current = id;
@@ -148,7 +155,12 @@ async function releaseUnderSeries(ctx: QueryCtx, release: Doc<"releases">, serie
       const series = await ctx.db.get(current);
       if (!series) break;
       if (series.status !== "merged") {
-        if (series.status === "active" && !series.locked && series._id === seriesId) return true;
+        if (
+          series.status === "active" &&
+          !series.locked &&
+          (series._id === seriesId || (familyId !== undefined && series.familyId === familyId))
+        )
+          return true;
         break;
       }
       if (!series.mergedIntoId) break;
