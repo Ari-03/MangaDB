@@ -21,6 +21,7 @@ import {
   insertPublisher,
   insertRelease,
   insertSeries,
+  insertSourceRevision,
   insertVolume,
 } from "./test.factories";
 import { makeT, seedRegistry, type TestT as T } from "./test.helpers";
@@ -180,6 +181,30 @@ describe("heldBooks.linkByIsbnInternal", () => {
         ...extra,
       });
 
+    // The box Release the Bundle was converted from, hidden, still holds the ISBN.
+    await t.run(async (ctx) => {
+      const box = await ctx.db.query("releases").first();
+      const releaseId = await insertRelease(ctx, {
+        editionId: box!.editionId,
+        publisherId,
+        seriesIds: box!.seriesIds,
+        isbn13: BOX,
+        format: "physical",
+        status: "hidden",
+      });
+      const { proposalId, revisionId } = await insertSourceRevision(ctx, {
+        ref: { type: "release", id: releaseId },
+        changes: [],
+        sourceKey: "repair",
+      });
+      await ctx.db.insert("bundleConversions", {
+        releaseId,
+        bundleId,
+        proposalId,
+        revisionId,
+        isbnKeys: BOX,
+      });
+    });
     expect(await link(boxRecord)).toMatchObject({
       status: "applied",
       target: { type: "releaseBundle", id: bundleId },

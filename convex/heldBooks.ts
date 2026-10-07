@@ -856,9 +856,23 @@ export const linkByIsbnOneInternal = internalMutation({
     const scope = await isbnScope(ctx, isbn13);
     if (scope) return refuse(scope);
     const claims = await isbnClaims(ctx, isbn13, { resolver: claimResolver(ctx) });
-    if (!claims?.complete || claims.unresolved.length > 0 || claims.owners.size !== 1)
+    if (!claims?.complete || claims.unresolved.length > 0)
       return refuse(`ISBN ${isbn13} has no single owner.`);
-    const owner = [...claims.owners.values()][0]!;
+    // A box Release converted into a Bundle keeps its ISBN while hidden; the
+    // Bundle it became is the box set now.
+    const owners = [];
+    for (const one of claims.owners.values()) {
+      if (one.kind === "release" && one.doc.status === "hidden") {
+        const conversion = await ctx.db
+          .query("bundleConversions")
+          .withIndex("by_release", (q) => q.eq("releaseId", one.doc._id))
+          .first();
+        if (conversion && claims.owners.has(conversion.bundleId)) continue;
+      }
+      owners.push(one);
+    }
+    const [owner] = owners;
+    if (!owner || owners.length > 1) return refuse(`ISBN ${isbn13} has no single owner.`);
     if (owner.doc.status !== "active" || owner.doc.locked)
       return refuse("The ISBN's owner is not active and unlocked.");
     const target =

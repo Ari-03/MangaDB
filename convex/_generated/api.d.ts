@@ -32,6 +32,7 @@ import type * as lib_bookFacts from "../lib/bookFacts.js";
 import type * as lib_bookTitle from "../lib/bookTitle.js";
 import type * as lib_bounded from "../lib/bounded.js";
 import type * as lib_boundedReads from "../lib/boundedReads.js";
+import type * as lib_boxSets from "../lib/boxSets.js";
 import type * as lib_canonicalDigital from "../lib/canonicalDigital.js";
 import type * as lib_catalogTitle from "../lib/catalogTitle.js";
 import type * as lib_commentPolicy from "../lib/commentPolicy.js";
@@ -165,6 +166,7 @@ declare const fullApi: ApiFromModules<{
   "lib/bookTitle": typeof lib_bookTitle;
   "lib/bounded": typeof lib_bounded;
   "lib/boundedReads": typeof lib_boundedReads;
+  "lib/boxSets": typeof lib_boxSets;
   "lib/canonicalDigital": typeof lib_canonicalDigital;
   "lib/catalogTitle": typeof lib_catalogTitle;
   "lib/commentPolicy": typeof lib_commentPolicy;
