@@ -283,7 +283,7 @@ type ShopifyEvidence = Extract<
  */
 const DISTRIBUTOR_PUBLISHERS: Record<DistributorEvidence["distributor"], Record<string, string>> = {
   bookwalker: { "One Peace Books": "one-peace-books" },
-  overdrive: { "One Peace Ebooks": "one-peace-books" },
+  overdrive: { "One Peace Ebooks": "one-peace-books", "One Peace Books": "one-peace-books" },
 };
 
 /** The value at a key path through parsed JSON objects, or undefined. */
