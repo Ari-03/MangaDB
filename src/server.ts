@@ -3,12 +3,14 @@
 // canonical, www 301, HTTPS-only) and the SEO endpoints — robots.txt and the
 // on-demand sitemaps — the cover-art route (src/server/covers.ts),
 // and the same-origin PostHog proxy at /_s/* (src/server/posthogProxy.ts).
+// App requests carry Server-Timing (src/server/timing.ts).
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 
 import { canonicalRedirect } from "./server/canonicalHost";
 import { coverResponse } from "./server/covers";
 import { posthogProxyResponse } from "./server/posthogProxy";
 import { seoResponse } from "./server/seoRoutes";
+import { timeRequest } from "./server/timing";
 
 export default createServerEntry({
   async fetch(request, opts) {
@@ -22,6 +24,6 @@ export default createServerEntry({
     if (cover) return cover;
     const seo = await seoResponse(request);
     if (seo) return seo;
-    return handler.fetch(request, opts);
+    return timeRequest(() => handler.fetch(request, opts));
   },
 });

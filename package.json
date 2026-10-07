@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite dev",
     "dev:staging": "CLOUDFLARE_ENV=staging vite dev --mode staging",
-    "build": "vite build",
+    "build": "vite build && node build/checkPreloads.ts",
     "build:staging": "CLOUDFLARE_ENV=staging VITE_SITE_URL=https://mangadb-staging.mangadb.workers.dev npm run build",
     "preview": "vite preview",
     "test": "vitest run",

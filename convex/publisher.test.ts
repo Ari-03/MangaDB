@@ -4,8 +4,10 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { boardWindow, LANE_CAP, nearMonths } from "./publisher";
 import { WINDOW_CAP } from "./releases";
-import { pubDate } from "./test.catalog";
+import { oldComputeBoard, oldMonthBoard } from "./test.boardOracle";
+import { pubDate, readTally } from "./test.catalog";
 import {
+  type Overrides,
   insertCoverage,
   insertEdition,
   insertEditionLine,
@@ -14,6 +16,7 @@ import {
   insertSeries,
   insertVolume,
   seedCatalog,
+  seriesStatsRow,
 } from "./test.factories";
 import { makeT, type TestT } from "./test.helpers";
 
@@ -697,5 +700,489 @@ describe("publisher precomputed boards", () => {
     const result = await t.action(internal.publisher.rebuildBoards, {});
     expect(result.dropped).toBe(1);
     expect(await releasesIn(t)).toBe(1);
+  });
+});
+
+describe("publisher board — both views from one month's reads", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // Every visibility case the two views split on, around September 2026:
+  // Mature Series under general Publishers, crossovers with a Mature
+  // Series (active, and hidden), an adult-only imprint of a general parent
+  // and a general imprint of an adult-only parent, adult-only Publishers,
+  // hidden Editions, Series and Releases, and the debut and cover-strip
+  // rules (backfills, relaunches, year-only and July siblings, coverage
+  // order, an inactive Vol. 1, Edition Lines, art found, borrowed, or
+  // missing). August is the delta month; October has general books only,
+  // November Mature ones only; January 2026 wraps to December 2025; March
+  // 2027 has none.
+  async function mixedCatalog() {
+    const t = makeT({ transactionLimits: true });
+    await t.run(async (ctx) => {
+      const seas = await insertPublisher(ctx, {
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      });
+      const ghostShip = await insertPublisher(ctx, {
+        name: "Ghost Ship",
+        slug: "ghost-ship",
+        parentPublisherId: seas,
+        contentRating: "mature",
+      });
+      const steamship = await insertPublisher(ctx, {
+        name: "Steamship",
+        slug: "steamship",
+        parentPublisherId: seas,
+      });
+      const kuma = await insertPublisher(ctx, {
+        name: "Kuma Adult",
+        slug: "kuma-adult",
+        contentRating: "mature",
+      });
+      const kumaClean = await insertPublisher(ctx, {
+        name: "Kuma Clean",
+        slug: "kuma-clean",
+        parentPublisherId: kuma,
+      });
+      const fakku = await insertPublisher(ctx, {
+        name: "FAKKU",
+        slug: "fakku",
+        contentRating: "mature",
+      });
+      const tokyopop = await insertPublisher(ctx, { name: "Tokyopop", slug: "tokyopop" });
+      await insertPublisher(ctx, { name: "CMX", slug: "cmx", defunct: true });
+      await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
+
+      const series = async (
+        title: string,
+        positions: number[],
+        fields: Overrides<"series"> = {},
+      ) => {
+        const seriesId = await insertSeries(ctx, { title, ...fields });
+        const volumes: Array<Id<"volumes">> = [];
+        for (const position of positions)
+          volumes.push(await insertVolume(ctx, { seriesId, position }));
+        return { seriesId, volumes };
+      };
+      // An Edition of `publisherId` covering `covers` in that order, with a
+      // Release per entry of `releases`, each crediting `seriesIds`.
+      const book = async (
+        publisherId: Id<"publishers">,
+        seriesIds: Array<Id<"series">>,
+        covers: Array<Id<"volumes">>,
+        releases: Array<{
+          sort: number;
+          format?: "physical" | "digital";
+          isbn13?: string;
+          status?: "hidden";
+        }>,
+        edition: { lineOf?: Id<"series">; status?: "hidden" } = {},
+      ) => {
+        const editionLineId = edition.lineOf
+          ? await insertEditionLine(ctx, {
+              seriesId: edition.lineOf,
+              publisherId,
+              name: "Deluxe Edition",
+            })
+          : undefined;
+        const editionId = await insertEdition(ctx, {
+          publisherId,
+          editionLineId,
+          ...(edition.status ? { status: edition.status } : {}),
+        });
+        for (const volumeId of covers) await insertCoverage(ctx, { editionId, volumeId });
+        for (const release of releases) {
+          await insertRelease(ctx, {
+            editionId,
+            publisherId,
+            seriesIds,
+            format: release.format ?? "physical",
+            isbn13: release.isbn13,
+            pubDate: pubDate(release.sort),
+            ...(release.status ? { status: release.status } : {}),
+          });
+        }
+      };
+
+      const newThing = await series("New Thing", [1]);
+      const longRunner = await series("Long Runner", [1, 2, 3, 4, 5]);
+      const oldClassic = await series("Old Classic", [1]);
+      const heat = await series("Heat", [1, 2], { mature: true });
+      const heatTwo = await series("Heat Two", [1, 2], { mature: true });
+      const goneHeat = await series("Gone Heat", [1], { status: "hidden", mature: true });
+      const goneGeneral = await series("Gone General", [1], { status: "hidden" });
+      const ghostly = await series("Ghostly", [3]);
+      const steamStory = await series("Steam Story", [1]);
+      const cleanTale = await series("Clean Tale", [1]);
+      const rescued = await series("Rescued", [1]);
+      const ordered = await series("Ordered", [1, 2]);
+      const inactiveOne = await series("Inactive One", [1, 2]);
+      await ctx.db.patch(inactiveOne.volumes[0]!, { status: "hidden" });
+      const backfilled = await series("Backfilled", [1]);
+      const yearOnly = await series("Year Only", [1]);
+      const julySibling = await series("July Sibling", [1]);
+      // Rescued began in 2005 (the rebuilt stats say so); nothing else has a stats row.
+      const rescuedDoc = (await ctx.db.get(rescued.seriesId))!;
+      await ctx.db.insert(
+        "seriesStats",
+        seriesStatsRow({
+          seriesId: rescued.seriesId,
+          publicId: rescuedDoc.publicId,
+          title: rescuedDoc.title,
+          firstReleaseSort: 20050412,
+        }),
+      );
+
+      // September 2026.
+      await book(
+        seas,
+        [newThing.seriesId],
+        [newThing.volumes[0]!],
+        [
+          { sort: 20260908, isbn13: "9780000000001" },
+          { sort: 20260908, format: "digital" },
+        ],
+      );
+      await book(seas, [longRunner.seriesId], [longRunner.volumes[4]!], [{ sort: 20260915 }]);
+      await book(
+        seas,
+        [longRunner.seriesId],
+        [longRunner.volumes[2]!],
+        [{ sort: 20260920, status: "hidden" }],
+      );
+      await book(seas, [oldClassic.seriesId], [oldClassic.volumes[0]!], [{ sort: 20260900 }], {
+        lineOf: oldClassic.seriesId,
+      });
+      await book(
+        seas,
+        [longRunner.seriesId, heat.seriesId],
+        [longRunner.volumes[3]!],
+        [{ sort: 20260918 }],
+      );
+      await book(
+        seas,
+        [newThing.seriesId, goneHeat.seriesId],
+        [newThing.volumes[0]!],
+        [{ sort: 20260919, format: "digital" }],
+      );
+      await book(seas, [goneGeneral.seriesId], [goneGeneral.volumes[0]!], [{ sort: 20260919 }]);
+      await book(
+        seas,
+        [heat.seriesId],
+        [heat.volumes[0]!],
+        [{ sort: 20260920, isbn13: "9780000000002" }],
+      );
+      await book(ghostShip, [heatTwo.seriesId], [heatTwo.volumes[0]!], [{ sort: 20260922 }]);
+      await book(
+        ghostShip,
+        [ghostly.seriesId],
+        [ghostly.volumes[0]!],
+        [{ sort: 20260923, format: "digital" }],
+      );
+      await book(
+        steamship,
+        [steamStory.seriesId],
+        [steamStory.volumes[0]!],
+        [{ sort: 20260925, isbn13: "9780000000003" }],
+      );
+      // A hidden Edition neither shows nor lends its ISBN to the artless one.
+      await book(kumaClean, [cleanTale.seriesId], [cleanTale.volumes[0]!], [{ sort: 20260910 }]);
+      await book(
+        kumaClean,
+        [cleanTale.seriesId],
+        [cleanTale.volumes[0]!],
+        [{ sort: 20260910, isbn13: "9780000000004" }],
+        { status: "hidden" },
+      );
+      await book(fakku, [heatTwo.seriesId], [heatTwo.volumes[1]!], [{ sort: 20260911 }]);
+      await book(tokyopop, [rescued.seriesId], [rescued.volumes[0]!], [{ sort: 20260915 }]);
+      await book(
+        tokyopop,
+        [ordered.seriesId],
+        [ordered.volumes[1]!, ordered.volumes[0]!],
+        [{ sort: 20260916 }],
+      );
+      await book(tokyopop, [inactiveOne.seriesId], inactiveOne.volumes, [{ sort: 20260917 }]);
+      await book(
+        tokyopop,
+        [backfilled.seriesId],
+        [backfilled.volumes[0]!],
+        [{ sort: 20190305 }, { sort: 20260910, format: "digital" }],
+      );
+      await book(
+        tokyopop,
+        [yearOnly.seriesId],
+        [yearOnly.volumes[0]!],
+        [{ sort: 20260916 }, { sort: 20260000, format: "digital" }],
+      );
+      await book(
+        tokyopop,
+        [julySibling.seriesId],
+        [julySibling.volumes[0]!],
+        [{ sort: 20260916 }, { sort: 20260700, format: "digital" }],
+      );
+      // More Series than the strip holds, all the same day: art decides,
+      // then title. Strip A's ISBN-less digital Edition borrows its print
+      // Edition's ISBN; Strip B has no art anywhere.
+      for (const [letter, isbn13] of [
+        ["A", "9780000000011"],
+        ["B", undefined],
+        ["C", "9780000000013"],
+        ["D", "9780000000014"],
+        ["E", "9780000000015"],
+        ["F", "9780000000016"],
+      ] as const) {
+        const strip = await series(`Strip ${letter}`, [1]);
+        await book(tokyopop, [strip.seriesId], [strip.volumes[0]!], [{ sort: 20260920, isbn13 }]);
+        if (letter === "A") {
+          await book(
+            tokyopop,
+            [strip.seriesId],
+            [strip.volumes[0]!],
+            [{ sort: 20260920, format: "digital" }],
+          );
+        }
+        // A tie on every rank key: window order picks the first one.
+        if (letter === "C") {
+          await book(
+            tokyopop,
+            [strip.seriesId],
+            [strip.volumes[0]!],
+            [{ sort: 20260920, isbn13: "9780000000023" }],
+          );
+        }
+      }
+
+      // August 2026: the delta month.
+      await book(seas, [longRunner.seriesId], [longRunner.volumes[2]!], [{ sort: 20260811 }]);
+      await book(seas, [heat.seriesId], [heat.volumes[1]!], [{ sort: 20260812 }]);
+      await book(
+        seas,
+        [longRunner.seriesId, heat.seriesId],
+        [longRunner.volumes[1]!],
+        [{ sort: 20260813 }],
+      );
+      await book(fakku, [heatTwo.seriesId], [heatTwo.volumes[0]!], [{ sort: 20260814 }]);
+      await book(kumaClean, [cleanTale.seriesId], [cleanTale.volumes[0]!], [{ sort: 20260815 }]);
+
+      // October 2026: general books only.
+      await book(seas, [longRunner.seriesId], [longRunner.volumes[3]!], [{ sort: 20261001 }]);
+      await book(
+        tokyopop,
+        [ordered.seriesId],
+        [ordered.volumes[0]!],
+        [{ sort: 20261002, isbn13: "9780000000021" }],
+      );
+      await book(steamship, [steamStory.seriesId], [steamStory.volumes[0]!], [{ sort: 20261005 }]);
+
+      // November 2026: Mature books only.
+      await book(fakku, [heatTwo.seriesId], [heatTwo.volumes[1]!], [{ sort: 20261103 }]);
+      await book(ghostShip, [heat.seriesId], [heat.volumes[1]!], [{ sort: 20261104 }]);
+      await book(seas, [heat.seriesId], [heat.volumes[0]!], [{ sort: 20261105 }]);
+
+      // January 2026, and December 2025 before it.
+      await book(seas, [longRunner.seriesId], [longRunner.volumes[0]!], [{ sort: 20260105 }]);
+      await book(seas, [heat.seriesId], [heat.volumes[0]!], [{ sort: 20260106 }]);
+      await book(seas, [longRunner.seriesId], [longRunner.volumes[1]!], [{ sort: 20251210 }]);
+      await book(seas, [heat.seriesId], [heat.volumes[1]!], [{ sort: 20251211 }]);
+      await book(fakku, [heatTwo.seriesId], [heatTwo.volumes[0]!], [{ sort: 20251212 }]);
+    });
+    return t;
+  }
+
+  const MONTHS = [
+    { year: 2026, month: 9 },
+    { year: 2026, month: 8 },
+    { year: 2026, month: 10 },
+    { year: 2026, month: 11 },
+    { year: 2026, month: 1 },
+    { year: 2025, month: 12 },
+    { year: 2027, month: 3 },
+    { year: 2026, month: 13 },
+  ];
+
+  // Byte-for-byte, as storeBoard compares payloads: a readable diff first.
+  const expectSameJson = (actual: unknown, expected: unknown) => {
+    expect(actual).toStrictEqual(expected);
+    expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+  };
+
+  it("computes both views exactly as the builder did before they shared reads", async () => {
+    const t = await mixedCatalog();
+    for (const { year, month } of MONTHS) {
+      const [expected, actual] = await Promise.all([
+        t.run((ctx) => oldComputeBoard(ctx, year, month)),
+        t.query(internal.publisher.computeBoard, { year, month }),
+      ]);
+      expectSameJson(actual, expected);
+      // The live board (nothing stored) agrees view by view.
+      for (const showMature of [false, true]) {
+        expectSameJson(
+          await t.query(api.publisher.monthBoard, { year, month, showMature }),
+          await t.run((ctx) => oldMonthBoard(ctx, year, month, showMature)),
+        );
+      }
+    }
+  });
+
+  it("leaves a Mature Series' books, crossovers too, out of every general count", async () => {
+    const t = await mixedCatalog();
+    const { general, mature } = await t.query(internal.publisher.computeBoard, {
+      year: 2026,
+      month: 9,
+    });
+    const card = (board: typeof general, slug: string) =>
+      board.board.find((c) => c.publisher.slug === slug);
+    // General: the crossover with Heat and Heat's own book are gone, so is
+    // last month's Heat and crossover; the book also crediting a hidden
+    // Mature Series stays.
+    expect(card(general, "seven-seas")).toMatchObject({
+      releases: 5,
+      series: 3,
+      newSeries: 1,
+      previousReleases: 1,
+    });
+    expect(card(mature, "seven-seas")).toMatchObject({
+      releases: 7,
+      series: 4,
+      newSeries: 2,
+      previousReleases: 3,
+    });
+    // Adult-only Publishers have no general card, even for a general book;
+    // a general imprint of one is a top-level card there.
+    expect(general.board.map((c) => c.publisher.slug).sort()).toEqual([
+      "kuma-clean",
+      "seven-seas",
+      "steamship",
+      "tokyopop",
+    ]);
+    expect(mature.board.map((c) => c.publisher.slug).sort()).toEqual([
+      "fakku",
+      "ghost-ship",
+      "kuma-clean",
+      "seven-seas",
+      "steamship",
+      "tokyopop",
+    ]);
+    expect(card(general, "kuma-clean")?.publisher.parent).toBeNull();
+    expect(card(mature, "kuma-clean")?.publisher.parent).toEqual({
+      name: "Kuma Adult",
+      slug: "kuma-adult",
+    });
+    expect(card(general, "tokyopop")).toMatchObject({ releases: 14, series: 12, newSeries: 8 });
+    // Ordered debuts earlier in the month but has no art; the five Strips
+    // with art (A's digital one borrowed) fill the strip, title order.
+    expect(card(general, "tokyopop")?.covers.map((row) => row.series[0]!.title)).toEqual([
+      "Strip A",
+      "Strip C",
+      "Strip D",
+      "Strip E",
+      "Strip F",
+    ]);
+    expect(
+      card(general, "tokyopop")?.covers.find((row) => row.series[0]!.title === "Strip C")
+        ?.coverIsbns,
+    ).toEqual(["9780000000013"]);
+    const names = (board: typeof general) =>
+      board.directory.map((entry) => [entry.name, entry.imprints.map((i) => i.name)]);
+    expect(names(general)).toEqual([
+      ["CMX", []],
+      ["Kuma Clean", []],
+      ["Seven Seas Entertainment", ["Steamship"]],
+      ["Tokyopop", []],
+    ]);
+    expect(names(mature)).toEqual([
+      ["CMX", []],
+      ["FAKKU", []],
+      ["Kuma Adult", ["Kuma Clean"]],
+      ["Seven Seas Entertainment", ["Ghost Ship", "Steamship"]],
+      ["Tokyopop", []],
+    ]);
+  });
+
+  it("scans the month, last month, and the Publishers once for both views", async () => {
+    // Fresh catalogs per month and per builder, so no run warms another.
+    for (const { year, month } of [
+      { year: 2026, month: 9 },
+      { year: 2026, month: 10 },
+      { year: 2026, month: 11 },
+    ]) {
+      const measure = async (build: "old" | "new") => {
+        const t = await mixedCatalog();
+        let reads = { documents: 0, bytes: 0, queries: 0 };
+        const { ranges } = await readTally(() =>
+          t.run(async (ctx) => {
+            const before = await ctx.meta.getTransactionMetrics();
+            if (build === "old") await oldComputeBoard(ctx, year, month);
+            else await ctx.runQuery(internal.publisher.computeBoard, { year, month });
+            const after = await ctx.meta.getTransactionMetrics();
+            reads = {
+              documents: after.documentsRead.used - before.documentsRead.used,
+              bytes: after.bytesRead.used - before.bytesRead.used,
+              queries: after.databaseQueries.used - before.databaseQueries.used,
+            };
+          }),
+        );
+        // What one scan of each costs: the month's and last month's active
+        // Releases, and the Publisher list.
+        const scanned = await t.run(async (ctx) => {
+          const window = (from: number) =>
+            ctx.db
+              .query("releases")
+              .withIndex("by_status_date", (q) =>
+                q
+                  .eq("status", "active")
+                  .gte("pubDate.sort", from)
+                  .lte("pubDate.sort", from + 99),
+              )
+              .collect();
+          const from = year * 10000 + month * 100;
+          const previous = month === 1 ? from - 10000 + 1100 : from - 100;
+          return (
+            (await window(from)).length +
+            (await window(previous)).length +
+            (await ctx.db.query("publishers").collect()).length
+          );
+        });
+        return { reads, ranges, scanned };
+      };
+      const before = await measure("old");
+      const after = await measure("new");
+      expect([
+        before.ranges.get("releases.by_status_date"),
+        before.ranges.get("publishers"),
+      ]).toEqual([4, 2]);
+      expect([after.ranges.get("releases.by_status_date"), after.ranges.get("publishers")]).toEqual(
+        [2, 1],
+      );
+      // At least one copy of every scanned document is saved; debut checks
+      // a book needs in both views are shared too.
+      expect(before.reads.documents - after.reads.documents).toBeGreaterThanOrEqual(after.scanned);
+      expect(after.reads.bytes).toBeLessThan(before.reads.bytes);
+      expect(after.reads.queries).toBeLessThan(before.reads.queries);
+    }
+  });
+
+  it("stores what the old builder built, serves it, and rewrites nothing on an unchanged rebuild", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T12:00:00Z"));
+    const t = await mixedCatalog();
+    await t.action(internal.publisher.rebuildBoards, {});
+    const stored = await t.run((ctx) => ctx.db.query("publisherBoards").collect());
+    // Months with cards (July for the July sibling); March 2027 has none.
+    expect([...new Set(stored.map((row) => row.month))]).toEqual([
+      202512, 202601, 202607, 202608, 202609, 202610, 202611,
+    ]);
+    for (const row of stored) {
+      const year = Math.floor(row.month / 100);
+      const month = row.month % 100;
+      const expected = await t.run((ctx) => oldMonthBoard(ctx, year, month, row.mature === true));
+      expect(row.payload).toBe(JSON.stringify(expected));
+      expectSameJson(
+        await t.query(api.publisher.monthBoard, { year, month, showMature: row.mature === true }),
+        expected,
+      );
+    }
+    expect((await t.action(internal.publisher.rebuildBoards, {})).changed).toBe(0);
   });
 });
