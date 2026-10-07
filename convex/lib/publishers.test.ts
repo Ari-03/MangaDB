@@ -21,6 +21,7 @@ describe("canonicalPublisherFor", () => {
     expect(canonicalPublisherFor("Square Enix Manga")?.slug).toBe("square-enix");
     expect(canonicalPublisherFor("Dark Horse Manga")?.slug).toBe("dark-horse");
     expect(canonicalPublisherFor("Dark Horse Manhwa")?.slug).toBe("dark-horse");
+    expect(canonicalPublisherFor("Dark Horse Comics")?.slug).toBe("dark-horse");
     expect(canonicalPublisherFor("Irodori Inc.")?.slug).toBe("irodori-comics");
     expect(canonicalPublisherFor("Kaiten Books LLC")?.slug).toBe("kaiten-books");
     expect(canonicalPublisherFor("One Peace Books, Incorporated")?.slug).toBe("one-peace-books");

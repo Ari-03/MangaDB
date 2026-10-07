@@ -195,6 +195,7 @@ export const DUPLICATE_ALIASES: Record<string, string> = {
   "square enix manga and books": "square-enix",
   "dark horse manga": "dark-horse",
   "dark horse manhwa": "dark-horse",
+  "dark horse comics": "dark-horse",
   "seven seas": "seven-seas",
   viz: "viz-media",
   "viz communications": "viz-media",
