@@ -18,6 +18,7 @@ import type * as crons from "../crons.js";
 import type * as favorites from "../favorites.js";
 import type * as follows from "../follows.js";
 import type * as heldBooks from "../heldBooks.js";
+import type * as heldBundleCreation from "../heldBundleCreation.js";
 import type * as heldRepair from "../heldRepair.js";
 import type * as importSources from "../importSources.js";
 import type * as imports from "../imports.js";
@@ -146,6 +147,7 @@ declare const fullApi: ApiFromModules<{
   favorites: typeof favorites;
   follows: typeof follows;
   heldBooks: typeof heldBooks;
+  heldBundleCreation: typeof heldBundleCreation;
   heldRepair: typeof heldRepair;
   importSources: typeof importSources;
   imports: typeof imports;

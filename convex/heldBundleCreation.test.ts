@@ -1,0 +1,153 @@
+import { expect, it } from "vitest";
+import { internal } from "./_generated/api";
+import { insertBook } from "./test.moderation";
+import { insertObservation, insertPublisher, insertSeries, insertVolume } from "./test.factories";
+import { alice, makeT, seedTeam } from "./test.helpers";
+
+async function fixture() {
+  const t = makeT();
+  await seedTeam(t, [alice]);
+  const args = await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+    const seriesId = await insertSeries(ctx, { title: "Naruto" });
+    const volumeIds = [],
+      memberIds = [];
+    const memberIsbn13s = ["9781569319000", "9781591161783"];
+    for (const [i, isbn13] of memberIsbn13s.entries()) {
+      const volumeId = await insertVolume(ctx, { seriesId, label: String(i + 1), position: i + 1 });
+      const book = await insertBook(ctx, {
+        seriesId,
+        publisherId,
+        volumeId,
+        release: { isbn13, format: "physical", binding: "paperback" },
+      });
+      volumeIds.push(volumeId);
+      memberIds.push(book.releaseId);
+    }
+    await insertObservation(ctx, {
+      sourceKey: "ann",
+      sourceRecordId: "manga:11",
+      snapshot: { kind: "annManga", id: "11", title: "Naruto" },
+      recordRef: { type: "series", id: seriesId },
+    });
+    const observationId = await insertObservation(ctx, {
+      sourceKey: "ann",
+      sourceRecordId: "release:22",
+      snapshot: {
+        kind: "annRelease",
+        annId: "22",
+        mangaId: "11",
+        title: "Naruto Box Set",
+        isbn13: "9781421525822",
+        format: "physical",
+        multi: true,
+        editionLineHint: true,
+        coverRange: { from: "1", to: "2" },
+        page: {
+          status: "ok",
+          title: "Naruto Box Set",
+          isbn13: "9781421525822",
+          mangaId: "11",
+          volume: "GN 1-2",
+          distributor: "VIZ Media",
+        },
+      },
+    });
+    await ctx.db.insert("placementHolds", {
+      observationId,
+      sourceKey: "ann",
+      kind: "packaging",
+      seriesId,
+      heldAt: 1,
+    });
+    return {
+      observationId,
+      publisherId,
+      seriesId,
+      memberIds,
+      memberIsbn13s,
+      volumeIds,
+      name: "Naruto Box Set",
+      isbn13: "9781421525822",
+      evidenceUrls: ["https://www.viz.com/naruto-box-set"],
+    };
+  });
+  return { t, args };
+}
+
+it("dry runs roll back bundle, memberships, allocator and audit; stale dependencies refuse", async () => {
+  const { t, args } = await fixture();
+  const before = await t.run(async (ctx) => ({
+    bundles: await ctx.db.query("releaseBundles").collect(),
+    proposals: await ctx.db.query("proposals").collect(),
+    ids: await ctx.db.query("counters").collect(),
+  }));
+  const preview = await t.query(internal.heldBundleCreation.previewInternal, args);
+  expect(preview.refusal).toBeNull();
+  const execution = {
+    ...args,
+    expected: preview.expected!,
+    actor: "alice",
+    reason: "Reviewed exact ordered print members",
+    dryRun: true,
+  };
+  expect(await t.mutation(internal.heldBundleCreation.createInternal, execution)).toEqual({
+    status: "dryRun",
+  });
+  const after = await t.run(async (ctx) => ({
+    bundles: await ctx.db.query("releaseBundles").collect(),
+    proposals: await ctx.db.query("proposals").collect(),
+    ids: await ctx.db.query("counters").collect(),
+  }));
+  expect(after).toEqual(before);
+  expect(await t.run((ctx) => ctx.db.query("bundleMemberships").collect())).toEqual([]);
+  await t.run((ctx) => ctx.db.patch(args.memberIds[0]!, { binding: "hardcover" }));
+  const drift = await t.mutation(internal.heldBundleCreation.createInternal, {
+    ...execution,
+    dryRun: false,
+  });
+  expect(drift).toMatchObject({ status: "refused" });
+  expect(await t.run((ctx) => ctx.db.query("releaseBundles").collect())).toEqual([]);
+});
+
+it("rejects duplicate members, incomplete contents and claimed package ISBNs", async () => {
+  const { t, args } = await fixture();
+  expect(
+    (
+      await t.query(internal.heldBundleCreation.previewInternal, {
+        ...args,
+        memberIds: [args.memberIds[0]!, args.memberIds[0]!],
+      })
+    ).refusal,
+  ).toMatch(/distinct/);
+  await t.run(async (ctx) => {
+    const release = await ctx.db.get(args.memberIds[0]!);
+    await ctx.db.patch(release!.editionId, { coverageUnmapped: true });
+  });
+  expect((await t.query(internal.heldBundleCreation.previewInternal, args)).refusal).toMatch(
+    /unmapped/,
+  );
+});
+
+it("creates audited ordered members without clearing the hold, then refuses the occupied package ISBN", async () => {
+  const { t, args } = await fixture();
+  const preview = await t.query(internal.heldBundleCreation.previewInternal, args);
+  expect(preview.refusal).toBeNull();
+  const result = await t.mutation(internal.heldBundleCreation.createInternal, {
+    ...args,
+    expected: preview.expected!,
+    actor: "alice",
+    reason: "Primary exact package and member ISBN review",
+    dryRun: false,
+  });
+  expect(result.status).toBe("created");
+  const members = await t.run((ctx) => ctx.db.query("bundleMemberships").collect());
+  expect(members.map((m) => ({ releaseId: m.releaseId, order: m.order }))).toEqual(
+    args.memberIds.map((releaseId, i) => ({ releaseId, order: i + 1 })),
+  );
+  expect(await t.run((ctx) => ctx.db.query("placementHolds").collect())).toHaveLength(1);
+  expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toHaveLength(1);
+  expect((await t.query(internal.heldBundleCreation.previewInternal, args)).refusal).toMatch(
+    /unowned/,
+  );
+});
