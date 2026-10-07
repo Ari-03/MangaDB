@@ -105,6 +105,27 @@ export async function recordPrinting(
 }
 
 /**
+ * Undo one Other Printing decided in error (printings.undoDecidedInternal):
+ * delete `row`, unlink its one record, and audit the removal like the
+ * recording, with one approved Proposal and a Revision on the Release. The
+ * caller checks that `row` is a plain printing whose only linked record is
+ * `observationId`, and lists the book as held again.
+ */
+export async function removePrinting(
+  ctx: MutationCtx,
+  args: Decision & { row: Doc<"releaseIsbns"> },
+): Promise<Id<"proposals">> {
+  await ctx.db.delete(args.row._id);
+  await ctx.db.patch(args.observationId, { recordRef: undefined, printingIsbn13: undefined });
+  return await auditDecision(
+    ctx,
+    args,
+    { field: "otherPrinting", after: `ISBN ${args.isbn13} removed` },
+    `Removed a printing decided in error, from ${args.citation.sourceName}.`,
+  );
+}
+
+/**
  * Link one more record of a printing `release` already has a row for: the
  * link marks it and clears its hold (linkObservation), with one approved
  * Proposal by the record's source and a `sourceObservation` Revision on the

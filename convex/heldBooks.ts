@@ -31,6 +31,7 @@ import {
   holdOf,
   linkObservation,
   recordUnplaced,
+  snapshotSha256,
 } from "./lib/observations";
 import { resolveActor } from "./lib/repair/audit";
 import { claimResolver, isbnClaims, primaryIsbnsOf } from "./lib/releaseIsbns";
@@ -39,6 +40,7 @@ import { sameWorkTitle } from "./lib/matching";
 import { isbnScope } from "./lib/scope";
 import { sameValue, valueHash } from "./lib/values";
 import type { AnnReleaseSnapshot } from "./ann";
+import { holdKind } from "./schema";
 
 export const targetValidator = v.union(
   v.object({ type: v.literal("release"), id: v.id("releases") }),
@@ -717,6 +719,85 @@ export const applyOlSubtitleRefreshInternal = internalMutation({
   },
 });
 
+const dismissArgs = {
+  actor: v.string(),
+  observationId: v.id("sourceObservations"),
+  /** The kind the caller saw it held as; a hold that moved since is refused. */
+  expectedKind: holdKind,
+  reason: v.string(),
+  evidenceUrls: v.array(v.string()),
+};
+type Dismissed = {
+  status: "applied";
+  proposalId: Id<"proposals">;
+  ledgerId: Id<"heldRepairLedger">;
+};
+/**
+ * Take a held book off Held Books as not a book of its own: a phantom ISBN
+ * no publisher lists, or a duplicate record of one the catalog has. Nothing
+ * in the catalog changes. The record keeps its snapshot and `placement`
+ * note and gains `dismissedHold`, so imports leave it off the list until
+ * its source changes the book (lib/observations.ts holdDismissed). One
+ * approved Proposal cites the evidence, and a ledger entry lets
+ * restoreInternal list it again. Refusals throw, writing nothing.
+ *
+ *   npx convex run heldBooks:dismissInternal '{"actor": "ari",
+ *     "observationId": "…", "expectedKind": "isbn", "reason": "…",
+ *     "evidenceUrls": ["https://…"]}'
+ */
+export const dismissInternal = internalMutation({
+  args: dismissArgs,
+  handler: async (ctx, args): Promise<Dismissed> => {
+    return await ctx.runMutation(internal.heldBooks.dismissOneInternal, args, {
+      transactionLimits: await nestedLimits(ctx),
+    });
+  },
+});
+export const dismissOneInternal = internalMutation({
+  args: dismissArgs,
+  handler: async (ctx, args): Promise<Dismissed> => {
+    const actor = await resolveActor(ctx, args.actor);
+    if (!args.reason.trim() || args.reason.length > 4000)
+      return refuse("Supply a short dismissal reason.");
+    const observation = await ctx.db.get(args.observationId);
+    if (!observation) return refuse("No such source record.");
+    const hold = await holdOf(ctx, observation._id);
+    if (!hold) return refuse("The book is not held.");
+    if (hold.kind !== args.expectedKind)
+      return refuse(`The book is held as ${hold.kind}, not ${args.expectedKind}.`);
+    const before = JSON.stringify({ observation, hold });
+    if (utf8Bytes(before) > MAX_GUARD_BYTES) return refuse("Ledger exceeds 256 KiB.");
+    const proposalId = await audit(
+      ctx,
+      actor,
+      observation._id,
+      `Dismissed from Held Books, not a book of its own: ${args.reason}`,
+      evidenceUrls(args.evidenceUrls),
+    );
+    await ctx.db.patch(observation._id, {
+      dismissedHold: {
+        reason: args.reason,
+        at: Date.now(),
+        snapshotSha256: snapshotSha256(observation.snapshot),
+        proposalId,
+      },
+    });
+    await ctx.db.delete(hold._id);
+    const after = valueHash({
+      observation: await ctx.db.get(observation._id),
+      hold: await holdOf(ctx, observation._id),
+    });
+    const ledgerId = await ctx.db.insert("heldRepairLedger", {
+      observationId: observation._id,
+      operation: "dismissHold",
+      proposalId,
+      before,
+      after,
+    });
+    return { status: "applied", proposalId, ledgerId };
+  },
+});
+
 const restoreArgs = {
   actor: v.string(),
   ledgerId: v.id("heldRepairLedger"),
@@ -753,6 +834,25 @@ export const restoreOneInternal = internalMutation({
       );
     const observation = await ctx.db.get(ledger.observationId);
     const hold = await holdOf(ctx, ledger.observationId);
+    if (ledger.operation === "dismissHold") {
+      // A re-sighting since moves lastSeenAt, so the dismissal itself is the guard.
+      if (observation?.dismissedHold?.proposalId !== ledger.proposalId)
+        return refuse("The book is no longer dismissed by this entry.");
+      const before = JSON.parse(ledger.before) as { hold: Doc<"placementHolds"> };
+      await ctx.db.patch(observation._id, { dismissedHold: undefined });
+      if (!hold) {
+        const { _id, _creationTime, ...fields } = before.hold;
+        await ctx.db.insert("placementHolds", fields);
+      }
+      const proposalId = await audit(ctx, actor, observation._id, args.reason, []);
+      return {
+        status: "applied" as const,
+        proposalId,
+        originalHoldId: before.hold._id,
+        holdId: (await holdOf(ctx, observation._id))?._id ?? null,
+        maturity: "Dismissal undone; the book is held again.",
+      };
+    }
     const current = valueHash({ observation, hold });
     if (current !== ledger.after || args.expectedAfter !== ledger.after)
       return refuse("Repair after-state changed; restoration refuses.");
@@ -807,6 +907,7 @@ export const restoreOneInternal = internalMutation({
       reviewedSourceFormat: before.observation.reviewedSourceFormat,
       recordRef: before.observation.recordRef,
       printingIsbn13: before.observation.printingIsbn13,
+      dismissedHold: before.observation.dismissedHold,
       conflicts: before.observation.conflicts,
       queuedProposalId: before.observation.queuedProposalId,
       snapshot: before.observation.snapshot,

@@ -27,7 +27,8 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { holdKind, recordRef } from "../schema";
 import { applyMatureEvidence } from "./mature";
 import { observedIsbn13, printingIsbnOf } from "./releaseIsbns";
-import { sameValue } from "./values";
+import { sameValue, valueHash } from "./values";
+import { sha256Hex } from "./olDump";
 
 export type HoldKind = Infer<typeof holdKind>;
 
@@ -242,6 +243,23 @@ export async function holdOf(
     .unique();
 }
 
+/** The SHA-256 a dismissal pins: the snapshot's canonical form (lib/values.ts valueHash). */
+export function snapshotSha256(snapshot: unknown): string {
+  return sha256Hex(valueHash(snapshot));
+}
+
+/**
+ * Whether a person dismissed this record's hold and the source has not
+ * changed the book since (schema `dismissedHold`): such a record is never
+ * listed as a Held Book.
+ */
+export function holdDismissed(observation: Doc<"sourceObservations">): boolean {
+  const dismissed = observation.dismissedHold;
+  return (
+    dismissed !== undefined && dismissed.snapshotSha256 === snapshotSha256(observation.snapshot)
+  );
+}
+
 /**
  * Leave a record the importer cannot place on its observation (spec §6:
  * record, never guess): the reason becomes its `placement` note, and an
@@ -276,6 +294,7 @@ export async function recordUnplaced(
   const listed =
     current.recordRef === undefined &&
     !current.withdrawn &&
+    !holdDismissed(current) &&
     !(await proposalInReview(ctx, current));
   const kind = listed ? hold.kind : null;
   if (kind === null) {

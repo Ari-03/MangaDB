@@ -32,9 +32,9 @@ import { isbnFieldValue, isbnHiddenFromIndex, toIsbn13 } from "./lib/isbn";
 import { labelsEqual, sameWorkTitle } from "./lib/matching";
 import type { WorkContext } from "./lib/declaredWork";
 import { canonicalRecord, mergeSurvivor } from "./lib/merges";
-import { holdOf } from "./lib/observations";
+import { holdOf, recordUnplaced } from "./lib/observations";
 import { findPublisherByName, toPartialDate } from "./lib/pipeline";
-import { linkRecordedPrinting, recordPrinting } from "./lib/printings";
+import { linkRecordedPrinting, recordPrinting, removePrinting } from "./lib/printings";
 import {
   addClaim,
   CLAIM_SCAN,
@@ -994,6 +994,80 @@ export const decideInternal = internalMutation({
     const pubDate = observedDate(snapshot);
     await recordPrinting(ctx, { ...decision, ...(pubDate !== undefined ? { pubDate } : {}) });
     return { status: "recorded", isbn13 };
+  },
+});
+
+/**
+ * Undo a printing recorded by recordDecidedInternal that proved to be
+ * another book (an unlisted ebook ISBN, a rebind, another part): remove the
+ * `releaseIsbns` row, unlink its record, audit it on the Release, and list
+ * the book as held again with `hold` (the kind, reason and Series it was
+ * held under before). Refused, with nothing written, unless the record is
+ * the row's own and the only record linked to that printing.
+ *
+ *   npx convex run printings:undoDecidedInternal '{"observationId": "…",
+ *     "reason": "…", "hold": {"kind": "isbn", "reason": "…", "seriesId": "…"}}'
+ */
+export const undoDecidedInternal = internalMutation({
+  args: {
+    observationId: v.id("sourceObservations"),
+    reason: v.string(),
+    hold: v.object({
+      kind: holdKind,
+      reason: v.string(),
+      seriesId: v.optional(v.id("series")),
+    }),
+  },
+  handler: async (ctx, { observationId, reason, hold }) => {
+    const refuse = (why: string) => ({ status: "refused" as const, reason: why });
+    if (reason.trim() === "") return refuse("An undo needs a reason.");
+    const observation = await ctx.db.get(observationId);
+    if (observation === null) return refuse("No such source record.");
+    const isbn13 = observation.printingIsbn13;
+    const ref = observation.recordRef;
+    if (isbn13 === undefined || ref?.type !== "release") {
+      return refuse("The record is not linked as a printing's record.");
+    }
+    const row = await ctx.db
+      .query("releaseIsbns")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .unique();
+    if (row === null || row.kind !== undefined || row.releaseId !== ref.id) {
+      return refuse(`ISBN ${isbn13} is not an Other Printing of the linked Release.`);
+    }
+    if (row.observationId !== observationId) {
+      return refuse("The printing was recorded from another record; undo that one.");
+    }
+    const linked = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_record", (q) => q.eq("recordRef.type", "release").eq("recordRef.id", ref.id))
+      .take(200);
+    if (linked.some((one) => one._id !== observationId && one.printingIsbn13 === isbn13)) {
+      return refuse("Another record is linked to this printing; unlink it first.");
+    }
+    const release = await ctx.db.get(ref.id);
+    if (release === null) return refuse("No such Release.");
+    const snapshot = observation.snapshot as SnapshotFacts;
+    const citation = decidedCitationUrl(undefined, snapshot);
+    if ("refusal" in citation) return refuse(citation.refusal);
+    const source = await getSourceByKey(ctx, observation.sourceKey);
+    const now = Date.now();
+    const proposalId = await removePrinting(ctx, {
+      release,
+      isbn13,
+      reason,
+      sourceKey: observation.sourceKey,
+      observationId,
+      citation: {
+        sourceName: `${source?.name ?? observation.sourceKey} (undone by review)`,
+        url: citation.url,
+      },
+      now,
+      row,
+    });
+    const current = await ctx.db.get(observationId);
+    if (current !== null) await recordUnplaced(ctx, current, hold, now);
+    return { status: "undone" as const, isbn13, proposalId };
   },
 });
 

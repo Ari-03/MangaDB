@@ -826,6 +826,19 @@ export default defineSchema({
     // printing's ISBN. Reconciliation offers the Release nothing from it,
     // whatever its snapshot later says.
     printingIsbn13: v.optional(v.string()),
+    // Set when a person dismissed its hold as not a book of its own (a
+    // phantom or duplicate ISBN; heldBooks.dismissInternal): it stays off
+    // Held Books while its snapshot still hashes to `snapshotSha256`, so a
+    // source that changes the book lists it again (lib/observations.ts
+    // holdDismissed). Restoring the ledger entry clears it.
+    dismissedHold: v.optional(
+      v.object({
+        reason: v.string(),
+        at: v.number(),
+        snapshotSha256: v.string(),
+        proposalId: v.id("proposals"),
+      }),
+    ),
   })
     .index("by_source_record", ["sourceKey", "sourceRecordId"])
     .index("by_record", ["recordRef.type", "recordRef.id"])

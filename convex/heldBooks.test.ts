@@ -1144,3 +1144,53 @@ describe("storedHoldKind", () => {
     expect(reasons.map(([reason]) => [reason, storedHoldKind(reason)])).toEqual(reasons);
   });
 });
+
+describe("heldBooks.dismissInternal", () => {
+  it("keeps a dismissed book off the list until its source changes it, and restores it", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, carol]);
+    await aliceSkeleton(t);
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    const observation = await observationOf(t, "/books/OL1M");
+    const dismiss = (expectedKind: HoldKind) =>
+      t.mutation(internal.heldBooks.dismissInternal, {
+        actor: "alice",
+        observationId: observation!._id,
+        expectedKind,
+        reason: "An ISBN no publisher lists.",
+        evidenceUrls: ["https://openlibrary.org/books/OL1M"],
+      });
+
+    // A hold that moved since the caller looked is refused.
+    await expect(dismiss("isbn")).rejects.toThrow("held as volumeMissing");
+    const { ledgerId } = await dismiss("volumeMissing");
+    expect((await list(t)).page).toEqual([]);
+
+    // The same book, seen again, stays off the list.
+    await openLibrarySync(t);
+    expect((await list(t)).page).toEqual([]);
+
+    // Undone from the ledger, it is listed again.
+    const ledger = await t.run((ctx) => ctx.db.get(ledgerId));
+    await t.mutation(internal.heldBooks.restoreInternal, {
+      actor: "alice",
+      ledgerId,
+      expectedAfter: ledger!.after,
+      reason: "Dismissed in error.",
+    });
+    expect((await list(t)).page).toEqual([
+      expect.objectContaining({ sourceRecordId: "/books/OL1M", kind: "volumeMissing" }),
+    ]);
+    expect((await observationOf(t, "/books/OL1M"))?.dismissedHold).toBeUndefined();
+
+    // Dismissed again, a source that changes the book lists it again.
+    await dismiss("volumeMissing");
+    stubDump([{ ...alice1, title: "Alice in Borderland, Vol. 1 (Special Edition)" }]);
+    await openLibrarySync(t);
+    expect((await list(t)).page).toEqual([
+      expect.objectContaining({ sourceRecordId: "/books/OL1M" }),
+    ]);
+  });
+});
