@@ -41,6 +41,9 @@ export const reviewedIdentityValidator = v.object({
   volumeIds: v.array(v.id("volumes")),
   evidenceUrls: v.array(v.string()),
   sourceTitle: v.optional(v.string()),
+  titledVolume: v.optional(
+    v.object({ productTitle: v.string(), volumeTitle: v.string(), productVolumeLabel: v.string() }),
+  ),
   umbrellaRouting: v.optional(
     v.object({ sourceTitle: v.string(), productTitle: v.string(), productVolumeLabel: v.string() }),
   ),

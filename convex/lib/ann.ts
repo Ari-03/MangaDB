@@ -222,7 +222,10 @@ const ANNIVERSARY = /\b(?:\d+(?:st|nd|rd|th)\s+)?anniversary\s+edition\b/gi;
 // A line's name may carry the article the shared parser's trailing phrase
 // allows ("Dark Metro - The Ultimate Edition"): it belongs to the line, not
 // the work. The name itself is read without it.
-const LINE_NAMES = new RegExp(`(?:\\bthe\\s+)?${EDITION_LINE_NAME.source}`, "gi");
+const LINE_NAMES = new RegExp(
+  `(?:\\bthe\\s+)?(?:\\b(?:hardcover|paperback)\\s+collection\\b|${EDITION_LINE_NAME.source})`,
+  "gi",
+);
 const ARTICLE = /^the\s+/i;
 
 type LineHit = {
@@ -637,7 +640,12 @@ function segmentTitle(title: string, names: readonly string[], packaged: boolean
     kind: "line",
     work,
     lineName: text.slice(hit.name, hit.end),
-    name: tidyLineName(text.slice(nameStart, nameEnd)),
+    // A binding can be part of an explicitly named Collection line.
+    name: /^(?:the\s+)?(?:hardcover|paperback)\s+collection$/i.test(
+      text.slice(nameStart, nameEnd).trim(),
+    )
+      ? text.slice(nameStart, nameEnd).trim().replace(ARTICLE, "")
+      : tidyLineName(text.slice(nameStart, nameEnd)),
     position: tailPosition(facts),
     tail: text.slice(start),
     bracket: open !== -1 ? text.slice(open + 1, end - 1) : null,

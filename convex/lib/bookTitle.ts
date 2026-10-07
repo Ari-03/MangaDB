@@ -228,6 +228,7 @@ const PACKAGING_PHRASE = [
   "library\\s+edition",
   "full\\s+colou?r\\s+(?:edition|collection)",
   "premium\\s+collection",
+  "hardcover\\s+collection",
   "naoko\\s+takeuchi\\s+collection",
   "fully\\s+compiled",
   "(?:complete\\s+)?collector['’]?s\\s+(?:edition|box\\s+set)",
@@ -489,6 +490,8 @@ function peelInnerNovelGroups(text: string, peel: Peeled): string {
  * line from its title's segment the same way (lib/ann.ts).
  */
 export function tidyLineName(text: string): string {
+  // Preserve this complete line name without changing binding qualifiers on other lines.
+  if (/^(?:the\s+)?hardcover\s+collection$/i.test(text.trim())) return "Hardcover Collection";
   const cleaned = text
     .replace(/^the\s+/i, "")
     .replace(/^complete\s+(?=(?:manga\s+)?box\s+set)/i, "")

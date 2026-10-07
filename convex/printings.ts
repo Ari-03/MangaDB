@@ -532,13 +532,27 @@ export function readTitledRecord(
   title: string,
   s: SnapshotFacts,
   names: readonly string[],
+  workContext?: WorkContext,
 ): BookReading {
   const parsed = parseBookTitle(title);
+  // Only independently resolved source names license a whole trailing integer.
+  // Target names and the ISBN owner alone never establish this context.
+  const titleKey = (text: string) =>
+    decodeEntities(text).normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+  const bare = /^(.+?)\s+([0-9]+)$/.exec(title.trim());
+  const contextualVolume =
+    workContext &&
+    bare &&
+    !/\b(?:part|episode)\s+[0-9]+$/i.test(title.trim()) &&
+    !workContext.names.some((name) => titleKey(name) === titleKey(title)) &&
+    workContext.names.some((name) => titleKey(name) === titleKey(bare[1]!))
+      ? { work: bare[1]!, label: canonicalLabel(bare[2]!) }
+      : undefined;
   const subtitle = nonEmpty(s?.subtitle) ? s.subtitle.trim() : "";
   const titleFacts = bookFacts(title, names);
   const subtitleFacts = bookFacts(subtitle);
   const reading: BookReading = {
-    work: parsed.seriesTitle,
+    work: contextualVolume?.work ?? parsed.seriesTitle,
     label: undefined,
     needsLabel: false,
     binding: undefined,
@@ -555,6 +569,7 @@ export function readTitledRecord(
   ]);
   agreedLabel(reading, [
     { where: `its title "${title}"`, label: parsed.volumeLabel },
+    { where: "its title in the resolved source work", label: contextualVolume?.label },
     { where: "its stored reading", label: nonEmpty(s?.volumeLabel) ? s.volumeLabel : undefined },
     ...titleFacts.labels.map((label) => ({ where: `its title "${title}"`, label })),
     ...subtitleFacts.labels.map((label) => ({ where: `its subtitle "${subtitle}"`, label })),
@@ -572,7 +587,11 @@ export function readTitledRecord(
     reading.packaging.push("its stored packaging");
   }
   if (s?.isBox === true) reading.packaging.push("its stored box-set flag");
-  if (parsed.bareNumber || parsed.bareRoman || s?.bareNumber === true || s?.bareRoman === true) {
+  if (
+    parsed.bareRoman ||
+    s?.bareRoman === true ||
+    (!contextualVolume && (parsed.bareNumber || s?.bareNumber === true))
+  ) {
     reading.unreadable.push(
       `its title "${title}" ends in a number that may be the work's own, with no Volume marker`,
     );
@@ -633,7 +652,7 @@ export async function readObservationBook(
       annContext,
     );
   } else {
-    reading = readTitledRecord(observation.sourceKey, title, s, seriesTitles);
+    reading = readTitledRecord(observation.sourceKey, title, s, seriesTitles, annContext);
   }
   if (observation.sourceKey === "ann") {
     const segmented = readAnnLineTitle(title, { names: seriesTitles });

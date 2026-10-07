@@ -835,6 +835,7 @@ export type ReviewedIdentity = {
   volumeIds: Id<"volumes">[];
   evidenceUrls: string[];
   sourceTitle?: string;
+  titledVolume?: { productTitle: string; volumeTitle: string; productVolumeLabel: string };
   umbrellaRouting?: { sourceTitle: string; productTitle: string; productVolumeLabel: string };
 };
 export async function reviewedMatch(
@@ -906,9 +907,84 @@ async function sourceContentsMatch(
     const names = routed ? [series.title, routed.sourceWork] : workNames;
     const reading = await readObservationBook(ctx, state.observation, [series], names, context);
     const named = readAnnLineTitle(line.title, { names });
+    // Only an exact-ISBN publisher review may identify this one book's subtitle.
+    // Keep the raw reader's binding, labels, scope and technical clauses intact.
+    const parent = state.source.parent?.snapshot as
+      | { kind?: string; id?: string; title?: string }
+      | undefined;
+    const title = parseBookTitle(line.title).seriesTitle;
+    const subtitle = /^(.*?)\s+[-–—]\s+(.+)$/.exec(title);
+    const reviewedSubtitle =
+      !routed &&
+      !state.bundle &&
+      proof?.sourceTitle === line.title &&
+      proof.evidenceUrls.length > 0 &&
+      line.page?.status === "ok" &&
+      toIsbn13(line.page.isbn13) === proof.isbn13 &&
+      proof.volumeIds.length === 1 &&
+      actual.length === 1 &&
+      actual[0]!.extent === "complete" &&
+      actual[0]!.volume._id === proof.volumeIds[0] &&
+      actual[0]!.work._id === proof.seriesId &&
+      proof.seriesId === series._id &&
+      state.source.series?._id === series._id &&
+      parent?.kind === "annManga" &&
+      parent.id === line.mangaId &&
+      parent.title !== undefined &&
+      workNames.some((name) => sameWorkTitle(parent.title!, name)) &&
+      subtitle !== null &&
+      workNames.some((name) => sameWorkTitle(subtitle[1]!, name)) &&
+      !/\b(?:part|episode|novel)\b/i.test(subtitle[2]!) &&
+      !contents.some((content) => content.line) &&
+      !line.multi &&
+      !line.editionLineHint &&
+      !line.coverRange &&
+      !line.coverageGapped &&
+      !bookFacts(line.title, workNames).packaging.length &&
+      reading.label !== undefined &&
+      labelsEqual(actual[0]!.volume.label ?? null, reading.label) &&
+      sameWorkTitle(reading.work, title);
+    // Exact own-ISBN product review identifies a titled member, never a Series alias.
+    // The existing ANN reader still owns all numeric, scope and format statements.
+    const titled = proof?.titledVolume;
+    const reviewedTitled = !!titled;
+    if (titled) {
+      const titleFacts = bookFacts(titled.volumeTitle);
+      if (
+        routed ||
+        state.source.series?._id !== series._id ||
+        proof.sourceTitle !== line.title ||
+        !titled.volumeTitle.trim() ||
+        line.title !== `${series.title} - ${titled.volumeTitle}` ||
+        titled.productTitle !==
+          `${series.title} Vol. ${titled.productVolumeLabel}: ${titled.volumeTitle}` ||
+        actual.length !== 1 ||
+        actual[0]!.extent !== "complete" ||
+        !labelsEqual(actual[0]!.volume.label ?? null, titled.productVolumeLabel) ||
+        !reading.label ||
+        !labelsEqual(reading.label, titled.productVolumeLabel) ||
+        reading.packaging.length ||
+        titleFacts.labels.length ||
+        titleFacts.packaging.length ||
+        titleFacts.unreadable.length ||
+        titleFacts.bindings.length ||
+        titleFacts.digital ||
+        outOfScopeReason(titled.volumeTitle)
+      )
+        return refuse("Reviewed titled product does not identify this exact complete Volume.");
+    }
     // A reviewed Season/Box product can be titled beyond its parent work.
     // Exact title text plus selected IDs cannot excuse an unrelated known work.
-    const productWork = line.title.replace(
+    const productWork = (
+      state.bundle &&
+      proof?.sourceTitle === line.title &&
+      state.source.series?._id === series._id &&
+      named.kind === "line" &&
+      named.lineName === "Box Set" &&
+      /\bSeason\s+\d+(?:\s+Part\s+\d+)?$/i.test(named.work)
+        ? named.work
+        : line.title
+    ).replace(
       /\s*(?:[-–—:]\s*)?(?:Season\s+\d+(?:\s+Part\s+\d+)?|Box\s+Set(?:\s+\d+)?)(?:\s+Manga\s+Box\s+Set)?$/i,
       "",
     );
@@ -924,7 +1000,9 @@ async function sourceContentsMatch(
           routed &&
           (sameWorkTitle(reading.work, routed.rootWork) || samePartWork(reading.work, series.title))
         ) &&
-        !reviewedProduct) ||
+        !reviewedProduct &&
+        !reviewedSubtitle &&
+        !reviewedTitled) ||
       reading.scope.length ||
       reading.unreadable.length
     )
@@ -957,6 +1035,7 @@ async function sourceContentsMatch(
       title,
       state.effective.snapshot as Parameters<typeof readTitledRecord>[2],
       workNames,
+      declaredWorkContext(state, series),
     );
     if (
       reading.scope.length ||

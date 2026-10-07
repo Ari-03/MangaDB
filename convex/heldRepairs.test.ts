@@ -3999,3 +3999,77 @@ describe("an ANN line title that keeps its designator", () => {
     });
   });
 });
+
+// Real ANN 55222 and exact publisher/distributor ISBN 9798893739732.
+it("reviews Classmates home as its exact titled Volume and keeps the wrong-contents guard", async () => {
+  const t = makeT();
+  const s = await dance(t);
+  await t.run(async (ctx) => {
+    await ctx.db.patch(s.seriesId, { title: "Classmates", altTitles: [] });
+    await ctx.db.patch(s.volumeId, { label: "7", position: 7 });
+    await ctx.db.patch(s.releaseId, { isbn13: "9798893739732" });
+    await ctx.db.patch(s.parentId, {
+      sourceRecordId: "manga:33065",
+      snapshot: { kind: "annManga", title: "home" },
+    });
+    await ctx.db.patch(s.observationId, {
+      sourceRecordId: "release:55222",
+      snapshot: {
+        annId: "55222",
+        date: {
+          day: 14,
+          month: 10,
+          year: 2025,
+        },
+        editionLineHint: false,
+        format: "physical",
+        isbn13: "9798893739732",
+        kind: "annRelease",
+        label: "7",
+        mangaId: "33065",
+        multi: false,
+        page: {
+          date: {
+            day: 14,
+            month: 10,
+            year: 2025,
+          },
+          distributor: "Seven Seas Entertainment",
+          distributorId: "5286",
+          fetchedAt: 1790504513950,
+          isbn13: "9798893739732",
+          mangaId: "33065",
+          status: "ok",
+          title: "Classmates - home",
+          volume: "GN 7",
+        },
+        title: "Classmates - home",
+        url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=55222",
+      },
+    });
+  });
+  const args = {
+    ...linkArgs(s),
+    reviewed: {
+      isbn13: "9798893739732",
+      seriesId: s.seriesId,
+      publisherId: s.publisherId,
+      volumeIds: [s.volumeId],
+      evidenceUrls: ["https://prhinternationalsales.com/book/?isbn=9798893739732"],
+      sourceTitle: "Classmates - home",
+      titledVolume: {
+        productTitle: "Classmates Vol. 7: home",
+        volumeTitle: "home",
+        productVolumeLabel: "7",
+      },
+    },
+  };
+  expect((await t.query(internal.heldBooks.previewInternal, linkArgs(s))).refusal).toBeTruthy();
+  const preview = await t.query(internal.heldBooks.previewInternal, args);
+  expect(preview.refusal).toBeNull();
+  expect(preview.classification).toBe("linkReady");
+  await t.run((ctx) => ctx.db.patch(s.volumeId, { label: "8" }));
+  const wrongContents = await t.query(internal.heldBooks.previewInternal, args);
+  expect(wrongContents.refusal).toMatch(/titled product does not identify/);
+  expect(wrongContents.classification).toBe("blocked");
+});

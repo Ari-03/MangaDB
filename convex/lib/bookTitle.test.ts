@@ -411,6 +411,7 @@ describe("parseBookTitle — packaging", () => {
   it("reads the publishers' premium line names (2026 survey)", () => {
     const cases: Array<[string, string, string | null]> = [
       ["Death Note Black Edition, Vol. 3", "Black Edition", "3"],
+      ["AKIRA Hardcover Collection 3", "Hardcover Collection", "3"],
       ["Fullmetal Alchemist: Fullmetal Edition, Vol. 16", "Fullmetal Edition", "16"],
       ["Witch Hat Atelier: Grimoire Edition 2", "Grimoire Edition", "2"],
       ["Vagabond Definitive Edition, Vol. 4", "Definitive Edition", "4"],
