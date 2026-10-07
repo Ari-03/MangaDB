@@ -1,0 +1,848 @@
+// Retained exact-product evidence for batch-040 only. No contents arithmetic or title matcher.
+// Expanding this list requires independent product review and a code review.
+export const reviewedCatalogProducts = [
+  {
+    observationId: "n974tn6gzwhyx5m42gz5nwx7g58f77be",
+    sourceRecordId: "release:15108",
+    snapshot: {
+      annId: "15108",
+      date: {
+        day: 9,
+        month: 2,
+        year: 2010,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532813",
+      kind: "annRelease",
+      label: "2",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 9,
+          month: 2,
+          year: 2010,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790488317127,
+        isbn10: "1421532816",
+        isbn13: "9781421532813",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 2",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=15108",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "2",
+    isbn13: "9781421532813",
+    isbn10: "1421532816",
+    volumes: [
+      {
+        id: "nx795wqm1hw1drgppq7jc9rys98f60tb",
+        label: "4",
+      },
+      {
+        id: "nx7908gecvsjbbjszgf4ekwak58f6p61",
+        label: "5",
+      },
+      {
+        id: "nx7djkrr1wv3prq0s857abrakh8f6r2k",
+        label: "6",
+      },
+    ],
+    pubDate: {
+      day: 9,
+      month: 2,
+      year: 2010,
+      sort: 20100209,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532813",
+    reason:
+      "Exact ISBN 9781421532813 is Inuyasha VIZBIG 2, collecting complete Volumes 4-6; its product number is not underlying Volume 2. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-2/product/2161",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532813-viz.html",
+        sha256: "64cdcceed172d13da2900578810ec9c36f659fe7fa5a0c3f68f48c79ac952645",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532813",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-a.txt",
+        sha256: "209d3eb71701d94988dff10455d556b5918841e5a7f25d0ba8fe5c70fde6119d",
+        contents: "volume 2 collects volumes 4-6 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n97f14fx06pm6szfpbz1a1rr0d8f7srd",
+    sourceRecordId: "release:16543",
+    snapshot: {
+      annId: "16543",
+      date: {
+        day: 10,
+        month: 8,
+        year: 2010,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532837",
+      kind: "annRelease",
+      label: "4",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 10,
+          month: 8,
+          year: 2010,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790488662113,
+        isbn10: "1421532832",
+        isbn13: "9781421532837",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 4",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=16543",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "4",
+    isbn13: "9781421532837",
+    isbn10: "1421532832",
+    volumes: [
+      {
+        id: "nx7bystjwjfxy85faazp5825r98f60rq",
+        label: "10",
+      },
+      {
+        id: "nx7b11y2zm1zxefk8pwtztq7x58f6jkt",
+        label: "11",
+      },
+      {
+        id: "nx79vgrh49wx90gh262kbnbx298f7rh5",
+        label: "12",
+      },
+    ],
+    pubDate: {
+      day: 10,
+      month: 8,
+      year: 2010,
+      sort: 20100810,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532837",
+    reason:
+      "Exact ISBN 9781421532837 is Inuyasha VIZBIG 4, collecting complete Volumes 10-12; its product number is not underlying Volume 4. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-4/product/2163",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532837-viz.html",
+        sha256: "e075c045f5d1a2708f4ec9b510a66b672fd1ad28aa53d61eb0a3291381af7d12",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532837",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-a.txt",
+        sha256: "209d3eb71701d94988dff10455d556b5918841e5a7f25d0ba8fe5c70fde6119d",
+        contents: "volume 4 collects volumes 10-12 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n9765gywvgwfefjnnq3xmn4e7s8f6j57",
+    sourceRecordId: "release:16855",
+    snapshot: {
+      annId: "16855",
+      date: {
+        day: 9,
+        month: 11,
+        year: 2010,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532844",
+      kind: "annRelease",
+      label: "5",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 9,
+          month: 11,
+          year: 2010,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790488881974,
+        isbn10: "1421532840",
+        isbn13: "9781421532844",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 5",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=16855",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "5",
+    isbn13: "9781421532844",
+    isbn10: "1421532840",
+    volumes: [
+      {
+        id: "nx71yhccpdsebsjfyrcxbkhqm58f7yex",
+        label: "13",
+      },
+      {
+        id: "nx72jymby1ckyaj6pg086444ws8f65te",
+        label: "14",
+      },
+      {
+        id: "nx7dmjcnvxgqq9gbjbn46p4ge58f6z7p",
+        label: "15",
+      },
+    ],
+    pubDate: {
+      day: 9,
+      month: 11,
+      year: 2010,
+      sort: 20101109,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532844",
+    reason:
+      "Exact ISBN 9781421532844 is Inuyasha VIZBIG 5, collecting complete Volumes 13-15; its product number is not underlying Volume 5. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-5/product/2164",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532844-viz.html",
+        sha256: "de8d375469f87dae7c45ad2695ac9c0d268e1d656ad2ec63ed33cacc6f51d645",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532844",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-a.txt",
+        sha256: "209d3eb71701d94988dff10455d556b5918841e5a7f25d0ba8fe5c70fde6119d",
+        contents: "volume 5 collects volumes 13-15 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n977x048rnz39gjxy7cry4bat98f7ze7",
+    sourceRecordId: "release:17680",
+    snapshot: {
+      annId: "17680",
+      date: {
+        day: 10,
+        month: 5,
+        year: 2011,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532868",
+      kind: "annRelease",
+      label: "7",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 10,
+          month: 5,
+          year: 2011,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790489411944,
+        isbn10: "1421532867",
+        isbn13: "9781421532868",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 7",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=17680",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "7",
+    isbn13: "9781421532868",
+    isbn10: "1421532867",
+    volumes: [
+      {
+        id: "nx7bg9psv9pyb92jytkdx0dksn8f750w",
+        label: "19",
+      },
+      {
+        id: "nx70p2byv485jbf64959hp54998f7wf6",
+        label: "20",
+      },
+      {
+        id: "nx70yq83zd0rb0dfcw5c5r17b58f6cv0",
+        label: "21",
+      },
+    ],
+    pubDate: {
+      day: 10,
+      month: 5,
+      year: 2011,
+      sort: 20110510,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532868",
+    reason:
+      "Exact ISBN 9781421532868 is Inuyasha VIZBIG 7, collecting complete Volumes 19-21; its product number is not underlying Volume 7. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-7/product/2166",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532868-viz.html",
+        sha256: "33118d5e9dc144053cb508a4989bf8e93d5486f88702d8c2998e8ce9a7e77f20",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532868",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-a.txt",
+        sha256: "209d3eb71701d94988dff10455d556b5918841e5a7f25d0ba8fe5c70fde6119d",
+        contents: "volume 7 collects volumes 19-21 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n97fkr50gck7xde0me8ftzkk2d8f7121",
+    sourceRecordId: "release:18171",
+    snapshot: {
+      annId: "18171",
+      date: {
+        day: 9,
+        month: 8,
+        year: 2011,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532875",
+      kind: "annRelease",
+      label: "8",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 9,
+          month: 8,
+          year: 2011,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790489717038,
+        isbn10: "1421532875",
+        isbn13: "9781421532875",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 8",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=18171",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "8",
+    isbn13: "9781421532875",
+    isbn10: "1421532875",
+    volumes: [
+      {
+        id: "nx7dhyds9aqb65bjtjbdfvepb58f6pbv",
+        label: "22",
+      },
+      {
+        id: "nx73yanpskc4h041hkkewht8s18f60wz",
+        label: "23",
+      },
+      {
+        id: "nx78ermy96jp8gsm9db4c0ct558f6ete",
+        label: "24",
+      },
+    ],
+    pubDate: {
+      day: 9,
+      month: 8,
+      year: 2011,
+      sort: 20110809,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532875",
+    reason:
+      "Exact ISBN 9781421532875 is Inuyasha VIZBIG 8, collecting complete Volumes 22-24; its product number is not underlying Volume 8. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-8/product/2167",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532875-viz.html",
+        sha256: "78840edc0376582866d4f23269c928329aace3698033a2c3338d5a9af06ed64a",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532875",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-b.txt",
+        sha256: "c77365ccfb63cc28553d335f360f8f4df47b062243b65fb4de35d75b436c6dcc",
+        contents: "volume 8 collects volumes 22-24 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n9774rr5s8h3cbt9b1dm63rrgh8f6m41",
+    sourceRecordId: "release:19296",
+    snapshot: {
+      annId: "19296",
+      date: {
+        day: 8,
+        month: 11,
+        year: 2011,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532882",
+      kind: "annRelease",
+      label: "9",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 8,
+          month: 11,
+          year: 2011,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790490416175,
+        isbn10: "1421532883",
+        isbn13: "9781421532882",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 9",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=19296",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "9",
+    isbn13: "9781421532882",
+    isbn10: "1421532883",
+    volumes: [
+      {
+        id: "nx7a638ygxq2g3gjkj6v62c8z18f7c5h",
+        label: "25",
+      },
+      {
+        id: "nx7b9e3z90qewhr6a718adxhn98f61pr",
+        label: "26",
+      },
+      {
+        id: "nx7fv8gdy6zwf9hcs2v1n5n5a98f6ph7",
+        label: "27",
+      },
+    ],
+    pubDate: {
+      day: 8,
+      month: 11,
+      year: 2011,
+      sort: 20111108,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532882",
+    reason:
+      "Exact ISBN 9781421532882 is Inuyasha VIZBIG 9, collecting complete Volumes 25-27; its product number is not underlying Volume 9. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-9/product/2168",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532882-viz.html",
+        sha256: "4eaa8fa931c94d1b93d13ebde6272a88fe86493045d466d50852ab9d0808f304",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532882",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-b.txt",
+        sha256: "c77365ccfb63cc28553d335f360f8f4df47b062243b65fb4de35d75b436c6dcc",
+        contents: "volume 9 collects volumes 25-27 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n97e57hg6qwsqn88r1md41qb858f7fd8",
+    sourceRecordId: "release:19298",
+    snapshot: {
+      annId: "19298",
+      date: {
+        day: 8,
+        month: 5,
+        year: 2012,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532905",
+      kind: "annRelease",
+      label: "11",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 8,
+          month: 5,
+          year: 2012,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790490418946,
+        isbn10: "1421532905",
+        isbn13: "9781421532905",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 11",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=19298",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "11",
+    isbn13: "9781421532905",
+    isbn10: "1421532905",
+    volumes: [
+      {
+        id: "nx7cgshbp1hmncnyve0emy0ss18f611f",
+        label: "31",
+      },
+      {
+        id: "nx7etaxb9s5ystbkdxsk4b4cvx8f73zk",
+        label: "32",
+      },
+      {
+        id: "nx7dtmyk75kp40b5ywwmzr6pn18f724x",
+        label: "33",
+      },
+    ],
+    pubDate: {
+      day: 8,
+      month: 5,
+      year: 2012,
+      sort: 20120508,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532905",
+    reason:
+      "Exact ISBN 9781421532905 is Inuyasha VIZBIG 11, collecting complete Volumes 31-33; its product number is not underlying Volume 11. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-11/product/2170",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532905-viz.html",
+        sha256: "c6ca97c2c146ef1005884040c7d577d5417af73f00493e8cdbd74a86f818e09c",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532905",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-b.txt",
+        sha256: "c77365ccfb63cc28553d335f360f8f4df47b062243b65fb4de35d75b436c6dcc",
+        contents: "volume 11 collects volumes 31-33 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n97b98cb8a8b3vm0hm4hhx16q18f731t",
+    sourceRecordId: "release:20129",
+    snapshot: {
+      annId: "20129",
+      date: {
+        day: 14,
+        month: 8,
+        year: 2012,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532912",
+      kind: "annRelease",
+      label: "12",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 14,
+          month: 8,
+          year: 2012,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790490832006,
+        isbn10: "1421532913",
+        isbn13: "9781421532912",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 12",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=20129",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "12",
+    isbn13: "9781421532912",
+    isbn10: "1421532913",
+    volumes: [
+      {
+        id: "nx7299w25x63b91kxjy0z65d1x8f67tr",
+        label: "34",
+      },
+      {
+        id: "nx79jnj6fyqdmm549bsgw3czrd8f6an9",
+        label: "35",
+      },
+      {
+        id: "nx702qvsr0shp9jvecsw6rqv018f6vnf",
+        label: "36",
+      },
+    ],
+    pubDate: {
+      day: 14,
+      month: 8,
+      year: 2012,
+      sort: 20120814,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532912",
+    reason:
+      "Exact ISBN 9781421532912 is Inuyasha VIZBIG 12, collecting complete Volumes 34-36; its product number is not underlying Volume 12. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-12/product/2171",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532912-viz.html",
+        sha256: "225ce0e071e560b9d98c936944d38610b2c2cecafc2acead2b0d4d57fbfa7ed7",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532912",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-b.txt",
+        sha256: "c77365ccfb63cc28553d335f360f8f4df47b062243b65fb4de35d75b436c6dcc",
+        contents: "volume 12 collects volumes 34-36 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n972bzrwe80yghqjcv3df4v4c98f6tp3",
+    sourceRecordId: "release:20893",
+    snapshot: {
+      annId: "20893",
+      date: {
+        day: 13,
+        month: 11,
+        year: 2012,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532929",
+      kind: "annRelease",
+      label: "13",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 13,
+          month: 11,
+          year: 2012,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790491308570,
+        isbn10: "1421532921",
+        isbn13: "9781421532929",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 13",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=20893",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "13",
+    isbn13: "9781421532929",
+    isbn10: "1421532921",
+    volumes: [
+      {
+        id: "nx7ak4a15wjtvh1nkpgf8qxaws8f7nfm",
+        label: "37",
+      },
+      {
+        id: "nx759r68ctssjcc8sjpexcm4v18f66zg",
+        label: "38",
+      },
+      {
+        id: "nx70f85571w8va6zzy9v1pdf618f6jks",
+        label: "39",
+      },
+    ],
+    pubDate: {
+      day: 13,
+      month: 11,
+      year: 2012,
+      sort: 20121113,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532929",
+    reason:
+      "Exact ISBN 9781421532929 is Inuyasha VIZBIG 13, collecting complete Volumes 37-39; its product number is not underlying Volume 13. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-13/product/2172",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532929-viz.html",
+        sha256: "b0591f0cab5370eadae017c3fd70dae589d19a44652065b582b8f817d94d3adb",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532929",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-c.txt",
+        sha256: "847da70ada3c7913c4de92a984e753988639c44550f7ad18cb5c3723fab7dfb0",
+        contents: "volume 13 collects volumes 37-39 in omnibus format",
+      },
+    ],
+  },
+  {
+    observationId: "n97fq5pv0c5vmsw4nfza3kga518f791j",
+    sourceRecordId: "release:21801",
+    snapshot: {
+      annId: "21801",
+      date: {
+        day: 12,
+        month: 2,
+        year: 2013,
+      },
+      editionLineHint: false,
+      format: "physical",
+      isbn13: "9781421532936",
+      kind: "annRelease",
+      label: "14",
+      mangaId: "76",
+      multi: false,
+      page: {
+        date: {
+          day: 12,
+          month: 2,
+          year: 2013,
+        },
+        distributor: "Viz Media",
+        distributorId: "4552",
+        fetchedAt: 1790491849088,
+        isbn10: "142153293X",
+        isbn13: "9781421532936",
+        mangaId: "76",
+        priceCents: 1799,
+        status: "ok",
+        title: "Inuyasha [VIZBIG Edition]",
+        volume: "GN 14",
+      },
+      title: "Inuyasha [VIZBIG Edition]",
+      url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=21801",
+    },
+    seriesId: "n179e8z4cmmsksrn9pthkgc5y58f6k46",
+    publisherId: "m17bf8pvmeb50xkafhweyexhm18f6fcb",
+    lineId: "jx7004t2w4hb8r5xsgp0hhn4k58fpq23",
+    lineName: "VIZBIG Edition",
+    position: "14",
+    isbn13: "9781421532936",
+    isbn10: "142153293X",
+    volumes: [
+      {
+        id: "nx735h32yvdh7t7k377eqfe9kn8f6k6d",
+        label: "40",
+      },
+      {
+        id: "nx7f735ba2k803s8d92s3dsxmh8f7vsf",
+        label: "41",
+      },
+      {
+        id: "nx7es62tajpkh5d9ynjar7nsc98f7mst",
+        label: "42",
+      },
+    ],
+    pubDate: {
+      day: 12,
+      month: 2,
+      year: 2013,
+      sort: 20130212,
+    },
+    key: "queue-clear-20261007-batch-040-9781421532936",
+    reason:
+      "Exact ISBN 9781421532936 is Inuyasha VIZBIG 14, collecting complete Volumes 40-42; its product number is not underlying Volume 14. VIZ confirms paperback product identity; Crunchyroll explicitly states contents.",
+    evidence: [
+      {
+        url: "https://www.viz.com/manga-books/manga/inuyasha-vizbig-edition-volume-14/product/2173",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/9781421532936-viz.html",
+        sha256: "28b2e65ca4d17b3890630bd2f3ddfd0b36a5f2a6aa8bc14b0297514b816bb5db",
+        contents: null,
+      },
+      {
+        url: "https://store.crunchyroll.com/on/demandware.store/Sites-CrunchyrollUS-Site/en_US/Product-Show?pid=9781421532936",
+        artifact:
+          "/home/ari/mangadb-audit/queue-clear-20261007/results/batch-040/sources/cr-research-c.txt",
+        sha256: "847da70ada3c7913c4de92a984e753988639c44550f7ad18cb5c3723fab7dfb0",
+        contents: "volume 14 collects volumes 40-42 in omnibus format",
+      },
+    ],
+  },
+];
+
+export function assignedProduct(observationId: string) {
+  return reviewedCatalogProducts.find((product) => product.observationId === observationId);
+}

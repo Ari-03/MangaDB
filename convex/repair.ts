@@ -28,6 +28,11 @@ import {
 } from "./lib/repair/metrics";
 import { nestedLimits } from "./lib/bounded";
 import { applyEntry } from "./lib/repair/ops";
+import {
+  applyReviewedCreation,
+  creationRefusal,
+  reviewedCreationState,
+} from "./lib/reviewedCatalogCreation";
 
 /** Evidence stored on each repair Proposal: its source observations, else a plan note. */
 function evidenceFor(entry: RepairEntry) {
@@ -223,5 +228,77 @@ export const metrics = internalAction({
       bundleMemberships: await table("bundleMemberships", 4000),
       observations,
     });
+  },
+});
+
+/** Batch-040 only. The returned expected string is a complete bounded read closure. */
+export const previewReviewedCreation = internalQuery({
+  args: { observationId: v.id("sourceObservations") },
+  handler: async (ctx, { observationId }) => {
+    try {
+      const state = await reviewedCreationState(ctx, observationId);
+      return {
+        classification: state.prior ? "alreadyApplied" : "ready",
+        expected: state.expected,
+        refusal: null,
+        product: state.product,
+        created: state.prior,
+      };
+    } catch (error) {
+      const refusal = creationRefusal(error);
+      if (!refusal) throw error;
+      return { classification: "refused", expected: null, refusal, product: null, created: null };
+    }
+  },
+});
+
+/** Called as a subtransaction so dry runs roll back catalog and audit together. */
+export const applyReviewedCreationInternal = internalMutation({
+  args: {
+    observationId: v.id("sourceObservations"),
+    expected: v.string(),
+    actor: v.string(),
+    dryRun: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const result = await applyReviewedCreation(ctx, args);
+    // Rolled-back IDs must never become link targets or future expected IDs.
+    if (args.dryRun && result.status === "created")
+      throw new ConvexError({ reviewedCreationDryRun: true });
+    return result;
+  },
+});
+
+type ReviewedCreationResult =
+  | Awaited<ReturnType<typeof applyReviewedCreation>>
+  | { status: "dryRun" }
+  | { status: "refused"; reason: string };
+
+/** Parent-only operator entry. Never links or changes the source/hold. */
+export const executeReviewedCreation = internalMutation({
+  args: {
+    observationId: v.id("sourceObservations"),
+    expected: v.string(),
+    actor: v.string(),
+    dryRun: v.boolean(),
+  },
+  handler: async (ctx, args): Promise<ReviewedCreationResult> => {
+    try {
+      return await ctx.runMutation(internal.repair.applyReviewedCreationInternal, args, {
+        transactionLimits: await nestedLimits(ctx),
+      });
+    } catch (error) {
+      if (
+        error instanceof ConvexError &&
+        typeof error.data === "object" &&
+        error.data !== null &&
+        "reviewedCreationDryRun" in error.data &&
+        error.data.reviewedCreationDryRun === true
+      )
+        return { status: "dryRun" };
+      const reason = creationRefusal(error);
+      if (!reason) throw error;
+      return { status: "refused", reason };
+    }
   },
 });
