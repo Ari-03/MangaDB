@@ -1,3 +1,5 @@
+import { heldPackageContentsState, packageLedgerState } from "./lib/heldPackageContents";
+import { MAX_GUARD_BYTES } from "./lib/heldBooks";
 import { v, ConvexError } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import {
@@ -303,5 +305,106 @@ export const hideScopedReleaseOneInternal = internalMutation({
     );
     await audit.finish();
     return { status: "applied", proposalId: (await audit.meta()).proposalId };
+  },
+});
+
+const heldContentsArgs = {
+  observationId: v.id("sourceObservations"),
+  bundleId: v.id("releaseBundles"),
+  memberIds: v.array(v.id("releases")),
+};
+export const heldBundleContentsStateInternal = internalQuery({
+  args: heldContentsArgs,
+  handler: async (ctx, args) => {
+    try {
+      const state = await heldPackageContentsState(
+        ctx,
+        args.observationId,
+        args.bundleId,
+        args.memberIds,
+      );
+      return { expected: state.expected, refusal: null };
+    } catch (error) {
+      return { expected: null, refusal: heldError(error) };
+    }
+  },
+});
+const completeContentsArgs = {
+  ...heldContentsArgs,
+  actor: v.string(),
+  expected: v.string(),
+  reason: v.string(),
+  evidenceUrls: v.array(v.string()),
+};
+type CompletedContents = Fixed & { ledgerId?: Id<"heldRepairLedger"> };
+/** Repair membership only. A separate fresh heldBooks link remains necessary to clear the hold. */
+export const completeHeldBundleContentsInternal = internalMutation({
+  args: completeContentsArgs,
+  handler: async (ctx, args): Promise<CompletedContents> => {
+    if (new TextEncoder().encode(args.expected).length > MAX_GUARD_BYTES)
+      return { status: "refused", reason: "Guard exceeds 256 KiB." };
+    try {
+      return await ctx.runMutation(
+        internal.heldRepair.completeHeldBundleContentsOneInternal,
+        args,
+        {
+          transactionLimits: await nestedLimits(ctx),
+        },
+      );
+    } catch (error) {
+      return { status: "refused", reason: heldError(error) };
+    }
+  },
+});
+export const completeHeldBundleContentsOneInternal = internalMutation({
+  args: completeContentsArgs,
+  handler: async (ctx, args): Promise<CompletedContents> => {
+    const before = await heldPackageContentsState(
+      ctx,
+      args.observationId,
+      args.bundleId,
+      args.memberIds,
+    );
+    if (before.expected !== args.expected)
+      throw new ConvexError("Contents or source state changed; preview again.");
+    const serializedBefore = packageLedgerState(before.snapshot);
+    const result: Fixed = await ctx.runMutation(
+      internal.heldRepair.repairBundleContentsOneInternal,
+      {
+        bundleId: args.bundleId,
+        memberIds: args.memberIds,
+        corrections: [],
+        actor: args.actor,
+        expected: before.state.expected,
+        reason: args.reason,
+        evidenceUrls: args.evidenceUrls,
+      },
+    );
+    if (result.status === "alreadyApplied") return result;
+    if (result.status !== "applied" || !result.proposalId)
+      throw new ConvexError("Membership repair did not complete; rolled back.");
+    const after = await heldPackageContentsState(
+      ctx,
+      args.observationId,
+      args.bundleId,
+      args.memberIds,
+    );
+    if (
+      valueHash(before.snapshot.observation) !== valueHash(after.snapshot.observation) ||
+      valueHash(before.snapshot.hold) !== valueHash(after.snapshot.hold) ||
+      valueHash(before.snapshot.bundle) !== valueHash(after.snapshot.bundle) ||
+      valueHash(after.snapshot.members.map((m) => ({ releaseId: m.releaseId, order: m.order }))) !==
+        valueHash(args.memberIds.map((releaseId, i) => ({ releaseId, order: i + 1 })))
+    )
+      throw new ConvexError("Membership/source preservation failed; rolled back.");
+    const ledgerId = await ctx.db.insert("heldRepairLedger", {
+      observationId: args.observationId,
+      operation: "completeBundleContents",
+      proposalId: result.proposalId,
+      before: serializedBefore,
+      after: packageLedgerState(after.snapshot),
+      target: { type: "bundle", id: args.bundleId },
+    });
+    return { ...result, ledgerId };
   },
 });
