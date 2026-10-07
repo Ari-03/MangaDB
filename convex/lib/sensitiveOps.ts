@@ -1893,7 +1893,8 @@ export async function variantMergeRefusal(
  * loser's Other Printings move to the survivor (transferReferences), which
  * reads both Releases' lists whole, up to RELEASE_PRINTINGS_READ each; and
  * only a physical Release has other printings (printings.ts), so a loser
- * with printing rows merges only into a physical survivor. applyMerge
+ * with printing rows merges only into a physical survivor, and one with
+ * alternate ebook ISBNs (alternateEbooks.ts) only into a digital one. applyMerge
  * refuses with this before writing anything; the merge form shows it
  * instead of the merge.
  */
@@ -1912,16 +1913,22 @@ export async function releaseMergeRefusal(
     }
   }
   const survivor = await ctx.db.get(survivorId);
-  if (survivor === null || survivor.format === "physical") return null;
-  const printing = await ctx.db
+  if (survivor === null) return null;
+  const rows = await ctx.db
     .query("releaseIsbns")
     .withIndex("by_release", (q) => q.eq("releaseId", loserId))
-    .first();
-  if (printing === null) return null;
+    .take(RELEASE_PRINTINGS_READ);
+  // Other Printings stay on physical Releases, alternate ebook ISBNs on digital ones.
+  const misplaced = rows.find(
+    (row) => (row.kind === "alternateEbook" ? "digital" : "physical") !== survivor.format,
+  );
+  if (misplaced === undefined) return null;
+  const wanted = misplaced.kind === "alternateEbook" ? "digital" : "physical";
+  const what = misplaced.kind === "alternateEbook" ? "alternate ebook ISBNs" : "other printings";
   return (
-    `The Release being merged has other printings (ISBN ${printing.isbn13}), which would move to ` +
-    `a ${survivor.format} Release, and only a physical Release has other printings. Merge it into ` +
-    "a physical Release."
+    `The Release being merged has ${what} (ISBN ${misplaced.isbn13}), which would move to ` +
+    `a ${survivor.format} Release, and only a ${wanted} Release has ${what}. Merge it into ` +
+    `a ${wanted} Release.`
   );
 }
 

@@ -44,22 +44,25 @@ function FormatChip({
  * A Release row's Other Printings line, or null when it has none to show:
  * each ISBN with its year, and, when the list is only the first recorded
  * (catalogPages releaseRow `morePrintings`), that others may not be shown.
+ * A digital Release's are its alternate ebook ISBNs, listed, not printed.
  */
 export function otherPrintingsText(
-  release: Pick<ReleaseRowData, "otherPrintings" | "morePrintings">,
+  release: Pick<ReleaseRowData, "otherPrintings" | "morePrintings"> &
+    Partial<Pick<ReleaseRowData, "format">>,
 ): string | null {
+  const verb = release.format === "digital" ? "listed" : "printed";
   const shown = release.otherPrintings.map((printing) =>
     printing.year !== null
       ? `ISBN ${printing.isbn13}, ${printing.year}`
       : `ISBN ${printing.isbn13}`,
   );
   if (shown.length === 0) {
-    return release.morePrintings ? "Also printed under other ISBNs, not shown here." : null;
+    return release.morePrintings ? `Also ${verb} under other ISBNs, not shown here.` : null;
   }
   const more = release.morePrintings
     ? ` (the first ${shown.length} recorded; others may not be shown)`
     : "";
-  return `Also printed as ${shown.join("; ")}${more}`;
+  return `Also ${verb} as ${shown.join("; ")}${more}`;
 }
 
 /**

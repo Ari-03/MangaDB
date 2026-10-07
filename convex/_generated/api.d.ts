@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as alternateEbooks from "../alternateEbooks.js";
 import type * as ann from "../ann.js";
 import type * as catalog from "../catalog.js";
 import type * as catalogPages from "../catalogPages.js";
@@ -69,6 +70,7 @@ import type * as lib_printings from "../lib/printings.js";
 import type * as lib_proposalCreates from "../lib/proposalCreates.js";
 import type * as lib_proposalWarnings from "../lib/proposalWarnings.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
+import type * as lib_publisherIsbnBlocks from "../lib/publisherIsbnBlocks.js";
 import type * as lib_publishers from "../lib/publishers.js";
 import type * as lib_qa from "../lib/qa.js";
 import type * as lib_ratingStats from "../lib/ratingStats.js";
@@ -134,6 +136,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  alternateEbooks: typeof alternateEbooks;
   ann: typeof ann;
   catalog: typeof catalog;
   catalogPages: typeof catalogPages;
@@ -195,6 +198,7 @@ declare const fullApi: ApiFromModules<{
   "lib/proposalCreates": typeof lib_proposalCreates;
   "lib/proposalWarnings": typeof lib_proposalWarnings;
   "lib/publicIds": typeof lib_publicIds;
+  "lib/publisherIsbnBlocks": typeof lib_publisherIsbnBlocks;
   "lib/publishers": typeof lib_publishers;
   "lib/qa": typeof lib_qa;
   "lib/ratingStats": typeof lib_ratingStats;

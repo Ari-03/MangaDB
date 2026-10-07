@@ -20,6 +20,8 @@ type PartialDate = NonNullable<Doc<"releaseIsbns">["pubDate"]>;
 type Decision = {
   release: Doc<"releases">;
   isbn13: string;
+  /** Absent for an Other Printing; `alternateEbook` for a digital Release's other ebook ISBN. */
+  kind?: "alternateEbook";
   reason: string;
   sourceKey: string;
   observationId: Id<"sourceObservations">;
@@ -56,7 +58,8 @@ async function auditDecision(
 
 /**
  * Record ISBN `isbn13` (published `pubDate`) as another printing of
- * `release` and link the book's observation to the Release, which marks it
+ * `release` (or, with `kind: "alternateEbook"`, as another ISBN of a
+ * digital Release's same ebook) and link the book's observation to the Release, which marks it
  * as that printing's record and takes the book off the Held Books list
  * (linkObservation). Every call writes the ISBN row and one approved
  * Proposal authored by the record's source, with a public Revision on the
@@ -79,9 +82,11 @@ export async function recordPrinting(
   if (existing !== null) {
     fail("conflict", `ISBN ${isbn13} is already recorded as a printing; nothing was recorded.`);
   }
+  const alternate = args.kind === "alternateEbook";
   await ctx.db.insert("releaseIsbns", {
     releaseId: release._id,
     isbn13,
+    ...(alternate ? { kind: args.kind } : {}),
     ...(pubDate !== undefined ? { pubDate } : {}),
     reason: args.reason,
     sourceKey: args.sourceKey,
@@ -91,10 +96,10 @@ export async function recordPrinting(
     ctx,
     args,
     {
-      field: "otherPrinting",
+      field: alternate ? "alternateEbookIsbn" : "otherPrinting",
       after: `ISBN ${isbn13}${pubDate !== undefined ? `, ${pubDate.year}` : ""}`,
     },
-    `Recorded from ${args.citation.sourceName} as another printing.`,
+    `Recorded from ${args.citation.sourceName} as ${alternate ? "an alternate ebook ISBN" : "another printing"}.`,
   );
   await linkObservation(ctx, args.observationId, { type: "release", id: release._id });
 }

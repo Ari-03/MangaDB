@@ -656,10 +656,13 @@ export default defineSchema({
   // Release. A row follows its Release on a merge and comes back on Split
   // unless the survivor claims the ISBN now. An ISBN with a row belongs to
   // that row's Release alone (lib/releaseIsbns.ts). An ISBN-10 is looked
-  // up by its ISBN-13.
+  // up by its ISBN-13. A row of kind `alternateEbook` is instead another
+  // ISBN of a digital Release's same ebook (CONTEXT.md Alternate Ebook
+  // ISBN, alternateEbooks.ts), and its owner is digital.
   releaseIsbns: defineTable({
     releaseId: v.id("releases"),
     isbn13: v.string(),
+    kind: v.optional(v.literal("alternateEbook")),
     pubDate: v.optional(partialDate),
     // Why it was decided another printing, and the source record it came from.
     reason: v.string(),

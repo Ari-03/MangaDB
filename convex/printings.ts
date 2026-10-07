@@ -18,7 +18,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalMutation,
   internalQuery,
-  type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
 import { type AnnReleaseSnapshot, lineOutOfScope } from "./ann";
@@ -95,7 +94,7 @@ function observedDate(s: SnapshotFacts) {
 }
 
 /** Dedicated format fields and independently scoped technical title clauses. */
-function saysDigital(s: SnapshotFacts, names: readonly string[]): boolean {
+export function saysDigital(s: SnapshotFacts, names: readonly string[]): boolean {
   if (s?.format === "digital") return true;
   if (
     [s?.binding, s?.physicalFormat, s?.page?.volume].some(
@@ -140,7 +139,7 @@ function publisherNames(sourceKey: string, s: SnapshotFacts): string[] {
  * it states (statedIsbns), in any spelling, must be valid and name the same
  * book. A record that disagrees with itself is no evidence for a decision.
  */
-function decidedIsbn13(snapshot: unknown): { isbn13: string } | { refusal: string } {
+export function decidedIsbn13(snapshot: unknown): { isbn13: string } | { refusal: string } {
   const stated = statedIsbns(snapshot);
   if (stated.length === 0) return { refusal: "The record gives no ISBN." };
   const invalid = stated.filter((isbn) => toIsbn13(isbn) === undefined);
@@ -156,7 +155,7 @@ function decidedIsbn13(snapshot: unknown): { isbn13: string } | { refusal: strin
 }
 
 /** `text` as an absolute http(s) URL with a host, else undefined. Parsed, never fetched. */
-function httpUrl(text: string): string | undefined {
+export function httpUrl(text: string): string | undefined {
   let url: URL;
   try {
     url = new URL(text);
@@ -173,7 +172,7 @@ function httpUrl(text: string): string | undefined {
  * empty or blank `evidenceUrl` counts as not given. A given URL that is not
  * an absolute http(s) URL is refused, never replaced by the record's.
  */
-function decidedCitationUrl(
+export function decidedCitationUrl(
   evidenceUrl: string | undefined,
   s: SnapshotFacts,
 ): { url: string } | { refusal: string } {
@@ -196,8 +195,8 @@ function decidedCitationUrl(
  * the work a decision compares the record with, by ID. A hidden Series, or
  * one whose merges end nowhere, has no printings decided for it.
  */
-async function releaseSeries(
-  ctx: MutationCtx,
+export async function releaseSeries(
+  ctx: QueryCtx,
   release: Doc<"releases">,
 ): Promise<{ series: Array<Doc<"series">> } | { refusal: string }> {
   const series: Array<Doc<"series">> = [];
@@ -220,8 +219,8 @@ async function releaseSeries(
  * Series (releaseSeries), and a publisher the record names must resolve to
  * the Release's publisher (followed through merges too).
  */
-async function slotRefusal(
-  ctx: MutationCtx,
+export async function slotRefusal(
+  ctx: QueryCtx,
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
   series: Array<Doc<"series">>,
@@ -1098,7 +1097,8 @@ type Pass = keyof typeof PASS_TABLES;
  *   until these two passes are clean, nothing the other two find, or do
  *   not find, is complete.
  * - `rows` reads `releaseIsbns`: each row's ISBN must be valid, stored as
- *   its key, and have one owner, a physical Release, with no Bundle
+ *   its key, and have one owner, a physical Release (a digital one for an
+ *   `alternateEbook` row), with no Bundle
  *   claiming it (violations). The row itself counts as a claim whatever its
  *   spelling, so a row the exact read misses still meets the others. A row
  *   whose evidence record is gone or now links elsewhere is a diagnostic.
@@ -1283,12 +1283,15 @@ async function checkRow(
   }
   const sole = soleOwner(claims);
   if ("finding" in sole) return [...findings, { ...sole.finding, rowId: row._id }];
-  if (sole.owner.format !== "physical") {
+  // An Other Printing belongs to a physical Release, an alternate ebook ISBN
+  // to a digital one (alternateEbooks.ts).
+  const ownerFormat = row.kind === "alternateEbook" ? "digital" : "physical";
+  if (sole.owner.format !== ownerFormat) {
     findings.push({
       severity: "violation",
       isbn13,
       rowId: row._id,
-      message: `ISBN ${isbn13}'s owner, Release ${sole.owner._id}, is not physical.`,
+      message: `ISBN ${isbn13}'s owner, Release ${sole.owner._id}, is not ${ownerFormat}.`,
     });
   }
   if (row.observationId !== undefined) {
