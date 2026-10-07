@@ -1037,10 +1037,23 @@ async function sourceContentsMatch(
       workNames,
       declaredWorkContext(state, series),
     );
+    // An exact-ISBN package review may reconcile a leading article only after
+    // independent source resolution and complete ordered contents agree.
+    const reviewedArticle =
+      !!state.bundle &&
+      reading.packaging.length > 0 &&
+      proof?.sourceTitle === title &&
+      proof.isbn13 === state.isbn13 &&
+      state.source.series?._id === series._id &&
+      !!s.seriesTitle &&
+      sameWorkTitle(reading.work, s.seriesTitle) &&
+      workNames.some((name) =>
+        sameWorkTitle(reading.work.replace(/^the\s+/i, ""), name.replace(/^the\s+/i, "")),
+      );
     if (
       reading.scope.length ||
       reading.unreadable.length ||
-      !workNames.some((name) => sameWorkTitle(reading.work, name))
+      (!workNames.some((name) => sameWorkTitle(reading.work, name)) && !reviewedArticle)
     )
       return refuse("Known source work, scope or unreadable facts contradict review.");
     const parsed = parseBookTitle(title, { subtitle: s.subtitle });

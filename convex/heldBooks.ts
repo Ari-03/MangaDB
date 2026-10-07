@@ -1,3 +1,4 @@
+import { subtitleRefreshProof, subtitleRefreshState } from "./lib/olSubtitleRefresh";
 import { sourceFormatState } from "./lib/heldBooks";
 import { reviewedFormatValidator, utf8Bytes, formatContext } from "./lib/sourceFormat";
 import { convertedClaim } from "./lib/heldRepair";
@@ -21,7 +22,13 @@ import {
   reviewedRouting,
   refuse,
 } from "./lib/heldBooks";
-import { clearHold, holdOf, linkObservation, recordUnplaced } from "./lib/observations";
+import {
+  archiveObservationSnapshot,
+  clearHold,
+  holdOf,
+  linkObservation,
+  recordUnplaced,
+} from "./lib/observations";
 import { resolveActor } from "./lib/repair/audit";
 import { claimResolver, isbnClaims, primaryIsbnsOf } from "./lib/releaseIsbns";
 import { evidenceUrls } from "./lib/scope";
@@ -342,11 +349,7 @@ export const applyInternal = internalMutation({
           ...(fresh.coverageGapped ? { coverageGapped: true } : {}),
         };
         if (sameValue(next, line)) return { status: "alreadyApplied" };
-        await ctx.db.insert("observationSnapshots", {
-          observationId: args.observationId,
-          snapshot: line,
-          supersededAt: Date.now(),
-        });
+        await archiveObservationSnapshot(ctx, state.observation, Date.now());
         await ctx.db.patch(args.observationId, { snapshot: next });
       } else if (args.operation === "replay") {
         if (!args.replay)
@@ -538,6 +541,91 @@ export const applySourceFormatInternal = internalMutation({
       after,
     });
     return { status: "applied", proposalId, ledgerId };
+  },
+});
+
+const subtitleArgs = { observationId: v.id("sourceObservations"), proof: subtitleRefreshProof };
+export const previewOlSubtitleRefreshInternal = internalQuery({
+  args: subtitleArgs,
+  handler: async (ctx, args) => {
+    try {
+      const state = await subtitleRefreshState(ctx, args.observationId, args.proof);
+      return {
+        expected: state.expected,
+        proposedSnapshot: state.next,
+        heldCleared: false,
+        requiresFreshFormatGuardAndReplay: true,
+        refusal: null,
+      };
+    } catch (error) {
+      return {
+        expected: null,
+        heldCleared: false,
+        requiresFreshFormatGuardAndReplay: true,
+        refusal: heldError(error),
+      };
+    }
+  },
+});
+const refreshSubtitleArgs = { ...subtitleArgs, actor: v.string(), expected: v.string() };
+export const refreshOlSubtitleInternal = internalMutation({
+  args: refreshSubtitleArgs,
+  handler: async (ctx, args): Promise<Result & { heldCleared: false }> => {
+    if (utf8Bytes(args.expected) > MAX_GUARD_BYTES)
+      return { status: "refused", heldCleared: false, reason: "Guard exceeds 256 KiB." };
+    try {
+      return await ctx.runMutation(internal.heldBooks.applyOlSubtitleRefreshInternal, args, {
+        transactionLimits: await nestedLimits(ctx),
+      });
+    } catch (error) {
+      return { status: "refused", heldCleared: false, reason: heldError(error) };
+    }
+  },
+});
+/** Snapshot, append-only archive and native audit commit together; hold and placement stay intact. */
+export const applyOlSubtitleRefreshInternal = internalMutation({
+  args: refreshSubtitleArgs,
+  handler: async (ctx, args): Promise<Result & { heldCleared: false }> => {
+    const actor = await resolveActor(ctx, args.actor);
+    const state = await subtitleRefreshState(ctx, args.observationId, args.proof);
+    if (args.expected !== state.expected)
+      return refuse("Source, hold, canonical facts or proof changed; preview again.");
+    const before = valueHash({
+      observation: state.observation,
+      hold: state.hold,
+      proof: args.proof,
+    });
+    const after = valueHash({
+      observation: { ...state.observation, snapshot: state.next },
+      hold: state.hold,
+    });
+    if (utf8Bytes(valueHash({ before, after })) > MAX_GUARD_BYTES)
+      return refuse("Ledger exceeds 256 KiB.");
+    await state.r.room();
+    const metrics = await ctx.meta.getTransactionMetrics();
+    if (
+      metrics.bytesWritten.remaining <
+      utf8Bytes(before) + utf8Bytes(after) + utf8Bytes(valueHash(args.proof)) + 256 * 1024
+    )
+      return refuse("Insufficient refresh audit write tail.");
+    const proposalId = await audit(
+      ctx,
+      actor,
+      args.observationId,
+      args.proof.reason,
+      evidenceUrls([args.proof.ol.url, args.proof.reviewed.publisher.url]),
+      valueHash(args.proof),
+    );
+    await archiveObservationSnapshot(ctx, state.observation, Date.now());
+    await ctx.db.patch(args.observationId, { snapshot: state.next });
+    const ledgerId = await ctx.db.insert("heldRepairLedger", {
+      observationId: args.observationId,
+      operation: "refreshOlSubtitle",
+      proposalId,
+      before,
+      after,
+    });
+    return { status: "applied", heldCleared: false, proposalId, ledgerId };
   },
 });
 

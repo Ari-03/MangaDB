@@ -115,6 +115,19 @@ export async function markSeen(
   return seen;
 }
 
+/** Preserve one prior raw snapshot without importer or placement side effects. */
+export async function archiveObservationSnapshot(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  now: number,
+) {
+  return await ctx.db.insert("observationSnapshots", {
+    observationId: observation._id,
+    snapshot: observation.snapshot,
+    supersededAt: now,
+  });
+}
+
 /**
  * Record one fetch of a source record. New identity → new observation;
  * same snapshot → bump lastSeenAt (and clear a stale withdrawn mark — the
@@ -149,11 +162,7 @@ export async function upsertObservation(
     return { observation, changed: false };
   }
 
-  await ctx.db.insert("observationSnapshots", {
-    observationId: existing._id,
-    snapshot: existing.snapshot,
-    supersededAt: args.now,
-  });
+  await archiveObservationSnapshot(ctx, existing, args.now);
   const reviewedSourceFormat = invalidateSourceFormat(existing, args.now);
   await ctx.db.patch(existing._id, {
     reviewedSourceFormat,

@@ -1,3 +1,6 @@
+import { canonicalDigitalProof, canonicalDigitalState } from "./lib/canonicalDigital";
+import { utf8Bytes } from "./lib/sourceFormat";
+import { sameValue } from "./lib/values";
 import { heldPackageContentsState, packageLedgerState } from "./lib/heldPackageContents";
 import { MAX_GUARD_BYTES } from "./lib/heldBooks";
 import { v, ConvexError } from "convex/values";
@@ -406,5 +409,88 @@ export const completeHeldBundleContentsOneInternal = internalMutation({
       target: { type: "bundle", id: args.bundleId },
     });
     return { ...result, ledgerId };
+  },
+});
+
+// Guarded correction for a reviewed own-ISBN ebook; holds require separate placement.
+export const previewCanonicalDigitalInternal = internalQuery({
+  args: { releaseId: v.id("releases"), observationId: v.id("sourceObservations") },
+  handler: async (ctx, args) => {
+    try {
+      const state = await canonicalDigitalState(ctx, args.releaseId, args.observationId);
+      return { expected: state.expected, refusal: null, proof: canonicalDigitalProof };
+    } catch (error) {
+      return { expected: null, refusal: heldError(error), proof: canonicalDigitalProof };
+    }
+  },
+});
+
+/** Atomic existing field repair plus complete native before/after ledger. */
+export const correctCanonicalDigitalInternal = internalMutation({
+  args: {
+    releaseId: v.id("releases"),
+    observationId: v.id("sourceObservations"),
+    expected: v.string(),
+    actor: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const state = await canonicalDigitalState(ctx, args.releaseId, args.observationId);
+    if (state.expected !== args.expected)
+      throw new ConvexError("Canonical correction state changed; preview again.");
+    const audit = createAudit(
+      ctx,
+      await resolveActor(ctx, args.actor),
+      "Correct exact own-ISBN Farming Life Volume 10 ebook format. No printing relationship asserted.",
+      [
+        { kind: "url", url: canonicalDigitalProof.url },
+        { kind: "note", text: valueHash(canonicalDigitalProof) },
+      ],
+    );
+    await state.r.room();
+    const result = await applyEntry(ctx, audit, {
+      kind: "updateFields",
+      table: "releases",
+      id: args.releaseId,
+      key: `canonical-digital:${args.releaseId}`,
+      reason: "Exact own-ISBN BookWalker EBook Product and Manga breadcrumb.",
+      evidenceObservationId: null,
+      changes: [{ field: "format", before: "physical", after: "digital" }],
+    });
+    if (result.status !== "applied")
+      throw new ConvexError("Canonical format repair did not apply; rolled back.");
+    await audit.finish();
+    const proposalId = (await audit.meta()).proposalId;
+    const corrected = await ctx.db.get(args.releaseId);
+    if (
+      !corrected ||
+      !sameValue(corrected, { ...state.release, format: "digital", binding: undefined })
+    )
+      throw new ConvexError("Canonical repair changed unexpected fields; rolled back.");
+    const after = valueHash({
+      before: state.before,
+      release: corrected,
+      proposal: await ctx.db.get(proposalId),
+      versions: await state.r.many(
+        ctx.db
+          .query("proposalVersions")
+          .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId)),
+      ),
+      revisions: await state.r.many(
+        ctx.db
+          .query("revisions")
+          .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", args.releaseId)),
+      ),
+    });
+    if (utf8Bytes(valueHash({ before: state.before, after })) > MAX_GUARD_BYTES)
+      throw new ConvexError("Canonical correction ledger exceeds bounds; rolled back.");
+    const ledgerId = await ctx.db.insert("heldRepairLedger", {
+      observationId: args.observationId,
+      target: { type: "release", id: args.releaseId },
+      operation: "correctCanonicalDigital",
+      proposalId,
+      before: state.before,
+      after,
+    });
+    return { status: "applied", releaseId: args.releaseId, proposalId, ledgerId };
   },
 });

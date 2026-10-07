@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { internal } from "./_generated/api";
 import { alice, makeT, seedTeam } from "./test.helpers";
+import { sameWorkTitle } from "./lib/matching";
 import {
   insertPublisher,
   insertSeries,
@@ -24,6 +25,7 @@ async function chi() {
       altTitles: ["チーズスイートホーム"],
     });
     const memberIds = [];
+    const volumeIds = [];
     for (const [i, isbn13] of [
       "9781942993162",
       "9781942993179",
@@ -31,6 +33,7 @@ async function chi() {
       "9781942993575",
     ].entries()) {
       const volumeId = await insertVolume(ctx, { seriesId, position: i + 1 });
+      volumeIds.push(volumeId);
       const editionId = await insertEdition(ctx, { publisherId });
       await insertCoverage(ctx, { editionId, volumeId });
       memberIds.push(
@@ -84,12 +87,12 @@ async function chi() {
       sourceKey: "openlibrary",
       heldAt: 1,
     });
-    return { bundleId, observationId, memberIds, seriesId };
+    return { bundleId, observationId, memberIds, seriesId, publisherId, volumeIds };
   });
   return { t, ...ids };
 }
 it("completes actual Chi whole books with ledger and unchanged source, coverage, member IDs and histories", async () => {
-  const { t, seriesId: _series, ...args } = await chi();
+  const { t, seriesId, publisherId, volumeIds, ...args } = await chi();
   const frozen = () =>
     t.run(async (ctx) => ({
       observation: await ctx.db.get(args.observationId),
@@ -142,9 +145,69 @@ it("completes actual Chi whole books with ledger and unchanged source, coverage,
   expect(
     after.revisions.some((r) => r.ref.type === "releaseBundle" && r.ref.id === args.bundleId),
   ).toBe(true);
+  const target = { type: "bundle" as const, id: args.bundleId };
+  const reviewed = {
+    isbn13: "9781949980387",
+    seriesId,
+    publisherId,
+    volumeIds,
+    evidenceUrls: [
+      "https://www.penguinrandomhouse.com/books/634458/the-complete-chis-sweet-home-box-set-by-konami-kanata/",
+    ],
+    sourceTitle: "Complete Chi's Sweet Home Box Set",
+  };
+  expect(sameWorkTitle("Complete Chi's Sweet Home", "The Complete Chi's Sweet Home")).toBe(false);
+  const ordinary = await t.query(internal.heldBooks.previewInternal, {
+    observationId: args.observationId,
+    target,
+  });
+  expect(ordinary.classification).not.toBe("linkReady");
+  const withoutTitle = await t.query(internal.heldBooks.previewInternal, {
+    observationId: args.observationId,
+    target,
+    reviewed: { ...reviewed, sourceTitle: undefined },
+  });
+  expect(withoutTitle.refusal).toContain("Known source work");
+  const linkPreview = await t.query(internal.heldBooks.previewInternal, {
+    observationId: args.observationId,
+    target,
+    reviewed,
+  });
+  expect(linkPreview.refusal).toBeNull();
+  expect(linkPreview.classification).toBe("linkReady");
+  const link = await t.mutation(internal.heldBooks.executeInternal, {
+    observationId: args.observationId,
+    target,
+    reviewed,
+    actor: "alice",
+    operation: "link",
+    expected: linkPreview.expected!,
+    reason: "Exact publisher ISBN proves this box contains the four collected books.",
+    evidenceUrls: reviewed.evidenceUrls,
+  });
+  expect(link.status).toBe("applied");
+  const linked = await frozen();
+  const { observation: oldSource, holds: oldHolds, ...oldCanonical } = before;
+  const { observation: newSource, holds: newHolds, ...newCanonical } = linked;
+  expect(newCanonical).toEqual(oldCanonical);
+  expect(newSource).toEqual({
+    ...oldSource,
+    recordRef: { type: "releaseBundle", id: args.bundleId },
+    conflicts: [],
+  });
+  expect(newHolds).toEqual([]);
+  const linkLedger = await t.run((ctx) => ctx.db.get(link.ledgerId!));
+  expect(JSON.parse(linkLedger!.before)).toEqual({ observation: oldSource, hold: oldHolds[0] });
+  expect(JSON.parse(linkLedger!.after)).toEqual({ observation: newSource, hold: null });
 });
 it("refuses changed source before writing", async () => {
-  const { t, seriesId: _series, ...args } = await chi();
+  const {
+    t,
+    seriesId: _series,
+    publisherId: _publisher,
+    volumeIds: _volumes,
+    ...args
+  } = await chi();
   const p = await t.query(internal.heldRepair.heldBundleContentsStateInternal, args);
   await t.run(async (ctx) => {
     await ctx.db.patch(args.observationId, { lastSeenAt: 200 });
