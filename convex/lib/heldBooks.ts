@@ -366,6 +366,18 @@ export async function releaseContents(ctx: QueryCtx, id: Id<"releases">, r: Read
 }
 export type Contents = Awaited<ReturnType<typeof releaseContents>>;
 
+/**
+ * Whether a source and a Release both state a file format and state
+ * different ones. An unstated file format is unknown (glossary: Format).
+ */
+function fileFormatsDisagree(source: { digitalFileFormat?: unknown }, release: Doc<"releases">) {
+  return (
+    source.digitalFileFormat !== undefined &&
+    release.digitalFileFormat !== undefined &&
+    source.digitalFileFormat !== release.digitalFileFormat
+  );
+}
+
 /** Own-ISBN linking may compare complete packaged contents. A Line ID alone supplies no contents. */
 export async function contentMatch(
   ctx: QueryCtx,
@@ -376,11 +388,14 @@ export async function contentMatch(
   const s = state.effective.snapshot as {
     title?: string;
     format?: string;
+    digitalFileFormat?: string;
     publishers?: string[];
     page?: { distributor?: string };
     imprint?: string;
   };
   if (s.format !== target.release.format) return refuse("Source and target formats disagree.");
+  if (fileFormatsDisagree(s, target.release))
+    return refuse("Source and target file formats disagree.");
   const selected = target.series.find((one) => one._id === state.source.series?._id);
   const context = selected
     ? (annWorkContext(state, selected) ?? declaredWorkContext(state, selected))
@@ -881,6 +896,7 @@ async function sourceContentsMatch(
     subtitle?: string;
     seriesTitle?: string;
     format?: string;
+    digitalFileFormat?: string;
     coverRange?: { from: string; to: string };
     coverageGapped?: boolean;
     packaging?: {
@@ -892,6 +908,8 @@ async function sourceContentsMatch(
   };
   if (contents.some((c) => c.release.format !== s.format))
     return refuse("Known source format differs.");
+  if (contents.some((c) => fileFormatsDisagree(s, c.release)))
+    return refuse("Source and target file formats disagree.");
   const ranges = [s.coverRange, s.packaging?.coverRange];
   if (s.coverageGapped || s.packaging?.coverageGapped)
     return refuse("Known incomplete source contents cannot be reviewed as a complete range.");

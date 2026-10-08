@@ -1620,16 +1620,17 @@ async function toBundle(
       (proof && current.length !== selected.length)
     )
       skip("Existing Bundle members drifted.");
-    if (proof) {
-      for (const id of entry.retireVolumeIds) {
-        const volume = await ctx.db.get(id);
-        if (!volume || volume.status === "active")
-          skip("Converted placeholder retirement drifted.");
-      }
-    }
     plans.push({ box, bundle, isbns, selected, current, proof });
   }
-  if (plans.every((p) => p.proof)) return already;
+  // Placeholders retire after the last box set converts, so a continuation
+  // whose earlier legs converted only some box sets still finds them active.
+  if (plans.every((p) => p.proof)) {
+    for (const id of entry.retireVolumeIds) {
+      const volume = await ctx.db.get(id);
+      if (!volume || volume.status === "active") skip("Converted placeholder retirement drifted.");
+    }
+    return already;
+  }
   const moves = newMoves(entry.key);
   let firstMemberVolume: Id<"volumes"> | null = null;
   for (const plan of plans) {

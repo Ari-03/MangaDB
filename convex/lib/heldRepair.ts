@@ -494,6 +494,16 @@ export async function bundleContentsState(
       );
       if (variants.length)
         return refuse("Format correction has Release Variants; repair their semantics first.");
+      // Only a physical Release has Other Printings (glossary: Other Printing).
+      if (
+        correction.to === "digital" &&
+        (
+          await r.many(
+            ctx.db.query("releaseIsbns").withIndex("by_release", (q) => q.eq("releaseId", id)),
+          )
+        ).length
+      )
+        return refuse("Format correction to digital, but the Release has other printings.");
       await r.many(
         ctx.db
           .query("sourceObservations")

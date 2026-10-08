@@ -348,4 +348,47 @@ describe("Tokyopop store-product PDFs", () => {
     });
     expect(preview.refusal).toMatch(/slot is occupied/);
   });
+
+  it.each(["pdf", "epub"] as const)(
+    "links Dark Metro 1's reviewed PDF only to a Release not classified otherwise (%s)",
+    async (fileFormat) => {
+      const t = makeT();
+      const s = await seed(t, darkMetro, {
+        title: "Dark Metro",
+        label: "1",
+        epub: "9781427861344",
+      });
+      await correct(t, s.observationId, reviewedFor(darkMetro));
+      // The PDF's own ISBN already on a Release of the parent's Edition.
+      const isbn13 = parsed(darkMetro).isbn13!;
+      const { releaseId } = await t.run((ctx) =>
+        insertBook(ctx, {
+          publisherId: s.parentId,
+          seriesId: s.seriesId,
+          volumeId: s.volumeId,
+          release: { format: "digital", digitalFileFormat: fileFormat, isbn13 },
+        }),
+      );
+      const target = { type: "release" as const, id: releaseId };
+      const ordinary = await t.query(internal.heldBooks.previewInternal, {
+        observationId: s.observationId,
+        target,
+      });
+      const reviewed = await t.query(internal.heldBooks.previewInternal, {
+        observationId: s.observationId,
+        target,
+        reviewed: {
+          isbn13,
+          seriesId: s.seriesId,
+          publisherId: s.parentId,
+          volumeIds: [s.volumeId],
+          evidenceUrls: ["https://tokyopop.com/products.json?limit=250&page=4"],
+        },
+      });
+      for (const preview of [ordinary, reviewed]) {
+        if (fileFormat === "pdf") expect(preview.refusal).toBeNull();
+        else expect(preview.refusal).toMatch(/file formats disagree/);
+      }
+    },
+  );
 });
