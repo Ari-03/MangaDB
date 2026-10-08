@@ -1,9 +1,10 @@
 // Moderation affordances (spec §5). On catalog pages: the public per-record
 // revision history — final diff, author, approver, timestamp, change
 // comment, citation — and the moderator/administrator edit links. On the
-// /mod pages: the access gate and the tool links. All of it fetches
+// /mod pages: the access gate. All of it fetches
 // client-side through the reactive Convex client; role checks here are
 // cosmetic (the moderation functions re-check authorization on every call).
+// The workroom frame and its tool tabs are lib/modShell.tsx.
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
@@ -11,7 +12,8 @@ import type { FunctionReturnType } from "convex/server";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { FEATURES } from "../../convex/lib/features";
+import type { Citation } from "../../convex/lib/moderationFields";
+import { Cover } from "~/lib/cover";
 import type { WrittenBy } from "../../convex/moderation";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
@@ -38,8 +40,84 @@ export function renderFieldValue(value: unknown): string {
     if (typeof record.amountCents === "number") {
       return formatPrice(record as { amountCents: number; currency: string }) ?? "(empty)";
     }
+    // A cover (convex schema `cover`): stored art, or a source's placeholder.
+    if (typeof record.storageId === "string") {
+      return typeof record.attribution === "string"
+        ? `stored art, from ${record.attribution}`
+        : "stored art";
+    }
+    if (typeof record.sourceUrl === "string") return `no art (placeholder at ${record.sourceUrl})`;
   }
   return JSON.stringify(value);
+}
+
+/** The art behind the covers a change list names (convex/moderation.ts coverArtOf). */
+export type CoverArt = ReadonlyArray<{ storageId: string; url: string | null }>;
+
+/** A cover value's storage id, or null for no stored art. */
+function storageIdOf(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { storageId } = value as { storageId?: unknown };
+  return typeof storageId === "string" ? storageId : null;
+}
+
+/** One side of a cover change: a small jacket, or cloth for no art. */
+function CoverThumb({ value, art, label }: { value: unknown; art: CoverArt; label: string }) {
+  const storageId = storageIdOf(value);
+  const url = storageId ? (art.find((entry) => entry.storageId === storageId)?.url ?? null) : null;
+  return <Cover src={url} title={storageId ? label : "No stored art"} className="cover-thumb" />;
+}
+
+/**
+ * One field's change in History or on a proposal: a cover as before and
+ * after jackets with its source under the new one, a Human Override list
+ * as what was set or cleared, anything else as text.
+ */
+export function FieldChangeItem({
+  change,
+  art,
+}: {
+  change: { field: string; before?: unknown; after?: unknown };
+  art: CoverArt;
+}) {
+  if (change.field === "overriddenFields") {
+    return <li>{overrideChangeText(change.before, change.after)}</li>;
+  }
+  if (change.field === "coverImage") {
+    const source = (change.after as { attribution?: unknown } | undefined)?.attribution;
+    return (
+      <li className="cover-diff">
+        <code>coverImage</code>:
+        <CoverThumb value={change.before} art={art} label="Cover before" />→
+        <CoverThumb value={change.after} art={art} label="Cover after" />
+        {typeof source === "string" ? <span>Source: {source}</span> : null}
+      </li>
+    );
+  }
+  return (
+    <li>
+      <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
+      <ins>{renderFieldValue(change.after)}</ins>
+    </li>
+  );
+}
+
+/**
+ * The source a person stated for a field's text (a Revision's `citedField`,
+ * a proposal op's `citation`): the page, or that it has none.
+ */
+export function StatedSource({ field, citation }: { field: string; citation: Citation | null }) {
+  return (
+    <p className="revision-citation">
+      {citation ? (
+        <>
+          Source of the {field}: <a href={citation.url}>{citation.sourceName}</a>
+        </>
+      ) : (
+        `The ${field} has no external source.`
+      )}
+    </p>
+  );
 }
 
 /**
@@ -185,18 +263,13 @@ function HistoryBody({
             </div>
             <p className="revision-comment">{revision.comment}</p>
             <ul className="revision-changes">
-              {revision.changes.map((change) =>
-                change.field === "overriddenFields" ? (
-                  <li key={change.field}>{overrideChangeText(change.before, change.after)}</li>
-                ) : (
-                  <li key={change.field}>
-                    <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
-                    <ins>{renderFieldValue(change.after)}</ins>
-                  </li>
-                ),
-              )}
+              {revision.changes.map((change) => (
+                <FieldChangeItem key={change.field} change={change} art={history.coverArt} />
+              ))}
             </ul>
-            {revision.citation ? (
+            {revision.citedField ? (
+              <StatedSource field={revision.citedField} citation={revision.citation} />
+            ) : revision.citation ? (
               <p className="revision-citation">
                 Source: <a href={revision.citation.url}>{revision.citation.sourceName}</a>
               </p>
@@ -255,55 +328,6 @@ export function ModGate({
     );
   }
   return children;
-}
-
-const MOD_TOOLS = [
-  { to: "/mod/queue", label: "Review queue" },
-  { to: "/mod/imports", label: "Imports" },
-  { to: "/mod/launch", label: "Launch" },
-  { to: "/mod/packaging", label: "Catalog gaps" },
-] as const;
-
-/**
- * The data team's tool links under a dashboard's heading, leaving out the
- * page they sit on, then the Comments queue.
- */
-export function ModTools({ current }: { current?: (typeof MOD_TOOLS)[number]["to"] }) {
-  return (
-    <nav className="mod-tools" aria-label="Data team tools">
-      {MOD_TOOLS.filter((tool) => tool.to !== current).map((tool) => (
-        <Link key={tool.to} to={tool.to}>
-          {tool.label}
-        </Link>
-      ))}
-      <CommentsQueueLink />
-    </nav>
-  );
-}
-
-/**
- * The Comments queue link for the `.mod-tools` navs, with the number of
- * Comments awaiting review as a badge ("100+" past the query's cap).
- * Nothing while Comments are switched off (FEATURES.comments).
- */
-export function CommentsQueueLink() {
-  if (!FEATURES.comments) return null;
-  return <CommentsQueueLinkInner />;
-}
-
-function CommentsQueueLinkInner() {
-  const counts = useQuery(api.comments.queueCounts, {});
-  const pending = counts?.pending ?? 0;
-  return (
-    <Link to="/mod/comments">
-      Comments
-      {pending > 0 ? (
-        <span className="mod-badge" role="img" aria-label={`${pending} awaiting review`}>
-          {pending >= 100 ? "100+" : pending}
-        </span>
-      ) : null}
-    </Link>
-  );
 }
 
 /**

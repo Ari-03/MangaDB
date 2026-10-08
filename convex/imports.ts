@@ -31,8 +31,10 @@ import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
 import { ofOtherPrinting } from "./lib/releaseIsbns";
 import { requireDataTeam, requireModerator } from "./lib/roles";
+import { observationRatesMature } from "./lib/mature";
 import { LOCK_NOTE } from "./lib/unmatched";
 import { revisionsOf } from "./moderation";
+import { coverInUse } from "./lib/coverRefs";
 import { type AnnReleaseSnapshot, lineOutOfScope, SOURCE_KEY as ANN } from "./ann";
 import { outOfScopeElsewhere, placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
 import { holdKind } from "./schema";
@@ -286,45 +288,78 @@ export const recentRuns = query({
 });
 
 /**
- * The Data Team dashboard's source table: every registry row with its
- * health flag and last-run summary, unhealthy sources first.
+ * The most registry rows dashboardPage (and the workroom's source count,
+ * workroom.ts) reads. The registry holds one row per Approved Source, seven
+ * today; past this the page says more exist.
+ */
+export const MAX_SOURCES = 50;
+
+/**
+ * The dashboard's source rows for these registry rows: each with its health
+ * flag, enablement and last-run summary, unhealthy sources first.
+ */
+async function sourceRowsOf(ctx: QueryCtx, sources: ReadonlyArray<Doc<"approvedSources">>) {
+  const rows = [];
+  for (const source of sources) {
+    const lastRun = await ctx.db
+      .query("importRuns")
+      .withIndex("by_source", (q) => q.eq("sourceKey", source.key))
+      .order("desc")
+      .first();
+    rows.push({
+      key: source.key,
+      name: source.name,
+      enabled: source.enabled,
+      cadence: source.cadence,
+      healthState: source.healthState,
+      consecutiveFailures: source.consecutiveFailures,
+      lastRun: lastRun
+        ? {
+            status: lastRun.status,
+            startedAt: lastRun._creationTime,
+            finishedAt: lastRun.finishedAt ?? null,
+            recordsSeen: lastRun.recordsSeen,
+            recordsChanged: lastRun.recordsChanged,
+            errorCount: lastRun.errors.length,
+          }
+        : null,
+    });
+  }
+  return rows.sort(
+    (a, b) =>
+      Number(b.healthState === "unhealthy") - Number(a.healthState === "unhealthy") ||
+      a.key.localeCompare(b.key),
+  );
+}
+
+/**
+ * The Data Team dashboard's source table as an array of every registry row
+ * (sourceRowsOf). This is the contract clients built before dashboardPage
+ * still call, kept with its array result so a Worker or open tab older than
+ * the Convex deploy keeps working; it reads the whole registry. The site
+ * calls dashboardPage. Remove this once no deployed client calls it.
  */
 export const dashboard = query({
   args: {},
   handler: async (ctx) => {
     await requireDataTeam(ctx);
-    const sources = await ctx.db.query("approvedSources").collect();
-    const rows = [];
-    for (const source of sources) {
-      const lastRun = await ctx.db
-        .query("importRuns")
-        .withIndex("by_source", (q) => q.eq("sourceKey", source.key))
-        .order("desc")
-        .first();
-      rows.push({
-        key: source.key,
-        name: source.name,
-        enabled: source.enabled,
-        cadence: source.cadence,
-        healthState: source.healthState,
-        consecutiveFailures: source.consecutiveFailures,
-        lastRun: lastRun
-          ? {
-              status: lastRun.status,
-              startedAt: lastRun._creationTime,
-              finishedAt: lastRun.finishedAt ?? null,
-              recordsSeen: lastRun.recordsSeen,
-              recordsChanged: lastRun.recordsChanged,
-              errorCount: lastRun.errors.length,
-            }
-          : null,
-      });
-    }
-    return rows.sort(
-      (a, b) =>
-        Number(b.healthState === "unhealthy") - Number(a.healthState === "unhealthy") ||
-        a.key.localeCompare(b.key),
-    );
+    return await sourceRowsOf(ctx, await ctx.db.query("approvedSources").collect());
+  },
+});
+
+/**
+ * The Data Team dashboard's source table: registry rows (sourceRowsOf), at
+ * most MAX_SOURCES, with `hasMore` past that.
+ */
+export const dashboardPage = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireDataTeam(ctx);
+    const read = await ctx.db.query("approvedSources").take(MAX_SOURCES + 1);
+    return {
+      sources: await sourceRowsOf(ctx, read.slice(0, MAX_SOURCES)),
+      hasMore: read.length > MAX_SOURCES,
+    };
   },
 });
 
@@ -568,11 +603,15 @@ async function coverOfferRefusal(
  * longer exists (an overlapping run replaced it: `stale`). Otherwise the
  * Release takes the blob of an active sibling in its Edition with the same
  * `sourceUrl` (print and digital share one file), else the incoming one,
- * replacing art the publisher has since changed. A blob nothing shows any
+ * replacing art the publisher has since changed. A blob nothing needs any
  * more, the incoming one or the replaced one, is deleted; one another
- * Release or a Bundle still shows is kept, wherever a split or merge has
- * moved it (`by_cover`). Returns what the Release now holds for
- * `sourceUrl`: its blob, "placeholder", or null when nothing.
+ * Release, a Bundle or a Variant still shows, a Revision names or a pending
+ * Proposal names is kept (lib/coverRefs.ts coverInUse), wherever a split
+ * or merge has moved it, and nothing is deleted before older Revisions'
+ * covers are pinned. A Release whose cover is a Human Override (a
+ * person set or removed it) is refused: imports never replace that art.
+ * Returns what the Release now holds for `sourceUrl`: its blob,
+ * "placeholder", or null when nothing.
  */
 export const attachCover = internalMutation({
   args: {
@@ -596,22 +635,11 @@ export const attachCover = internalMutation({
     refused?: string;
   }> => {
     const incoming = args.storageId;
-    // Shown by any Release but this one, or by a Bundle made from a Release.
-    const shown = async (id: Id<"_storage">) => {
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
-        .collect();
-      if (releases.some((r) => r._id !== args.releaseId)) return true;
-      const bundle = await ctx.db
-        .query("releaseBundles")
-        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
-        .first();
-      return bundle !== null;
-    };
-    // Delete `id` unless it is `keep` or something still shows it.
+    // Delete `id` unless it is `keep` or something still needs it.
     const drop = async (id: Id<"_storage"> | undefined, keep: Id<"_storage"> | undefined) => {
-      if (id !== undefined && id !== keep && !(await shown(id))) await ctx.storage.delete(id);
+      if (id === undefined || id === keep) return;
+      if (await coverInUse(ctx, id, args.releaseId)) return;
+      await ctx.storage.delete(id);
     };
 
     if (incoming !== undefined && (await ctx.db.system.get(incoming)) === null) {
@@ -626,7 +654,9 @@ export const attachCover = internalMutation({
     // download is deleted only when nothing shows it: not this Release
     // (an action's cache can hand back the very blob it shows), another
     // Release, or a Bundle. `held: null` makes the action forget it.
-    const refused = await coverOfferRefusal(ctx, release, args);
+    const refused = release.overriddenFields?.includes("coverImage")
+      ? "cover is a Human Override"
+      : await coverOfferRefusal(ctx, release, args);
     if (refused !== null) {
       await drop(incoming, release.coverImage?.storageId);
       return { attached: false, held: null, refused };
@@ -842,6 +872,8 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id
     seriesTitle: text(book?.seriesTitle),
     volumeLabel: text(book?.volumeLabel) ?? text(book?.label),
     series: series ? { publicId: series.publicId, title: series.title } : null,
+    // A Mature Series' book, or one its source rates 18+: the row's jacket is concealed.
+    mature: series?.mature === true || (observation ? observationRatesMature(observation) : false),
     observationId: hold.observationId,
     proposal:
       queued?.state === "draft" || queued?.state === "inReview"

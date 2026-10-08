@@ -8,9 +8,9 @@
 // token Clerk cannot give reads as signed out, on a cold load and after a
 // sign-in on the page alike. (From the review of the Clerk gate.)
 
-import { act, createElement, Fragment } from "react";
+import { act, createElement, Fragment, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ConvexReactClient } from "convex/react";
+import { ConvexReactClient, useQuery } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -33,7 +33,6 @@ function useAuth() {
 }
 vi.mock("@clerk/tanstack-react-start", () => ({ useAuth }));
 const { useConvexClerkAuth, useViewerQuery } = await import("./viewer");
-const { SeriesReportAffordance } = await import("./report");
 
 type Message = {
   type: string;
@@ -95,10 +94,22 @@ function Probe() {
   return createElement("p", { "data-probe": true }, state);
 }
 
+/** A control that, once opened, reads users.viewer with a plain useQuery, signed in or not. */
+function ViewerReader() {
+  const [open, setOpen] = useState(false);
+  return open
+    ? createElement(ViewerRead)
+    : createElement("button", { type: "button", onClick: () => setOpen(true) }, "Open");
+}
+function ViewerRead() {
+  useQuery(api.users.viewer, {});
+  return null;
+}
+
 /**
- * Render the probe under the providers.tsx wiring, beside the report
- * affordance when `anonymousReader` (it reads users.viewer whether signed
- * in or not, so the client holds an anonymous answer before a sign-in).
+ * Render the probe under the providers.tsx wiring, beside a ViewerReader
+ * when `anonymousReader` (it reads users.viewer whether signed in or not,
+ * so the client holds an anonymous answer before a sign-in).
  */
 async function render(anonymousReader = false) {
   await act(async () => {
@@ -110,7 +121,7 @@ async function render(anonymousReader = false) {
         children: createElement(
           Fragment,
           null,
-          anonymousReader ? createElement(SeriesReportAffordance, { seriesPublicId: 1 }) : null,
+          anonymousReader ? createElement(ViewerReader) : null,
           createElement(Probe),
         ),
       }),
@@ -138,7 +149,7 @@ afterEach(async () => {
   await client.close();
 });
 
-/** Sign in on the page after the report affordance read users.viewer anonymously. */
+/** Sign in on the page after a ViewerReader read users.viewer anonymously. */
 async function signInAfterAnonymousAnswer(token: () => Promise<string | null>) {
   await render(true);
   await act(async () => container.querySelector("button")!.click());

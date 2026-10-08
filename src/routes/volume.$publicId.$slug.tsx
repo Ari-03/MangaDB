@@ -10,6 +10,7 @@ import { Cover, coverIsbns } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { plural } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
+import { BlurbSource, ContextEditLink, EditionCoverLink, EditLinks } from "~/lib/contextEdit";
 import { VolumeOwnership } from "~/lib/collection";
 import { ConcealArt } from "~/lib/mature";
 import { RatingAggregate } from "~/lib/ratings";
@@ -106,7 +107,7 @@ function ConcealedVolumePage() {
 
 function VolumePage() {
   const page = Route.useLoaderData();
-  const { volume, series, credits, description, editions, coverUrl } = page;
+  const { volume, series, credits, description, editions, coverUrl, coverEdition } = page;
   const ratingTarget = { kind: "volume" as const, publicId: volume.publicId };
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
@@ -152,6 +153,7 @@ function VolumePage() {
               lazy={false}
             />
           </div>
+          {coverEdition ? <EditionCoverLink edition={coverEdition} /> : null}
         </div>
 
         {/* The viewer's take, under the cover: their private Rating of this
@@ -227,9 +229,11 @@ function VolumePage() {
             ) : (
               <p className="note">No description on file yet.</p>
             )}
-            {description?.source === "volume" ? (
+            <BlurbSource attribution={description?.attribution} />
+            {description?.source === "volume" && !description.attribution ? (
               <p className="note">Volume synopsis curated by editors.</p>
             ) : null}
+            <VolumeDescriptionLinks description={description} volumeKey={String(volume.publicId)} />
           </div>
 
           <div className="section-head volume-editions-head">
@@ -279,6 +283,47 @@ function VolumePage() {
       <RecordHistory type="volume" publicId={volume.publicId} />
       <ModEditLink type="volume" editKey={String(volume.publicId)} />
     </main>
+  );
+}
+
+/**
+ * The data team's links under the Volume's description, to the record
+ * that owns the text shown: its own synopsis, or, for borrowed text, the
+ * lending Release or the Series beside a link to write this Volume's own.
+ */
+function VolumeDescriptionLinks({
+  description,
+  volumeKey,
+}: {
+  description: ReturnType<typeof Route.useLoaderData>["description"];
+  volumeKey: string;
+}) {
+  const volumeOwner = { type: "volume" as const, key: volumeKey, label: "the volume synopsis" };
+  if (!description || description.source === "volume") {
+    return (
+      <EditLinks>
+        <ContextEditLink owner={volumeOwner} anchor="description">
+          {description ? "Edit synopsis" : "Write a volume synopsis"}
+        </ContextEditLink>
+      </EditLinks>
+    );
+  }
+  const note =
+    description.source === "edition"
+      ? `Borrowed from the ${description.edition.publisherName ?? "English"} edition.`
+      : "This is the series synopsis.";
+  return (
+    <EditLinks note={note}>
+      <ContextEditLink owner={description.owner} anchor="description">
+        {description.source === "edition"
+          ? "Edit that release's description"
+          : "Edit the series synopsis"}
+      </ContextEditLink>
+      <span>or</span>
+      <ContextEditLink owner={volumeOwner} anchor="description">
+        write a volume synopsis
+      </ContextEditLink>
+    </EditLinks>
   );
 }
 

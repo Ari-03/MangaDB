@@ -469,33 +469,9 @@
   font-size: 0.9rem;
   color: var(--text-dim);
 }
-.report-form {
-  display: grid;
-  gap: 12px;
-  max-width: 46rem;
-}
-.report-field {
-  display: grid;
-  gap: 6px;
-  font-size: 0.9rem;
-  font-weight: 700;
-}
-.report-form textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--line-strong);
-  background: var(--surface-2);
-  font: inherit;
-  font-weight: 400;
-  resize: vertical;
-}
-.report-form textarea::placeholder {
-  color: var(--text-mute);
-}
-.report-actions {
-  display: flex;
-  gap: 10px;
+.report-link svg {
+  width: 16px;
+  height: 16px;
 }
 [data-theme="light"] .form-error {
   color: #a23c15;

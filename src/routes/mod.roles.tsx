@@ -4,8 +4,8 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { mutationErrorMessage } from "~/lib/errors";
-import { ModGate, ModTools } from "~/lib/moderation";
-import { Breadcrumbs } from "~/lib/pageScaffold";
+import { ModGate } from "~/lib/moderation";
+import { ModWorkroom } from "~/lib/modShell";
 
 /**
  * Role governance (spec §4/§5): the data-team roster, the
@@ -67,15 +67,11 @@ function ModRolesContent() {
   };
 
   return (
-    <main className="mod-page">
-      <Breadcrumbs trail={["Roles"]} />
-      <h1>Data-team roles</h1>
-      <p className="section-hint">
-        Administrators appoint Moderators; Moderators appoint Editors. Every change is audited
-        permanently, and revoking a role never rewrites past attribution.
-      </p>
-      <ModTools />
-
+    <ModWorkroom
+      current="roles"
+      title="Data-team roles"
+      hint="Administrators appoint Moderators; Moderators appoint Editors. Every change is audited permanently, and revoking a role never rewrites past attribution."
+    >
       <section className="mod-panel">
         <h2>Appoint</h2>
         <form
@@ -214,6 +210,6 @@ function ModRolesContent() {
           </ul>
         )}
       </section>
-    </main>
+    </ModWorkroom>
   );
 }

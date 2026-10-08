@@ -7,7 +7,17 @@ import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
 import { MAX_REPORT_LENGTH } from "./reports";
 import { insertSeries } from "./test.factories";
-import { MOD, PLAIN, alice, bob, dave, makeT, seedTeam, type TestT } from "./test.helpers";
+import {
+  MOD,
+  PLAIN,
+  alice,
+  bob,
+  dave,
+  makeT,
+  queueRows,
+  seedTeam,
+  type TestT,
+} from "./test.helpers";
 
 /** alice, bob the Moderator and dave, and the Series "Witch Hat Atelier" (public id 7). */
 async function setup(t: TestT) {
@@ -25,7 +35,7 @@ describe("reports.submit", () => {
     });
 
     // The report feeds the SAME queue Moderators already work (spec §7).
-    const queue = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueue, {});
+    const queue = await queueRows(t.withIdentity({ subject: MOD }), {});
     const row = queue.find((r) => r.proposalId === proposalId);
     expect(row).toBeDefined();
     expect(row).toMatchObject({ opCount: 0 });
@@ -38,7 +48,7 @@ describe("reports.submit", () => {
       proposalId,
       note: "Added the volume — thanks.",
     });
-    const after = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueue, {});
+    const after = await queueRows(t.withIdentity({ subject: MOD }), {});
     expect(after.find((r) => r.proposalId === proposalId)).toBeUndefined();
   });
 

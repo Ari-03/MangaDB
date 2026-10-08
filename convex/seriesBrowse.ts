@@ -186,6 +186,30 @@ export const rebuildBatch = internalMutation({
   },
 });
 
+/** Series one `refreshStats` run rewrites before it schedules the rest. */
+const REFRESH_BATCH = 5;
+
+/**
+ * Rewrite the library rows of a few Series now rather than at the next
+ * rebuild: a person's cover change (moderation.ts applyUpdate) moves the
+ * shelf cover each row stores. Hidden, merged and missing Series are left
+ * to the rebuild.
+ */
+export const refreshStats = internalMutation({
+  args: { seriesIds: v.array(v.id("series")) },
+  handler: async (ctx, { seriesIds }) => {
+    const publisherOf = memoize((id: Id<"publishers">) => ctx.db.get(id));
+    for (const seriesId of seriesIds.slice(0, REFRESH_BATCH)) {
+      const series = await ctx.db.get(seriesId);
+      if (series?.status === "active") await upsertStats(ctx, series, Date.now(), publisherOf);
+    }
+    const rest = seriesIds.slice(REFRESH_BATCH);
+    if (rest.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.seriesBrowse.refreshStats, { seriesIds: rest });
+    }
+  },
+});
+
 /**
  * Bring a Series' `searchText` up to the current `seriesSearchText` rule.
  * Writers set it as they go; this catches Series written before the rule

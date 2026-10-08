@@ -33,6 +33,7 @@ import {
   seedTeam,
   signedIn,
   type TestT,
+  queueRows,
 } from "./test.helpers";
 
 const DUMP_URL = "https://dumps.example.org/filtered.txt";
@@ -650,7 +651,7 @@ describe("a Proposal in review takes the book off the list", () => {
       }),
     ).rejects.toMatchObject({ data: { code: "importAuthored" } });
     expect((await t.run((ctx) => ctx.db.get(proposalId)))?.state).toBe("inReview");
-    const queue = await signedIn(t, alice).query(api.proposals.reviewQueue, {});
+    const queue = await queueRows(signedIn(t, alice), {});
     expect(queue.map((row) => row.proposalId)).toEqual([proposalId]);
   });
 });

@@ -27,6 +27,7 @@ import {
   drain,
   expectStampedAtHandOff,
   makeT,
+  pinCoverHistory,
   matureFlags,
   projectionJobs,
   seedRegistry,
@@ -429,6 +430,7 @@ describe("kodansha covers — stored once, kept current", () => {
 
   it("replaces art whose URL changed and deletes the old blob once unused", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     await seedRegistry(t, true);
     stubSite([IRUMA]);
     await sync(t);
@@ -453,6 +455,7 @@ describe("kodansha covers — stored once, kept current", () => {
 
   it("attachCover shares a sibling's blob and never deletes one still in use", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     await seedRegistry(t, true);
     stubSite([IRUMA]);
     await sync(t);
@@ -671,6 +674,7 @@ describe("kodansha covers — stored once, kept current", () => {
 
   it("shares a blob within an Edition only, so one Edition's new art cannot strand another's", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     await seedRegistry(t, true);
     // Two volumes (two Editions) whose calendar items name the same jacket.
     const shared = "https://production.image.azuki.co/coming-soon/800.webp";
@@ -1001,6 +1005,7 @@ describe("kodansha.backlistSync — the crawl", () => {
 
   it("the calendar stores the volume page's art, never its own size of the jacket", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     await seedBacklist(t, true);
     stubBacklist([BLUE_LOCK], {
       ...BACKLIST_PAGES,

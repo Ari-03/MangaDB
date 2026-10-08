@@ -11,8 +11,10 @@
 
 import { Link } from "@tanstack/react-router";
 
+import { releaseLabel } from "../../convex/lib/titles";
 import type { EditionPageData } from "~/lib/catalogData";
 import { ReleaseCollectionControls } from "~/lib/collection";
+import { ContextEditLink, EditLinks } from "~/lib/contextEdit";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ReleasePassControls } from "~/lib/reading";
 import { slugParams } from "~/lib/slug";
@@ -73,7 +75,9 @@ export function otherPrintingsText(
  * the first recorded only and saying so when others may remain;
  * Variants render beneath their Release; containing Bundles link to their
  * Bundle pages. The signed-in collection and reading-pass controls sit in
- * the row's right-hand column and collapse it when signed out.
+ * the row's right-hand column and collapse it when signed out, above the
+ * data team's link to this Release's own cover, the one place a Release's
+ * art is addressable.
  */
 export function ReleaseRow({ release }: { release: ReleaseRowData }) {
   const printings = otherPrintingsText(release);
@@ -139,6 +143,14 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
         <ReleaseCollectionControls releaseId={release.id} />
         {/* Release Progress pass controls; render nothing signed out. */}
         <ReleasePassControls releaseId={release.id} />
+        <EditLinks>
+          <ContextEditLink
+            owner={{ type: "release", key: release.id, label: releaseLabel(release) }}
+            anchor="cover"
+          >
+            {release.coverUrl ? "Change cover" : "Add a cover"}
+          </ContextEditLink>
+        </EditLinks>
       </div>
     </li>
   );

@@ -2,13 +2,19 @@
 // edit (/mod/edit) and the Editor update proposal (/mod/propose).
 // Everything edits as strings keyed by field name; the submit handlers shape
 // typed values that the Convex mutations re-validate against the same
-// registry (convex/lib/moderationFields.ts).
+// registry (convex/lib/moderationFields.ts). A cover is the JSON of its
+// `CoverDraft` (empty for no art), and the source of a description lives
+// beside it under `{field}.source…` keys (`draftCitation`).
 
 import {
   EDITABLE_FIELDS,
+  httpsUrl,
+  normalizeCitation,
+  type Citation,
   type FieldDescriptor,
   type RecordType,
 } from "../../convex/lib/moderationFields";
+import type { Id } from "../../convex/_generated/dataModel";
 
 /**
  * Whether a `$type` route segment names an editable record type. Own keys
@@ -19,6 +25,34 @@ export function isRecordType(raw: string): raw is RecordType {
 }
 
 export type FormState = Record<string, string>;
+
+/** A cover as the form holds it: the blob and where the art came from, in the person's words. */
+export type CoverDraft = { storageId: string; attribution: string };
+
+/** The form-state string of a cover: its JSON, or "" for no stored art. */
+export function encodeCover(cover: CoverDraft | null): string {
+  return cover ? JSON.stringify(cover) : "";
+}
+
+/** The cover a form-state string holds (`encodeCover`), or null for none. */
+export function decodeCover(raw: string | undefined): CoverDraft | null {
+  if (!raw) return null;
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const { storageId, attribution } = parsed as Record<string, unknown>;
+  return typeof storageId === "string"
+    ? { storageId, attribution: typeof attribution === "string" ? attribution : "" }
+    : null;
+}
+
+/** A stored cover value (convex schema `cover`) as the form holds it. */
+function coverOf(value: unknown): CoverDraft | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { storageId, attribution } = value as Record<string, unknown>;
+  return typeof storageId === "string"
+    ? { storageId, attribution: typeof attribution === "string" ? attribution : "" }
+    : null;
+}
 
 export function initialFormState(fields: Array<FieldDescriptor & { value: unknown }>): FormState {
   const state: FormState = {};
@@ -42,6 +76,9 @@ export function initialFormState(fields: Array<FieldDescriptor & { value: unknow
         state[`${field.name}.currency`] = price.currency ?? "USD";
         break;
       }
+      case "image":
+        state[field.name] = encodeCover(coverOf(value));
+        break;
       default:
         state[field.name] = typeof value === "string" ? value : "";
     }
@@ -102,6 +139,8 @@ export function fieldValue(
         },
       };
     }
+    case "image":
+      return { ok: true, value: decodeCover(state[descriptor.name]) };
     default:
       return { ok: true, value: state[descriptor.name] ?? "" };
   }
@@ -156,6 +195,20 @@ export function editDraft<Base>(
   };
 }
 
+/**
+ * The draft with `keys` put back to `initial` and no longer touched: undoing
+ * a choice (Keep current cover) must not leave a no-op change behind.
+ */
+export function revertDraft<Base>(
+  draft: EditDraft<Base>,
+  keys: ReadonlyArray<string>,
+  initial: FormState,
+): EditDraft<Base> {
+  const values = { ...draft.values };
+  for (const key of keys) values[key] = initial[key] ?? "";
+  return { ...draft, values, dirty: new Set([...draft.dirty].filter((k) => !keys.includes(k))) };
+}
+
 /** Whether the record gained a Revision after this draft's values were loaded. */
 export function draftIsStale<Base>(draft: EditDraft<Base>, liveBase: Base): boolean {
   return draft.baseRevisionId !== liveBase;
@@ -178,6 +231,95 @@ export function draftChanges<Base>(
   return { ok: true, changes };
 }
 
+// ---------- the source of a description ----------
+
+/**
+ * Where a description's text comes from, as the form's source radios say:
+ * keep the current credit, a source record's blurb ("Use this
+ * description"), another page the person names, or no external source.
+ */
+export type SourceMode = "keep" | "observation" | "custom" | "none";
+
+/** The form-state keys of `field`'s source choice. */
+export function sourceKeys(field: string) {
+  return {
+    mode: `${field}.source`,
+    name: `${field}.sourceName`,
+    url: `${field}.sourceUrl`,
+    observation: `${field}.observationId`,
+  };
+}
+
+/** The radio a description's source starts on: Keep when it has a credit, else no external source. */
+export function sourceMode(
+  values: FormState,
+  field: string,
+  attribution: Citation | null,
+): SourceMode {
+  const chosen = values[sourceKeys(field).mode];
+  if (chosen === "observation" || chosen === "custom" || chosen === "none") return chosen;
+  return attribution ? "keep" : "none";
+}
+
+/**
+ * The source statement a draft makes for the record's editorial `field`
+ * (convex/moderation.ts validateUpdate): nothing (undefined) unless the
+ * text or its source was touched; null for empty text or no external
+ * source; else the citation, plus the source record as evidence when a
+ * blurb was used. A named page needs a name and an https URL.
+ */
+export function draftCitation(
+  field: FieldDescriptor | null,
+  values: FormState,
+  dirty: ReadonlySet<string>,
+  attribution: Citation | null,
+):
+  | {
+      ok: true;
+      citation: Citation | null | undefined;
+      evidence: Array<{ kind: "observation"; observationId: Id<"sourceObservations"> }>;
+    }
+  | { ok: false; message: string } {
+  const none = { ok: true as const, citation: undefined, evidence: [] };
+  if (!field) return none;
+  const keys = sourceKeys(field.name);
+  if (![field.name, ...Object.values(keys)].some((key) => dirty.has(key))) return none;
+  if ((values[field.name] ?? "").trim() === "") return { ok: true, citation: null, evidence: [] };
+  const named = (sourceName: string, url: string) => {
+    const normalized = normalizeCitation({ sourceName, url });
+    return normalized.ok
+      ? normalized
+      : {
+          ok: false as const,
+          message: "Add the page the text came from, or choose Original prose.",
+        };
+  };
+  switch (sourceMode(values, field.name, attribution)) {
+    case "keep":
+      return { ok: true, citation: attribution, evidence: [] };
+    case "none":
+      return { ok: true, citation: null, evidence: [] };
+    case "custom": {
+      const result = named(values[keys.name] ?? "", values[keys.url] ?? "");
+      return result.ok ? { ok: true, citation: result.value, evidence: [] } : result;
+    }
+    case "observation": {
+      const result = named(values[keys.name] ?? "", values[keys.url] ?? "");
+      if (!result.ok) return result;
+      // Form state holds the id the sourceBlurbs query returned.
+      const observationId = (values[keys.observation] ?? "") as Id<"sourceObservations">;
+      return {
+        ok: true,
+        citation: result.value,
+        evidence: observationId ? [{ kind: "observation", observationId }] : [],
+      };
+    }
+  }
+}
+
+/** Whether a source record's page can be cited: an https URL. */
+export const citableUrl = (url: string | null): url is string => url !== null && httpsUrl(url);
+
 /**
  * The input(s) for one field. `disabled` locks them, e.g. while a save is in
  * flight, so nothing typed then can be discarded when the save resets the form.
@@ -194,6 +336,9 @@ export function FieldInput({
   disabled?: boolean;
 }) {
   switch (field.kind) {
+    // Covers have their own section (lib/coverField.tsx).
+    case "image":
+      return null;
     case "textarea":
     case "stringList":
       return (

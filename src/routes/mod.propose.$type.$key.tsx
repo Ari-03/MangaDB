@@ -4,8 +4,11 @@ import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import type { RecordType } from "../../convex/lib/moderationFields";
+import { editorialField, type RecordType } from "../../convex/lib/moderationFields";
+import { CoverField } from "~/lib/coverField";
+import { DescriptionField } from "~/lib/descriptionField";
 import {
+  draftCitation,
   FieldInput,
   fieldValue,
   initialFormState,
@@ -27,7 +30,10 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
  * against. The server anchors every op on the base Revision current when
  * the draft is saved, so the form follows the live record until the first
  * edit or tick and pins its values then; a newer Revision arriving asks the
- * Editor to reload before saving. Auth-gated client-side for UX; the Convex
+ * Editor to reload before saving. The Cover and Description sections are
+ * the edit form's (lib/coverField.tsx, lib/descriptionField.tsx): a staged
+ * cover upload is held by the Draft once saved, and a blurb used from a
+ * source goes in as evidence. Auth-gated client-side for UX; the Convex
  * functions re-check the role on every call. Never indexed.
  */
 export const Route = createFileRoute("/mod/propose/$type/$key")({
@@ -66,6 +72,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const [comment, setComment] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
   const [evidenceNote, setEvidenceNote] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   if (form === undefined) {
     return (
@@ -92,12 +99,18 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   // Someone else changed the record after the values were pinned: a save
   // now would anchor the ops on a state the Editor has not seen.
   const stale = pinnedBase !== null && pinnedBase.id !== form.baseRevisionId;
-  const setValue = (key: string, value: string) => {
+  const setValues = (patch: FormState) => {
     pin();
-    setState({ ...values, [key]: value });
-    setDirty(new Set([...dirty, key]));
+    setState({ ...values, ...patch });
+    setDirty(new Set([...dirty, ...Object.keys(patch)]));
     draft.clearSaved();
   };
+  const setValue = (key: string, value: string) => setValues({ [key]: value });
+  const initial = initialFormState(form.fields);
+  const coverField = form.fields.find((field) => field.kind === "image");
+  const textName = editorialField(type)?.name;
+  const textField = form.fields.find((field) => field.name === textName);
+  const plainFields = form.fields.filter((field) => field !== coverField && field !== textField);
 
   const editable = form.status === "active" && !form.locked;
   const toggleClear = (field: string, on: boolean) => {
@@ -121,9 +134,9 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
       if (!result.ok) throw new ConvexError({ message: result.message });
       changes.push({ field: field.name, value: result.value });
     }
-    const evidence: Array<
-      { kind: "url"; url: string; note?: string } | { kind: "note"; text: string }
-    > = [];
+    const cited = draftCitation(textField ?? null, values, dirty, form.attribution);
+    if (!cited.ok) throw new ConvexError({ message: cited.message });
+    const evidence: DraftContent["evidence"] = [...cited.evidence];
     if (evidenceUrl.trim() !== "") {
       evidence.push({ kind: "url", url: evidenceUrl.trim() });
     }
@@ -132,8 +145,15 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
     }
     return {
       ops: [
-        ...(changes.length > 0
-          ? [{ kind: "update" as const, ref: form.ref as never, changes }]
+        ...(changes.length > 0 || cited.citation !== undefined
+          ? [
+              {
+                kind: "update" as const,
+                ref: form.ref as never,
+                changes,
+                citation: cited.citation,
+              },
+            ]
           : []),
         ...activeClears.map(({ field }) => ({
           kind: "clearOverride" as const,
@@ -195,9 +215,41 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
               </button>
             </div>
           ) : null}
-          {form.fields.map((field) => (
+          {form.cover && coverField ? (
+            <CoverField
+              cover={form.cover}
+              boxSet={type === "releaseBundle"}
+              title={form.title}
+              value={values[coverField.name] ?? ""}
+              initial={initial[coverField.name] ?? ""}
+              setValue={(value) => setValue(coverField.name, value)}
+              revert={() => {
+                setState({ ...values, [coverField.name]: initial[coverField.name] ?? "" });
+                setDirty(new Set([...dirty].filter((key) => key !== coverField.name)));
+                draft.clearSaved();
+              }}
+              onUploading={setUploading}
+              overridden={form.overriddenFields.includes(coverField.name)}
+              disabled={draft.busy}
+              proposing
+            />
+          ) : null}
+          {plainFields.map((field) => (
             <FieldInput key={field.name} field={field} values={values} setValue={setValue} />
           ))}
+          {textField ? (
+            <DescriptionField
+              type={type}
+              recordId={form.ref.id}
+              field={textField}
+              attribution={form.attribution}
+              values={values}
+              dirty={dirty}
+              initialText={initial[textField.name] ?? ""}
+              setValues={setValues}
+              disabled={draft.busy}
+            />
+          ) : null}
           {form.overrides.map((override) => (
             <label key={override.field}>
               <span>
@@ -246,7 +298,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="button"
               className="btn"
-              disabled={draft.busy || stale || !changed}
+              disabled={draft.busy || uploading || stale || !changed}
               onClick={() => void draft.saveDraft(buildArgs)}
             >
               Save draft
@@ -254,9 +306,9 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={draft.busy || stale || !changed || comment.trim() === ""}
+              disabled={draft.busy || uploading || stale || !changed || comment.trim() === ""}
             >
-              {draft.busy ? "Working…" : "Submit for review"}
+              {draft.busy ? "Working…" : uploading ? "Uploading…" : "Submit for review"}
             </button>
           </div>
           {draft.pendingWarnings ? (

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { pageHead } from "~/lib/seo";
+import { DISCORD_INVITE_URL } from "~/lib/community";
 
 /**
  * The "about the data" page (spec §7): where the catalog comes
@@ -118,9 +119,13 @@ function AboutTheData() {
         takedowns are honored promptly.
       </p>
 
-      <h2>Corrections</h2>
+      <h2 id="corrections">Corrections</h2>
       <p>
-        Spot an error? Use the report button on the series page, or email{" "}
+        Spot an error? Report it in{" "}
+        <a href={DISCORD_INVITE_URL} target="_blank" rel="noreferrer">
+          our Discord
+        </a>
+        , which has channels for bug reports, suggestions and series requests, or email{" "}
         <a href={`mailto:${DATA_CONTACT_EMAIL}`}>{DATA_CONTACT_EMAIL}</a>. Every accepted correction
         becomes a public revision on the record it fixes.
       </p>

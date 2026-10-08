@@ -13,7 +13,15 @@ import type { Id } from "./_generated/dataModel";
 import { coverRequest } from "./lib/covers";
 import { BOOK_PAGE_VERSION } from "./lib/sevenSeas";
 import { insertBundle, insertObservation } from "./test.factories";
-import { alice, bob, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
+import {
+  alice,
+  bob,
+  makeT,
+  pinCoverHistory,
+  seedRegistry,
+  seedTeam,
+  type TestT,
+} from "./test.helpers";
 import { hideRecord, mergeAs, moderate } from "./test.moderation";
 import { ALPHA_1, imageRequests, SEVEN_SEAS, stubSite } from "./test.imports";
 import { linkObservation } from "./lib/observations";
@@ -209,6 +217,7 @@ describe("attaching a cover", () => {
     ];
     for (const [, change, reason] of cases) {
       const t = makeT();
+      await pinCoverHistory(t);
       const book = await offered(t);
       await change(t, book);
       const incoming = await t.run((ctx) => ctx.storage.store(blob()));
@@ -267,6 +276,7 @@ describe("attaching a cover", () => {
   it("never deletes art someone shows when it refuses a download", async () => {
     for (const shownBy of ["target", "release", "bundle", "nobody"] as const) {
       const t = makeT();
+      await pinCoverHistory(t);
       const book = await offered(t, OLDER);
       const incoming = await t.run(async (ctx) => {
         const id = await ctx.storage.store(blob());
@@ -370,6 +380,7 @@ describe("a download queued before its Edition was frozen (C67-10)", () => {
   it("refuses it, keeping the Release's art and deleting only the unshown download", async () => {
     for (const [, change, reason] of freeze) {
       const t = makeT();
+      await pinCoverHistory(t);
       const b = await queued(t);
       await change(t, b);
       const before = await coverOf(t, b.releaseId);
@@ -467,6 +478,7 @@ describe("a download queued before its Edition was frozen (C67-10)", () => {
 
   it("attaches it while the Edition stays active and unlocked (control)", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     const b = await queued(t);
     expect(
       await t.mutation(internal.imports.attachCover, {
@@ -500,6 +512,7 @@ describe("a download racing a decision", () => {
       ["relink", "its record links another record now"],
     ] as const) {
       const t = makeT();
+      await pinCoverHistory(t);
       await seedRegistry(t, true);
       const sync = () => t.action(internal.sevenSeas.sync, { politeDelayMs: 0 });
       // The book applies; its art fails, so the next listing retries it.
@@ -610,6 +623,7 @@ describe("a record a primary correction made another printing's (C67-R2-02)", ()
 
   it("refuses the queued download, keeping the Release's art and deleting the unshown one", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     const b = await promoted(t, true);
     expect(
       await t.mutation(internal.imports.attachCover, {
@@ -674,6 +688,7 @@ describe("a record a primary correction made another printing's (C67-R2-02)", ()
 
   it("still attaches the art of a record of the Release's own printing (control)", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     const b = await promoted(t, false);
     expect(
       await t.mutation(internal.sevenSeas.noteListing, {

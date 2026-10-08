@@ -27,7 +27,8 @@ export type FieldKind =
   | "partialDate"
   | "price"
   | "isbn13"
-  | "isbn10";
+  | "isbn10"
+  | "image";
 
 export type FieldDescriptor = {
   name: string;
@@ -39,9 +40,10 @@ export type FieldDescriptor = {
   options?: readonly string[];
   help?: string;
   /**
-   * Editorial prose (descriptions, synopses) rather than a checkable fact.
-   * Factual changes need source evidence at proposal submission (spec §5);
-   * editorial fields do not.
+   * Editorial prose (descriptions, synopses) or art rather than a
+   * checkable fact. Factual changes need source evidence at proposal
+   * submission (spec §5); editorial fields do not, and a Human Override on
+   * one never stops matching (`factualOverrides`).
    */
   editorial?: boolean;
 };
@@ -57,6 +59,19 @@ const textarea = (
   label: string,
   extra: Partial<FieldDescriptor> = {},
 ): FieldDescriptor => ({ name, label, kind: "textarea", ...extra });
+
+/**
+ * A Release's or Bundle's stored cover art (lib/coverUploads.ts checks the
+ * blob itself). Every person's change to it is a Human Override, since the
+ * importer attaches art without a Revision to learn authorship from.
+ */
+const coverImage: FieldDescriptor = {
+  name: "coverImage",
+  label: "Cover",
+  kind: "image",
+  editorial: true,
+  help: "A JPEG, PNG or WebP jacket. Removing it shows the ISBN jacket or the cloth placeholder.",
+};
 
 export const SOURCE_STATUS_OPTIONS = ["ongoing", "completed", "hiatus", "cancelled"] as const;
 
@@ -122,6 +137,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
     { name: "pubDate", label: "Publication date", kind: "partialDate" },
     { name: "price", label: "Price", kind: "price" },
     textarea("description", "Release description", { editorial: true }),
+    coverImage,
   ],
   releaseVariant: [text("name", "Variant name", { required: true })],
   releaseBundle: [
@@ -131,11 +147,20 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
     { name: "pubDate", label: "Publication date", kind: "partialDate" },
     { name: "price", label: "Price", kind: "price" },
     textarea("description", "Description", { editorial: true }),
+    coverImage,
   ],
 };
 
 export function fieldDescriptor(type: RecordType, field: string): FieldDescriptor | null {
   return EDITABLE_FIELDS[type].find((d) => d.name === field) ?? null;
+}
+
+/**
+ * The one editorial text field of a record type (its description or
+ * synopsis), whose source a change may cite; null when it has none.
+ */
+export function editorialField(type: RecordType): FieldDescriptor | null {
+  return EDITABLE_FIELDS[type].find((d) => d.kind === "textarea" && d.editorial) ?? null;
 }
 
 /**
@@ -222,6 +247,77 @@ function normalizePrice(raw: unknown): Normalized {
   return { ok: true, value: { amountCents, currency: currency.toUpperCase() } };
 }
 
+// ---------- covers ----------
+
+/** The file types a person may upload as cover art: what the shelf can show. */
+export const COVER_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+/** The largest cover file accepted. */
+export const MAX_COVER_UPLOAD_BYTES = 10 * 1024 * 1024;
+/** The narrowest jacket worth shelving; the browser checks it, having decoded the file. */
+export const MIN_COVER_WIDTH = 300;
+
+export type CoverValue = { storageId: string; sourceUrl?: string; attribution?: string };
+
+/**
+ * A submitted cover: `{ storageId, attribution? }`, or null/undefined to
+ * remove the stored art. `attribution` is where the art came from in a
+ * person's words; when it is an https URL it is kept as `sourceUrl` too, as
+ * the importer records it. Whether the blob exists and may be used is
+ * checked against storage (lib/coverUploads.ts).
+ */
+function normalizeImage(raw: unknown): Normalized {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+  if (typeof raw !== "object") return invalid("Malformed cover.");
+  const { storageId, attribution } = raw as Record<string, unknown>;
+  if (typeof storageId !== "string" || storageId === "") {
+    return invalid("A cover needs an uploaded file.");
+  }
+  if (attribution !== undefined && typeof attribution !== "string") {
+    return invalid("A cover's source must be text.");
+  }
+  const source = attribution?.trim() ?? "";
+  if (source.length > 500) return invalid("A cover's source is at most 500 characters.");
+  const value: CoverValue = { storageId };
+  if (source !== "") {
+    value.attribution = source;
+    if (httpsUrl(source)) value.sourceUrl = source;
+  }
+  return { ok: true, value };
+}
+
+// ---------- citations ----------
+
+export type Citation = { sourceName: string; url: string };
+
+/** Whether `raw` is an absolute https URL. */
+export function httpsUrl(raw: string): boolean {
+  try {
+    return new URL(raw).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate the source a person cites for editorial text: a name and the
+ * https page the text came from. Null stays null (no external source).
+ */
+export function normalizeCitation(
+  raw: Citation | null,
+): { ok: true; value: Citation | null } | { ok: false; message: string } {
+  if (raw === null) return { ok: true, value: null };
+  const sourceName = raw.sourceName.trim();
+  const url = raw.url.trim();
+  if (sourceName === "") return { ok: false, message: "Name the source of the text." };
+  if (sourceName.length > 200) {
+    return { ok: false, message: "A source name is at most 200 characters." };
+  }
+  if (!httpsUrl(url) || url.length > 2000) {
+    return { ok: false, message: "A source needs the https page the text came from." };
+  }
+  return { ok: true, value: { sourceName, url } };
+}
+
 /**
  * Validate and normalize one submitted field value against its descriptor.
  * `undefined` (or an empty string/list) clears an optional field.
@@ -257,5 +353,7 @@ export function normalizeFieldValue(descriptor: FieldDescriptor, raw: unknown): 
       return normalizePartialDate(raw);
     case "price":
       return normalizePrice(raw);
+    case "image":
+      return normalizeImage(raw);
   }
 }

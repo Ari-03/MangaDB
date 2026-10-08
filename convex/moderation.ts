@@ -16,22 +16,31 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { editionCoverage } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { getSourceByKey } from "./importSources";
-import { recordRef, recordType } from "./schema";
+import { internal } from "./_generated/api";
+import { citation as citationValidator, evidence, recordRef, recordType } from "./schema";
+import { fieldAttribution } from "./lib/attribution";
 import { liveUser } from "./lib/auth";
 import { latestTouch } from "./lib/authority";
+import { checkCoverStored, checkCoverUse, coverBlobsOf, pinCovers } from "./lib/coverRefs";
+import { coverUrl } from "./lib/covers";
+import { releasesOf } from "./lib/editionRows";
 import { fail } from "./lib/errors";
+import { checkEvidence } from "./lib/evidence";
 import { ratedByDataTeam, syncMatureProjection } from "./lib/mature";
 import { anchoredOn, currentOps } from "./lib/observations";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
+  editorialField,
   fieldDescriptor,
+  normalizeCitation,
   normalizeFieldValue,
+  type Citation,
   type RecordType,
 } from "./lib/moderationFields";
 import { seriesSearchText } from "./lib/searchMatch";
 import type { OpMeta } from "./lib/sensitiveOps";
-import { volumeTitle } from "./lib/titles";
+import { releaseLabel, volumeTitle } from "./lib/titles";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue } from "./lib/values";
 
@@ -106,12 +115,14 @@ export type FieldChange = { field: string; before: unknown; after: unknown };
  * Validate a submitted change set against the field registry and the current
  * doc, dropping no-ops. Throws ConvexError on anything malformed — both
  * submission and approval run this validation (spec §5); hard invariants are
- * never overridable.
+ * never overridable. `citing` allows an empty change set: the op only
+ * states the source of its record's text (`validateUpdate`).
  */
 export function validateChanges(
   type: RecordType,
   doc: CatalogDoc,
   submitted: Array<{ field: string; value: unknown }>,
+  citing = false,
 ): FieldChange[] {
   const seen = new Set<string>();
   const changes: FieldChange[] = [];
@@ -138,8 +149,69 @@ export function validateChanges(
     }
   }
 
-  if (changes.length === 0) fail("noChanges", "Nothing changed — edit at least one field.");
+  if (changes.length === 0 && !citing) {
+    fail("noChanges", "Nothing changed — edit at least one field.");
+  }
   return changes;
+}
+
+/**
+ * An update op as a person submits it, validated: `validateChanges` on the
+ * fields, plus the source the op states for the record's editorial text
+ * (`citation`: a citation, null for no external source, absent for no
+ * statement). The statement is kept whenever the text changes, so the new
+ * text carries it; with the text unchanged it is kept only when it differs
+ * from the text's current credit (lib/attribution.ts), so restating the
+ * same source is a no-op and naming another is a change of its own, which
+ * comes back with `citedText`, the text it names a source for. Empty text
+ * has no source. `author` is checked for a claim to any cover blob the op
+ * sets (lib/coverRefs.ts checkCoverUse).
+ */
+export async function validateUpdate(
+  ctx: QueryCtx,
+  args: {
+    ref: RecordRef;
+    doc: CatalogDoc;
+    changes: Array<{ field: string; value: unknown }>;
+    citation: Citation | null | undefined;
+    author: Id<"users">;
+  },
+): Promise<{
+  changes: FieldChange[];
+  citation: Citation | null | undefined;
+  citedText?: string;
+}> {
+  const { ref, doc } = args;
+  let citation = args.citation;
+  let citedText: string | undefined;
+  const field = editorialField(ref.type);
+  if (citation !== undefined) {
+    if (!field) fail("invalidField", `A ${ref.type} has no text to cite a source for.`);
+    const normalized = normalizeCitation(citation);
+    if (!normalized.ok) fail("invalidCitation", normalized.message);
+    citation = normalized.value;
+  }
+  const changes = validateChanges(ref.type, doc, args.changes, citation !== undefined);
+  if (field && citation !== undefined) {
+    const textChange = changes.find((change) => change.field === field.name);
+    const text = textChange ? textChange.after : (doc as Record<string, unknown>)[field.name];
+    if (typeof text !== "string" || text.trim() === "") {
+      citation = textChange ? null : undefined;
+    } else if (!textChange) {
+      const current = await fieldAttribution(ctx, ref, field.name, text);
+      if (sameValue(current, citation)) citation = undefined;
+      else citedText = text;
+    }
+  }
+  if (changes.length === 0 && citation === undefined) {
+    fail("noChanges", "Nothing changed — edit at least one field or its source.");
+  }
+  for (const change of changes) {
+    if (change.field === "coverImage") {
+      await checkCoverUse(ctx, doc as Doc<"releases">, change, args.author);
+    }
+  }
+  return { changes, citation, ...(citedText !== undefined ? { citedText } : {}) };
 }
 
 // ---------- the approved-update write path ----------
@@ -185,7 +257,7 @@ export async function insertRevision(
   ref: RecordRef,
   latest: Doc<"revisions"> | null | undefined,
   changes: Doc<"revisions">["changes"],
-  meta: OpMeta,
+  meta: OpMeta & { cited?: { field: string; citation: Citation | null } },
 ) {
   const seq = (latest?.seq ?? 0) + 1;
   const revisionId = await ctx.db.insert("revisions", {
@@ -196,7 +268,12 @@ export async function insertRevision(
     approvedBy: meta.approvedBy,
     changes,
     comment: meta.comment,
+    ...(meta.cited
+      ? { citedField: meta.cited.field, citation: meta.cited.citation ?? undefined }
+      : {}),
   });
+  // History keeps every cover it names (lib/coverRefs.ts).
+  await pinCovers(ctx, coverBlobsOf(changes), { revisionId });
   return { revisionId, seq };
 }
 
@@ -217,6 +294,8 @@ export async function applyUpdate(
     author: Doc<"proposals">["author"];
     approvedBy: Id<"users">;
     comment: string;
+    /** The source the op states for the record's editorial text (`validateUpdate`). */
+    citation?: Citation | null;
   },
 ) {
   const { ref, doc, changes } = args;
@@ -237,6 +316,10 @@ export async function applyUpdate(
   for (const change of changes) patch[change.field] = change.after;
 
   if (ref.type === "release" || ref.type === "releaseBundle") {
+    // A cover's blob may have gone since the op was checked.
+    for (const change of changes) {
+      if (change.field === "coverImage") await checkCoverStored(ctx, change.after);
+    }
     const isbns = changes.flatMap((c) =>
       (c.field === "isbn13" || c.field === "isbn10") && typeof c.after === "string"
         ? [c.after]
@@ -285,6 +368,9 @@ export async function applyUpdate(
       history,
       changes.map((c) => c.field),
     );
+    // A cover is always one: the importer attaches art without a Revision,
+    // so History cannot say who wrote the art a person replaced or removed.
+    if (changes.some((c) => c.field === "coverImage")) overridden.add("coverImage");
     if (overridden.size > 0) {
       const merged = new Set([...(doc.overriddenFields ?? []), ...overridden]);
       patch.overriddenFields = [...merged].sort();
@@ -292,7 +378,21 @@ export async function applyUpdate(
   }
 
   await ctx.db.patch(ref.id, patch as never);
-  return await insertRevision(ctx, ref, latest, changes, args);
+  // The library row stores its Series' shelf cover (seriesBrowse.ts): bring
+  // it up to the new art now rather than at the next rebuild.
+  if (ref.type === "release" && changes.some((c) => c.field === "coverImage")) {
+    await ctx.scheduler.runAfter(0, internal.seriesBrowse.refreshStats, {
+      seriesIds: (doc as Doc<"releases">).seriesIds,
+    });
+  }
+  const field = editorialField(ref.type);
+  return await insertRevision(ctx, ref, latest, changes, {
+    ...args,
+    cited:
+      args.citation !== undefined && field
+        ? { field: field.name, citation: args.citation }
+        : undefined,
+  });
 }
 
 // ---------- lifting a Human Override ----------
@@ -417,6 +517,10 @@ export const submitDirectEdit = mutation({
     baseRevisionId: v.optional(v.id("revisions")),
     changes: v.array(v.object({ field: v.string(), value: v.any() })),
     comment: v.string(),
+    // The source of the record's editorial text, as validateUpdate reads it.
+    citation: v.optional(v.union(citationValidator, v.null())),
+    // The source record a description was taken from, shown beside the change.
+    evidence: v.optional(v.array(evidence)),
   },
   handler: async (ctx, args) => {
     const user = await requireModerator(ctx);
@@ -432,7 +536,15 @@ export const submitDirectEdit = mutation({
     }
     if (doc.locked) fail("locked", "This record is temporarily locked.");
 
-    const changes = validateChanges(ref.type, doc, args.changes);
+    const { changes, citation, citedText } = await validateUpdate(ctx, {
+      ref,
+      doc,
+      changes: args.changes,
+      citation: args.citation,
+      author: user._id,
+    });
+    const evidenceRows = args.evidence ?? [];
+    await checkEvidence(ctx, evidenceRows);
     const author = {
       kind: "user" as const,
       userId: user._id,
@@ -441,8 +553,17 @@ export const submitDirectEdit = mutation({
 
     const proposalId = await insertApprovedProposal(ctx, author, user._id);
     await insertFirstVersion(ctx, proposalId, {
-      ops: [{ kind: "update", ref, baseRevisionId: args.baseRevisionId, changes }],
-      evidence: [],
+      ops: [
+        {
+          kind: "update",
+          ref,
+          baseRevisionId: args.baseRevisionId,
+          changes,
+          ...(citation !== undefined ? { citation } : {}),
+          ...(citedText !== undefined ? { citedText } : {}),
+        },
+      ],
+      evidence: evidenceRows,
       changeComment: comment,
     });
 
@@ -455,6 +576,7 @@ export const submitDirectEdit = mutation({
       author,
       approvedBy: user._id,
       comment,
+      citation,
     });
     return { proposalId, revisionId, seq };
   },
@@ -621,9 +743,90 @@ export const editForm = query({
         value: (doc as Record<string, unknown>)[descriptor.name] ?? null,
       })),
       backLink,
+      cover:
+        type === "release" || type === "releaseBundle"
+          ? await coverContext(ctx, doc as Doc<"releases"> | Doc<"releaseBundles">)
+          : null,
+      /** The editorial text's current source (lib/attribution.ts), for the form's Keep choice. */
+      attribution: await descriptionCredit(ctx, ref, doc),
     };
   },
 });
+
+/** The current credit of a record's editorial text, or null. */
+async function descriptionCredit(ctx: QueryCtx, ref: RecordRef, doc: CatalogDoc) {
+  const field = editorialField(ref.type);
+  if (!field) return null;
+  return await fieldAttribution(ctx, ref, field.name, (doc as Record<string, unknown>)[field.name]);
+}
+
+/** Related art the cover form offers to reuse. */
+const RELATED_COVERS = 12;
+
+/**
+ * What the Cover section of the form shows for a Release or Bundle: its
+ * stored art (`missing` when the blob is gone), the art of related records
+ * to reuse (the Edition's other Releases, and the Bundles a Release is sold
+ * in), the ISBN the shelf falls back to, and the Series the art follows
+ * for maturity.
+ */
+async function coverContext(ctx: QueryCtx, doc: Doc<"releases"> | Doc<"releaseBundles">) {
+  const own = doc.coverImage;
+  const url = await coverUrl(ctx, own?.storageId);
+  const related: Array<{
+    storageId: string;
+    url: string;
+    label: string;
+    attribution: string | null;
+  }> = [];
+  const offer = async (cover: Doc<"releases">["coverImage"], label: string): Promise<void> => {
+    const storageId = cover?.storageId;
+    if (!storageId || storageId === own?.storageId || related.length >= RELATED_COVERS) return;
+    if (related.some((entry) => entry.storageId === storageId)) return;
+    const art = await coverUrl(ctx, storageId);
+    if (art) related.push({ storageId, url: art, label, attribution: cover.attribution ?? null });
+  };
+  let label = "this box set";
+  let series: { publicId: number; title: string } | null = null;
+  let mature = false;
+  if ("editionId" in doc) {
+    label = releaseLabel(doc);
+    for (const sibling of await releasesOf(ctx, doc.editionId)) {
+      if (sibling._id !== doc._id && sibling.status === "active") {
+        await offer(sibling.coverImage, releaseLabel(sibling));
+      }
+    }
+    const memberships = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_release", (q) => q.eq("releaseId", doc._id))
+      .take(8);
+    for (const membership of memberships) {
+      const bundle = await ctx.db.get(membership.bundleId);
+      if (bundle?.status === "active") await offer(bundle.coverImage, `the box set ${bundle.name}`);
+    }
+    const edition = await ctx.db.get(doc.editionId);
+    if (edition) {
+      const covered = await editionCoverage(ctx, edition);
+      series = covered.series
+        ? { publicId: covered.series.publicId, title: covered.series.title }
+        : null;
+      mature = covered.mature;
+    }
+  }
+  return {
+    label,
+    isbn13: doc.isbn13 ?? null,
+    current: {
+      url,
+      storageId: own?.storageId ?? null,
+      attribution: own?.attribution ?? null,
+      missing: own?.storageId !== undefined && url === null,
+    },
+    related,
+    series,
+    mature,
+  };
+}
 
 // ---------- source blurbs (reviewer visibility) ----------
 
@@ -659,25 +862,33 @@ function blurbText(raw: unknown): string | null {
 
 /**
  * Every blurb a source offered for one Release (its description) or Series
- * (its synopsis), for the edit form's review panel: one entry per linked
- * observation's current snapshot text, plus any recordOnly conflict entry
- * whose text differs from it. Also which text is canonical now and who
- * authored it (the latest Revision touching the field, as reconciliation
- * resolves the incumbent). Moderator/Administrator only.
+ * (its synopsis), for the Description section of the edit and propose
+ * forms: one entry per linked observation's current snapshot text, plus any
+ * recordOnly conflict entry whose text differs from it. Also which text is
+ * canonical now and who authored it (the latest Revision touching the
+ * field, as reconciliation resolves the incumbent). Volumes and Bundles
+ * take no source text, so theirs list nothing. Data Team: the blurbs are
+ * the sources' own public text, and Editors pick from them too.
  */
 export const sourceBlurbs = query({
   args: {
     ref: v.object({
-      type: v.union(v.literal("release"), v.literal("series")),
+      type: v.union(
+        v.literal("release"),
+        v.literal("series"),
+        v.literal("volume"),
+        v.literal("releaseBundle"),
+      ),
       id: v.string(),
     }),
   },
   handler: async (ctx, { ref }) => {
-    await requireModerator(ctx);
+    await requireDataTeam(ctx);
     const id = ctx.db.normalizeId(TABLE_FOR_TYPE[ref.type], ref.id);
     const doc = id ? await ctx.db.get(id) : null;
     if (!id || !doc) return null;
-    const field = ref.type === "release" ? "description" : "synopsis";
+    const field =
+      ref.type === "release" || ref.type === "releaseBundle" ? "description" : "synopsis";
     const canonicalText = blurbText((doc as Record<string, unknown>)[field]);
 
     const touch = latestTouch(await revisionsOf(ctx, { type: ref.type, id } as RecordRef), field);
@@ -691,10 +902,13 @@ export const sourceBlurbs = query({
             }
           : { kind: "source" as const, sourceKey: touch.author.sourceKey };
 
-    const observations = await ctx.db
-      .query("sourceObservations")
-      .withIndex("by_record", (q) => q.eq("recordRef.type", ref.type).eq("recordRef.id", id))
-      .take(BLURB_OBSERVATION_CAP + 1);
+    const observations =
+      ref.type === "release" || ref.type === "series"
+        ? await ctx.db
+            .query("sourceObservations")
+            .withIndex("by_record", (q) => q.eq("recordRef.type", ref.type).eq("recordRef.id", id))
+            .take(BLURB_OBSERVATION_CAP + 1)
+        : [];
 
     const sourceNames = new Map<string, string>();
     const sourceName = async (key: string) => {
@@ -758,6 +972,22 @@ export const sourceBlurbs = query({
 
 // ---------- public revision history (spec §5) ----------
 
+/**
+ * The art behind every cover a change list names, for History and the
+ * proposal page to draw before/after thumbnails: `url` is null when the
+ * blob is gone or only a placeholder.
+ */
+export async function coverArtOf(
+  ctx: QueryCtx,
+  changes: ReadonlyArray<{ field: string; before?: unknown; after?: unknown }>,
+) {
+  const art = [];
+  for (const storageId of coverBlobsOf(changes)) {
+    art.push({ storageId: storageId as string, url: await coverUrl(ctx, storageId) });
+  }
+  return art;
+}
+
 const historyTargetArg = v.union(
   v.literal("series"),
   v.literal("volume"),
@@ -807,11 +1037,17 @@ export const recordHistory = query({
               },
         approver: revision.approvedBy ? await usernameOf(revision.approvedBy) : null,
         citation: revision.citation ?? null,
+        // A person's stated source covers this field alone (lib/attribution.ts).
+        citedField: revision.citedField ?? null,
       });
     }
     return {
       overriddenFields: resolved.overriddenFields ?? [],
       revisions: entries,
+      coverArt: await coverArtOf(
+        ctx,
+        revisions.flatMap((revision) => revision.changes),
+      ),
     };
   },
 });

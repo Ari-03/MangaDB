@@ -5,6 +5,28 @@ catalog. Every human and automated change goes through a Proposal, and
 every approved change leaves a public Revision. Terms are defined in
 [CONTEXT.md](../CONTEXT.md).
 
+## The workroom
+
+Every `/mod` tool page (review queue, imports, catalog gaps, your
+proposals, launch, comments while they are on, and roles for Moderators)
+sits in one frame (`src/lib/modShell.tsx`): a breadcrumb, a tab strip of
+the tools, the page title and one line of hint. The queue tab counts
+In-Review proposals, and Imports gets a red dot while any source is
+unhealthy (`workroom.counts`; each count reads at most 101 rows and shows
+"100+" past 100). Explanations of how a page works sit in a closed "How
+this works" under the panel they explain. A page body that fails to load
+shows the error and a Reload button inside the frame. The edit, propose
+and manage forms keep their own layout.
+
+The frame's right end links the MangaDB Discord and opens "Report a bug",
+a dialog with the page address, your role, theme, window size, browser and
+the time (and the proposal id on a proposal page), plus three questions to
+answer. Copy it and paste it into the Discord server's channel for bugs
+and feedback. Nothing is sent from the site. The invite lives in one
+constant, `DISCORD_INVITE_URL` in `src/lib/community.tsx`; the site
+footer's Community column and the About page's Corrections section link
+it too.
+
 ## Roles
 
 Administrators appoint Moderators. Moderators appoint Editors. Editors
@@ -90,6 +112,49 @@ A Proposal may clear overrides beside other ops, on the same record or
 others, and applies all of them or none. It may not both change a field
 and clear that field's override: the change is itself a human correction.
 
+### Covers
+
+Release and Bundle forms have a Cover section (`#cover`), where a person
+drops, chooses or pastes a JPEG, PNG or WebP (2 KB to 10 MB, at least 300
+px wide), reuses art an Edition sibling or a containing Bundle stores, or
+removes the stored art. The file uploads first: `coverUploads.uploadUrl`
+issues a URL on this deployment's `/cover-upload` HTTP action
+(`convex/http.ts`) carrying the upload's id and token, the action stores
+the file and records the blob on that upload, and `coverUploads.uploaded`
+checks it. An upload can only name a blob it stored, so no one can claim,
+or have deleted, art they did not upload. The cover is then one more
+field of the same Save or Proposal:
+`coverImage`. Only the uploader, or art the catalog already shows or
+History names, can go into a change.
+
+A person's cover change, removal included, is always a Human Override on
+`coverImage`, since importers attach art without a Revision.
+`imports.attachCover` refuses a Release with that override until it is
+cleared. No blob is deleted while a Release, Bundle or Variant shows it, a
+Revision names it, or a Draft or In-Review Proposal names it (`coverRefs`,
+`convex/lib/coverRefs.ts`). An hourly sweep deletes uploads nothing came to
+use a day after upload. Revisions written before `coverRefs` existed get
+their pins from `coverUploads.pinRevisionCovers`, which a ten-minute cron
+starts after a deploy and restarts if it stalls (its cursor is the
+`coverPinBackfill` row). Until it is done, neither `attachCover` nor the
+sweep deletes any cover art.
+
+### Description sources
+
+The Description section (`#description`) shows the text with a preview of
+the page, the sources' own blurbs with "Use this description", and a
+choice of source: keep the current one, a blurb used from a source, another
+page (a name and an https URL), or original prose. The choice is the
+`update` op's `citation` and lands on the Revision with `citedField`. A
+source change with the text unchanged is a change of its own, tied to the
+text it was chosen for (`citedText`): if that text changes before the
+Proposal is approved, submission and approval refuse it and a rebase drops
+the source, so it has to be chosen again. Public pages
+end each blurb with `Source: …` from `convex/lib/attribution.ts`: the
+newest Revision that wrote or cited the text decides it, a person's edit
+that stated nothing credits nobody, and text no Revision wrote is credited
+only when exactly one source's linked record offers exactly that text.
+
 ## Proposals and the review queue
 
 Any Data Team member drafts a Proposal (`proposals.saveDraft`) and submits
@@ -124,12 +189,28 @@ Imports use the same machinery for the creations they queue.
 
 Pages:
 
-- `/mod/queue`: In-Review proposals, oldest first, filterable by operation,
-  record type, author, warnings, staleness and age. Claiming signals who is
-  looking and never locks.
+- `/mod/queue`: In-Review proposals, oldest submission first. Each row
+  names the record the proposal changes (its title, a small jacket, its
+  type) and what changes: up to three fields with before and after, what
+  it creates, the overrides it clears, or a report's message. A person's
+  change comment sits under that line. An importer's standing sentence
+  does not; the proposal page still shows the full comment. Filters cover
+  change kind (operation), record type, kind (import offer, import
+  creation, field change, new records, merge/hide/lock, report), author
+  kind, author or source name, waiting time, warnings and staleness. Five
+  views (All, Import offers, People, Reports, Stale) set those filters.
+  Filters and views live in the URL, so a view can be shared as a link.
+  The list loads 25 proposals at a time (`proposals.reviewQueuePage` is
+  paginated, at most 50 a page) and says how many it has checked and how
+  many match; "Check the next 25" reads further. The age filter measures
+  from your browser's clock. Claiming signals who is looking and never
+  locks. The older `proposals.reviewQueue` (no paging, an array with
+  `ageMs`) stays for clients built before the paged one and filters by the
+  same rules.
 - `/mod/proposal/{id}`: every version with before and after per record,
   bases, evidence, and internal discussion notes.
-- `/mod/proposals`: your own proposals.
+- `/mod/proposals`: your own proposals, titled by their change comment,
+  with the same change line as the queue.
 - `/mod/propose/{type}/{key}`: the Editor form, linked as "Propose a
   change" on record pages.
 
@@ -255,12 +336,22 @@ reason in history. A locked Series must be unlocked before either action.
 
 ## Packaging, bookless Series and held books
 
-`/mod/packaging` (`convex/packaging.ts`) lists Unmapped Packaging, which a
-Moderator maps to Volumes (writing coverage and a Revision), and bookless
-Series with the ANN entry that built each one. The duplicate-Series queue
-lives on `/mod/launch`. See [imports](imports.md) for how both arise.
+`/mod/packaging` ("Catalog gaps", `convex/packaging.ts`) has two panels,
+kept in the URL. "Series without books" lists bookless Series with the ANN
+entry that built each one. Each row offers "Add a release" (the
+`/mod/propose-new` wizard), "Open series", and for Moderators "Hide or
+merge…" (the manage page). Its search box and sort act on the rows loaded,
+the oldest 100, and the panel says when more follow. "Unmapped packaging"
+lists Unmapped Packaging, which a Moderator maps to Volumes (writing
+coverage and a Revision). The duplicate-Series queue lives on
+`/mod/launch`. See [imports](imports.md) for how both arise.
 
-The "Held books" section of `/mod/imports` (`imports.heldBooks`) lists the
+`/mod/imports` has three panels, kept in the URL: Sources, Held books and
+Run history. Sources shows each source's health (healthy, or unhealthy
+after three failed runs in a row) and its schedule (its cadence, or Paused
+when it is switched off) in separate columns, unhealthy sources first.
+
+The "Held books" panel of `/mod/imports` (`imports.heldBooks`) lists the
 books an import observed but could not place, newest first, filtered by
 kind and source. Each row shows the source's own title, link and ISBN, the
 Series and label it proposes, the matched Series, and the reason. A book

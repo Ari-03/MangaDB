@@ -1146,6 +1146,10 @@ unhealthy email carries the latest run's errors. Sending uses Resend.
 Without its variables, alerts are logged and skipped and the run is
 unaffected. Setup is in [configuration.md](configuration.md#convex-deployment).
 
-**Dashboard.** `/mod/imports` (Data Team) lists every source with its
-cadence, health and last run, unhealthy first, the Held Books (see
-"Held books" above), and run history with errors.
+**Dashboard.** `/mod/imports` (Data Team) has three panels. Sources lists
+every source with its health, its schedule (cadence, or Paused when it is
+switched off) and its last run, unhealthy first; health and schedule are
+separate columns (`imports.dashboardPage`, at most 50 sources; the older
+`imports.dashboard` returns the same rows as an array for clients built
+before it). Held books lists the Held Books (see "Held books" above), and
+Run history the runs with their errors.

@@ -5,15 +5,19 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { editorialField } from "../../convex/lib/moderationFields";
 import { mutationErrorMessage } from "~/lib/errors";
 import {
+  FieldChangeItem,
+  StatedSource,
+  type CoverArt,
   CLEAR_OVERRIDE_HINT,
   ModGate,
   ProposalStateChip,
   renderFieldValue,
   writtenByLabel,
 } from "~/lib/moderation";
-import { Breadcrumbs } from "~/lib/pageScaffold";
+import { ModWorkroom } from "~/lib/modShell";
 import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
 import { slugParams } from "~/lib/slug";
 
@@ -305,7 +309,7 @@ function PlacementPanel({
   );
 }
 
-function OpsList({ ops }: { ops: RenderedOps }) {
+function OpsList({ ops, art }: { ops: RenderedOps; art: CoverArt }) {
   return (
     <ol className="proposal-ops">
       {ops.map((op, i) => (
@@ -343,12 +347,15 @@ function OpsList({ ops }: { ops: RenderedOps }) {
               </p>
               <ul className="revision-changes">
                 {op.changes.map((change) => (
-                  <li key={change.field}>
-                    <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
-                    <ins>{renderFieldValue(change.after)}</ins>
-                  </li>
+                  <FieldChangeItem key={change.field} change={change} art={art} />
                 ))}
               </ul>
+              {op.citation !== undefined ? (
+                <StatedSource
+                  field={editorialField(op.recordType)?.name ?? "text"}
+                  citation={op.citation}
+                />
+              ) : null}
             </>
           ) : op.kind === "clearOverride" ? (
             <>
@@ -513,31 +520,35 @@ function ProposalDetail({ id }: { id: string }) {
   const coveragePending = detail.placement?.coverage.kind === "pending";
 
   return (
-    <main className="mod-page mod-proposal-page">
-      <Breadcrumbs
-        trail={[
-          <Link key="queue" to="/mod/queue">
-            Review queue
-          </Link>,
-          "Proposal",
-        ]}
-      />
-      <div className="mod-title-row">
-        <h1>Proposal</h1>
-        <ProposalStateChip state={detail.state} />
-        {detail.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
-      </div>
-      <p className="section-hint">
-        By{" "}
-        {detail.author.kind === "user"
-          ? `@${detail.author.username ?? "deleted"}${detail.author.role ? ` (${detail.author.role})` : ""}`
-          : `import source "${detail.author.sourceKey}"`}
-        {detail.claimedBy
-          ? ` · claimed by @${detail.claimedBy} (claims coordinate — any Moderator can still decide)`
-          : null}
-        {detail.decidedBy ? ` · decided by @${detail.decidedBy}` : null}
-      </p>
-
+    <ModWorkroom
+      current="queue"
+      crumbs={[
+        <Link key="queue" to="/mod/queue">
+          Review queue
+        </Link>,
+        "Proposal",
+      ]}
+      title="Proposal"
+      className="mod-proposal-page"
+      titleAside={
+        <>
+          <ProposalStateChip state={detail.state} />
+          {detail.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
+        </>
+      }
+      hint={
+        <>
+          By{" "}
+          {detail.author.kind === "user"
+            ? `@${detail.author.username ?? "deleted"}${detail.author.role ? ` (${detail.author.role})` : ""}`
+            : `import source "${detail.author.sourceKey}"`}
+          {detail.claimedBy
+            ? ` · claimed by @${detail.claimedBy} (claims coordinate — any Moderator can still decide)`
+            : null}
+          {detail.decidedBy ? ` · decided by @${detail.decidedBy}` : null}
+        </>
+      }
+    >
       {detail.stale && detail.state === "inReview" ? (
         <p className="notice">
           A record this proposal touches changed since submission. Approval is blocked until the
@@ -700,7 +711,7 @@ function ProposalDetail({ id }: { id: string }) {
               Will warn on submit: {detail.draft.warnings.map(warningLabel).join("; ")}
             </p>
           ) : null}
-          <OpsList ops={detail.draft.ops} />
+          <OpsList ops={detail.draft.ops} art={detail.coverArt} />
           <h3>Evidence</h3>
           <EvidenceList evidence={detail.draft.evidence} />
         </section>
@@ -719,7 +730,7 @@ function ProposalDetail({ id }: { id: string }) {
               Acknowledged warnings: {version.warnings.map(warningLabel).join("; ")}
             </p>
           ) : null}
-          <OpsList ops={version.ops} />
+          <OpsList ops={version.ops} art={detail.coverArt} />
           <h3>Evidence</h3>
           <EvidenceList evidence={version.evidence} />
         </section>
@@ -778,6 +789,6 @@ function ProposalDetail({ id }: { id: string }) {
           Add note
         </button>
       </section>
-    </main>
+    </ModWorkroom>
   );
 }

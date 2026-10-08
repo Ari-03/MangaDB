@@ -1,11 +1,15 @@
 import { createFileRoute, notFound, Outlet, rootRouteId } from "@tanstack/react-router";
 
+import { WorkroomErrorPage } from "~/lib/modShell";
+
 /**
  * The /mod/* layout: data-team tools are never indexed. Each page keeps its
  * own access gate (lib/moderation.tsx ModGate), since the pages differ in
  * the role they need and in what a refused visitor reads. A URL with no
  * mod page under it (the bare /mod, or a mistyped /mod/…) is handed to the
- * root's 404, exactly as before this layout existed.
+ * root's 404, exactly as before this layout existed. An error no page
+ * caught renders inside the workroom frame (WorkroomErrorPage), so the
+ * tools stay one click away.
  */
 export const Route = createFileRoute("/mod")({
   beforeLoad: ({ matches }) => {
@@ -15,4 +19,5 @@ export const Route = createFileRoute("/mod")({
     meta: [{ name: "robots", content: "noindex" }],
   }),
   component: Outlet,
+  errorComponent: WorkroomErrorPage,
 });

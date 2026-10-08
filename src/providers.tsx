@@ -5,6 +5,7 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
 import { AnalyticsProvider } from "~/lib/analytics";
+import { DISCORD_INVITE_URL, DiscordIcon } from "~/lib/community";
 import { convexUrl } from "~/lib/convexUrl";
 import { MatureProvider } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
@@ -128,6 +129,7 @@ export function SiteHeader() {
         </nav>
         <SearchCombobox />
         <div className="header-actions">
+          <DiscordLink />
           <ThemeToggle />
           <button
             className="icon-btn menu-toggle"
@@ -173,6 +175,22 @@ export function SiteHeader() {
         </div>
       </div>
     </header>
+  );
+}
+
+// A one-click way into the community Discord, sitting beside the theme toggle.
+function DiscordLink() {
+  return (
+    <a
+      className="icon-btn discord-link"
+      href={DISCORD_INVITE_URL}
+      target="_blank"
+      rel="noreferrer"
+      title="Join the MangaDB Discord"
+    >
+      <span className="visually-hidden">Join the MangaDB Discord</span>
+      <DiscordIcon />
+    </a>
   );
 }
 

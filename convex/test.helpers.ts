@@ -13,6 +13,8 @@ import rateLimiterTest from "@convex-dev/rate-limiter/test";
 import posthogTest from "@posthog/convex/test";
 import { expect, vi } from "vitest";
 
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
+
 import { api, internal } from "./_generated/api";
 import type { DataModel, Doc, Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -36,8 +38,48 @@ export function makeT(options: { transactionLimits?: TransactionLimits } = {}) {
 }
 export type TestT = ReturnType<typeof makeT>;
 
+/**
+ * Finish the backfill of older Revisions' cover pins on `t`
+ * (coverUploads.pinRevisionCovers), as on a deployment that has run it:
+ * until then nothing deletes cover art, so a test of the importer's or
+ * the sweep's deletions starts here.
+ */
+export async function pinCoverHistory(t: TestT) {
+  expect(await t.mutation(internal.coverUploads.pinRevisionCovers, {})).toMatchObject({
+    done: true,
+  });
+}
+
 /** `t` or a `t.withIdentity(...)` accessor: anything that runs functions. */
 export type Accessor = TestConvexForDataModel<DataModel>;
+
+/** The review queue's filters (proposals.reviewQueuePage), without paging. */
+export type QueueFilterArgs = Omit<
+  FunctionArgs<typeof api.proposals.reviewQueuePage>,
+  "paginationOpts"
+>;
+
+/**
+ * Every In-Review Proposal the queue shows for `filters`, oldest first:
+ * pages through proposals.reviewQueuePage `pageSize` at a time and keeps the
+ * matching rows.
+ */
+export async function queueRows(as: Accessor, filters: QueueFilterArgs = {}, pageSize = 10) {
+  const rows = [];
+  let cursor: string | null = null;
+  for (;;) {
+    const result: FunctionReturnType<typeof api.proposals.reviewQueuePage> = await as.query(
+      api.proposals.reviewQueuePage,
+      {
+        ...filters,
+        paginationOpts: { numItems: pageSize, cursor },
+      },
+    );
+    for (const row of result.page) if (row.matches) rows.push(row);
+    if (result.isDone) return rows;
+    cursor = result.continueCursor;
+  }
+}
 
 // ---------- users and the Data Team ----------
 
