@@ -8,9 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { recordUnplaced } from "./lib/observations";
+import { parseDumpLine } from "./lib/openLibrary";
 import {
   insertCoverage,
   insertEdition,
+  insertEditionLine,
   insertObservation,
   insertPublisher,
   insertRelease,
@@ -538,6 +541,258 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
   });
 });
 
+describe("openLibrary.sync — only a whole single-Volume Edition takes the ordinary slot (H02)", () => {
+  // Staging held Dragon Ball Vol. 6 against VIZBIG Vol. 2, which collects
+  // Volumes 4–6: packaging, not Volume 6's ordinary book.
+  const DRAGON_BALL_6 = {
+    key: "/books/OL7M",
+    title: "Dragon Ball, Vol. 6",
+    publishers: ["VIZ Media"],
+    isbn_13: ["9781569316375"],
+    physical_format: "paperback",
+    languages: [{ key: "/languages/eng" }],
+  };
+  const VIZBIG_2 = "9781421520698";
+  const OTHER_ISBN = "9781974701452";
+
+  /**
+   * How VIZ's existing Edition covers Volume 6: an omnibus of 4–6, part of
+   * it, a line's book, Unmapped Packaging with a leftover complete row or
+   * with none, or the ordinary whole Volume in either format.
+   */
+  type Shape =
+    | "omnibus"
+    | "partial"
+    | "line"
+    | "unmappedRow"
+    | "unmappedEmpty"
+    | "whole"
+    | "wholeDigital";
+
+  /** VIZ, "Dragon Ball" Volumes 4–6, and one ISBN'd VIZ Release on an Edition of that shape. */
+  async function dragonBall(t: TestT, shape: Shape) {
+    return await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { publicId: 1, title: "Dragon Ball" });
+      const volumeIds: Id<"volumes">[] = [];
+      for (const position of [4, 5, 6])
+        volumeIds.push(await insertVolume(ctx, { seriesId, position }));
+      const volume6 = volumeIds[2]!;
+      const lined = shape === "line" || shape === "unmappedEmpty";
+      const editionLineId = lined
+        ? await insertEditionLine(ctx, { seriesId, publisherId, name: "Collector's Edition" })
+        : undefined;
+      const editionId = await insertEdition(ctx, {
+        publisherId,
+        ...(editionLineId !== undefined ? { editionLineId, linePosition: "2" } : {}),
+        ...(shape === "unmappedRow" || shape === "unmappedEmpty"
+          ? { coverageUnmapped: true as const }
+          : {}),
+      });
+      if (shape === "omnibus") {
+        for (const [i, volumeId] of volumeIds.entries()) {
+          await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
+        }
+      } else if (shape !== "unmappedEmpty") {
+        await insertCoverage(ctx, {
+          editionId,
+          volumeId: volume6,
+          extent: shape === "partial" ? "partial" : "complete",
+        });
+      }
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: shape === "omnibus" ? VIZBIG_2 : OTHER_ISBN,
+        ...(shape === "wholeDigital" ? { format: "digital" as const } : {}),
+      });
+      return { publisherId, seriesId, volume6, editionId, releaseId };
+    });
+  }
+
+  /** The record's observation, its Release, and its hold, as stored. */
+  const stored = (t: TestT) =>
+    t.run(async (ctx) => {
+      const observation = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === DRAGON_BALL_6.key,
+      )!;
+      const release = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === "9781569316375",
+      );
+      const hold = await ctx.db
+        .query("placementHolds")
+        .withIndex("by_observation", (q) => q.eq("observationId", observation._id))
+        .unique();
+      return { observation, release, hold };
+    });
+
+  it.each<Shape>(["omnibus", "partial", "line", "unmappedRow", "unmappedEmpty"])(
+    "a VIZ %s Edition covering Volume 6 leaves its ordinary slot free: the book gets its own Edition",
+    async (shape) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const blocker = await dragonBall(t, shape);
+      stubDump([DRAGON_BALL_6]);
+      await sync(t);
+
+      const { observation, release, hold } = await stored(t);
+      expect(hold).toBeNull();
+      expect(release).toMatchObject({ format: "physical", seriesIds: [blocker.seriesId] });
+      expect(observation.recordRef).toEqual({ type: "release", id: release!._id });
+      await t.run(async (ctx) => {
+        // A new ordinary Edition of Volume 6 alone, never the packaging's.
+        expect(release!.editionId).not.toBe(blocker.editionId);
+        const edition = (await ctx.db.get(release!.editionId))!;
+        expect(edition.editionLineId).toBeUndefined();
+        expect(edition.coverageUnmapped).toBeUndefined();
+        const coverage = await ctx.db
+          .query("volumeCoverages")
+          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+          .collect();
+        expect(coverage.map((row) => [row.volumeId, row.extent])).toEqual([
+          [blocker.volume6, "complete"],
+        ]);
+        // The packaging keeps its own Release and nothing else.
+        const onBlocker = (await ctx.db.query("releases").collect()).filter(
+          (r) => r.editionId === blocker.editionId,
+        );
+        expect(onBlocker.map((r) => r._id)).toEqual([blocker.releaseId]);
+        expect(await ctx.db.query("volumes").collect()).toHaveLength(3);
+      });
+    },
+  );
+
+  it("releases the book staging held against VIZBIG Vol. 2 on the next sighting", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const blocker = await dragonBall(t, "omnibus");
+    // As the old slot rule left it: unlinked and held as a same-format reprint.
+    await t.run(async (ctx) => {
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: DRAGON_BALL_6.key,
+        snapshot: parseDumpLine(dumpLine(DRAGON_BALL_6))!,
+        lastSeenAt: 1,
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(observationId))!,
+        {
+          kind: "isbn",
+          reason: `Volume 6 already has a physical VIZ Media Release (ISBN ${VIZBIG_2}).`,
+          seriesId: blocker.seriesId,
+        },
+        1,
+      );
+    });
+    stubDump([DRAGON_BALL_6]);
+    await sync(t);
+
+    const { observation, release, hold } = await stored(t);
+    expect(hold).toBeNull();
+    expect(observation.recordRef).toEqual({ type: "release", id: release!._id });
+    expect(release!.editionId).not.toBe(blocker.editionId);
+    expect(observation.conflicts?.find((c) => c.field === "placement")).toBeUndefined();
+  });
+
+  it("still holds a different ISBN against the publisher's whole Volume 6 in that format", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const blocker = await dragonBall(t, "whole");
+    stubDump([DRAGON_BALL_6]);
+    await sync(t);
+
+    const { observation, release, hold } = await stored(t);
+    expect(release).toBeUndefined();
+    expect(observation.recordRef).toBeUndefined();
+    expect(hold).toMatchObject({ kind: "isbn", seriesId: blocker.seriesId });
+    expect(observation.conflicts?.find((c) => c.field === "placement")?.reason).toBe(
+      `Volume 6 already has a physical VIZ Media Release (ISBN ${OTHER_ISBN}).`,
+    );
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      expect(await ctx.db.query("editions").collect()).toHaveLength(1);
+    });
+  });
+
+  it("a whole decimal-labelled Volume is an ordinary slot too", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { seriesId } = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { publicId: 1, title: "Dragon Ball" });
+      const volumeId = await insertVolume(ctx, { seriesId, position: 14.5, label: "14.5" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
+      await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: OTHER_ISBN,
+      });
+      return { seriesId };
+    });
+    stubDump([{ ...DRAGON_BALL_6, title: "Dragon Ball, Vol. 14.5" }]);
+    await sync(t);
+
+    const { observation, release, hold } = await stored(t);
+    expect(release).toBeUndefined();
+    expect(hold).toMatchObject({ kind: "isbn", seriesId });
+    expect(observation.conflicts?.find((c) => c.field === "placement")?.reason).toBe(
+      `Volume 14.5 already has a physical VIZ Media Release (ISBN ${OTHER_ISBN}).`,
+    );
+  });
+
+  it("another format of the whole Volume is a sibling: the book joins that Edition", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const digital = await dragonBall(t, "wholeDigital");
+    stubDump([DRAGON_BALL_6]);
+    await sync(t);
+
+    const { observation, release, hold } = await stored(t);
+    expect(hold).toBeNull();
+    expect(release).toMatchObject({ format: "physical", editionId: digital.editionId });
+    expect(observation.recordRef).toEqual({ type: "release", id: release!._id });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("editions").collect()).toHaveLength(1);
+    });
+  });
+
+  it("an ISBN on a Release an Editor hid still holds the book, slot free or not", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const blocker = await dragonBall(t, "omnibus");
+    await t.run(async (ctx) => {
+      const editionId = await insertEdition(ctx, { publisherId: blocker.publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: blocker.volume6 });
+      await insertRelease(ctx, {
+        editionId,
+        publisherId: blocker.publisherId,
+        seriesIds: [blocker.seriesId],
+        isbn13: "9781569316375",
+        status: "hidden",
+      });
+    });
+    stubDump([DRAGON_BALL_6]);
+    await sync(t);
+
+    const { observation, hold } = await stored(t);
+    expect(observation.recordRef).toBeUndefined();
+    expect(hold).toMatchObject({ kind: "isbn", seriesId: blocker.seriesId });
+    expect(observation.conflicts?.find((c) => c.field === "match")?.reason).toContain(
+      "belongs to a Release an Editor hid",
+    );
+    await t.run(async (ctx) => {
+      const active = (await ctx.db.query("releases").collect()).filter(
+        (r) => r.status === "active",
+      );
+      expect(active.map((r) => r._id)).toEqual([blocker.releaseId]);
+    });
+  });
+});
+
 describe("openLibrary.sync — a link's time budget", () => {
   const english = { languages: [{ key: "/languages/eng" }] };
   const NOTHING_1 = {
@@ -950,6 +1205,57 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
     await t.run(async (ctx) => {
       expect((await ctx.db.get(releaseId!))!.isbn13).toBe("9781974766512");
       expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+});
+
+describe("openLibrary.sync — a subtitle read beside the title is kept (H09)", () => {
+  const MASHLE_3 = {
+    key: "/books/OL3M",
+    title: "Mashle",
+    subtitle: "Vol. 3",
+    publishers: ["VIZ Media"],
+    isbn_13: ["9781974736249"],
+    physical_format: "paperback",
+    languages: [{ key: "/languages/eng" }],
+  };
+
+  it("stores the subtitle, places the book as Vol. 3, and a repeat sighting changes nothing", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { seriesId, volume3 } = await t.run(async (ctx) => {
+      await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { publicId: 1, title: "Mashle" });
+      await insertVolume(ctx, { seriesId, position: 2 });
+      return { seriesId, volume3: await insertVolume(ctx, { seriesId, position: 3 }) };
+    });
+    stubDump([MASHLE_3]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+
+    const before = await t.run(async (ctx) => {
+      const [observation] = await ctx.db.query("sourceObservations").collect();
+      const [release] = await ctx.db.query("releases").collect();
+      const coverage = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", release!.editionId))
+        .collect();
+      expect(observation!.snapshot).toMatchObject({
+        title: "Mashle",
+        subtitle: "Vol. 3",
+        seriesTitle: "Mashle",
+        volumeLabel: "3",
+      });
+      expect(observation!.recordRef).toEqual({ type: "release", id: release!._id });
+      expect(release!).toMatchObject({ isbn13: "9781974736249", seriesIds: [seriesId] });
+      expect(coverage.map((row) => row.volumeId)).toEqual([volume3]);
+      return observation!;
+    });
+
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 0 });
+    await t.run(async (ctx) => {
+      const [observation] = await ctx.db.query("sourceObservations").collect();
+      expect(observation!.snapshot).toEqual(before.snapshot);
       expect(await ctx.db.query("releases").collect()).toHaveLength(1);
     });
   });

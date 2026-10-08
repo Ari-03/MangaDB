@@ -1,8 +1,73 @@
 // A Series' Editions grouped into the reading paths its page offers: one
 // "standard" path per Publisher for Editions outside any Edition Line (a
-// licence transfer gives each publisher's run its own path), and one path per
-// Edition Line (Omnibus, Deluxe, …). Pure, so the Convex query and the route
-// agree on the grouping and it stays unit-testable.
+// licence transfer gives each publisher's run its own path unless a moderator
+// combines them for this Series), and one path per Edition Line (Omnibus,
+// Deluxe, …). Pure, shared by the catalog and personal library.
+
+type Publisher = { name: string; slug: string };
+export const COMBINED_PUBLISHERS_CAP = 8;
+
+export type PathCombination = {
+  /** Lead first; its slug remains the combined path's key. */
+  publishers: Publisher[];
+  /** Former member keys, including publishers that have since merged. */
+  aliases: string[];
+};
+
+export function combinedPathFor(
+  edition: { publisher: { slug: string } | null; lineName: string | null },
+  combination?: PathCombination,
+) {
+  return edition.lineName === null &&
+    combination?.publishers.some((publisher) => publisher.slug === edition.publisher?.slug)
+    ? combination
+    : undefined;
+}
+
+/** Both original publisher links continue to open the combined shelf. */
+export function findEditionGroup<G extends { key: string; aliases: readonly string[] }>(
+  groups: readonly G[],
+  key: string | undefined,
+) {
+  return groups.find(
+    (group) => group.key === key || (key !== undefined && group.aliases.includes(key)),
+  );
+}
+
+type PathVolume = { publicId: number; position: number; label: string | null };
+type StandardRun = {
+  publisher: { id: string };
+  books: readonly { coverage: readonly { volumePublicId: number }[] }[];
+};
+
+/** Preview the union, preserving duplicate books and distinguishing real gaps. */
+export function previewCombinedPaths(
+  runs: readonly StandardRun[],
+  publisherIds: readonly string[],
+  volumes: readonly PathVolume[],
+) {
+  const selected = runs.filter((run) => publisherIds.includes(run.publisher.id));
+  const owners = new Map<number, Set<string>>();
+  for (const run of selected) {
+    for (const book of run.books) {
+      for (const coverage of book.coverage) {
+        const publishers = owners.get(coverage.volumePublicId) ?? new Set<string>();
+        publishers.add(run.publisher.id);
+        owners.set(coverage.volumePublicId, publishers);
+      }
+    }
+  }
+  const covered = volumes.filter((volume) => owners.has(volume.publicId));
+  const lastPosition = covered.at(-1)?.position ?? -Infinity;
+  return {
+    bookCount: selected.reduce((count, run) => count + run.books.length, 0),
+    covered,
+    gaps: volumes.filter(
+      (volume) => volume.position <= lastPosition && !owners.has(volume.publicId),
+    ),
+    overlaps: volumes.filter((volume) => (owners.get(volume.publicId)?.size ?? 0) > 1),
+  };
+}
 
 /** The Edition fields grouping reads; the query's Edition rows carry more. */
 export type GroupableEdition = {
@@ -20,6 +85,8 @@ export type EditionGroup<E extends GroupableEdition> = {
   name: string;
   kind: "standard" | "line";
   publisher: E["publisher"];
+  publishers: Publisher[];
+  aliases: string[];
   /** In reading order: canonical position for standard, line number for lines. */
   books: E[];
 };
@@ -38,10 +105,15 @@ export function keyPart(text: string): string {
  * gives its group, so a personal view can name a path ("Dark Horse's Deluxe
  * Edition") without rebuilding the whole Series page.
  */
-export function editionPathKey(edition: {
-  publisher: { slug: string } | null;
-  lineName: string | null;
-}): string {
+export function editionPathKey(
+  edition: {
+    publisher: { slug: string } | null;
+    lineName: string | null;
+  },
+  combination?: PathCombination,
+): string {
+  const combined = combinedPathFor(edition, combination);
+  if (combined?.publishers[0]) return combined.publishers[0].slug;
   const publisherKey = edition.publisher?.slug ?? "unknown";
   return edition.lineName === null
     ? publisherKey
@@ -82,11 +154,13 @@ function byKeys<T>(...keys: Array<(item: T) => number>) {
  */
 export function groupEditions<E extends GroupableEdition>(
   editions: ReadonlyArray<E>,
+  combination?: PathCombination,
 ): Array<EditionGroup<E>> {
   const groups = new Map<string, EditionGroup<E>>();
   for (const edition of editions) {
     const kind = edition.lineName === null ? "standard" : "line";
-    const key = editionPathKey(edition);
+    const combined = combinedPathFor(edition, combination);
+    const key = editionPathKey(edition, combination);
     const group = groups.get(key);
     if (group) group.books.push(edition);
     else
@@ -94,7 +168,9 @@ export function groupEditions<E extends GroupableEdition>(
         key,
         name: edition.lineName ?? "Standard edition",
         kind,
-        publisher: edition.publisher,
+        publisher: combined?.publishers[0] ?? edition.publisher,
+        publishers: combined?.publishers ?? (edition.publisher ? [edition.publisher] : []),
+        aliases: combined?.aliases.filter((alias) => alias !== key) ?? [],
         books: [edition],
       });
   }
@@ -120,7 +196,7 @@ export function groupEditions<E extends GroupableEdition>(
     if ((nameCounts.get(group.name) ?? 0) > 1 && group.publisher) {
       group.name =
         group.kind === "standard"
-          ? `${group.publisher.name} edition`
+          ? `${group.publishers.map((publisher) => publisher.name).join(" & ")} edition`
           : `${group.name} (${group.publisher.name})`;
     }
   }

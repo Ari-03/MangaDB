@@ -14,10 +14,17 @@ import { v, type Infer } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
-import { packagingValidator, rangeLabels, type ParsedBookTitle } from "./bookTitle";
+import { digitalFileFormat } from "./bookFacts";
+import { packagingValidator, rangeLabels } from "./bookTitle";
 import { fullDateValidator } from "./dates";
 import { inferCoverage } from "./coverage";
-import { candidateSeries, hiddenSeriesTitled, matchRelease, type ReleaseFact } from "./matching";
+import {
+  candidateSeries,
+  hiddenSeriesTitled,
+  matchRelease,
+  type ReleaseFact,
+  type TitleScan,
+} from "./matching";
 import { linkObservation, recordUnplaced, upsertObservation } from "./observations";
 import {
   type BundleReconcile,
@@ -57,6 +64,8 @@ export const catalogTitleFields = {
   author: v.optional(v.string()),
   onsale: v.optional(fullDateValidator),
   format: v.union(v.literal("physical"), v.literal("digital")),
+  /** A digital title's file format as the source's own record names it (PRH's subformat). */
+  digitalFileFormat: v.optional(digitalFileFormat),
   binding: v.optional(v.string()),
   /** The imprint = the publisher brand (e.g. "Kodansha Comics"). */
   imprint: v.optional(v.string()),
@@ -74,30 +83,20 @@ export const catalogTitleFields = {
 const catalogTitleValidator = v.object(catalogTitleFields);
 export type CatalogTitle = Infer<typeof catalogTitleValidator>;
 
-/**
- * A parsed book title as snapshot fields (PRH, Yen Press, OpenLibrary): the
- * parser's nulls and false flags become absent fields.
- */
-export function parsedTitleFields(parsed: ParsedBookTitle) {
-  const coverRange = parsed.packaging?.coverRange ?? null;
-  return {
-    seriesTitle: parsed.seriesTitle,
-    volumeLabel: parsed.volumeLabel ?? undefined,
-    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
-    packaging: parsed.packaging ?? undefined,
-    bareNumber: parsed.bareNumber || undefined,
-    bareRoman: parsed.bareRoman || undefined,
-    bareSplit: parsed.bareSplit ?? undefined,
-  };
-}
+export { parsedTitleFields } from "./bookTitle";
 
 /**
  * The fields this source offers on a linked Release, in canonical form.
  * Seven Seas, Kodansha and OpenLibrary keep their own: each reads other
  * snapshot fields and offers a different set, and the key order becomes
- * the order of a queued Proposal's changes.
+ * the order of a queued Proposal's changes. A file format only fills the
+ * blank of a digital Release with the record's own ISBN: it never
+ * reclassifies one, and a physical Release has none.
  */
-function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
+function offeredReleaseFields(
+  snapshot: CatalogTitle,
+  release: Doc<"releases">,
+): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
   offered.isbn13 = snapshot.isbn13;
   if (snapshot.isbn10 !== undefined) offered.isbn10 = snapshot.isbn10;
@@ -106,6 +105,14 @@ function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
     offered.price = { amountCents: snapshot.priceCents, currency: "USD" };
   }
   if (snapshot.binding !== undefined) offered.binding = snapshot.binding;
+  if (
+    snapshot.digitalFileFormat !== undefined &&
+    snapshot.format === "digital" &&
+    release.format === "digital" &&
+    release.digitalFileFormat === undefined &&
+    release.isbn13 === snapshot.isbn13
+  )
+    offered.digitalFileFormat = snapshot.digitalFileFormat;
   if (snapshot.description !== undefined) offered.description = snapshot.description;
   return offered;
 }
@@ -150,13 +157,15 @@ const lettersOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/g
  * left in place for want of a volume number ("Tower Dungeon 7" from a PRH
  * row without seriesNumber) follows the same rule: whole title first, else
  * an existing base Series takes it as a Volume, else the new work keeps its
- * whole name.
+ * whole name. `scan` replaces the importers' title search for every lookup
+ * (lib/matching.ts TitleScan).
  */
 export async function resolveBaseSeries(
   ctx: QueryCtx | MutationCtx,
   parsed: ProvisionalTitle,
+  scan?: TitleScan,
 ): Promise<{ seriesTitle: string; volumeLabel: string | null; candidates: Doc<"series">[] }> {
-  const named = await candidateSeries(ctx, parsed.seriesTitle);
+  const named = await candidateSeries(ctx, parsed.seriesTitle, scan);
   const plain = {
     seriesTitle: parsed.seriesTitle,
     volumeLabel: parsed.volumeLabel ?? null,
@@ -170,28 +179,28 @@ export async function resolveBaseSeries(
     const tidied = romanWholeName(parsed);
     const wholeName =
       tidied !== null && lettersOf(tidied) !== lettersOf(parsed.title) ? tidied : parsed.title;
-    let whole = await candidateSeries(ctx, parsed.title);
+    let whole = await candidateSeries(ctx, parsed.title, scan);
     if (whole.length === 0 && wholeName !== parsed.title) {
-      whole = await candidateSeries(ctx, wholeName);
+      whole = await candidateSeries(ctx, wholeName, scan);
     }
     if (whole.length > 0 || named.length === 0) {
       return { seriesTitle: whole[0]?.title ?? wholeName, volumeLabel: null, candidates: whole };
     }
     // An Editor hid the work the whole name names: it is never the base's Volume.
     const hidden =
-      (await hiddenSeriesTitled(ctx, parsed.title)).length > 0 ||
-      (wholeName !== parsed.title && (await hiddenSeriesTitled(ctx, wholeName)).length > 0);
+      (await hiddenSeriesTitled(ctx, parsed.title, scan)).length > 0 ||
+      (wholeName !== parsed.title && (await hiddenSeriesTitled(ctx, wholeName, scan)).length > 0);
     if (hidden) return { seriesTitle: wholeName, volumeLabel: null, candidates: [] };
     return plain;
   }
   if (named.length > 0) return plain;
   if (parsed.bareNumber) {
-    const whole = await candidateSeries(ctx, parsed.title);
+    const whole = await candidateSeries(ctx, parsed.title, scan);
     if (whole.length > 0) {
       return { seriesTitle: whole[0]!.title, volumeLabel: null, candidates: whole };
     }
   } else if (parsed.bareSplit) {
-    const base = await candidateSeries(ctx, parsed.bareSplit.seriesTitle);
+    const base = await candidateSeries(ctx, parsed.bareSplit.seriesTitle, scan);
     if (base.length > 0) {
       return {
         seriesTitle: base[0]!.title,
@@ -297,7 +306,7 @@ export async function applyCatalogTitle(
     if (!changed) return { status: "unchanged", changed: false };
     // An ISBN another Release holds is that book's: none of the record's
     // facts are reconciled onto this link until an Editor resolves the pair.
-    if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+    if (await isbnHeldElsewhere(ctx, observation, release, snapshot, now)) {
       return {
         status: "needsReview",
         changed,
@@ -309,7 +318,7 @@ export async function applyCatalogTitle(
       sourceKey: opts.sourceKey,
       ref: { type: "release", id: release._id },
       doc: release,
-      offered: offeredReleaseFields(snapshot),
+      offered: offeredReleaseFields(snapshot, release),
       observation,
       citation,
       now,
@@ -360,6 +369,7 @@ export async function applyCatalogTitle(
   const releasePayload = {
     format: snapshot.format,
     binding: snapshot.binding,
+    digitalFileFormat: snapshot.digitalFileFormat,
     isbn13: snapshot.isbn13,
     isbn10: snapshot.isbn10,
     pubDate: snapshot.onsale ? toPartialDate(snapshot.onsale) : undefined,
@@ -411,6 +421,7 @@ export async function applyCatalogTitle(
       tagBootstrapUnreviewed: true,
       now,
     });
+    if ("held" in bundle) return { status: "recordOnly", changed: true, reason: bundle.held };
     if (bundle.conflict !== undefined) {
       return { status: "needsReview", changed: true, reason: bundle.conflict };
     }
@@ -425,6 +436,7 @@ export async function applyCatalogTitle(
     multiVolume: packaging !== null,
     format: snapshot.format,
     binding: snapshot.binding,
+    digitalFileFormat: snapshot.digitalFileFormat,
     language: IMPORT_LANGUAGE,
     isbn13: snapshot.isbn13,
     publisherId: publisher?._id ?? null,
@@ -438,7 +450,7 @@ export async function applyCatalogTitle(
       sourceKey: opts.sourceKey,
       ref: { type: "release", id: release._id },
       doc: release,
-      offered: offeredReleaseFields(snapshot),
+      offered: offeredReleaseFields(snapshot, release),
       observation,
       citation,
       now,

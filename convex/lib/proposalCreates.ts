@@ -18,11 +18,13 @@
 // A member's placement of a held book (placement.ts) marks its Volume and
 // Edition creates `joinExisting` too: a Volume of that label an import
 // created meanwhile, or the sibling Edition it filed a Release under (same
-// publisher, line, position and coverage), is reused, never duplicated. A
-// matching record the placement may not join (a hidden Volume, one merged
-// away, a hidden, merged or locked Edition, a hidden or merged line) is
-// never read as absent: the plan names it `unavailable` and the Proposal is
-// stale. Its
+// publisher, line, position and coverage), is reused, never duplicated. Its
+// line is the one line of its name every state resolves to, and its
+// Edition the one member every exact sibling resolves to, never the first
+// open one. A matching record the placement may not join (a hidden Volume,
+// one merged away, a hidden, merged or locked Edition or line, a second
+// independent line or member) is never read as absent: the plan names it
+// `unavailable` and the Proposal is stale. Its
 // Edition may be Unmapped Packaging (`coverageUnmapped`, under a line, no
 // coverage rows), and its Release names the observation it places
 // (`placement`), which approval links to the new Release (proposals.ts).
@@ -42,9 +44,17 @@ import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { editionSeriesIds } from "./editionRows";
 import { fail } from "./errors";
-import { labelsEqual } from "./matching";
-import { joinableEdition, siblingEditions, unmappedSiblings, volumePositionFor } from "./pipeline";
+import { labelsEqual, survivorOf } from "./matching";
+import {
+  joinableEdition,
+  namedEditionLine,
+  siblingEditions,
+  unmappedSiblings,
+  volumePositionFor,
+} from "./pipeline";
+import type { DigitalFileFormat } from "./bookFacts";
 import { allocatePublicId } from "./publicIds";
+import { assignedIsbnRefusal } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
 import { fieldDescriptor, normalizeFieldValue, type RecordType } from "./moderationFields";
 
@@ -123,6 +133,7 @@ export type CreatePlan =
       fields: {
         format: "physical" | "digital";
         binding?: string;
+        digitalFileFormat?: DigitalFileFormat;
         language: string;
         isbn13?: string;
         isbn10?: string;
@@ -130,8 +141,17 @@ export type CreatePlan =
         price?: { amountCents: number; currency: string };
         description?: string;
       };
-      /** The held book this Release places, linked to it at approval, under that Series. */
-      placement?: { observationId: Id<"sourceObservations">; seriesId: Id<"series"> };
+      /**
+       * The held book this Release places, linked to it at approval, under
+       * that Series, and which book its source named when the member stated
+       * the placement (`reviewed`; absent on a placement written before it
+       * was recorded, which nothing then trusts: placement.ts).
+       */
+      placement?: {
+        observationId: Id<"sourceObservations">;
+        seriesId: Id<"series">;
+        reviewed?: string;
+      };
     };
 
 /** Bulk-operation cap: one coherent intent, not a mass migration. */
@@ -335,6 +355,35 @@ export async function planCreateOps(
             plan.publisherId === publisherId &&
             plan.fields.name.toLowerCase() === wanted,
         );
+        if (placing && series.kind === "id") {
+          // A placement's line is the one line of its name every state
+          // resolves to (pipeline.ts namedEditionLine), never the first
+          // active one beside a hidden, locked, unresolved or independent
+          // twin; it creates the line only when no line of the name exists
+          // in any state. A closed name is `unavailable`: the Proposal is
+          // stale until a Moderator resolves it.
+          if (twin) bad(`The edition line "${name}" is created twice by this proposal.`);
+          const resolved = await namedEditionLine(ctx, { seriesId: series.id, publisherId, name });
+          if (resolved.kind === "line" && fields.joinExisting !== true) {
+            bad(
+              `The edition line "${name}" already exists for this series and publisher — reference it instead.`,
+            );
+          }
+          plans.push({
+            table,
+            tempId: op.tempId,
+            series,
+            publisherId,
+            // Keep the requested namespace for the placement proof. The
+            // stored survivor may have been renamed by its merge.
+            fields: { name },
+            ...(resolved.kind === "line" ? { existingId: resolved.line._id } : {}),
+            ...(resolved.kind === "closed"
+              ? { unavailable: { type: "editionLine", id: resolved.lineId } }
+              : {}),
+          });
+          break;
+        }
         const named =
           series.kind === "id"
             ? (
@@ -366,16 +415,7 @@ export async function planCreateOps(
             `The edition line "${name}" already exists for this series and publisher — reference it instead.`,
           );
         }
-        // A placement never creates a twin of a hidden or merged line.
-        const closed = placing ? named[0] : undefined;
-        plans.push({
-          table,
-          tempId: op.tempId,
-          series,
-          publisherId,
-          fields: { name },
-          ...(closed !== undefined ? { unavailable: { type: "editionLine", id: closed._id } } : {}),
-        });
+        plans.push({ table, tempId: op.tempId, series, publisherId, fields: { name } });
         break;
       }
       case "editions": {
@@ -436,6 +476,14 @@ export async function planCreateOps(
         if (format === "digital" && binding !== undefined) {
           bad("Binding applies only to physical releases.");
         }
+        // Not an editable field: only an import's own-ISBN evidence states it.
+        const fileFormat = fields.digitalFileFormat;
+        if (fileFormat !== undefined && fileFormat !== "pdf" && fileFormat !== "epub") {
+          bad('A file format is "pdf" or "epub".');
+        }
+        if (format === "physical" && fileFormat !== undefined) {
+          bad("A file format applies only to digital releases.");
+        }
         const language = viaRegistry("release", "language", fields.language);
         const isbn13 = viaRegistry("release", "isbn13", fields.isbn13) as string | undefined;
         const isbn10 = viaRegistry("release", "isbn10", fields.isbn10) as string | undefined;
@@ -451,6 +499,7 @@ export async function planCreateOps(
           fields: {
             format,
             binding,
+            ...(fileFormat !== undefined ? { digitalFileFormat: fileFormat } : {}),
             language: language as string,
             isbn13,
             isbn10,
@@ -488,13 +537,25 @@ export type IsbnUpdate = {
   isbn: string | undefined;
 };
 
-/** One ISBN a proposal's final state assigns, and the kind of op assigning it. */
-type IsbnClaim = { field: IsbnField; isbn: string; by: "create" | "update" };
+/**
+ * One ISBN a proposal's final state assigns, the kind of op assigning it,
+ * and for an update the Release it writes.
+ */
+type IsbnClaim = {
+  field: IsbnField;
+  isbn: string;
+  by: "create" | "update";
+  releaseId?: Id<"releases">;
+};
 
 /**
  * Release identity (CONTEXT.md): an ISBN names one Release. Checks the
  * proposal's final ISBN assignments — new Releases and updated ones alike —
- * against each other and against every active Release. A holder whose same
+ * against each other and against every active Release; and an ISBN with
+ * Other Printings against every claim on it, hidden and merged ones
+ * included (a Release may take one of its own printings' ISBNs as its
+ * own). Approval runs this too, so a queued Proposal is checked against
+ * the catalog as it is then. A holder whose same
  * ISBN field this proposal rewrites no longer counts, so moving an ISBN off a
  * mis-keyed Release and onto the right one is allowed. A real duplicate is
  * resolved by merging or correcting the holder, never by a second holder.
@@ -510,8 +571,8 @@ async function checkIsbnAssignments(
     fail(involvesCreate ? "invalidCreate" : "invalidField", message);
   const rewritten = new Set(updates.map((update) => `${update.field}:${update.releaseId}`));
   const claims = [
-    ...updates.flatMap(({ field, isbn }): IsbnClaim[] =>
-      isbn === undefined ? [] : [{ field, isbn, by: "update" }],
+    ...updates.flatMap(({ field, isbn, releaseId }): IsbnClaim[] =>
+      isbn === undefined ? [] : [{ field, isbn, by: "update", releaseId }],
     ),
     ...creates,
   ];
@@ -546,6 +607,22 @@ async function checkIsbnAssignments(
           ? `ISBN ${isbn} already belongs to an active Release — correct or merge that Release instead of creating another.`
           : `ISBN ${isbn} already belongs to another active Release — correct or merge that Release first.`,
       );
+    }
+    // An ISBN with other printings is one Release's alone, active or
+    // hidden (lib/releaseIsbns.ts): a Release may take its own printing's
+    // ISBN as its own, and no other claim may remain but a primary this
+    // proposal rewrites.
+    const printed = await assignedIsbnRefusal(
+      ctx,
+      [isbn],
+      claim.releaseId,
+      (held) =>
+        held.on !== "release" ||
+        held.via === "printing" ||
+        !rewritten.has(`${held.via}:${held.storedId}`),
+    );
+    if (printed !== null) {
+      refuse(claim.by === "create", `${printed} Correct or merge that Release instead.`);
     }
   }
 }
@@ -650,11 +727,15 @@ async function joinedVolume(
 /**
  * The stored Edition a placement's `joinExisting` Edition resolves to: the
  * sibling an import created meanwhile under the same publisher, line and
- * position, covering exactly these Volumes (pipeline.ts siblingEditions),
- * or the line's unmapped member at that position (unmappedSiblings). A
- * sibling that is hidden, merged or locked, with no open one beside it, is
- * `unavailable`. Nothing while any covered Volume or the line is still to
- * be created: no stored Edition can cover a record that does not exist yet.
+ * position, covering exactly these Volumes, complete and in order
+ * (pipeline.ts siblingEditions), or the line's unmapped member at that
+ * position (unmappedSiblings). Every such sibling, in every state, must
+ * resolve to one member (`oneMember`); the first open one is never chosen
+ * beside a hidden, locked or independent one. Unmapped Packaging at no
+ * known position proves no identity: beside any unmapped member at no
+ * position it is `unavailable`. Nothing while any covered Volume or the
+ * line is still to be created: no stored Edition can cover a record that
+ * does not exist yet.
  */
 async function storedSibling(
   ctx: QueryCtx | MutationCtx,
@@ -677,7 +758,11 @@ async function storedSibling(
   const line = lineId !== null ? { id: lineId, position: edition.linePosition ?? null } : null;
   let siblings: Doc<"editions">[] = [];
   if (edition.unmapped) {
-    if (line !== null) siblings = await unmappedSiblings(ctx, edition.publisherId, line);
+    if (line === null) return {};
+    siblings = await unmappedSiblings(ctx, edition.publisherId, line);
+    if (line.position === null && siblings[0] !== undefined) {
+      return { unavailable: { type: "edition", id: siblings[0]._id } };
+    }
   } else {
     const volumeIds: Id<"volumes">[] = [];
     for (const row of [...edition.coverage].sort((a, b) => a.order - b.order)) {
@@ -692,22 +777,49 @@ async function storedSibling(
     }
     siblings = await siblingEditions(ctx, edition.publisherId, volumeIds, line);
   }
-  const open = siblings.find(joinableEdition);
-  if (open !== undefined) return { existingId: open._id };
-  return siblings[0] !== undefined ? { unavailable: { type: "edition", id: siblings[0]._id } } : {};
+  return await oneMember(ctx, siblings);
+}
+
+/**
+ * The one member a placement's siblings (storedSibling: every Edition, in
+ * any state, of its publisher, line, position and contents) are: each
+ * merged one answered by its survivor, which must be one of them, active
+ * and unlocked. One hidden, locked or merged elsewhere, or two independent
+ * ones (two Editions an import or an Editor made for the same book), is
+ * `unavailable`: which one the book is, or whether either is, is a
+ * Moderator's to settle, and the placement's form never names an Edition.
+ * None: nothing to join.
+ */
+async function oneMember(
+  ctx: QueryCtx | MutationCtx,
+  siblings: Doc<"editions">[],
+): Promise<Join<"editions">> {
+  const exact = new Set(siblings.map((sibling) => sibling._id));
+  const members = new Set<Id<"editions">>();
+  for (const sibling of siblings) {
+    const survivor = await survivorOf<"editions">(ctx, sibling);
+    if (survivor === null || !exact.has(survivor._id) || !joinableEdition(survivor)) {
+      return { unavailable: { type: "edition", id: sibling._id } };
+    }
+    members.add(survivor._id);
+  }
+  const [member, second] = members;
+  if (second !== undefined) return { unavailable: { type: "edition", id: second } };
+  return member !== undefined ? { existingId: member } : {};
 }
 
 /**
  * Validate a Release op's `placement`: it names an observation that exists
- * and a Series. Whether that book can still be placed under that Series by
- * these ops is placement.ts's question (checkPlacement), asked at
- * submission and approval; whether the Series is still active and unlocked
- * is a staleness question (unavailableCreateRefs).
+ * and a Series, and carries which book the member reviewed (`reviewed`,
+ * passed through as written). Whether that book can still be placed under
+ * that Series by these ops is placement.ts's question (checkPlacement),
+ * asked at submission and approval; whether the Series is still active and
+ * unlocked is a staleness question (unavailableCreateRefs).
  */
 async function planPlacement(
   ctx: QueryCtx | MutationCtx,
   raw: unknown,
-): Promise<{ observationId: Id<"sourceObservations">; seriesId: Id<"series"> }> {
+): Promise<{ observationId: Id<"sourceObservations">; seriesId: Id<"series">; reviewed?: string }> {
   const placement = asObject(raw, "release's placement");
   const observationId =
     typeof placement.observationId === "string"
@@ -722,7 +834,11 @@ async function planPlacement(
   }
   if ((await ctx.db.get(observationId)) === null)
     return bad("The observation this release places no longer exists.");
-  return { observationId, seriesId };
+  return {
+    observationId,
+    seriesId,
+    ...(typeof placement.reviewed === "string" ? { reviewed: placement.reviewed } : {}),
+  };
 }
 
 // ---------- staleness ----------

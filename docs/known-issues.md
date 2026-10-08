@@ -480,6 +480,68 @@ is fixed.
   ended at 30 minutes leaves those undone until the next rebuild. Making
   those phases steps of the same continuation, with the budget checked
   between them, is the fix.
+- **Nothing takes back an Other Printing recorded in error.** No page or
+  command removes a `releaseIsbns` row, and its observation stays linked
+  to the Release, so its ISBN keeps finding that Release. To undo one by
+  hand, delete the row and unlink every observation linked through it (the
+  row's `observationId` names the first) with the repair entry
+  `unlinkObservation`, which clears its `printingIsbn13` mark with the link
+  (and a mark left on an observation already unlinked). The book is held
+  again when its source next places it. The `otherPrinting` Revision stays
+  in the Release's history. Before any bulk run of printing decisions, the
+  held-book work needs an audited correction or a ledger of every decision
+  it makes, so each can be reversed.
+- **A packaged printing cannot be recorded yet.** `recordDecidedInternal`
+  refuses any record that reads as packaging (a multi-Volume designator, a
+  line name or packaging word in the title, any bracketed part such as
+  "[1st Ed]"), and any Release whose Edition is not one whole Volume, until
+  PR #66's line reader lets it compare line, position and coverage
+  ([operations](operations.md#recording-decided-other-printings)). A work
+  whose own name contains a packaging word ("Makunouchi Deluxe") is refused
+  the same way. These books stay held.
+- **An ISBN-10-only Release is not found by its ISBN-13.** `/isbn` reads a
+  13-digit ISBN against Releases' `isbn13` and printing rows only. A merge
+  keeps a moved printing row the survivor has only as its ISBN-10 so that
+  spelling still finds it; a Release with no such row stays unreachable by
+  its ISBN-13, as before #67.
+- **An ISBN with no printing row has no reservation once its last row
+  goes.** The one-owner rule covers ISBNs with a current printing row. A
+  row a merge removed as a duplicate, or one a correction deletes, leaves
+  its ISBN to the older rule (duplicate primaries refused against active
+  Releases only), so a hidden Release's former printing can be claimed.
+- **Stored ISBNs in another spelling hide claims until corrected.** Every
+  ownership check reads exact keys. Writers now store one spelling, but a
+  Release, Bundle or printing row stored before (hyphens, a lower-case x,
+  an ISBN-10 in `isbn13`) is seen by no check; the consistency check's
+  `releases`, `bundles` and `rows` passes list them. A row has no audited
+  correction yet, so it is fixed by hand. Until those passes are clean, no
+  decision, Split or clean result is complete for those ISBNs.
+- **A Release Split refuses rows moved by a merge older than the manifest
+  ISBN.** Manifests written before they kept each moved row's ISBN cannot
+  show the row still carries it, so such a Split refuses and an
+  administrator splits it by hand. A Split that moves records of a
+  printing reads every Revision written since the merge (at most 1,000)
+  to show none of them was relinked; on a busy catalog an older merge
+  passes that and is refused the same way.
+- **Printing bounds refuse rather than read further.** A merge refuses a
+  Release with more than 100 printings, Restore a Release with more than
+  100, a decision an ISBN with more than 20 stored claims of one kind, and
+  a Release Split past the bounds in
+  [moderation](moderation.md#hide-restore-merge-split-and-locks). An
+  administrator resolves those by hand.
+- **A cover request from an action started before covers named their
+  record attaches only to a matching offer of the Release's own printing.**
+  `imports.attachCover` without an `observationId` (a sync running across
+  the deploy) needs a record of the Release's own printing offering that
+  art and none of another printing (marked, or made one by a correction),
+  among at most 50 records; otherwise it refuses and the next run retries.
+- **A Split or printing decision too large for one transaction is refused
+  whole.** Both run as a nested mutation capped at what the transaction
+  has left (`lib/bounded.ts`). Large live Bundle documents, hundreds of
+  tracked Bundles, or claims too large to read can make an otherwise valid
+  Split or decision refuse; an administrator then handles it by hand. A
+  nested call's error other than an application error is reported as the
+  refusal's cause, so a programming error there reads as a refusal too.
 
 ## Review queue
 
@@ -576,3 +638,11 @@ is fixed.
   [configuration.md](configuration.md#analytics-posthog) says so for
   operators, and nothing tells a reader. Stripping the query from what
   posthog-js sends, or disclosing it, is the owner's call.
+- **Grimgar novel Releases occupy manga Volumes.** Exact official distribution
+  records identify ISBNs `9781626926608` and `9781626926622` as novels. The October
+  6 staging snapshot has active Releases on manga Volumes 2 and 3, with two linked
+  OL observations. The guarded scope-only Release hide in
+  [operations.md](operations.md#guarded-held-book-repairs) keeps manga Volume,
+  Edition, Series, comment and source identities; Root must establish current
+  exact scope decisions and pass the personal/namespace guards before executing.
+  Retiring the manga Volumes or merging their Series would lose the intended work.

@@ -38,6 +38,15 @@ describe("parseBookTitle — volume markers", () => {
     expect(split("Sudoku Plus, Volume Two")).toEqual(["Sudoku Plus", "2", null]);
   });
 
+  it("reads a period before the marker as a separator, never a period inside the name", () => {
+    // Real held Open Library titles (2026-10-06), Inuyasha Volumes 27-31.
+    for (const label of ["27", "28", "29", "31"])
+      expect(split(`Inu-Yasha. vol ${label}`)).toEqual(["Inu-Yasha", label, null]);
+    expect(split("D.Gray-man, Vol. 27")).toEqual(["D.Gray-man", "27", null]);
+    expect(split("Dr. Slump, Vol. 3")).toEqual(["Dr. Slump", "3", null]);
+    expect(split("A.I. Love You, Vol. 2")).toEqual(["A.I. Love You", "2", null]);
+  });
+
   it("keeps a per-volume subtitle out of the series title", () => {
     expect(split("Lone Wolf and Cub Volume 7: Cloud Dragon, Wind Tiger")).toEqual([
       "Lone Wolf and Cub",
@@ -402,6 +411,7 @@ describe("parseBookTitle — packaging", () => {
   it("reads the publishers' premium line names (2026 survey)", () => {
     const cases: Array<[string, string, string | null]> = [
       ["Death Note Black Edition, Vol. 3", "Black Edition", "3"],
+      ["AKIRA Hardcover Collection 3", "Hardcover Collection", "3"],
       ["Fullmetal Alchemist: Fullmetal Edition, Vol. 16", "Fullmetal Edition", "16"],
       ["Witch Hat Atelier: Grimoire Edition 2", "Grimoire Edition", "2"],
       ["Vagabond Definitive Edition, Vol. 4", "Definitive Edition", "4"],
@@ -1450,6 +1460,21 @@ describe("canonicalLabel / rangeLabels", () => {
 });
 
 describe("outOfScopeReason", () => {
+  it.each([
+    "Delicious in Dungeon Party Backs T-Shirt - M",
+    "Bungo Stray Dogs T Shirt - XL",
+    "The Summer Hikaru Died T\u2011Shirt - L",
+    "Delicious in Dungeon Acrylic Standee",
+  ])("excludes merchandise sold as %s", (title) => {
+    expect(outOfScopeReason(title)).toBe("merchandise");
+  });
+
+  it("keeps the manga and its illustrated world guide in scope", () => {
+    expect(outOfScopeReason("Delicious in Dungeon, Vol. 14")).toBeNull();
+    expect(outOfScopeReason("Delicious in Dungeon World Guide: The Adventurer's Bible")).toBeNull();
+    expect(outOfScopeReason("My Dress-Up Darling, Vol. 1")).toBeNull();
+  });
+
   it("classifies the scope audit's clear-cut classes", () => {
     expect(outOfScopeReason("The Seven Deadly Sins (Novel)")).toBe("novel");
     expect(outOfScopeReason("Cowboy Bebop - Playing Cards")).toBe("merchandise");

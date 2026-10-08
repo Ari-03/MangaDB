@@ -26,7 +26,14 @@ import {
   type ObservationRow,
   type Row,
 } from "./lib/repair/metrics";
+import { nestedLimits } from "./lib/bounded";
+import { rasterType } from "./lib/covers";
 import { applyEntry } from "./lib/repair/ops";
+import {
+  applyReviewedCreation,
+  creationRefusal,
+  reviewedCreationState,
+} from "./lib/reviewedCatalogCreation";
 
 /** Evidence stored on each repair Proposal: its source observations, else a plan note. */
 function evidenceFor(entry: RepairEntry) {
@@ -34,6 +41,16 @@ function evidenceFor(entry: RepairEntry) {
   switch (entry.kind) {
     case "unlinkObservation":
       return [{ kind: "observation" as const, observationId: entry.observationId }, note];
+    case "editionLinePublisher":
+      return [
+        ...entry.editions.flatMap((move) =>
+          move.observationIds.map((observationId) => ({
+            kind: "observation" as const,
+            observationId,
+          })),
+        ),
+        note,
+      ];
     case "editionPublisher":
     case "splitSeries":
       return [
@@ -47,8 +64,31 @@ function evidenceFor(entry: RepairEntry) {
       return entry.evidenceObservationId
         ? [{ kind: "observation" as const, observationId: entry.evidenceObservationId }, note]
         : [note];
+    case "otherPrinting":
+    case "releaseVariant":
+      return [
+        { kind: "observation" as const, observationId: entry.observationId },
+        ...entry.sources.map((url) => ({ kind: "url" as const, url })),
+        note,
+      ];
+    case "amendProposalEvidence":
+      return [
+        ...entry.replacements.map((row) => ({
+          kind: "url" as const,
+          url: row.after,
+          note: `Replaces ${row.before} on Proposal ${entry.proposalId}`,
+        })),
+        note,
+      ];
+    case "createPublisher":
     case "createRelease":
       return [...entry.sources.map((url) => ({ kind: "url" as const, url })), note];
+    case "createVolume":
+      return [
+        { kind: "observation" as const, observationId: entry.observationId },
+        ...entry.sources.map((url) => ({ kind: "url" as const, url })),
+        note,
+      ];
     default:
       return [note];
   }
@@ -98,7 +138,13 @@ export const runBatch = internalMutation({
     const outcomes: Outcome[] = [];
     for (const entry of entries) {
       try {
-        outcomes.push(await ctx.runMutation(internal.repair.applyOne, { entry, dryRun, actor }));
+        outcomes.push(
+          await ctx.runMutation(
+            internal.repair.applyOne,
+            { entry, dryRun, actor },
+            { transactionLimits: await nestedLimits(ctx) },
+          ),
+        );
       } catch (error) {
         const data = errorData(error);
         if (data?.dryRun) outcomes.push(data.dryRun);
@@ -210,5 +256,104 @@ export const metrics = internalAction({
       bundleMemberships: await table("bundleMemberships", 4000),
       observations,
     });
+  },
+});
+
+/** Batch-040 only. The returned expected string is a complete bounded read closure. */
+export const previewReviewedCreation = internalQuery({
+  args: { observationId: v.id("sourceObservations") },
+  handler: async (ctx, { observationId }) => {
+    try {
+      const state = await reviewedCreationState(ctx, observationId);
+      return {
+        classification: state.prior ? "alreadyApplied" : "ready",
+        expected: state.expected,
+        refusal: null,
+        product: state.product,
+        created: state.prior,
+      };
+    } catch (error) {
+      const refusal = creationRefusal(error);
+      if (!refusal) throw error;
+      return { classification: "refused", expected: null, refusal, product: null, created: null };
+    }
+  },
+});
+
+/** Called as a subtransaction so dry runs roll back catalog and audit together. */
+export const applyReviewedCreationInternal = internalMutation({
+  args: {
+    observationId: v.id("sourceObservations"),
+    expected: v.string(),
+    actor: v.string(),
+    dryRun: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const result = await applyReviewedCreation(ctx, args);
+    // Rolled-back IDs must never become link targets or future expected IDs.
+    if (args.dryRun && result.status === "created")
+      throw new ConvexError({ reviewedCreationDryRun: true });
+    return result;
+  },
+});
+
+type ReviewedCreationResult =
+  | Awaited<ReturnType<typeof applyReviewedCreation>>
+  | { status: "dryRun" }
+  | { status: "refused"; reason: string };
+
+/** Parent-only operator entry. Never links or changes the source/hold. */
+export const executeReviewedCreation = internalMutation({
+  args: {
+    observationId: v.id("sourceObservations"),
+    expected: v.string(),
+    actor: v.string(),
+    dryRun: v.boolean(),
+  },
+  handler: async (ctx, args): Promise<ReviewedCreationResult> => {
+    try {
+      return await ctx.runMutation(internal.repair.applyReviewedCreationInternal, args, {
+        transactionLimits: await nestedLimits(ctx),
+      });
+    } catch (error) {
+      if (
+        error instanceof ConvexError &&
+        typeof error.data === "object" &&
+        error.data !== null &&
+        "reviewedCreationDryRun" in error.data &&
+        error.data.reviewedCreationDryRun === true
+      )
+        return { status: "dryRun" };
+      const reason = creationRefusal(error);
+      if (!reason) throw error;
+      return { status: "refused", reason };
+    }
+  },
+});
+
+/**
+ * Store cover art an operator found at `url` (a publisher or retailer
+ * jacket) for an updateFields `coverImage` entry, when no source record
+ * offers the Release any: a public https JPEG, PNG, GIF or WebP, at least a real jacket's
+ * size. Returns the storage id the entry names. A blob no entry ends up
+ * using is left in storage.
+ *
+ *   npx convex run repair:storeCoverFromUrl '{"url": "https://…"}'
+ */
+export const storeCoverFromUrl = internalAction({
+  args: { url: v.string() },
+  handler: async (ctx, { url }) => {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") throw new ConvexError("Cover URL must be https.");
+    const res = await fetch(url);
+    if (!res.ok) throw new ConvexError(`Cover URL answered ${res.status}.`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    // Read from the bytes: some CDNs send jackets with no content type.
+    const type = rasterType(bytes);
+    if (type === null) throw new ConvexError("Not a raster image.");
+    if (bytes.length < 5000)
+      throw new ConvexError(`Too small for a jacket (${bytes.length} bytes).`);
+    const storageId = await ctx.storage.store(new Blob([bytes], { type }));
+    return { storageId, bytes: bytes.length, type };
   },
 });

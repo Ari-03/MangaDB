@@ -74,3 +74,29 @@ export async function requireActive<T extends MergeableTable>(
   }
   return active;
 }
+
+/**
+ * Where a stored record's merge chain ends, for a check that must know for
+ * certain: at most `hops` pointers followed, or why it cannot be followed
+ * (a missing record, a merged one pointing nowhere, a cycle, a longer
+ * chain). Unlike mergeSurvivor, a dead end is never read as a record.
+ */
+export async function canonicalRecord<T extends MergeableTable>(
+  ctx: QueryCtx,
+  _table: T,
+  id: Id<T>,
+  hops = 8,
+): Promise<{ doc: Doc<T> } | { problem: string }> {
+  let current = (await ctx.db.get(id)) as Doc<T> | null;
+  const visited = new Set<string>();
+  for (;;) {
+    if (current === null) return { problem: `${id} is missing from its merge chain` };
+    if (current.status !== "merged") return { doc: current };
+    const next = current.mergedIntoId as Id<T> | undefined;
+    if (next === undefined) return { problem: `${current._id} is merged into nothing` };
+    if (visited.has(current._id)) return { problem: `${current._id} is in a merge cycle` };
+    if (visited.size === hops) return { problem: `${id} is merged more than ${hops} times over` };
+    visited.add(current._id);
+    current = (await ctx.db.get(next)) as Doc<T> | null;
+  }
+}

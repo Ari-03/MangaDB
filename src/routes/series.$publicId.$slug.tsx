@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
+import { findEditionGroup } from "../../convex/lib/editionGroups";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type SeriesPageData } from "~/lib/catalogData";
 import { CommentsSection } from "~/lib/comments";
@@ -24,7 +25,7 @@ import {
   MissingVolume,
   type EditionGroup,
 } from "~/lib/seriesShelf";
-import { plural } from "~/lib/format";
+import { formatPartialDate, plural } from "~/lib/format";
 import { SeriesVisibilityControls } from "~/lib/sharing";
 import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
@@ -33,8 +34,9 @@ import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
  * Convex. The Series' Editions are grouped into reading paths — the standard
  * run per publisher, then each Edition Line (Omnibus, Deluxe, …); the picker
  * shows each path's first book and `?edition=` opens that path as a shelf of
- * its books, with gaps in a standard run marked. Releases, Variants and
- * Bundles live on each book's Edition page.
+ * its books, with gaps in a standard run marked. Box sets holding its books
+ * get a shelf of their own; Releases and Variants live on each book's
+ * Edition page.
  *
  * The hero: the cover (and its date span) on the left with the viewer's
  * take under it (TakePanel: Rating, Review, Follow, Favorite), the facts on
@@ -156,9 +158,7 @@ function SeriesPage() {
     : [];
   // One path needs no picker; with several, the reader picks one.
   const selected =
-    editionGroups.length === 1
-      ? editionGroups[0]
-      : editionGroups.find((group) => group.key === editionKey);
+    editionGroups.length === 1 ? editionGroups[0] : findEditionGroup(editionGroups, editionKey);
 
   return (
     <main className="series-page">
@@ -336,7 +336,9 @@ function SeriesPage() {
               {editionGroups.length > 1 ? selected.name : "Reading path"}
             </h2>
             <p className="section-note">
-              {selected.publisher ? `${selected.publisher.name} · ` : ""}
+              {selected.publishers.length > 0
+                ? `${selected.publishers.map((publisher) => publisher.name).join(" · ")} · `
+                : ""}
               {plural(selected.books.length, "book", "books")}
               {selected.kind === "line" ? " in the publisher's own numbering" : " in reading order"}
             </p>
@@ -369,6 +371,8 @@ function SeriesPage() {
           )}
         </section>
       ) : null}
+
+      {page.boxSets.length > 0 ? <BoxSetsSection boxSets={page.boxSets} /> : null}
 
       {family ? <FamilySection family={family} self={series} /> : null}
 
@@ -435,7 +439,9 @@ function EditionPicker({
             <span className="edition-card-body">
               <span className="edition-card-name">{group.name}</span>
               {group.publisher ? (
-                <span className="edition-card-meta">{group.publisher.name}</span>
+                <span className="edition-card-meta">
+                  {group.publishers.map((publisher) => publisher.name).join(" · ")}
+                </span>
               ) : null}
               <span className="edition-card-meta">
                 {plural(group.books.length, "book", "books")}
@@ -450,8 +456,57 @@ function EditionPicker({
 }
 
 /**
- * The Series Family shelf: sibling Series stand next to this one, each
- * keeping its own Volume sequence. The typed relationships are spelled out
+ * The box sets holding this Series' books (Release Bundles): each its own
+ * cover and what it holds here, linking to its Bundle page, where its books
+ * are listed. A box set's books stay on their own reading paths above.
+ */
+function BoxSetsSection({ boxSets }: { boxSets: SeriesPageData["boxSets"] }) {
+  return (
+    <section className="section series-box-sets">
+      <div className="section-head">
+        <h2 className="section-title">Box sets</h2>
+        <p className="section-note">
+          Sold as one package; each book inside keeps its place in the reading paths above.
+        </p>
+      </div>
+      <div className="shelf">
+        {boxSets.map((boxSet) => {
+          const date = formatPartialDate(boxSet.pubDate);
+          return (
+            <div className="shelf-item" key={boxSet.publicId}>
+              <div className="cover-wrap">
+                <Link
+                  className="cover-link"
+                  to="/bundle/$publicId/$slug"
+                  params={slugParams(boxSet.publicId, boxSet.name)}
+                  aria-label={boxSet.name}
+                >
+                  <Cover src={boxSet.coverUrl} isbn13={boxSet.isbn13} title={boxSet.name} />
+                </Link>
+              </div>
+              <div className="caption">
+                <Link
+                  className="caption-title"
+                  to="/bundle/$publicId/$slug"
+                  params={slugParams(boxSet.publicId, boxSet.name)}
+                >
+                  {boxSet.name}
+                </Link>
+                <div className="caption-meta">
+                  {[boxSet.contents, date].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The Series Family shelf: sibling Series stand next to this one in reading
+ * order, each with its jacket and keeping its own Volume sequence. The typed relationships are spelled out
  * underneath as sentences — the edge is stored once, whichever end this
  * Series is.
  */
@@ -473,11 +528,17 @@ function FamilySection({
       <div className="shelf">
         {family.members.map((member) => {
           const isSelf = member.publicId === self.publicId;
+          // A Mature sibling's art stays hidden for viewers who have not opted in.
+          const cover = (
+            <ConcealArt mature={member.mature} notice={false}>
+              <Cover src={member.coverUrl} isbn13={member.coverIsbn} title={member.title} />
+            </ConcealArt>
+          );
           return (
             <div className="shelf-item" key={member.publicId}>
               <div className="cover-wrap">
                 {isSelf ? (
-                  <Cover title={member.title} />
+                  cover
                 ) : (
                   <Link
                     className="cover-link"
@@ -485,7 +546,7 @@ function FamilySection({
                     params={slugParams(member.publicId, member.title)}
                     aria-label={member.title}
                   >
-                    <Cover title={member.title} />
+                    {cover}
                   </Link>
                 )}
               </div>

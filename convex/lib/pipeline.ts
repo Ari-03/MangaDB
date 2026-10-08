@@ -28,15 +28,19 @@
 // `release` is optional on both paths: a series-structured source (ANN)
 // creates or queues the Series/Volume backbone without any Release.
 
+import type { repairCountsValidator } from "./descriptionRepair";
+import { reader, releaseContents, volumesForLabels, refuse } from "./heldBooks";
+import { isbnScope } from "./scope";
 import type { FunctionReference } from "convex/server";
-import { v, type Infer } from "convex/values";
+import type { Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
+import type { DigitalFileFormat } from "./bookFacts";
 import { canonicalLabel } from "./bookTitle";
 import { partialDateSort, type DateParts } from "./dates";
-import { coverageOf, coveringOf, releasesOf } from "./editionRows";
+import { coverageOf, coveringOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
@@ -56,6 +60,15 @@ import {
   type CanonicalPublisher,
 } from "./publishers";
 import { insertSourceProposal, reconcileFields } from "./reconcile";
+import {
+  primaryNamespaceRefusal,
+  assignedIsbnRefusal,
+  printingReleases,
+  isbnClaims,
+  claimResolver,
+  primaryIsbnsOf,
+} from "./releaseIsbns";
+import { toIsbn13 } from "./isbn";
 import { seriesSearchText } from "./searchMatch";
 
 // ---------- dates & labels ----------
@@ -114,7 +127,7 @@ export async function alreadyHandled(
 
 /** The row a slug means today: current slug, rename redirect, then merges. */
 export async function publisherBySlug(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   slug: string,
 ): Promise<Doc<"publishers"> | null> {
   const canonicalSlug = canonicalPublisherBySlug(slug)?.slug ?? slug;
@@ -171,7 +184,7 @@ export async function ensurePublisher(
  * publisher key.
  */
 export async function findPublisherByName(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   name: string,
 ): Promise<Doc<"publishers"> | null> {
   const wanted = publisherNameKey(name);
@@ -375,7 +388,7 @@ export type RemovedSeries =
 
 /** A publisher row and its parent: an imprint and its company are one house. */
 async function publisherHouse(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   publisherId: Id<"publishers">,
 ): Promise<Id<"publishers">[]> {
   const row = await ctx.db.get(publisherId);
@@ -387,7 +400,7 @@ async function publisherHouse(
  * coverage: an Edition covering several Volumes repeats.
  */
 export async function seriesEditions(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   seriesId: Id<"series">,
 ): Promise<Doc<"editions">[]> {
   const editions: Doc<"editions">[] = [];
@@ -407,7 +420,7 @@ export async function seriesEditions(
 
 /** Every publisher house the Series' Editions (any status) were published by. */
 async function seriesPublishers(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   seriesId: Id<"series">,
 ): Promise<Set<Id<"publishers">>> {
   const houses = new Set<Id<"publishers">>();
@@ -475,7 +488,7 @@ function hiddenWork(seriesTitle: string, series: Doc<"series">): HiddenWork {
  * hold such a book.
  */
 export async function hiddenWorkTitled(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   seriesTitle: string,
   publisherId: Id<"publishers"> | null,
 ): Promise<HiddenWork | null> {
@@ -497,9 +510,10 @@ export async function hiddenWorkTitled(
 const ISBN_HOLDERS_SCAN = 10;
 
 /**
- * The canonical Release other than `release` that holds `isbn13`: active or
- * hidden, a merged holder answered by its survivor. Null when `release`
- * holds it itself or nobody does.
+ * The canonical Release other than `release` that holds `isbn13`, as its
+ * own ISBN or one of its Other Printings: active or hidden, a merged
+ * holder answered by its survivor. Null when `release` holds it itself
+ * (another printing of it included) or nobody does.
  */
 export async function isbnHolderBesides(
   ctx: MutationCtx,
@@ -507,10 +521,13 @@ export async function isbnHolderBesides(
   isbn13: string,
 ): Promise<Doc<"releases"> | null> {
   if (release.isbn13 === isbn13) return null;
-  const holders = await ctx.db
-    .query("releases")
-    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-    .take(ISBN_HOLDERS_SCAN);
+  const holders = [
+    ...(await ctx.db
+      .query("releases")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .take(ISBN_HOLDERS_SCAN)),
+    ...(await printingReleases(ctx, isbn13)),
+  ];
   for (const holder of holders) {
     const owner = await survivorOf<"releases">(ctx, holder);
     if (owner !== null && owner._id !== release._id) return owner;
@@ -540,24 +557,32 @@ export async function recordIsbnConflict(
  * names one Release (CONTEXT.md), so a snapshot offering an ISBN another
  * Release holds is that book's facts, not the linked Release's (a calendar
  * duplicate awaiting a merge, or a record an old crawl rewrote with another
- * Binding). The pair is recorded on the observation for an Editor and the
- * caller applies nothing; returns whether it did.
+ * Binding). An ISBN with Other Printings, offered as an ISBN-13 or an
+ * ISBN-10, must be the linked Release's alone, every claim on it read
+ * (lib/releaseIsbns.ts), even when it is that Release's own. The pair is
+ * recorded on the observation for an Editor and the caller applies
+ * nothing; returns whether it did.
  */
 export async function isbnHeldElsewhere(
   ctx: MutationCtx,
   observation: Doc<"sourceObservations">,
   release: Doc<"releases">,
-  isbn13: string | undefined,
+  offered: { isbn13?: string; isbn10?: string },
   now: number,
 ): Promise<boolean> {
-  if (isbn13 === undefined) return false;
-  const holder = await isbnHolderBesides(ctx, release, isbn13);
-  if (holder === null) return false;
+  const { isbn13, isbn10 } = offered;
+  const printed = await assignedIsbnRefusal(ctx, [isbn13, isbn10], release._id);
+  const holder =
+    printed === null && isbn13 !== undefined ? await isbnHolderBesides(ctx, release, isbn13) : null;
+  const held =
+    printed ?? (holder !== null ? `ISBN ${isbn13} is already on Release ${holder._id}` : null);
+  const conflicting = isbn13 ?? toIsbn13(isbn10) ?? isbn10;
+  if (held === null || conflicting === undefined) return false;
   await recordIsbnConflict(
     ctx,
     observation,
-    isbn13,
-    `ISBN ${isbn13} is already on Release ${holder._id}, not on the Release this record links (${release._id}); none of its facts are applied until an Editor resolves which book it is (a duplicate to merge, or another book).`,
+    conflicting,
+    `${held}, not on the Release this record links (${release._id}); none of its facts are applied until an Editor resolves which book it is (a duplicate to merge, or another book).`,
     now,
   );
   return true;
@@ -576,6 +601,8 @@ export const IMPORT_LANGUAGE = "en";
 export type ReleasePayload = {
   format: "physical" | "digital";
   binding?: string;
+  /** A digital Release's file format, only from evidence naming its own ISBN. */
+  digitalFileFormat?: DigitalFileFormat;
   isbn13?: string;
   isbn10?: string;
   pubDate?: PartialDate;
@@ -729,13 +756,6 @@ export const REPAIR_SCAN = 100;
 /** Failed records whose message a repair link logs (the count is complete). */
 const REPAIR_ERROR_SAMPLES = 20;
 
-export const repairCountsValidator = v.object({
-  scanned: v.number(),
-  snapshotFixed: v.number(),
-  releaseUpdated: v.number(),
-  releaseCleared: v.number(),
-  errors: v.number(),
-});
 type RepairCounts = Infer<typeof repairCountsValidator>;
 
 /** What repairing one observation did. */
@@ -915,8 +935,11 @@ export type CreationArgs = {
   /**
    * The Edition Line a packaged Release belongs to ("Omnibus" 7), under the
    * base Series; its coverage is `labels` — the real Volumes it collects.
+   * `id`: the existing line the caller proved the book's
+   * (`namedEditionLine`), which it joins instead of the name's first
+   * active line.
    */
-  editionLine?: { name: string; position: string | null };
+  editionLine?: { name: string; position: string | null; id?: Id<"editionLines"> };
   /**
    * With `editionLine` and no `labels`: create the member as Unmapped
    * Packaging — an Edition with no coverage rows, flagged for a Moderator to
@@ -949,19 +972,30 @@ type CreatedRecord = {
   fields: Record<string, unknown>;
 };
 
-export type CreationResult = {
-  /** The Series the records went under — the hidden one when `blocked`. */
-  seriesId: Id<"series">;
-  volumeIds: Id<"volumes">[];
-  releaseId?: Id<"releases">;
-  /** False when everything already existed and nothing was written. */
-  changed: boolean;
-  /**
-   * Set when the record belongs to a Series an Editor hid: nothing was
-   * created and the reason sits on the observation as a placement note.
-   */
-  blocked?: string;
-};
+export type CreationResult =
+  | {
+      /** The Series the records went under. */
+      seriesId: Id<"series">;
+      volumeIds: Id<"volumes">[];
+      releaseId?: Id<"releases">;
+      /** False when everything already existed and nothing was written. */
+      changed: boolean;
+      blocked?: undefined;
+    }
+  | {
+      /** The hidden Series, or the Series the book is held under (null: a new one). */
+      seriesId: Id<"series"> | null;
+      volumeIds: [];
+      releaseId?: undefined;
+      changed: boolean;
+      /**
+       * Why nothing was created: the record belongs to a Series an Editor
+       * hid (`series`), or its ISBN has Other Printings another record owns
+       * (`isbn`, lib/releaseIsbns.ts). The reason is the record's hold.
+       */
+      blocked: string;
+      heldAs: "series" | "isbn";
+    };
 
 /**
  * Volume Position for a new Volume (spec §2): the volume number itself when
@@ -1062,7 +1096,9 @@ export const joinableEdition = (edition: Doc<"editions">) =>
 /**
  * Every Edition, in any state, by this publisher covering exactly these
  * volumes (complete, in order) in the same Edition Line at the same
- * position — or outside any line when the new Release has none.
+ * position — or outside any line when the new Release has none. Unmapped
+ * Packaging is never one, even with a coverage row left on it: it joins
+ * only its line position's siblings (unmappedSiblings).
  */
 export async function siblingEditions(
   ctx: QueryCtx,
@@ -1074,7 +1110,7 @@ export async function siblingEditions(
   const siblings = [];
   for (const coverage of await coveringOf(ctx, volumeIds[0]!)) {
     const edition = await ctx.db.get(coverage.editionId);
-    if (!edition || edition.publisherId !== publisherId) continue;
+    if (!edition || edition.publisherId !== publisherId || edition.coverageUnmapped) continue;
     if ((edition.editionLineId ?? null) !== (line?.id ?? null)) continue;
     if (line !== null && (edition.linePosition ?? null) !== line.position) continue;
     const rows = await coverageOf(ctx, edition._id);
@@ -1091,8 +1127,9 @@ export async function siblingEditions(
  * The active, unlocked one of those siblings (siblingEditions): the
  * Edition a same-packaging Release in another Format/Binding belongs to
  * (spec §2: an Edition is realized by Releases differing only there); an
- * omnibus never joins a single volume's Edition, or vice versa. A placement
- * Proposal's Edition joins it too (lib/proposalCreates.ts).
+ * omnibus never joins a single volume's Edition, or vice versa. Placement
+ * Proposals prove every sibling's canonical identity separately
+ * (lib/proposalCreates.ts storedSibling).
  */
 export async function findSiblingEdition(
   ctx: QueryCtx,
@@ -1129,8 +1166,9 @@ export async function unmappedSiblings(
 }
 
 /**
- * The active, unlocked one of those (unmappedSiblings). A placement
- * Proposal's unmapped Edition joins it too (lib/proposalCreates.ts).
+ * The active, unlocked one of those (unmappedSiblings). Placement
+ * Proposals prove every sibling's canonical identity separately
+ * (lib/proposalCreates.ts storedSibling).
  */
 export async function findUnmappedSibling(
   ctx: QueryCtx,
@@ -1158,17 +1196,111 @@ async function activeEditionLine(
   );
 }
 
-/** Find-or-create the base Series' Edition Line for one publisher (spec §2). */
+/** What the Series' Edition Lines of one name from one publisher are, every state read (`namedEditionLine`). */
+export type NamedLine =
+  | { kind: "none" }
+  | { kind: "line"; line: Doc<"editionLines"> }
+  | { kind: "closed"; reason: string; lineId: Id<"editionLines"> };
+
+/**
+ * The one Edition Line a book naming `name` (any case) under this Series
+ * and publisher may join, read from every line of that name in every
+ * state: `none` when there is no such line at all; `line` when they all
+ * resolve to one active, unlocked line of this Series and publisher (an
+ * active one, and merged ones whose survivor it is); `closed` otherwise,
+ * with why, as a noun phrase, and one line that closes it: one an Editor
+ * hid (a Moderator restores it, never a twin), a merge that resolves to no
+ * active line of this Series and publisher, a locked line, or two
+ * independent lines (an Editor merges them). Insertion order never chooses
+ * among them. The ANN page pass and the Editor's placement both ask this
+ * before a book joins a line, and before one creates it: only `none` lets
+ * a new line of the name be made.
+ */
+export async function namedEditionLine(
+  ctx: QueryCtx,
+  args: { seriesId: Id<"series">; publisherId: Id<"publishers">; name: string },
+): Promise<NamedLine> {
+  const wanted = args.name.toLowerCase();
+  const named = (
+    await ctx.db
+      .query("editionLines")
+      .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
+      .collect()
+  ).filter((line) => line.publisherId === args.publisherId && line.name.toLowerCase() === wanted);
+  if (named.length === 0) return { kind: "none" };
+  const hidden = named.find((line) => line.status === "hidden");
+  if (hidden !== undefined) {
+    return {
+      kind: "closed",
+      reason: `the Series' hidden ${args.name} line: a Moderator restores the line before a book joins it, never a second one`,
+      lineId: hidden._id,
+    };
+  }
+  const resolved = new Map<Id<"editionLines">, Doc<"editionLines">>();
+  for (const line of named) {
+    const survivor = await survivorOf<"editionLines">(ctx, line);
+    if (
+      survivor === null ||
+      survivor.status !== "active" ||
+      survivor.seriesId !== args.seriesId ||
+      survivor.publisherId !== args.publisherId
+    ) {
+      return {
+        kind: "closed",
+        reason: `a ${args.name} line merged into no one active line of this Series and publisher — an Editor places it`,
+        lineId: line._id,
+      };
+    }
+    resolved.set(survivor._id, survivor);
+  }
+  const [line, ...more] = resolved.values();
+  if (line === undefined) return { kind: "none" };
+  if (more.length > 0) {
+    return {
+      kind: "closed",
+      reason: `the Series' ${resolved.size} independent ${args.name} lines from this publisher — an Editor merges them`,
+      lineId: more[0]!._id,
+    };
+  }
+  if (line.locked)
+    return {
+      kind: "closed",
+      reason: `the Series' locked ${line.name} line — an Editor places it`,
+      lineId: line._id,
+    };
+  return { kind: "line", line };
+}
+
+/**
+ * Find-or-create the base Series' Edition Line for one publisher (spec §2).
+ * With `id`, the line a caller already proved the book's
+ * (`namedEditionLine`, in the same transaction): that line, never the
+ * first active one of the name.
+ */
 async function ensureEditionLine(
   ctx: MutationCtx,
   args: {
     seriesId: Id<"series">;
     publisherId: Id<"publishers">;
     name: string;
+    id?: Id<"editionLines">;
     tag: { bootstrapUnreviewed?: boolean };
   },
   created: CreatedRecord[],
 ): Promise<Id<"editionLines">> {
+  if (args.id !== undefined) {
+    const proved = await ctx.db.get(args.id);
+    if (
+      proved?.status !== "active" ||
+      proved.seriesId !== args.seriesId ||
+      proved.publisherId !== args.publisherId
+    ) {
+      throw new Error(
+        "The Edition Line this book was proved to join is not open under its Series.",
+      );
+    }
+    return proved._id;
+  }
   const existing = await activeEditionLine(ctx, args);
   if (existing) return existing._id;
   const id = await ctx.db.insert("editionLines", {
@@ -1266,9 +1398,26 @@ export async function createCanonicalRecords(
         volumeIds: [],
         changed: false,
         blocked: removed.reason,
+        heldAs: "series",
       };
     }
     if (removed?.kind === "merged") seriesId = removed.survivor._id;
+  }
+  // A new Release never takes an ISBN with Other Printings: that ISBN is its
+  // owner's alone, active or hidden, and a claim nobody can follow blocks it
+  // too (lib/releaseIsbns.ts). The book is held for an Editor instead.
+  if (args.release !== undefined) {
+    const printed = await assignedIsbnRefusal(ctx, [args.release.isbn13, args.release.isbn10]);
+    if (printed !== null) {
+      const reason = `${printed} No Release was created for this record.`;
+      await recordUnplaced(
+        ctx,
+        args.observation,
+        { kind: "isbn", reason, ...(seriesId !== null ? { seriesId } : {}) },
+        now,
+      );
+      return { seriesId, volumeIds: [], changed: true, blocked: reason, heldAs: "isbn" };
+    }
   }
   if (seriesId === null) {
     const publicId = await allocatePublicId(ctx, "series");
@@ -1333,6 +1482,7 @@ export async function createCanonicalRecords(
                 seriesId,
                 publisherId: publisher.id,
                 name: args.editionLine.name,
+                ...(args.editionLine.id !== undefined ? { id: args.editionLine.id } : {}),
                 tag,
               },
               created,
@@ -1381,6 +1531,8 @@ export async function createCanonicalRecords(
     const releaseFields = {
       format: args.release.format,
       binding: args.release.binding,
+      digitalFileFormat:
+        args.release.format === "digital" ? args.release.digitalFileFormat : undefined,
       language: IMPORT_LANGUAGE,
       isbn13: args.release.isbn13,
       isbn10: args.release.isbn10,
@@ -1451,31 +1603,91 @@ export type BundleArgs = {
  * box imported before its books) with one importer-authored Revision —
  * unless the box names another Series or Format than the bundle's own
  * (`conflict`, left on the observation for review; `addLateBundleMembers`).
- * `members` counts the bundle's members from `labels` after the call.
+ * `members` counts the bundle's members from `labels` after the call. A box
+ * whose ISBN has Other Printings is `held` instead, creating nothing.
  */
 export async function createReleaseBundle(
   ctx: MutationCtx,
   args: BundleArgs,
-): Promise<{
-  bundleId: Id<"releaseBundles">;
-  members: number;
-  created: boolean;
-  conflict?: string;
-}> {
-  const existing =
-    args.release.isbn13 !== undefined
-      ? await ctx.db
-          .query("releaseBundles")
-          .withIndex("by_isbn13", (q) => q.eq("isbn13", args.release.isbn13))
-          .first()
-      : null;
+): Promise<
+  | { bundleId: Id<"releaseBundles">; members: number; created: boolean; conflict?: string }
+  | { held: string }
+> {
+  const keys = [...primaryIsbnsOf(args.release)];
+  let existing: Doc<"releaseBundles"> | null = null;
+  let conflict: string | null = null;
+  for (const key of keys) {
+    conflict = await isbnScope(ctx, key);
+    const claims = await isbnClaims(ctx, key, { resolver: claimResolver(ctx) });
+    if (!claims?.complete || claims.unresolved.length)
+      conflict = "Bundle ISBN ownership is incomplete or unresolved.";
+    else if (
+      claims.owners.size > 1 ||
+      [...claims.owners.values()].some((owner) => owner.kind !== "bundle")
+    )
+      conflict = "Bundle ISBN is reserved by a Release or several owners.";
+    else {
+      const owner = [...claims.owners.values()][0];
+      if (owner?.kind === "bundle") {
+        if (existing && existing._id !== owner.doc._id) conflict = "Bundle ISBNs disagree.";
+        existing = owner.doc;
+      }
+    }
+    if (conflict) break;
+  }
+  if (
+    existing &&
+    (existing.status !== "active" || existing.locked || existing.format !== args.release.format)
+  )
+    conflict = "Existing Bundle must be active, unlocked and the same format.";
+  if (existing && !conflict) {
+    const publisher = await publisherBySlug(ctx, args.publisher.slug);
+    if (!publisher || publisher.locked || publisher._id !== existing.publisherId)
+      conflict = "Existing Bundle publisher differs or is locked.";
+    const members = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", existing!._id))
+      .take(81);
+    if (members.length > 80) conflict = "Existing Bundle contents are incomplete.";
+    for (const member of members) {
+      const release = await ctx.db.get(member.releaseId);
+      const edition = release ? await ctx.db.get(release.editionId) : null;
+      if (
+        !release ||
+        release.status !== "active" ||
+        release.locked ||
+        !edition ||
+        edition.status !== "active" ||
+        edition.locked
+      )
+        conflict = "Existing Bundle member is unavailable or locked.";
+    }
+  }
+  if (conflict) {
+    await recordUnplaced(
+      ctx,
+      args.observation,
+      { kind: "isbn", reason: conflict, seriesId: args.seriesId },
+      args.now,
+    );
+    return { held: conflict };
+  }
   if (existing) {
-    await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: existing._id });
-    const { expected, conflict } = await addLateBundleMembers(ctx, existing, {
+    const { expected, conflict: membershipConflict } = await addLateBundleMembers(ctx, existing, {
       ...args,
       format: args.release.format,
     });
-    return { bundleId: existing._id, members: expected, created: false, conflict };
+    if (membershipConflict) {
+      await recordUnplaced(
+        ctx,
+        args.observation,
+        { kind: "packaging", reason: membershipConflict, seriesId: args.seriesId },
+        args.now,
+      );
+      return { held: membershipConflict };
+    }
+    await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: existing._id });
+    return { bundleId: existing._id, members: expected, created: false };
   }
 
   const created: CreatedRecord[] = [];
@@ -1489,11 +1701,21 @@ export async function createReleaseBundle(
     });
   }
 
-  const members = await expectedBundleMembers(
+  const selected = await expectedBundleMembers(
     ctx,
     { ...args, format: args.release.format },
     publisher.id,
   );
+  if (selected.conflict) {
+    await recordUnplaced(
+      ctx,
+      args.observation,
+      { kind: "packaging", reason: selected.conflict, seriesId: args.seriesId },
+      args.now,
+    );
+    return { held: selected.conflict };
+  }
+  const members = selected.members;
   const memberIds = members.map((member) => member.releaseId);
 
   const publicId = await allocatePublicId(ctx, "bundle");
@@ -1547,37 +1769,65 @@ async function expectedBundleMembers(
   ctx: MutationCtx,
   args: Pick<BundleMembersArgs, "seriesId" | "labels" | "format">,
   publisherId: Id<"publishers">,
-): Promise<Array<{ releaseId: Id<"releases">; order: number }>> {
-  const volumes = await ctx.db
-    .query("volumes")
-    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
-    .collect();
-  const members: Array<{ releaseId: Id<"releases">; order: number }> = [];
-  for (const [i, label] of args.labels.entries()) {
-    const volume = volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label));
-    if (!volume) continue;
-    const coverages = await coveringOf(ctx, volume._id);
-    for (const coverage of coverages) {
-      const edition = await ctx.db.get(coverage.editionId);
-      if (!edition || edition.status !== "active") continue;
-      // The member is the publisher's whole single-Volume book: never a
-      // packaging line's, an omnibus, or a book holding part of the Volume
-      // (the rule matching applies, lib/matching.ts).
-      if (edition.publisherId !== publisherId || !(await isWholeSingleVolume(ctx, edition))) {
-        continue;
-      }
-      const member = (await releasesOf(ctx, edition._id)).find(
-        (release) => release.status === "active" && release.format === args.format,
+  established: ReadonlySet<Id<"releases">> = new Set(),
+): Promise<{ members: Array<{ releaseId: Id<"releases">; order: number }>; conflict?: string }> {
+  const r = reader(ctx);
+  try {
+    const series = await r.active(args.seriesId);
+    const publisher = await r.active(publisherId);
+    const volumes = await volumesForLabels(ctx, series._id, args.labels, r);
+    const members: Array<{ releaseId: Id<"releases">; order: number }> = [];
+    for (const [i, label] of args.labels.entries()) {
+      const matching = volumes.filter((v) => v.status === "active" && labelsEqual(v.label, label));
+      if (matching.length > 1) refuse("Box Volume selection is ambiguous.");
+      const volume = matching[0];
+      // Missing books retain the ordinary incomplete-box import policy.
+      if (!volume) continue;
+      await r.active(volume._id);
+      const candidates = new Map<Id<"releases">, Doc<"releases">>();
+      const coverages = await r.many(
+        ctx.db.query("volumeCoverages").withIndex("by_volume", (q) => q.eq("volumeId", volume._id)),
       );
-      if (member) {
-        if (!members.some((m) => m.releaseId === member._id)) {
-          members.push({ releaseId: member._id, order: i + 1 });
+      for (const coverage of coverages) {
+        const edition = await r.read(coverage.editionId);
+        if (
+          !edition ||
+          edition.status !== "active" ||
+          edition.publisherId !== publisher._id ||
+          !(await isWholeSingleVolume(ctx, edition))
+        )
+          continue;
+        const releases = await r.many(
+          ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", edition._id)),
+        );
+        for (const release of releases) {
+          if (release.status === "active" && release.format === args.format)
+            candidates.set(release._id, release);
         }
-        break;
+      }
+      const kept = [...candidates.values()].filter((c) => established.has(c._id));
+      if (!kept.length && candidates.size > 1)
+        refuse("Box member selection is ambiguous; exact members need review.");
+      // Existing explicit memberships retain an Editor's book choices and order.
+      // A new member is selected only when its candidate is unambiguous.
+      const selected = kept.length ? kept : [...candidates.values()];
+      for (const candidate of selected) {
+        const content = await releaseContents(ctx, candidate._id, r);
+        if (
+          content.publisher._id !== publisher._id ||
+          content.release.format !== args.format ||
+          content.contents.length !== 1 ||
+          content.contents[0]!.volume._id !== volume._id ||
+          content.contents[0]!.work._id !== series._id
+        )
+          refuse("Selected Box member canonical identity differs.");
+        members.push({ releaseId: content.release._id, order: i + 1 });
       }
     }
+    return { members };
+  } catch (error) {
+    return { members: [], conflict: errorMessage(error) };
   }
-  return members;
 }
 
 /** What reconciling a box's members needs: its covered Volumes, Format and citation. */
@@ -1644,7 +1894,11 @@ async function addLateBundleMembers(
   args: BundleMembersArgs,
 ): Promise<{ expected: number; added: number; conflict?: string }> {
   if (bundle.status !== "active" || bundle.locked || bundle.overriddenFields?.includes("members")) {
-    return { expected: 0, added: 0 };
+    return {
+      expected: 0,
+      added: 0,
+      conflict: "Bundle membership is locked or manually overridden.",
+    };
   }
   // In page order: by `order`, then creation.
   const current = await ctx.db
@@ -1656,7 +1910,25 @@ async function addLateBundleMembers(
     await recordUnplaced(ctx, args.observation, { kind: "series", reason: conflict }, args.now);
     return { expected: 0, added: 0, conflict };
   }
-  const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
+  const selected = await expectedBundleMembers(
+    ctx,
+    args,
+    bundle.publisherId,
+    new Set(current.map((m) => m.releaseId)),
+  );
+  if (selected.conflict) return { expected: 0, added: 0, conflict: selected.conflict };
+  const r = reader(ctx);
+  try {
+    const publisher = await r.active(bundle.publisherId);
+    for (const row of current) {
+      const content = await releaseContents(ctx, row.releaseId, r);
+      if (content.publisher._id !== publisher._id || content.release.format !== bundle.format)
+        refuse("Existing Bundle member publisher/format differs.");
+    }
+  } catch (error) {
+    return { expected: 0, added: 0, conflict: errorMessage(error) };
+  }
+  const expected = selected.members;
   const linked = new Set<Id<"releases">>(current.map((row) => row.releaseId));
   const missing = expected.filter((member) => !linked.has(member.releaseId));
   if (missing.length === 0) return { expected: expected.length, added: 0 };
@@ -1725,6 +1997,26 @@ export async function reconcileLinkedBundle(
 ): Promise<BundleReconcile> {
   const bundle = await ctx.db.get(bundleId);
   if (!bundle) return { added: 0 };
+  if (bundle.status !== "active" || bundle.locked)
+    return { added: 0, conflict: "Bundle must be active and unlocked." };
+  const refusal = await primaryNamespaceRefusal(
+    ctx,
+    [bundle.isbn13, bundle.isbn10],
+    "bundle",
+    bundle._id,
+  );
+  if (refusal) return { added: 0, conflict: refusal };
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+    .take(81);
+  if (memberships.length > 80)
+    return { added: 0, conflict: "Existing Bundle membership inspection is incomplete." };
+  for (const row of memberships) {
+    const member = await ctx.db.get(row.releaseId);
+    if (!member || member.status !== "active" || member.locked)
+      return { added: 0, conflict: "Existing Bundle member is missing, inactive or locked." };
+  }
   const { added, conflict } = await addLateBundleMembers(ctx, bundle, args);
   return conflict === undefined ? { added } : { added, conflict };
 }
@@ -1764,6 +2056,8 @@ export type CreationOpsArgs = {
     observationId: Id<"sourceObservations">;
     seriesId: Id<"series">;
     coverage: "labels" | "unmapped" | "pending";
+    /** Which book the source named when the member stated this placement (placement.ts `identity`). */
+    reviewed: string;
   };
 };
 
@@ -1919,6 +2213,8 @@ export async function creationOps(ctx: MutationCtx, args: CreationOpsArgs): Prom
         editionId: "edition",
         format: args.release.format,
         binding: args.release.binding,
+        digitalFileFormat:
+          args.release.format === "digital" ? args.release.digitalFileFormat : undefined,
         language: IMPORT_LANGUAGE,
         isbn13: args.release.isbn13,
         isbn10: args.release.isbn10,
@@ -1926,7 +2222,13 @@ export async function creationOps(ctx: MutationCtx, args: CreationOpsArgs): Prom
         price: args.release.price,
         description: args.release.description,
         ...(placement !== undefined
-          ? { placement: { observationId: placement.observationId, seriesId: placement.seriesId } }
+          ? {
+              placement: {
+                observationId: placement.observationId,
+                seriesId: placement.seriesId,
+                reviewed: placement.reviewed,
+              },
+            }
           : {}),
       },
     });

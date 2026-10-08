@@ -22,9 +22,15 @@ survivor (`convex/publisher.ts`).
 
 Releases have no page. Each one is a row on its Edition page, anchored by
 ISBN when it has one, else by document ID. `/isbn/{isbn}` takes a valid
-ISBN-10 or ISBN-13 (separators allowed) and 301s to that row. A box-set
-ISBN goes to its Bundle page, and a Release match wins a conflict. Unknown
-or checksum-invalid ISBNs 404.
+ISBN-10 or ISBN-13 (separators allowed) and 301s to that row. The ISBN of
+one of the Release's Other Printings (an older or later printing by the
+same publisher, [imports](imports.md#other-printings)) lands on the same
+row, so a reader who scans an old copy finds the book. A box-set ISBN
+goes to its Bundle page, and a Release match wins a conflict. Unknown or
+checksum-invalid ISBNs 404, as does a hidden Release's printing. The 301
+is sent with `Cache-Control: no-store`, because the row an ISBN lands on
+can move (a merge, a Split, a corrected ISBN, a recorded printing); a
+response cached before that header shipped cannot be recalled.
 
 ## Release calendar
 
@@ -95,7 +101,10 @@ Omnibuses, split parts and Edition Line packaging never lend their blurb.
 
 **Edition page.** The book detail page. It shows one Edition Description
 in the header, then one row per Release with ISBN-13 and ISBN-10, date,
-price, its Release Variants and the Bundles that contain it. Releases still
+price, its Other Printings ("Also printed as ISBN 9781935934783, 2012";
+the first 20 recorded, sorted by date, saying so when others may not be
+shown),
+its Release Variants and the Bundles that contain it. Releases still
 store their own descriptions. The page picks one at query time
 (`convex/lib/descriptions.ts`): a Human Override first, then physical before
 digital, then earliest date, then longest text. An Edition of one whole

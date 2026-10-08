@@ -228,6 +228,7 @@ const PACKAGING_PHRASE = [
   "library\\s+edition",
   "full\\s+colou?r\\s+(?:edition|collection)",
   "premium\\s+collection",
+  "hardcover\\s+collection",
   "naoko\\s+takeuchi\\s+collection",
   "fully\\s+compiled",
   "(?:complete\\s+)?collector['’]?s\\s+(?:edition|box\\s+set)",
@@ -244,6 +245,15 @@ const PACKAGING_PHRASE = [
   "box(?:ed)?\\s+set",
   "slipcase\\s+set",
 ].join("|");
+
+/**
+ * An Edition Line's name anywhere in a title, in the phrase vocabulary
+ * above: "Vagabond [VIZBIG Edition]", "Death Note - Library Edition",
+ * "Rurouni Kenshin - VIZBIG Edition [13-15]". A reissue ("[2nd Edition]"),
+ * a binding ("[Hardcover]") or a variant ("[Limited Edition]") names none.
+ * ANN reads a release line's packaging with it (lib/ann.ts).
+ */
+export const EDITION_LINE_NAME = new RegExp(`\\b(?:${PACKAGING_PHRASE})(?![\\w-])`, "i");
 
 const SEASON_PREFIX =
   "(?:(?:the\\s+)?(?:final\\s+)?season(?:\\s+(?!part\\b)\\w+)?(?:\\s+part\\s+\\w+)?\\s+)";
@@ -269,9 +279,11 @@ const MARKER = `(?:Vol(?:ume)?s?\\.?|Volumen|Part|(?<!\\b(?:${BOOK_KINDS})\\s)Bo
  * "Series, Vol. 5: Subtitle" — the first marker whose tail parses. An
  * unseparated tail ("Vol. 10 Another End") counts as a subtitle only when it
  * holds no further marker, so "Rayearth Part 2 Vol. 1" splits at "Vol. 1".
+ * A period and space before the marker separates like a comma ("Inu-Yasha.
+ * vol 28"); a period inside the name ("D.Gray-man", "Dr. Slump") stays.
  */
 const VOLUME_MARKER = new RegExp(
-  `^(.*?\\S)(?:\\s*[,:;]\\s*|\\s+[-–—]\\s+|\\s+)${MARKER}\\s*(${RANGE}|${LABEL})(?:\\s*(?::|\\s[-–—])\\s*(.+?)|\\s+((?!.*\\b(?:vols?|volumes?|book|part)\\b)[\\[A-Z].*))?$`,
+  `^(.*?\\S)(?:\\s*[,:;]\\s*|\\.\\s+|\\s+[-–—]\\s+|\\s+)${MARKER}\\s*(${RANGE}|${LABEL})(?:\\s*(?::|\\s[-–—])\\s*(.+?)|\\s+((?!.*\\b(?:vols?|volumes?|book|part)\\b)[\\[A-Z].*))?$`,
   "i",
 );
 
@@ -299,9 +311,10 @@ const CONJUNCTION_BEFORE = /(?:^|\s)(?:and|&|or|vs\.?|with|the|a)$/i;
  * gapped list, a statement that reads two ways). The same three states as a
  * blurb's reading (lib/coverage.ts blurbCoverage). Silence and a rejected
  * statement are different facts, so these values meet only in `agreed`,
- * never through `??`.
+ * never through `??`. ANN reconciles its title's and designator's statements
+ * by the same rule (lib/ann.ts packagingOf).
  */
-type Stated = CoverRange | null | undefined;
+export type Stated = CoverRange | null | undefined;
 
 /**
  * Everything a title states about its coverage, as one reading. A bracket
@@ -313,7 +326,7 @@ type Stated = CoverRange | null | undefined;
  * 1-3)") contradict each other, so neither is taken. Picking one would be a
  * guess.
  */
-function agreed(a: Stated, b: Stated): Stated {
+export function agreed(a: Stated, b: Stated): Stated {
   if (a === undefined) return b;
   if (b === undefined) return a;
   return a !== null && b !== null && a.from === b.from && a.to === b.to ? a : null;
@@ -472,8 +485,13 @@ function peelInnerNovelGroups(text: string, peel: Peeled): string {
   });
 }
 
-/** "Hardcover Omnibus" → "Omnibus"; "Manga Box Set" → "Box Set". */
-function tidyLineName(text: string): string {
+/**
+ * "Hardcover Omnibus" → "Omnibus"; "Manga Box Set" → "Box Set". ANN names a
+ * line from its title's segment the same way (lib/ann.ts).
+ */
+export function tidyLineName(text: string): string {
+  // Preserve this complete line name without changing binding qualifiers on other lines.
+  if (/^(?:the\s+)?hardcover\s+collection$/i.test(text.trim())) return "Hardcover Collection";
   const cleaned = text
     .replace(/^the\s+/i, "")
     .replace(/^complete\s+(?=(?:manga\s+)?box\s+set)/i, "")
@@ -814,8 +832,9 @@ export function isNovelTitle(title: string): boolean {
 
 export type ScopeReason = "novel" | "merchandise" | "sampler" | "nonEnglish" | "childrensBook";
 
+// Publishers also give shirts and standees ISBNs and book-format labels.
 const MERCHANDISE =
-  /\b(?:playing cards|scratch cards|card game|roll & clash|advent calendar|stick it|activity book|colou?ring book|color the classics|papertoy|paper toy|fan notebook|sudoku|number place|origami|kirigami|papercrafts?|sticker book|postcard book|poster book|tarot deck|board game)\b|\b(?:\d{4}\s+)?(?:wall\s+)?calendar$/i;
+  /\b(?:t[-\s\u2010-\u2015]?shirts?|acrylic\s+standees?|playing cards|scratch cards|card game|roll & clash|advent calendar|stick it|activity book|colou?ring book|color the classics|papertoy|paper toy|fan notebook|sudoku|number place|origami|kirigami|papercrafts?|sticker book|postcard book|poster book|tarot deck|board game)\b|\b(?:\d{4}\s+)?(?:wall\s+)?calendar$/i;
 
 const SAMPLER =
   /\b(?:manga showcase|free sample|fcbd|free comic book day|convention exclusive|manga magazine|sampler)\b/i;
@@ -841,4 +860,21 @@ export function outOfScopeReason(title: string): ScopeReason | null {
   if (CHILDRENS_BOOK.test(text)) return "childrensBook";
   if (parseBookTitle(text).isNovel) return "novel";
   return null;
+}
+
+/**
+ * A parsed book title as snapshot fields (PRH, Yen Press, OpenLibrary): the
+ * parser's nulls and false flags become absent fields.
+ */
+export function parsedTitleFields(parsed: ParsedBookTitle) {
+  const coverRange = parsed.packaging?.coverRange ?? null;
+  return {
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? undefined,
+    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
+    packaging: parsed.packaging ?? undefined,
+    bareNumber: parsed.bareNumber || undefined,
+    bareRoman: parsed.bareRoman || undefined,
+    bareSplit: parsed.bareSplit ?? undefined,
+  };
 }

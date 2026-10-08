@@ -325,6 +325,11 @@ export function ModEditLink({ type, editKey }: { type: string; editKey: string }
         <Link to="/mod/manage/$type/$key" params={{ type, key: editKey }}>
           Manage (hide / merge / lock)
         </Link>
+        {type === "series" ? (
+          <Link to="/mod/manage/$type/$key" params={{ type, key: editKey }} hash="reading-paths">
+            Combine reading paths
+          </Link>
+        ) : null}
       </p>
     );
   }

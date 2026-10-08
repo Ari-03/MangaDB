@@ -6,11 +6,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { RepairEntry } from "./lib/repair/entries";
+import type { EntryOf, RepairEntry } from "./lib/repair/entries";
 import { canonicalLabel, labelNumber, sameLabel } from "./lib/repair/audit";
+import { recordUnplaced } from "./lib/observations";
 import { clusterKey } from "./lib/repair/metrics";
+import { parseEditionJson } from "./lib/openLibrary";
+import type { ReviewedFormat } from "./lib/sourceFormat";
+import { gachaPhysicalGraph } from "./test.sourceFormats";
 import {
   insertCoverage,
   insertEdition,
@@ -315,6 +319,74 @@ describe("packaging", () => {
   });
 });
 
+describe("a box set never becomes a Bundle over a printing's ISBN", () => {
+  it("skips both box conversions while the ISBN is a printing, in either form, and converts once it is free", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    const box = s.omnibusRelease.releaseId;
+    // The box Release has only an ISBN-10, whose ISBN-13 is Volume 1's other printing.
+    const row = await t.run(async (ctx) => {
+      await ctx.db.patch(box, { isbn13: undefined, isbn10: "1591160340" });
+      return await ctx.db.insert("releaseIsbns", {
+        releaseId: s.r1.releaseId,
+        isbn13: "9781591160342",
+        reason: "Another printing.",
+        sourceKey: "ann",
+      });
+    });
+    const toBundle: RepairEntry = {
+      kind: "remodelEdition",
+      key: "b",
+      reason: "box set",
+      editionId: s.omnibusRelease.editionId,
+      volumeId: s.omnibusVol,
+      targetSeriesId: s.base,
+      line: null,
+      bundle: { name: "Noragami Box Set 1" },
+      groups: [
+        {
+          releaseIds: null,
+          coverage: ["1", "2"].map((label) => ({
+            label,
+            volumeId: null,
+            extent: "complete" as const,
+          })),
+          linePosition: null,
+        },
+      ],
+      retireVolumeIds: [s.omnibusVol],
+    };
+    const printed = expect.stringContaining("ISBN 9781591160342 belongs to Release");
+    expect((await run(t, [toBundle]))[0]).toMatchObject({ status: "skipped", reason: printed });
+    await t.run((ctx) => ctx.db.patch(box, { isbn13: "9781591160342" }));
+    const releaseBundle: RepairEntry = {
+      kind: "releaseBundle",
+      key: "rb",
+      reason: "box set",
+      bundleId: null,
+      box: { releaseId: box, name: "Noragami Box Set" },
+      members: [{ isbn13: "9780000000011", order: 1 }],
+      retireVolumeIds: [],
+    };
+    expect((await run(t, [releaseBundle]))[0]).toMatchObject({
+      status: "skipped",
+      reason: printed,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releaseBundles").collect()).toEqual([]);
+      expect((await ctx.db.get(box))?.status).toBe("active");
+    });
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(box, { isbn13: undefined });
+      await ctx.db.delete(row);
+    });
+    expect((await run(t, [toBundle]))[0]?.status).toBe("applied");
+    const bundles = await t.run((ctx) => ctx.db.query("releaseBundles").collect());
+    expect(bundles).toEqual([expect.objectContaining({ isbn10: "1591160340" })]);
+  });
+});
+
 describe("field repairs and scope", () => {
   it("applies expected-before changes, skips drift, and is idempotent", async () => {
     const t = makeT();
@@ -331,6 +403,57 @@ describe("field repairs and scope", () => {
     expect((await run(t, [entry("9999999999")]))[0]?.status).toBe("skipped");
     expect((await run(t, [entry(null)]))[0]?.status).toBe("applied");
     expect((await run(t, [entry(null)]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  it("never gives a Release an ISBN another Release was also printed under", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    // 9781591160342 is another printing of the Release on Volume 2.
+    await t.run(async (ctx) => {
+      const other = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === "9780000000028",
+      )!;
+      await ctx.db.insert("releaseIsbns", {
+        releaseId: other._id,
+        isbn13: "9781591160342",
+        reason: "Another printing: published 2002, the Release 2007.",
+        sourceKey: "ann",
+      });
+    });
+    const assign = (field: "isbn13" | "isbn10", after: string): RepairEntry => ({
+      kind: "updateFields",
+      key: `assign-${field}`,
+      reason: "isbn",
+      table: "releases",
+      id: s.r1.releaseId,
+      changes: [{ field, before: field === "isbn13" ? "9780000000011" : null, after }],
+      evidenceObservationId: null,
+    });
+    const owned = expect.stringContaining("ISBN 9781591160342 belongs to Release");
+    expect((await run(t, [assign("isbn13", "9781591160342")]))[0]).toMatchObject({
+      status: "skipped",
+      reason: owned,
+    });
+    expect((await run(t, [assign("isbn10", "1591160340")]))[0]).toMatchObject({
+      status: "skipped",
+      reason: owned,
+    });
+    const create: RepairEntry = {
+      kind: "createRelease",
+      key: "printing",
+      reason: "missing release",
+      isbn13: "9781591160342",
+      isbn10: null,
+      format: "physical",
+      binding: null,
+      pubDate: null,
+      price: null,
+      publisherId: s.publisherId,
+      coverage: [{ volumeId: s.v3, extent: "complete" }],
+      line: null,
+      sources: [],
+    };
+    expect((await run(t, [create]))[0]).toMatchObject({ status: "skipped", reason: owned });
   });
 
   it("turns a print-labelled ebook digital and drops its binding", async () => {
@@ -351,6 +474,53 @@ describe("field repairs and scope", () => {
     expect(release?.format).toBe("digital");
     expect(release?.binding).toBeUndefined();
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  it("refuses to make a Release digital while it has other printings, without changing fields or audit history", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(s.r1.releaseId, { binding: "paperback" });
+      await ctx.db.insert("releaseIsbns", {
+        releaseId: s.r1.releaseId,
+        isbn13: "9781591160342",
+        reason: "An earlier physical printing.",
+        sourceKey: "ann",
+      });
+    });
+    const snapshot = () =>
+      t.run(async (ctx) => ({
+        release: await ctx.db.get(s.r1.releaseId),
+        printings: await ctx.db.query("releaseIsbns").collect(),
+        revisions: await ctx.db.query("revisions").collect(),
+        proposals: await ctx.db.query("proposals").collect(),
+      }));
+    const before = await snapshot();
+    const entry: RepairEntry = {
+      kind: "updateFields",
+      key: "f-printings",
+      reason: "ebook recorded as print",
+      table: "releases",
+      id: s.r1.releaseId,
+      changes: [
+        { field: "format", before: "physical", after: "digital" },
+        { field: "isbn10", before: null, after: "0000000019" },
+      ],
+      evidenceObservationId: null,
+    };
+    for (const dryRun of [true, false]) {
+      expect((await run(t, [entry], dryRun))[0]).toMatchObject({
+        status: "skipped",
+        reason: expect.stringMatching(
+          /ISBN 9781591160342.*only a physical Release has other printings/,
+        ),
+      });
+      expect(await snapshot()).toEqual(before);
+      expect(await t.query(api.catalogPages.isbnLookup, { isbn: "9781591160342" })).toMatchObject({
+        kind: "release",
+        anchor: "9780000000011",
+      });
+    }
   });
 
   it("clears a recorded placeholder cover", async () => {
@@ -464,6 +634,76 @@ describe("field repairs and scope", () => {
     expect(state.series?.status).toBe("hidden");
     expect(state.volume?.status).toBe("hidden");
     expect(state.observation?.recordRef).toBeUndefined();
+  });
+
+  it("clears an Other Printing's mark with the link, and a mark left on an unlinked observation", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    const { linked, orphan } = await t.run(async (ctx) => {
+      const printing = { recordRef: undefined, printingIsbn13: "9781591160342" };
+      const linked = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL1M",
+        ...printing,
+        recordRef: { type: "release", id: s.r1.releaseId },
+      });
+      const orphan = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL2M",
+        ...printing,
+      });
+      await recordUnplaced(
+        ctx,
+        (await ctx.db.get(orphan))!,
+        {
+          kind: "isbn",
+          reason: "Volume 1 already has a physical Kodansha Release.",
+          seriesId: s.base,
+        },
+        Date.now(),
+      );
+      return { linked, orphan };
+    });
+    const entry = (key: string, observationId: Id<"sourceObservations">): RepairEntry => ({
+      kind: "unlinkObservation",
+      key,
+      reason: "not this book",
+      observationId,
+      recordType: "release",
+      recordId: s.r1.releaseId,
+    });
+    const state = () =>
+      t.run(async (ctx) => ({
+        linked: await ctx.db.get(linked),
+        orphan: await ctx.db.get(orphan),
+        holds: await ctx.db.query("placementHolds").collect(),
+        proposals: (await ctx.db.query("proposals").collect()).length,
+        revisions: (await ctx.db.query("revisions").collect()).length,
+      }));
+    const before = await state();
+    expect(
+      (await run(t, [entry("l", linked), entry("o", orphan)], true)).map((o) => o.status),
+    ).toEqual(["applied", "applied"]);
+    expect(await state()).toEqual(before);
+
+    const out = await run(t, [entry("l", linked), entry("o", orphan)]);
+    expect(out.map((o) => o.status)).toEqual(["applied", "applied"]);
+    expect(out[1]?.notes).toEqual([
+      "cleared printing mark 9781591160342 of an unlinked observation",
+    ]);
+    const after = await state();
+    expect(after.linked?.recordRef).toBeUndefined();
+    expect(after.linked?.printingIsbn13).toBeUndefined();
+    expect(after.orphan?.printingIsbn13).toBeUndefined();
+    // The orphan's hold stays, and only the linked observation's unlink is audited.
+    expect(after.holds).toEqual(before.holds);
+    expect(after.holds).toEqual([expect.objectContaining({ observationId: orphan, kind: "isbn" })]);
+    expect(after.proposals).toBe(before.proposals + 1);
+    expect(after.revisions).toBe(before.revisions + 1);
+    expect((await run(t, [entry("l", linked), entry("o", orphan)])).map((o) => o.status)).toEqual([
+      "alreadyApplied",
+      "alreadyApplied",
+    ]);
   });
 
   it("normalizes labels and settles positions to the volume number", async () => {
@@ -988,9 +1228,142 @@ describe("lines, researched releases, cross-series books", () => {
     ).toMatchObject({ status: "skipped" });
   });
 
+  it("gives a box set's Bundle the box's ISBNs as their fields store them (C67-14)", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    // Box members must be physical; the shared seed also exercises digital sibling work elsewhere.
+    await t.run((ctx) => ctx.db.patch(s.shardRelease.releaseId, { format: "physical" }));
+    // A box Release stored before writers kept one spelling.
+    await t.run((ctx) =>
+      ctx.db.patch(s.omnibusRelease.releaseId, {
+        isbn13: "978-0-8044-2957-3",
+        isbn10: "0-8044-2957-x",
+      }),
+    );
+    const entry: RepairEntry = {
+      kind: "releaseBundle",
+      key: "b",
+      reason: "box set of two works",
+      bundleId: null,
+      box: { releaseId: s.omnibusRelease.releaseId, name: "Noragami Box Set" },
+      members: [
+        { isbn13: "9780000000035", order: 1 },
+        { isbn13: "9780000000011", order: 2 },
+      ],
+      retireVolumeIds: [s.omnibusVol],
+    };
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    const bundle = await t.run((ctx) =>
+      ctx.db
+        .query("releaseBundles")
+        .withIndex("by_isbn13", (q) => q.eq("isbn13", "9780804429573"))
+        .unique(),
+    );
+    expect(bundle).toMatchObject({ isbn13: "9780804429573", isbn10: "080442957X" });
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  it("never stores a valid ISBN where its field cannot hold it, in either conversion (C67-R2-07)", async () => {
+    const W979 = "9798888772584";
+    type Fields = { isbn13?: string; isbn10?: string };
+    /** Convert the omnibus box Release, stored with `fields`, through `kind`. */
+    const convert = async (kind: "releaseBundle" | "remodelEdition", fields: Fields) => {
+      const t = makeT();
+      const s = await seed(t);
+      // Box members must be physical; the shared seed also exercises digital sibling work elsewhere.
+      await t.run((ctx) => ctx.db.patch(s.shardRelease.releaseId, { format: "physical" }));
+      await t.run((ctx) =>
+        ctx.db.patch(s.omnibusRelease.releaseId, {
+          isbn13: fields.isbn13,
+          isbn10: fields.isbn10,
+        }),
+      );
+      const entry: RepairEntry =
+        kind === "releaseBundle"
+          ? {
+              kind,
+              key: "b",
+              reason: "box set of two works",
+              bundleId: null,
+              box: { releaseId: s.omnibusRelease.releaseId, name: "Noragami Box Set" },
+              members: [
+                { isbn13: "9780000000035", order: 1 },
+                { isbn13: "9780000000011", order: 2 },
+              ],
+              retireVolumeIds: [s.omnibusVol],
+            }
+          : {
+              kind,
+              key: "b",
+              reason: "box set",
+              editionId: s.omnibusRelease.editionId,
+              volumeId: s.omnibusVol,
+              targetSeriesId: s.base,
+              line: null,
+              bundle: { name: "Noragami Box Set 1" },
+              groups: [
+                {
+                  releaseIds: null,
+                  coverage: ["1", "2"].map((label) => ({
+                    label,
+                    volumeId: null,
+                    extent: "complete" as const,
+                  })),
+                  linePosition: null,
+                },
+              ],
+              retireVolumeIds: [s.omnibusVol],
+            };
+      const [outcome] = await run(t, [entry]);
+      const bundles = await t.run((ctx) => ctx.db.query("releaseBundles").collect());
+      const check = await t.query(internal.printings.consistencyInternal, {
+        pass: "bundles",
+        paginationOpts: { numItems: 100, cursor: null },
+      });
+      return { outcome, bundles, check };
+    };
+    for (const kind of ["releaseBundle", "remodelEdition"] as const) {
+      // Stored as each field's one spelling, the ISBN-13 taking a 979 ISBN
+      // kept as `isbn10`; text that is no ISBN stays as it was.
+      for (const [fields, stored] of [
+        [{ isbn10: W979 }, { isbn13: W979, isbn10: undefined }],
+        [
+          { isbn13: W979, isbn10: "979-8-8887-7258-4" },
+          { isbn13: W979, isbn10: undefined },
+        ],
+        [
+          { isbn13: "1591160340", isbn10: "9781591160342" },
+          { isbn13: "9781591160342", isbn10: "1591160340" },
+        ],
+        [
+          { isbn13: "9781591160342", isbn10: "12345" },
+          { isbn13: "9781591160342", isbn10: "12345" },
+        ],
+      ] satisfies Array<[Fields, Fields]>) {
+        const { outcome, bundles, check } = await convert(kind, fields);
+        expect(outcome?.status).toBe("applied");
+        expect(bundles).toHaveLength(1);
+        expect({ isbn13: bundles[0]!.isbn13, isbn10: bundles[0]!.isbn10 }).toEqual(stored);
+        expect(check).toMatchObject({ findings: [], isDone: true });
+      }
+      // A valid ISBN no field can hold beside another book's ISBN, or beside
+      // text in `isbn13`, is refused: nothing is written, no barcode lost.
+      for (const [fields, reason] of [
+        [{ isbn13: "9781421506555", isbn10: W979 }, /names two ISBNs/],
+        [{ isbn13: "9781421506556", isbn10: W979 }, /has no ISBN-10, as its isbn10 beside isbn13/],
+      ] satisfies Array<[Fields, RegExp]>) {
+        const { outcome, bundles } = await convert(kind, fields);
+        expect(outcome).toMatchObject({ status: "skipped", reason: expect.stringMatching(reason) });
+        expect(bundles).toEqual([]);
+      }
+    }
+  });
+
   it("turns a box set into a bundle whose members span Series, in plan order, and extends a bundle", async () => {
     const t = makeT();
     const s = await seed(t);
+    // Box members must be physical; the shared seed also exercises digital sibling work elsewhere.
+    await t.run((ctx) => ctx.db.patch(s.shardRelease.releaseId, { format: "physical" }));
     const entry: RepairEntry = {
       kind: "releaseBundle",
       key: "b",
@@ -1051,6 +1424,97 @@ describe("lines, researched releases, cross-series books", () => {
       status: "skipped",
       reason: expect.stringContaining("sits at order 2"),
     });
+  });
+
+  it("maps the unmapped Lovecraft deluxe Edition and audits its flag clear, with dry-run rollback", async () => {
+    const t = makeT();
+    await seed(t);
+    const s = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "Dark Horse" });
+      const seriesId = await insertSeries(ctx, {
+        publicId: 5751,
+        title: "H.P. Lovecraft's At the Mountains of Madness",
+      });
+      const volumes = [
+        await insertVolume(ctx, { seriesId, label: "1", position: 1 }),
+        await insertVolume(ctx, { seriesId, label: "2", position: 2 }),
+      ];
+      const editionLineId = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Deluxe Edition",
+      });
+      const editionId = await insertEdition(ctx, {
+        publicId: 23001,
+        publisherId,
+        editionLineId,
+        coverageUnmapped: true,
+      });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9781506740690",
+        binding: "hardcover",
+      });
+      return { seriesId, editionId, releaseId, volumes };
+    });
+    const entry: RepairEntry = {
+      kind: "setCoverage",
+      key: "lovecraft-deluxe",
+      reason: "Dark Horse's deluxe collects complete Volumes 1 and 2",
+      editionId: s.editionId,
+      before: [],
+      coverage: ["1", "2"].map((label) => ({
+        seriesId: s.seriesId,
+        label,
+        extent: "complete" as const,
+      })),
+      line: null,
+      retireVolumeIds: [],
+    };
+    const state = () =>
+      t.run(async (ctx) => ({
+        edition: await ctx.db.get(s.editionId),
+        release: await ctx.db.get(s.releaseId),
+        coverage: await ctx.db
+          .query("volumeCoverages")
+          .withIndex("by_edition", (q) => q.eq("editionId", s.editionId))
+          .collect(),
+        revisions: await ctx.db.query("revisions").collect(),
+        proposals: await ctx.db.query("proposals").collect(),
+        versions: await ctx.db.query("proposalVersions").collect(),
+      }));
+    const before = await state();
+    expect(before.coverage).toEqual([]);
+    expect(before.edition?.coverageUnmapped).toBe(true);
+    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    expect(await state()).toEqual(before);
+
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    const after = await state();
+    const { coverageUnmapped: _unmapped, ...mappedEdition } = before.edition!;
+    expect(after.edition).toEqual(mappedEdition);
+    expect(after.release).toEqual(before.release);
+    expect(
+      after.coverage.map(({ volumeId, extent, order }) => ({ volumeId, extent, order })),
+    ).toEqual(s.volumes.map((volumeId, i) => ({ volumeId, extent: "complete", order: i + 1 })));
+    expect(after.proposals).toHaveLength(1);
+    expect(after.versions).toHaveLength(1);
+    const flagChange = { field: "coverageUnmapped", before: true };
+    expect(after.revisions).toContainEqual(
+      expect.objectContaining({
+        ref: { type: "edition", id: s.editionId },
+        proposalId: after.proposals[0]!._id,
+        changes: [flagChange],
+      }),
+    );
+    expect(after.versions[0]!.ops).toContainEqual({
+      kind: "update",
+      ref: { type: "edition", id: s.editionId },
+      changes: [flagChange],
+    });
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
   });
 
   it("covers Volumes of several Series with one Edition, places it in a line, and skips on drift", async () => {
@@ -1123,5 +1587,249 @@ describe("lines, researched releases, cross-series books", () => {
       status: "skipped",
       reason: expect.stringContaining("0 active volumes"),
     });
+  });
+});
+
+describe("a held book's missing Volume", () => {
+  // Open Library OL53350074M as fetched 2026-10-06 (sha256 19051871…): no
+  // physical_format, so the parser's default reads it as physical.
+  const gacha7Wire =
+    '{"type": {"key": "/type/edition"}, "authors": [{"key": "/authors/OL9869234A"}, {"key": "/authors/OL9869232A"}, {"key": "/authors/OL10042522A"}], "isbn_13": ["9781952241727"], "languages": [{"key": "/languages/eng"}], "publish_date": "2024", "publishers": ["Kaiten Books LLC"], "source_records": ["bwb:9781952241727"], "subjects": ["Comics & graphic novels, general", "Fiction, fantasy, general"], "title": "Gacha Girls Corps Vol. 7 (manga)", "works": [{"key": "/works/OL39187247W"}], "key": "/books/OL53350074M", "latest_revision": 1, "revision": 1, "created": {"type": "/type/datetime", "value": "2024-08-17T23:56:36.807097"}, "last_modified": {"type": "/type/datetime", "value": "2024-08-17T23:56:36.807097"}}';
+  const gacha7Snapshot =
+    '{"format":"physical","isbn13":"9781952241727","key":"/books/OL53350074M","kind":"olEdition","multiVolume":false,"publishDate":{"year":2024},"publishers":["Kaiten Books LLC"],"seriesTitle":"Gacha Girls Corps","title":"Gacha Girls Corps Vol. 7 (manga)","url":"https://openlibrary.org/books/OL53350074M","volumeLabel":"7"}';
+  // The r10 reviewed ebook Format: Kaiten's own page lists this ISBN as the ebook.
+  const gacha7Format: ReviewedFormat = {
+    kind: "olInferredPhysicalToDigital",
+    sourceKey: "openlibrary",
+    from: "physical",
+    to: "digital",
+    key: "/books/OL53350074M",
+    isbn13: "9781952241727",
+    baseSnapshot: gacha7Snapshot,
+    reason: "Exact own publisher ISBN 9781952241727 is an ebook.",
+    publisher: {
+      kind: "publisherOwnIsbnEbook",
+      isbn13: "9781952241727",
+      url: "https://www.kaitenbooks.com/gacha-girls-corps-7",
+      fetchedAt: 1791321677000,
+      bodySha256: "e89600bb76170710e030aeb00639baacb362ba32a504be3f02f83ee711989f63",
+      sectionSha256: "1b6381735d549c5354a8a62e28a2d321b584a5a9cd04b73a517f51d9ba54f515",
+      byteStart: 189501,
+      byteEndExclusive: 189532,
+      excerpt: "ISBN: 978-1-952241-72-7 (ebook)",
+    },
+    ol: {
+      kind: "olPhysicalFormatAbsent",
+      key: "/books/OL53350074M",
+      isbn13: "9781952241727",
+      url: "https://openlibrary.org/books/OL53350074M.json",
+      fetchedAt: 1791321823000,
+      bodySha256: "19051871616859d84271ae6f3c03792c63cb9403e873eef7f8aab197add03f49",
+      physicalFormatAbsent: true,
+      normalizedSnapshot: gacha7Snapshot,
+    },
+  };
+  const sources = [
+    "https://www.kaitenbooks.com/gacha-girls-corps-7",
+    "https://www.kaitenbooks.com/gacha-girls-corps",
+    "https://micromagazine.co.jp/book/?book_no=1356",
+  ];
+
+  /**
+   * Staging Series 1837 as read 2026-10-06: Kaiten Volumes 1-6, each with
+   * its own Edition and physical Release, and the held OL edition of 7.
+   */
+  async function gacha(t: T) {
+    return await t.run(async (ctx) => {
+      await ctx.db.insert("users", {
+        clerkSubject: "admin",
+        username: "Ari",
+        usernameNormalized: "ari",
+        role: "administrator",
+        formatPreference: "both",
+        ownershipVisibility: "private",
+        readingVisibility: "private",
+      });
+      await ctx.db.insert("appConfig", { bootstrapMode: true });
+      const publisherId = await insertPublisher(ctx, gachaPhysicalGraph.publisher);
+      const seriesId = await insertSeries(ctx, {
+        ...gachaPhysicalGraph.series,
+        altTitles: [...gachaPhysicalGraph.series.altTitles],
+      });
+      const isbns = [
+        "9781952241154",
+        "9781952241277",
+        "9781952241307",
+        "9781952241499",
+        "9781952241574",
+        "9781952241697",
+      ];
+      const expectedActiveVolumes = [];
+      for (const [i, isbn13] of isbns.entries()) {
+        const label = String(i + 1);
+        const volumeId = await insertVolume(ctx, { seriesId, label, position: i + 1 });
+        await insertBook(ctx, { publisherId, seriesId, volumeId, release: { isbn13 } });
+        expectedActiveVolumes.push({ volumeId, label });
+      }
+      const at = 1791115239193;
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL53350074M",
+        snapshot: parseEditionJson(JSON.parse(gacha7Wire)),
+        lastSeenAt: at,
+        conflicts: [
+          {
+            field: "placement",
+            reason: 'Series 1837 ("Gacha Girls Corps") has no Volume 7; Kaiten Books publishes it.',
+            offered: null,
+            at,
+          },
+        ],
+      });
+      const holdId = await ctx.db.insert("placementHolds", {
+        observationId,
+        sourceKey: "openlibrary",
+        kind: "volumeMissing",
+        seriesId,
+        heldAt: at,
+      });
+      const entry: EntryOf<"createVolume"> = {
+        kind: "createVolume",
+        key: "held-r10-createVolume-gacha-girls-corps-7-9781952241727",
+        reason: "Kaiten Books publishes Gacha Girls Corps Volume 7 (ebook 9781952241727).",
+        seriesId,
+        seriesTitle: "Gacha Girls Corps",
+        label: "7",
+        expectedActiveVolumes,
+        observationId,
+        holdId,
+        isbn13: "9781952241727",
+        sources,
+      };
+      return { seriesId, observationId, holdId, entry };
+    });
+  }
+
+  const catalog = (t: T) =>
+    t.run(async (ctx) => ({
+      volumes: await ctx.db.query("volumes").collect(),
+      editions: await ctx.db.query("editions").collect(),
+      coverages: await ctx.db.query("volumeCoverages").collect(),
+      releases: await ctx.db.query("releases").collect(),
+      holds: await ctx.db.query("placementHolds").collect(),
+      observations: await ctx.db.query("sourceObservations").collect(),
+      proposals: await ctx.db.query("proposals").collect(),
+      revisions: await ctx.db.query("revisions").collect(),
+    }));
+
+  it("creates Gacha Girls Corps 7 once with its audit, then the native replay files the ebook under it", async () => {
+    const t = makeT();
+    const s = await gacha(t);
+    // The parent's order: the reviewed ebook Format lands first.
+    const formatArgs = { observationId: s.observationId, reviewed: gacha7Format };
+    const formatPreview = await t.query(internal.heldBooks.previewSourceFormatInternal, formatArgs);
+    expect(formatPreview.refusal).toBeNull();
+    expect(
+      await t.mutation(internal.heldBooks.correctSourceFormatInternal, {
+        ...formatArgs,
+        expected: formatPreview.expected!,
+        actor: "ari",
+      }),
+    ).toMatchObject({ status: "applied" });
+    const before = await catalog(t);
+
+    expect(await run(t, [s.entry], true)).toEqual([
+      expect.objectContaining({ key: s.entry.key, status: "applied" }),
+    ]);
+    expect(await catalog(t)).toEqual(before);
+
+    expect(await run(t, [s.entry])).toEqual([
+      expect.objectContaining({ key: s.entry.key, status: "applied" }),
+    ]);
+    const created = await catalog(t);
+    const added = created.volumes.filter((vol) => !before.volumes.some((b) => b._id === vol._id));
+    expect(added).toEqual([
+      expect.objectContaining({
+        seriesId: s.seriesId,
+        label: "7",
+        position: 7,
+        status: "active",
+        bootstrapUnreviewed: true,
+      }),
+    ]);
+    const volume7 = added[0]!;
+    // Nothing else changed: no Edition, coverage, Release, hold or observation.
+    expect(created.volumes.filter((vol) => vol._id !== volume7._id)).toEqual(before.volumes);
+    for (const table of ["editions", "coverages", "releases", "holds", "observations"] as const)
+      expect(created[table]).toEqual(before[table]);
+    const revision = created.revisions.find((r) => r.ref.id === volume7._id)!;
+    expect(revision.changes).toContainEqual({ field: "repairKey", after: s.entry.key });
+    expect(revision.author).toMatchObject({ kind: "user", roleAtAuthorship: "administrator" });
+    const versions = await t.run((ctx) =>
+      ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", revision.proposalId!))
+        .collect(),
+    );
+    expect(versions[0]!.evidence).toEqual([
+      { kind: "observation", observationId: s.observationId },
+      ...sources.map((url) => ({ kind: "url", url })),
+      { kind: "note", text: `One-time data repair plan entry ${s.entry.key}` },
+    ]);
+
+    // A re-run recognizes its own Volume and writes nothing.
+    expect(await run(t, [s.entry])).toEqual([{ key: s.entry.key, status: "alreadyApplied" }]);
+    expect(await catalog(t)).toEqual(created);
+
+    const replayArgs = { observationId: s.observationId, replay: true };
+    const preview = await t.query(internal.heldBooks.previewInternal, replayArgs);
+    expect(preview.refusal).toBeNull();
+    expect(preview.placement).toBe("create");
+    expect(
+      await t.mutation(internal.heldBooks.executeInternal, {
+        ...replayArgs,
+        actor: "ari",
+        expected: preview.expected!,
+        operation: "replay",
+        reason: "Fresh guarded ebook placement after the Volume was created.",
+        evidenceUrls: [sources[0]!],
+      }),
+    ).toMatchObject({ status: "applied" });
+    const placed = await catalog(t);
+    expect(placed.holds).toEqual([]);
+    const ebook = placed.releases.find((r) => r.isbn13 === "9781952241727")!;
+    expect(ebook).toMatchObject({ format: "digital", seriesIds: [s.seriesId] });
+    expect(placed.coverages.filter((c) => c.editionId === ebook.editionId)).toEqual([
+      expect.objectContaining({ volumeId: volume7._id, extent: "complete" }),
+    ]);
+    expect(placed.volumes).toEqual(created.volumes);
+  });
+
+  it("refuses a stale Volume list, a gap, a label any Volume already holds, and Open Library alone", async () => {
+    const t = makeT();
+    const s = await gacha(t);
+    const rest = s.entry.expectedActiveVolumes.slice(1);
+    const outcomes = await run(t, [
+      { ...s.entry, key: "stale", expectedActiveVolumes: rest },
+      { ...s.entry, key: "gap", label: "8" },
+      { ...s.entry, key: "ol-only", sources: ["https://openlibrary.org/books/OL53350074M.json"] },
+    ]);
+    expect(outcomes.map((o) => [o.key, o.status, o.reason])).toEqual([
+      ["stale", "skipped", "series' active Volumes differ from the plan"],
+      ["gap", "skipped", "plan error: Volume 8 does not follow Volumes 1-n without a gap"],
+      ["ol-only", "skipped", "plan error: no source beyond Open Library"],
+    ]);
+    // A hidden Volume 7 someone else made still owns the label.
+    await t.run(async (ctx) => {
+      await insertVolume(ctx, { seriesId: s.seriesId, label: "7", position: 7, status: "hidden" });
+    });
+    const before = await catalog(t);
+    expect(await run(t, [s.entry])).toEqual([
+      expect.objectContaining({
+        status: "skipped",
+        reason: expect.stringMatching(/already has hidden Volume 7/),
+      }),
+    ]);
+    expect(await catalog(t)).toEqual(before);
   });
 });

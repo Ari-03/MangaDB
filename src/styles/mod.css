@@ -228,6 +228,22 @@
   color: var(--text-dim);
 }
 
+.combined-path-choices {
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.combined-path-choices legend {
+  padding-inline: 6px;
+}
+.mod-form .combined-path-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .mod-page input[type="text"],
 .mod-page input[type="url"],
 .mod-page input:not([type]),

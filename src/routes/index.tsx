@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
+import { createIsomorphicFn, createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import type { CSSProperties, ReactNode } from "react";
 
@@ -27,6 +27,7 @@ import { pageHead, SITE_NAME } from "~/lib/seo";
 import { slugify, slugParams } from "~/lib/slug";
 import { SeriesShelfItem } from "~/lib/shelfItem";
 import { coversOnFile } from "~/server/covers";
+import { timed } from "~/server/timing";
 
 /** Series asked for to fill the Series shelf: only jacketed ones are shelved (the query's cap). */
 const SERIES_SHELF_POOL = 28;
@@ -45,6 +46,14 @@ const fetchCoversOnFile = createServerFn({ method: "POST" })
   .inputValidator((shelves: Array<CoverShelf>) => shelves)
   .handler(async ({ data }) => coversOnFile(data, new URL(getRequest().url).origin));
 
+// The catalog reads, timed as Server-Timing `cat` (server/timing.ts) when the
+// loader runs in the Worker. In the browser (client navigations) it only runs
+// them; the server branch and its import are compiled out of that bundle.
+type HomeCatalog = ReturnType<typeof fetchHomeCatalog>;
+const timeCatalog = createIsomorphicFn()
+  .server((read: () => HomeCatalog) => timed("cat", read))
+  .client((read: () => HomeCatalog) => read());
+
 export const Route = createFileRoute("/")({
   // The shelves are server-rendered from the same public month window the
   // Releases browser uses (lib/catalogData.ts) — a loader read, never a
@@ -54,22 +63,23 @@ export const Route = createFileRoute("/")({
   // otherwise travel in the page's HTML (about 250 KB of it).
   loader: async () => {
     const month = currentMonth();
-    const [stats, series, releases, nextReleases] = await fetchHomeCatalog(
-      month,
-      SERIES_SHELF_POOL,
+    const [stats, series, releases, nextReleases, seriesFacets] = await timeCatalog(() =>
+      fetchHomeCatalog(month, SERIES_SHELF_POOL),
     );
     // The "today" boundary travels with the loader data so the headings
     // read the same day the shelves were seated by, in SSR and hydration.
     const todaySort = todaySortKey();
     const pools = homePools(releases.releases, nextReleases.releases, todaySort);
-    // Which candidates have a jacket on file. A failed check is "unknown"
-    // (null): the shelves then seat any book with art to try, as before.
+    // Which candidates have a jacket on file. The store waits on R2 for at
+    // most its budget (server/covers.ts): a read that failed or did not answer
+    // in time comes back as unknown and counts as art. A failed call is null:
+    // the shelves then seat any book with art to try.
     const jackets = await fetchCoversOnFile({ data: homeQuestions(pools, series) }).catch(
       () => null,
     );
     return {
       counts: {
-        series: stats.series.count,
+        series: seriesFacets.total,
         volumes: stats.volumes.count,
         publishers: stats.publishers.count,
       },
@@ -111,10 +121,10 @@ function Home() {
     <main className="home">
       <section className={hero.length > 0 ? "hero" : "hero hero--solo"}>
         <div className="hero-copy">
-          <h1 className="hero-title">Know what lands on the shelf this week.</h1>
+          <h1 className="hero-title">A place on the internet for your manga shelf.</h1>
           <p className="hero-sub">
-            MangaDB tracks every English manga volume, every edition that collects it, and every
-            release date — so you always know what to buy next and what you already own.
+            Keep track of the volumes you own, the ones you want, and the ones you've read. Discover
+            upcoming English releases and see which volumes each edition collects.
           </p>
           <div className="hero-cta">
             <Link className="btn btn-primary" to="/releases">

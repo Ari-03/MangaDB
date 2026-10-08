@@ -1,0 +1,243 @@
+// Original batch-010 held snapshots, 2026-10-07. Canonical IDs are created in tests.
+// Dark Horse Backlist 2009 p. 52 proves these ISBNs as original softcover singles.
+// OL volume 9 subtitle differs from the publisher and must remain verbatim.
+export const numberedSubtitles = [
+  {
+    observationId: "n972bsqr47x2x1bdbvv3mnb4yh8f5cwf",
+    snapshot: {
+      bareSplit: {
+        seriesTitle: "Lone Wolf and Cub",
+        volumeLabel: "2",
+      },
+      binding: "paperback",
+      format: "physical",
+      isbn10: "1569715033",
+      isbn13: "9781569715031",
+      key: "/books/OL8694065M",
+      kind: "olEdition",
+      multiVolume: false,
+      publishDate: {
+        day: 11,
+        month: 10,
+        year: 2000,
+      },
+      publishers: ["Dark Horse"],
+      seriesTitle: "Lone Wolf and Cub 2: The Gateless Barrier",
+      title: "Lone Wolf and Cub 2: The Gateless Barrier",
+      url: "https://openlibrary.org/books/OL8694065M",
+    },
+    lastSeenAt: 1791149690489,
+    conflicts: [
+      {
+        at: 1791149690489,
+        field: "placement",
+        offered: null,
+        reason: "Volume 2 already has a physical Dark Horse Release (ISBN 9781506747613).",
+      },
+    ],
+  },
+  {
+    observationId: "n97bpps8t7zehpdjq62w3zhn598f45jv",
+    snapshot: {
+      bareSplit: {
+        seriesTitle: "Lone Wolf and Cub",
+        volumeLabel: "4",
+      },
+      binding: "paperback",
+      format: "physical",
+      isbn10: "156971505X",
+      isbn13: "9781569715055",
+      key: "/books/OL8694067M",
+      kind: "olEdition",
+      multiVolume: false,
+      publishDate: {
+        day: 27,
+        month: 12,
+        year: 2000,
+      },
+      publishers: ["Dark Horse"],
+      seriesTitle: "Lone Wolf and Cub 4: The Bell Warden",
+      title: "Lone Wolf and Cub 4: The Bell Warden",
+      url: "https://openlibrary.org/books/OL8694067M",
+    },
+    lastSeenAt: 1791120460664,
+    conflicts: [
+      {
+        at: 1791115367674,
+        field: "placement",
+        offered: null,
+        reason: "Volume 4 already has a physical Dark Horse Release (ISBN 9781506747620).",
+      },
+    ],
+  },
+  {
+    observationId: "n97by468s6qj13p2jfveg2h8md8f5zs8",
+    snapshot: {
+      bareSplit: {
+        seriesTitle: "Lone Wolf and Cub",
+        volumeLabel: "5",
+      },
+      binding: "paperback",
+      format: "physical",
+      isbn10: "1569715068",
+      isbn13: "9781569715062",
+      key: "/books/OL8694068M",
+      kind: "olEdition",
+      multiVolume: false,
+      publishDate: {
+        day: 31,
+        month: 1,
+        year: 2001,
+      },
+      publishers: ["Dark Horse"],
+      seriesTitle: "Lone Wolf and Cub 5: Black Wind",
+      title: "Lone Wolf and Cub 5: Black Wind",
+      url: "https://openlibrary.org/books/OL8694068M",
+    },
+    lastSeenAt: 1791149974972,
+    conflicts: [
+      {
+        at: 1791149974972,
+        field: "placement",
+        offered: null,
+        reason: "Volume 5 already has a physical Dark Horse Release (ISBN 9781506747620).",
+      },
+    ],
+  },
+  {
+    observationId: "n976bmdkc70de3x2wh962ners98f4pma",
+    snapshot: {
+      bareSplit: {
+        seriesTitle: "Lone Wolf and Cub",
+        volumeLabel: "6",
+      },
+      binding: "paperback",
+      format: "physical",
+      isbn10: "1569715076",
+      isbn13: "9781569715079",
+      key: "/books/OL8694069M",
+      kind: "olEdition",
+      multiVolume: false,
+      publishDate: {
+        day: 28,
+        month: 2,
+        year: 2001,
+      },
+      publishers: ["Dark Horse"],
+      seriesTitle: "Lone Wolf and Cub 6: Lanterns for the Dead",
+      title: "Lone Wolf and Cub 6: Lanterns for the Dead",
+      url: "https://openlibrary.org/books/OL8694069M",
+    },
+    lastSeenAt: 1791141204967,
+    conflicts: [
+      {
+        at: 1791141204967,
+        field: "placement",
+        offered: null,
+        reason: "Volume 6 already has a physical Dark Horse Release (ISBN 9781506747637).",
+      },
+    ],
+  },
+  {
+    observationId: "n971gj5604cmdsp7kry62msrw98f5xdn",
+    snapshot: {
+      bareSplit: {
+        seriesTitle: "Lone Wolf and Cub",
+        volumeLabel: "7",
+      },
+      binding: "paperback",
+      format: "physical",
+      isbn10: "1569715084",
+      isbn13: "9781569715086",
+      key: "/books/OL8694070M",
+      kind: "olEdition",
+      multiVolume: false,
+      publishDate: {
+        day: 28,
+        month: 3,
+        year: 2001,
+      },
+      publishers: ["Dark Horse"],
+      seriesTitle: "Lone Wolf and Cub 7: Cloud Dragon, Wind Tiger",
+      title: "Lone Wolf and Cub 7: Cloud Dragon, Wind Tiger",
+      url: "https://openlibrary.org/books/OL8694070M",
+    },
+    lastSeenAt: 1791122707443,
+    conflicts: [
+      {
+        at: 1791122707443,
+        field: "placement",
+        offered: null,
+        reason: "Volume 7 already has a physical Dark Horse Release (ISBN 9781506747637).",
+      },
+    ],
+  },
+  {
+    observationId: "n97dv3q3t9948kte5hwb294en58f4f9q",
+    snapshot: {
+      bareSplit: {
+        seriesTitle: "Lone Wolf and Cub",
+        volumeLabel: "8",
+      },
+      binding: "paperback",
+      format: "physical",
+      isbn10: "1569715092",
+      isbn13: "9781569715093",
+      key: "/books/OL8694071M",
+      kind: "olEdition",
+      multiVolume: false,
+      publishDate: {
+        day: 25,
+        month: 4,
+        year: 2001,
+      },
+      publishers: ["Dark Horse"],
+      seriesTitle: "Lone Wolf and Cub 8: Chains of Death",
+      title: "Lone Wolf and Cub 8: Chains of Death",
+      url: "https://openlibrary.org/books/OL8694071M",
+    },
+    lastSeenAt: 1791120461846,
+    conflicts: [
+      {
+        at: 1791115368632,
+        field: "placement",
+        offered: null,
+        reason: "Volume 8 already has a physical Dark Horse Release (ISBN 9781506747637).",
+      },
+    ],
+  },
+  {
+    observationId: "n972a98xhxay7rh51tkpqa8c2h8f4p12",
+    snapshot: {
+      bareSplit: {
+        seriesTitle: "Lone Wolf and Cub",
+        volumeLabel: "9",
+      },
+      binding: "paperback",
+      format: "physical",
+      isbn10: "1569715106",
+      isbn13: "9781569715109",
+      key: "/books/OL8694072M",
+      kind: "olEdition",
+      multiVolume: false,
+      publishDate: {
+        day: 30,
+        month: 5,
+        year: 2001,
+      },
+      publishers: ["Dark Horse"],
+      seriesTitle: "Lone Wolf and Cub 9: Shadows, Echos",
+      title: "Lone Wolf and Cub 9: Shadows, Echos",
+      url: "https://openlibrary.org/books/OL8694072M",
+    },
+    lastSeenAt: 1791142925755,
+    conflicts: [
+      {
+        at: 1791142925755,
+        field: "placement",
+        offered: null,
+        reason: "Volume 9 already has a physical Dark Horse Release (ISBN 9781506747644).",
+      },
+    ],
+  },
+] as const;

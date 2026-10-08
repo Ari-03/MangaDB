@@ -1018,7 +1018,7 @@ describe("imports.backfillHolds", () => {
 });
 
 describe("imports.backfillHolds on its first run", () => {
-  it("drops a stale note with no row to remove: a book in review, an Open Library edition it skips", async () => {
+  it("clears a source review note and retains an unresolved skipped Open Library edition", async () => {
     const t = makeT();
     const queued = await heldThenQueued(t);
     const note = {
@@ -1049,10 +1049,10 @@ describe("imports.backfillHolds on its first run", () => {
     expect(await t.run((ctx) => ctx.db.query("placementHolds").collect())).toEqual([]);
 
     const result = await t.mutation(internal.imports.backfillHolds, {});
-    expect(result).toMatchObject({ cleared: 2, done: true });
+    expect(result).toMatchObject({ cleared: 1, done: true });
     await t.run(async (ctx) => {
       expect((await ctx.db.get(queued._id))?.conflicts).toEqual([]);
-      expect((await ctx.db.get(skipped))?.conflicts).toEqual([]);
+      expect((await ctx.db.get(skipped))?.conflicts).toHaveLength(1);
     });
     expect((await list(t)).page).toEqual([]);
   });
@@ -1074,6 +1074,19 @@ describe("storedHoldKind", () => {
       ],
       ["Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.", "packaging"],
       ["A store-exclusive or variant cover: never a Release of its own.", null],
+      ["Packaging its title marks a novel: out of manga scope.", null],
+      [
+        '"Citrus+ [VIZBIG Edition]" is packaging titled for another work than Series 3 ("Citrus"), or a spelling of it this check cannot confirm: its Volume numbers may be that work\'s — an Editor places it.',
+        "packaging",
+      ],
+      [
+        '"Alpha Deluxe [VIZBIG Edition]" is packaging whose title names more than one Edition Line, so its work is unclear — an Editor places it.',
+        "packaging",
+      ],
+      [
+        `"Rurouni Kenshin - VIZBIG Edition [25-27]" (GN 9 / 9) is packaging, its line's last book, but the Volumes it states end at 27, before the Series' 28 — an Editor maps it.`,
+        "packaging",
+      ],
       ["The manga entry has no linked active Series.", "series"],
       ["The Series is locked.", "series"],
       ["The release page names no distributor.", "other"],
@@ -1129,5 +1142,75 @@ describe("storedHoldKind", () => {
       ["Series 3 is locked.", "series"],
     ];
     expect(reasons.map(([reason]) => [reason, storedHoldKind(reason)])).toEqual(reasons);
+  });
+});
+
+describe("heldBooks.dismissInternal", () => {
+  it("keeps a dismissed book off the list until its source changes it, and restores it", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, carol]);
+    await aliceSkeleton(t);
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    const observation = await observationOf(t, "/books/OL1M");
+    const dismiss = (expectedKind: HoldKind) =>
+      t.mutation(internal.heldBooks.dismissInternal, {
+        actor: "alice",
+        observationId: observation!._id,
+        expectedKind,
+        reason: "An ISBN no publisher lists.",
+        evidenceUrls: ["https://openlibrary.org/books/OL1M"],
+      });
+
+    // A hold that moved since the caller looked is refused.
+    await expect(dismiss("isbn")).rejects.toThrow("held as volumeMissing");
+    const { ledgerId } = await dismiss("volumeMissing");
+    expect((await list(t)).page).toEqual([]);
+
+    // The same book, seen again, stays off the list.
+    await openLibrarySync(t);
+    expect((await list(t)).page).toEqual([]);
+
+    // Undone from the ledger, it is listed again.
+    const ledger = await t.run((ctx) => ctx.db.get(ledgerId));
+    await t.mutation(internal.heldBooks.restoreInternal, {
+      actor: "alice",
+      ledgerId,
+      expectedAfter: ledger!.after,
+      reason: "Dismissed in error.",
+    });
+    expect((await list(t)).page).toEqual([
+      expect.objectContaining({ sourceRecordId: "/books/OL1M", kind: "volumeMissing" }),
+    ]);
+    expect((await observationOf(t, "/books/OL1M"))?.dismissedHold).toBeUndefined();
+
+    // A record withdrawn (or linked) since its dismissal is not put back on the list.
+    const again = await dismiss("volumeMissing");
+    const againLedger = await t.run((ctx) => ctx.db.get(again.ledgerId));
+    await t.run((ctx) => ctx.db.patch(observation!._id, { withdrawn: true }));
+    await expect(
+      t.mutation(internal.heldBooks.restoreInternal, {
+        actor: "alice",
+        ledgerId: again.ledgerId,
+        expectedAfter: againLedger!.after,
+        reason: "Dismissed in error.",
+      }),
+    ).rejects.toThrow("linked or withdrawn since the dismissal");
+    await t.run((ctx) => ctx.db.patch(observation!._id, { withdrawn: false }));
+    await t.mutation(internal.heldBooks.restoreInternal, {
+      actor: "alice",
+      ledgerId: again.ledgerId,
+      expectedAfter: againLedger!.after,
+      reason: "Dismissed in error.",
+    });
+
+    // Dismissed again, a source that changes the book lists it again.
+    await dismiss("volumeMissing");
+    stubDump([{ ...alice1, title: "Alice in Borderland, Vol. 1 (Special Edition)" }]);
+    await openLibrarySync(t);
+    expect((await list(t)).page).toEqual([
+      expect.objectContaining({ sourceRecordId: "/books/OL1M" }),
+    ]);
   });
 });

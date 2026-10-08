@@ -6,6 +6,7 @@
 // bootstrap-unreviewed backlog query. Source-specific fetch/parse/apply
 // lives in each adapter module; everything here is source-agnostic.
 
+import { isbnScope } from "./lib/scope";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { type FunctionReference, paginationOptsValidator } from "convex/server";
@@ -28,11 +29,12 @@ import type { OlEditionSnapshot } from "./lib/openLibrary";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
+import { ofOtherPrinting } from "./lib/releaseIsbns";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { LOCK_NOTE } from "./lib/unmatched";
 import { revisionsOf } from "./moderation";
 import { type AnnReleaseSnapshot, lineOutOfScope, SOURCE_KEY as ANN } from "./ann";
-import { placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
+import { outOfScopeElsewhere, placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
 import { holdKind } from "./schema";
 
 // ---------- Import Runs (spec §6: runs & failure) ----------
@@ -484,9 +486,81 @@ export const runScheduled = internalAction({
 
 // ---------- covers (spec §6) ----------
 
+// Records of one Release an old-shape cover attach reads to find the offer.
+const COVER_OFFER_SCAN = 50;
+
+/** A record's current cover offer: its snapshot's `coverUrl`, unless its source withdrew it. */
+function offersCover(observation: Doc<"sourceObservations">, sourceUrl: string): boolean {
+  const snapshot = observation.snapshot as { coverUrl?: unknown } | null;
+  return !observation.withdrawn && snapshot?.coverUrl === sourceUrl;
+}
+
+/**
+ * Why art from `sourceUrl` may not attach to `release`, or null: the
+ * Release must still be in the request's Edition, and that Edition must
+ * still exist, active and unlocked (hiding or locking an Edition does not
+ * touch its Releases' status, so a request queued before it would
+ * otherwise replace art the Edition's moderator froze); the request's
+ * record (`observationId`) must still exist, be linked to this very
+ * Release, be no record of another printing now (lib/releaseIsbns.ts
+ * ofOtherPrinting: no mark, and the ISBN its snapshot states is no printing
+ * of the Release but its own), and still offer that URL. A record of
+ * another printing never changes the Release's cover, and a request made
+ * before a link moved, a mark arrived, a correction made its ISBN another
+ * printing, the art changed or the source withdrew the book attaches
+ * nothing. A request with no record or Edition (an action that started
+ * before requests named them) is held to the Release's current Edition,
+ * and needs a record of the Release's own printing offering the URL and
+ * none of another printing offering it; past COVER_OFFER_SCAN records it is
+ * refused, never guessed.
+ */
+async function coverOfferRefusal(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+  args: {
+    editionId?: Id<"editions">;
+    observationId?: Id<"sourceObservations">;
+    sourceUrl: string;
+  },
+): Promise<string | null> {
+  if (args.editionId !== undefined && release.editionId !== args.editionId) {
+    return "the Release is in another Edition now";
+  }
+  const edition = await ctx.db.get(release.editionId);
+  if (edition === null) return "the Release's Edition is gone";
+  if (edition.status !== "active") return `the Release's Edition is ${edition.status}`;
+  if (edition.locked === true) return "the Release's Edition is locked";
+  if (args.observationId !== undefined) {
+    const observation = await ctx.db.get(args.observationId);
+    if (observation === null) return "its record is gone";
+    const ref = observation.recordRef;
+    if (ref?.type !== "release" || ref.id !== release._id)
+      return "its record links another record now";
+    if (await ofOtherPrinting(ctx, release, observation)) return "its record is another printing's";
+    if (!offersCover(observation, args.sourceUrl)) return "its record no longer offers that art";
+    return null;
+  }
+  const linked = await ctx.db
+    .query("sourceObservations")
+    .withIndex("by_record", (q) =>
+      q.eq("recordRef.type", "release").eq("recordRef.id", release._id),
+    )
+    .take(COVER_OFFER_SCAN + 1);
+  if (linked.length > COVER_OFFER_SCAN)
+    return "the request names no record, and the Release has too many to tell";
+  const offering = linked.filter((observation) => offersCover(observation, args.sourceUrl));
+  for (const observation of offering) {
+    if (await ofOtherPrinting(ctx, release, observation)) {
+      return "a record of another printing offers that art";
+    }
+  }
+  return offering.length > 0 ? null : "no record of the Release offers that art";
+}
+
 /**
  * Attach a cover {storageId, sourceUrl, attribution} (spec §6), the one
- * attach path for publisher art (lib/covers.ts `storeCover`). Without a
+ * attach path for publisher art (lib/covers.ts `storeCover`), refused
+ * unless the requesting record still offers it (coverOfferRefusal). Without a
  * `storageId` the art at `sourceUrl` was a placeholder: the Release records
  * the URL, keeps any art it already shows, and is not fetched again until
  * the URL changes. Refused for a missing, inactive, or locked Release, one
@@ -503,6 +577,11 @@ export const runScheduled = internalAction({
 export const attachCover = internalMutation({
   args: {
     releaseId: v.id("releases"),
+    // The Edition and record the request was made for (lib/covers.ts
+    // CoverRequest). Optional only for an action that was already running
+    // when they were added; coverOfferRefusal holds those to more.
+    editionId: v.optional(v.id("editions")),
+    observationId: v.optional(v.id("sourceObservations")),
     storageId: v.optional(v.id("_storage")),
     sourceUrl: v.string(),
     attribution: v.string(),
@@ -510,7 +589,12 @@ export const attachCover = internalMutation({
   handler: async (
     ctx,
     args,
-  ): Promise<{ attached: boolean; held: Id<"_storage"> | "placeholder" | null; stale?: true }> => {
+  ): Promise<{
+    attached: boolean;
+    held: Id<"_storage"> | "placeholder" | null;
+    stale?: true;
+    refused?: string;
+  }> => {
     const incoming = args.storageId;
     // Shown by any Release but this one, or by a Bundle made from a Release.
     const shown = async (id: Id<"_storage">) => {
@@ -537,6 +621,15 @@ export const attachCover = internalMutation({
     if (!release) {
       await drop(incoming, undefined);
       return { attached: false, held: null };
+    }
+    // The art must still be its record's offer to this Release. A refused
+    // download is deleted only when nothing shows it: not this Release
+    // (an action's cache can hand back the very blob it shows), another
+    // Release, or a Bundle. `held: null` makes the action forget it.
+    const refused = await coverOfferRefusal(ctx, release, args);
+    if (refused !== null) {
+      await drop(incoming, release.coverImage?.storageId);
+      return { attached: false, held: null, refused };
     }
     const current = release.coverImage;
     const same = current !== undefined && current.sourceUrl === args.sourceUrl;
@@ -589,8 +682,11 @@ export function possiblyFuture(
  * op the reviewer approves (confirmed cancellation) or rejects (keep the
  * release). Past-dated linked records are untouched, unlinked observations
  * queue nothing, and withdrawal itself never writes a canonical field —
- * absence is not evidence (spec §6). The observation's queuedProposalId
- * dedups: one open queue item per observation.
+ * absence is not evidence (spec §6). A record of one of the Release's
+ * Other Printings (marked, or one a correction made another printing's:
+ * lib/releaseIsbns.ts ofOtherPrinting) says nothing about the Release's
+ * own printing, so its withdrawal queues nothing either. The observation's
+ * queuedProposalId dedups: one open queue item per observation.
  */
 async function queueWithdrawalReview(
   ctx: MutationCtx,
@@ -599,8 +695,10 @@ async function queueWithdrawalReview(
   observation: Doc<"sourceObservations">,
 ): Promise<boolean> {
   if (observation.recordRef?.type !== "release") return false;
+  if (observation.printingIsbn13 !== undefined) return false;
   const release = await ctx.db.get(observation.recordRef.id);
   if (!release || release.status !== "active" || release.locked) return false;
+  if (await ofOtherPrinting(ctx, release, observation)) return false;
   if (!release.pubDate || !possiblyFuture(release.pubDate, Date.now())) {
     return false;
   }
@@ -767,7 +865,7 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id
  */
 export function storedHoldKind(reason: string): HoldKind | null {
   if (
-    /^ANN lists no ISBN|^A store-exclusive or variant cover|" is a prose imprint:|" publishes in another language:/.test(
+    /^ANN lists no ISBN|^A store-exclusive or variant cover|^Packaging its title marks a novel:|" is a prose imprint:|" publishes in another language:/.test(
       reason,
     )
   ) {
@@ -842,6 +940,8 @@ export const backfillHolds = internalMutation({
       .query("sourceObservations")
       .paginate({ numItems: BACKFILL_PAGE, cursor: args.cursor ?? null });
     for (const observation of page) {
+      // A reviewed Format requires a fresh guarded disposition, including after drift.
+      if (observation.reviewedSourceFormat) continue;
       if (observation.withdrawn) continue;
       const note = observation.conflicts?.find((c) => c.field === "placement");
       if (observation.recordRef !== undefined) {
@@ -862,9 +962,20 @@ export const backfillHolds = internalMutation({
           if (row !== null) continue;
           const at = note?.reason === placement.hold.reason ? note.at : Date.now();
           if (await recordUnplaced(ctx, observation, placement.hold, at)) counts.classified++;
-        } else if (placement.kind === "skip" || placement.kind === "review") {
+        } else if (
+          await outOfScopeElsewhere(ctx, (observation.snapshot as OlEditionSnapshot).isbn13 ?? "")
+        ) {
           if (await clearHold(ctx, observation._id)) counts.cleared++;
         }
+        continue;
+      }
+      const scoped = await isbnScope(
+        ctx,
+        (observation.snapshot as { isbn13?: string; isbn10?: string }).isbn13 ??
+          (observation.snapshot as { isbn10?: string }).isbn10,
+      );
+      if (scoped) {
+        if (await clearHold(ctx, observation._id)) counts.cleared++;
         continue;
       }
       if (note === undefined) continue;

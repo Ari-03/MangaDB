@@ -7,6 +7,7 @@
 
 import { v, type Infer } from "convex/values";
 import { cover, money, partialDate, recordType, releaseFormat } from "../../schema";
+import { digitalFileFormat } from "../bookFacts";
 
 const nullableString = v.union(v.string(), v.null());
 
@@ -32,19 +33,65 @@ export const publisherParentEntry = v.object({
 });
 
 /**
- * Move an Edition (and its Releases' denorm) to another publisher row. With
- * `imprint`, the target must be that PRH imprint's row and an imprint of the
- * edition's current company.
+ * One Edition's whole-Edition publisher move, as the reviewer saw it. The move
+ * rewrites every Release of the Edition, so it only applies with
+ * `expectedReleaseIds`: exactly the Edition's Releases, any status.
+ * `otherReleases` is the number of those Releases without evidence among
+ * `observationIds`: for an imprint move, the Releases with no validated
+ * own-ISBN PRH record listed; with `imprint` null (the legacy owner repair),
+ * the Releases none of the observations is linked to.
+ */
+const editionMove = {
+  editionId: v.id("editions"),
+  observationIds: v.array(v.id("sourceObservations")),
+  otherReleases: v.number(),
+  expectedReleaseIds: v.optional(v.array(v.id("releases"))),
+};
+
+/**
+ * Move an Edition (and its Releases' denorm) to another publisher row.
+ *
+ * With `imprint`, `to` must be that imprint's row, an imprint whose parent is
+ * the company `from` names, and every observation must be PRH's own record of
+ * one of the Edition's Releases stating exactly `imprint` (ops.ts
+ * imprintEvidence). PRH's own record of any other Release stating an imprint
+ * of another publisher refuses. With `imprint` null the observations are
+ * only counted, as the 2026-09 owner repair did.
+ *
+ * Either way a locked Edition, a publisher Human Override, a Release in
+ * another publisher's Bundle, or a Release with Other Printing or Alternate
+ * Ebook ISBN rows refuses. The 2026-09 plan generators filled
+ * `otherReleases` inconsistently (active siblings of one release, or a
+ * constant 0) and nothing read it; such entries without
+ * `expectedReleaseIds` only report alreadyApplied, they never move an
+ * Edition.
  */
 export const editionPublisherEntry = v.object({
   kind: v.literal("editionPublisher"),
   ...base,
-  editionId: v.id("editions"),
+  ...editionMove,
   fromPublisherId: v.id("publishers"),
   toPublisherId: v.id("publishers"),
   imprint: nullableString,
-  observationIds: v.array(v.id("sourceObservations")),
-  otherReleases: v.number(),
+});
+
+/**
+ * Move an Edition Line and its member Editions to an imprint of the line's
+ * company in one transaction: the line's `publisherId` with an editionLine
+ * Revision, each member as an editionPublisher imprint move would. `editions`
+ * must list exactly the line's active members, each with its own closure and
+ * PRH evidence; a hidden member must already be on `to`, since nothing here
+ * evidences it. Reports alreadyApplied when the line and every member are on
+ * `to`.
+ */
+export const editionLinePublisherEntry = v.object({
+  kind: v.literal("editionLinePublisher"),
+  ...base,
+  lineId: v.id("editionLines"),
+  fromPublisherId: v.id("publishers"),
+  toPublisherId: v.id("publishers"),
+  imprint: v.string(),
+  editions: v.array(v.object(editionMove)),
 });
 
 // ---------- stage 2: scope ----------
@@ -93,7 +140,11 @@ export const restoreRecordEntry = v.object({
   releaseIds: v.array(v.id("releases")),
 });
 
-/** Clear a Source Observation's link to a record it does not describe. */
+/**
+ * Clear a Source Observation's link to a record it does not describe, with
+ * its Other Printing mark; on an observation already unlinked, clear only a
+ * mark left behind.
+ */
 export const unlinkObservationEntry = v.object({
   kind: v.literal("unlinkObservation"),
   ...base,
@@ -154,6 +205,17 @@ export const remodelEditionEntry = v.object({
         }),
       ),
       linePosition: nullableString,
+      // A later group whose Releases move into this existing Edition
+      // instead of a new one: the member at `linePosition` of line
+      // `editionLineId`, as the plan saw it. The group states no coverage
+      // or line position of its own.
+      into: v.optional(
+        v.object({
+          editionId: v.id("editions"),
+          editionLineId: v.id("editionLines"),
+          linePosition: nullableString,
+        }),
+      ),
     }),
   ),
   retireVolumeIds: v.array(v.id("volumes")),
@@ -177,6 +239,7 @@ export const foldEditionEntry = v.object({
 // `null` in a plan means "absent" (JSON has no undefined).
 const seriesChange = v.union(
   v.object({ field: v.literal("title"), before: v.string(), after: v.string() }),
+  v.object({ field: v.literal("synopsis"), before: nullableString, after: nullableString }),
   v.object({
     field: v.literal("altTitles"),
     before: v.array(v.string()),
@@ -195,21 +258,44 @@ const releaseChange = v.union(
     before: v.union(partialDate, v.null()),
     after: v.union(partialDate, v.null()),
   }),
+  // Cleared, or set to art an operator stored (repair:storeCoverFromUrl)
+  // when no source record offers any.
   v.object({
     field: v.literal("coverImage"),
     before: v.union(cover, v.null()),
-    after: v.null(),
+    after: v.union(cover, v.null()),
   }),
-  // An ebook recorded as print (or the reverse); going digital drops Binding.
+  v.object({ field: v.literal("description"), before: nullableString, after: nullableString }),
+  // An ebook recorded as print (or the reverse); going digital drops Binding,
+  // going physical drops the digital file format.
   v.object({
     field: v.literal("format"),
     before: releaseFormat,
     after: releaseFormat,
   }),
+  // A digital Release's PDF or EPUB classification. Setting one needs
+  // `evidenceObservationId`: a digital source record linked to this Release
+  // under its own ISBN that states no other file format (ops.ts
+  // fileFormatRefusal); the primary proof it rests on goes in `reason`.
+  v.object({
+    field: v.literal("digitalFileFormat"),
+    before: v.union(digitalFileFormat, v.null()),
+    after: v.union(digitalFileFormat, v.null()),
+  }),
 );
 
 /** Field-level repair with expected before-values (drift = skip). */
 export const updateFieldsEntry = v.union(
+  v.object({
+    kind: v.literal("updateFields"),
+    ...base,
+    table: v.literal("volumes"),
+    id: v.id("volumes"),
+    changes: v.array(
+      v.object({ field: v.literal("synopsis"), before: nullableString, after: nullableString }),
+    ),
+    evidenceObservationId: v.union(v.id("sourceObservations"), v.null()),
+  }),
   v.object({
     kind: v.literal("updateFields"),
     ...base,
@@ -332,6 +418,35 @@ export const createReleaseEntry = v.object({
   ),
   line: v.union(v.object({ name: v.string(), position: nullableString }), v.null()),
   sources: v.array(v.string()),
+  // An Edition Line member no source maps to Volumes (CONTEXT.md Unmapped
+  // Packaging): `coverage` is empty, `line` names the member's line in this
+  // Series, and the Edition is created with `coverageUnmapped`.
+  unmappedSeriesId: v.optional(v.id("series")),
+});
+
+/**
+ * Create the one missing numbered backbone Volume a held Open Library
+ * edition names, under its existing Series, once publisher evidence proves
+ * the book. Bootstrap only. `label` must be the next number after
+ * `expectedActiveVolumes` (the Series' active Volumes in position order, as
+ * the plan saw them: drift = skip), and no Volume of the Series may carry it
+ * in any status. The observation and its `volumeMissing` hold must name this
+ * ISBN, Series and label, and the ISBN must have no owner. Writes only the
+ * Volume: the held book's native replay places its Release afterwards. The
+ * creation Revision records the entry key (alreadyApplied on re-run);
+ * `sources` land on the Proposal as URLs, at least one beyond Open Library.
+ */
+export const createVolumeEntry = v.object({
+  kind: v.literal("createVolume"),
+  ...base,
+  seriesId: v.id("series"),
+  seriesTitle: v.string(),
+  label: v.string(),
+  expectedActiveVolumes: v.array(v.object({ volumeId: v.id("volumes"), label: nullableString })),
+  observationId: v.id("sourceObservations"),
+  holdId: v.id("placementHolds"),
+  isbn13: v.string(),
+  sources: v.array(v.string()),
 });
 
 /**
@@ -340,15 +455,32 @@ export const createReleaseEntry = v.object({
  * (`box`: the box's facts become the bundle's, the box Release and, once
  * empty, its Edition are hidden). Members are named by ISBN and keep the
  * plan's order; `retireVolumeIds` (the box's own placeholder Volumes) merge
- * into the first member's Volume once nothing covers them.
+ * into the first member's Volume once nothing covers them. Or (`create`)
+ * makes a Bundle of a box set no Release stands for. A member may be
+ * Unmapped Packaging or cover its Volumes partially: the box set holds it
+ * whatever it collects.
  */
 export const releaseBundleEntry = v.object({
   kind: v.literal("releaseBundle"),
   ...base,
+  expectedConversion: v.optional(v.string()),
   bundleId: v.union(v.id("releaseBundles"), v.null()),
   box: v.union(v.object({ releaseId: v.id("releases"), name: v.string() }), v.null()),
   members: v.array(v.object({ isbn13: v.string(), order: v.number() })),
   retireVolumeIds: v.array(v.id("volumes")),
+  // With `bundleId` and `box` both null: a box set no Release stands for,
+  // made a Bundle from these stated facts. Its ISBN must be unclaimed.
+  create: v.optional(
+    v.object({
+      name: v.string(),
+      isbn13: v.string(),
+      isbn10: nullableString,
+      publisherId: v.id("publishers"),
+      format: releaseFormat,
+      pubDate: v.union(partialDate, v.null()),
+      price: v.union(money, v.null()),
+    }),
+  ),
 });
 
 /**
@@ -375,6 +507,71 @@ export const setCoverageEntry = v.object({
     v.null(),
   ),
   retireVolumeIds: v.array(v.id("volumes")),
+  // Make the Edition Unmapped Packaging in `line` instead: `coverage` is
+  // empty, its coverage rows are removed, and `coverageUnmapped` is set.
+  unmapped: v.optional(v.boolean()),
+  // With `line` null: also take the Edition out of the line it is in now
+  // (a book filed in another Series' line).
+  clearLine: v.optional(v.boolean()),
+});
+
+/**
+ * Add one Volume to a Series: a numbered one the backbone lacks, or a
+ * published extra with no number, labelled by its name ("Adventures of the
+ * Mini-Goddesses"), which sorts after the last Volume. A Volume with the
+ * label already is this one, so a re-run adds nothing.
+ */
+export const addVolumeEntry = v.object({
+  kind: v.literal("addVolume"),
+  ...base,
+  seriesId: v.id("series"),
+  seriesTitle: v.string(),
+  label: v.string(),
+});
+
+/**
+ * Move some of an Edition's Releases to a new Edition of the same publisher:
+ * two books an import put in one Edition (a Part's hardcover and another
+ * Part's ebook of the same number). The new Edition covers `coverage` (each
+ * Volume named by Series + label, created when missing) or, with
+ * `unmapped`, none, as an Unmapped Packaging member of `line`. The Edition
+ * must hold exactly `releaseIds` and `keepReleaseIds` now (drift = skip),
+ * and keeps the latter. A re-run finds the moved Releases' Edition.
+ */
+export const splitEditionEntry = v.object({
+  kind: v.literal("splitEdition"),
+  ...base,
+  editionId: v.id("editions"),
+  releaseIds: v.array(v.id("releases")),
+  keepReleaseIds: v.array(v.id("releases")),
+  coverage: v.array(
+    v.object({
+      seriesId: v.id("series"),
+      label: nullableString,
+      extent: v.union(v.literal("complete"), v.literal("partial")),
+    }),
+  ),
+  line: v.union(
+    v.object({ seriesId: v.id("series"), name: v.string(), position: nullableString }),
+    v.null(),
+  ),
+  unmapped: v.optional(v.boolean()),
+});
+
+/**
+ * Group Series in a Series Family (CONTEXT.md), creating the Family by
+ * `name` when no active one has it, in reading order: the plan's Series take
+ * the Family's shelf (`familyPosition`) in their `series` order, after any
+ * member the plan does not name, so adding one Part appends it. Series
+ * already in the Family in that order are left alone. Each Series states the
+ * title the plan saw (drift = skip); one already in another Family is skipped
+ * whole.
+ */
+export const seriesFamilyEntry = v.object({
+  kind: v.literal("seriesFamily"),
+  ...base,
+  name: v.string(),
+  series: v.array(v.object({ seriesId: v.id("series"), title: v.string() })),
 });
 
 /**
@@ -389,10 +586,63 @@ export const withdrawProposalEntry = v.object({
   observationId: v.id("sourceObservations"),
 });
 
+/** Create a researched publisher; aliases and normalized names remain unique. */
+export const createPublisherEntry = v.object({
+  kind: v.literal("createPublisher"),
+  ...base,
+  name: v.string(),
+  slug: v.string(),
+  parentPublisherId: v.union(v.id("publishers"), v.null()),
+  sources: v.array(v.string()),
+});
+
+/** Append a corrected evidence version without changing the approved operations. */
+export const amendProposalEvidenceEntry = v.object({
+  kind: v.literal("amendProposalEvidence"),
+  ...base,
+  proposalId: v.id("proposals"),
+  expectedVersionNo: v.number(),
+  replacements: v.array(v.object({ before: v.string(), after: v.string() })),
+});
+
+/** Record a reviewed cover variant, optionally correcting an existing printing row. */
+export const releaseVariantEntry = v.object({
+  kind: v.literal("releaseVariant"),
+  ...base,
+  observationId: v.id("sourceObservations"),
+  releaseId: v.id("releases"),
+  expected: v.string(),
+  name: v.string(),
+  printingRowId: v.union(v.id("releaseIsbns"), v.null()),
+  // Evidence states these unchanged publication facts and exact ordered coverage.
+  publisherId: v.id("publishers"),
+  binding: nullableString,
+  coverage: v.array(
+    v.object({
+      volumeId: v.id("volumes"),
+      extent: v.union(v.literal("complete"), v.literal("partial")),
+    }),
+  ),
+  sources: v.array(v.string()),
+});
+
+/** Record a researched same-content printing, including an omnibus or an isolated mistaken Release. */
+export const otherPrintingEntry = v.object({
+  ...releaseVariantEntry.omit("name", "printingRowId").fields,
+  kind: v.literal("otherPrinting"),
+  sourceReleaseId: v.union(v.id("releases"), v.null()),
+  expectedSource: nullableString,
+});
+
 export const repairEntry = v.union(
+  otherPrintingEntry,
+  createPublisherEntry,
+  amendProposalEvidenceEntry,
+  releaseVariantEntry,
   publisherMergeEntry,
   publisherParentEntry,
   editionPublisherEntry,
+  editionLinePublisherEntry,
   hideSeriesEntry,
   hideReleaseEntry,
   restoreRecordEntry,
@@ -406,8 +656,12 @@ export const repairEntry = v.union(
   splitSeriesEntry,
   hideEditionLineEntry,
   createReleaseEntry,
+  createVolumeEntry,
   releaseBundleEntry,
   setCoverageEntry,
+  seriesFamilyEntry,
+  splitEditionEntry,
+  addVolumeEntry,
 );
 
 export type RepairEntry = Infer<typeof repairEntry>;

@@ -3,7 +3,8 @@
 // (a rename at the source is then a field conflict, never a failed match);
 // this module resolves everything below it, strongest first:
 //
-//   ② ISBN-13 exact, with a title-similarity sanity check
+//   ② ISBN-13 exact (a Release's own, or one of its Other Printings), with a
+//     title-similarity sanity check
 //   ③ publisher + normalized series title + volume label + format, onto an
 //     ordinary whole-Volume Edition, Binding and language not contradicting —
 //     auto ONLY with exactly one candidate and no override/lock
@@ -19,9 +20,11 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { type DigitalFileFormat, takesFormatSlot } from "./bookFacts";
 import { isNovelTitle } from "./bookTitle";
 import { coveringOf, releasesOf } from "./editionRows";
 import { factualOverrides } from "./moderationFields";
+import { printingReleases } from "./releaseIsbns";
 import { decodeEntities } from "./text";
 
 // ---------- pure text rules ----------
@@ -84,6 +87,40 @@ function exactTitleAmong(title: string, series: Doc<"series">[]): Doc<"series">[
 }
 
 /**
+ * A work-name key that keeps every mark a title's identity can rest on:
+ * "+", "!", apostrophes, digits, dashes, a leading "The" and bracketed
+ * text all stay. It folds only spelling noise: entities, the apostrophe
+ * glyphs (mapped before NFKD, which would turn "´" into a space and a
+ * combining mark), accents, full-width forms, case, "&" and "and", the
+ * hyphen, en and em dash glyphs as "-", and runs of whitespace. Spacing
+ * around a dash still counts: "Alpha-Beta" is not "Alpha - Beta".
+ */
+function workKey(title: string): string {
+  return decodeEntities(title)
+    .replace(/[’‘`´ʼ]/g, "'")
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[‐‑–—]/g, "-")
+    .replace(/&/g, " and ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Whether two titles name the same work, strictly: Citrus is not Citrus+,
+ * E'S is not ES, Bastard is not Bastard!!, Kingdom Hearts is not Kingdom
+ * Hearts II, and a novel is never its manga. Only `workKey`'s spelling
+ * noise differs between titles it calls equal; an empty title names no
+ * work. The guard for creating records under a selected Series (ann.ts
+ * packaging); search and the matching ladder keep their looser keys.
+ */
+export function sameWorkTitle(a: string, b: string): boolean {
+  const key = workKey(a);
+  return key !== "" && key === workKey(b) && isNovelTitle(a) === isNovelTitle(b);
+}
+
+/**
  * Loose title-similarity sanity check for the ISBN rung (spec §6): at least
  * half of the shorter title's tokens must appear in the other, on the same
  * folding as normalizeTitle. A novel is never similar to a manga.
@@ -128,6 +165,8 @@ export type ReleaseFact = {
   format: "physical" | "digital";
   /** Physical Binding ("Paperback", "hardcover"); case-insensitive, unknown when absent. */
   binding?: string;
+  /** A digital record's file format, from its own ISBN's evidence; unknown when absent. */
+  digitalFileFormat?: DigitalFileFormat;
   /** Language code ("en"); unknown when absent. */
   language?: string;
   isbn13?: string;
@@ -145,6 +184,13 @@ export type MatchOutcome =
 // backbone entry) must still be found.
 const SEARCH_SCAN = 100;
 
+/**
+ * Series search-index hits for one title query. Importers read the top
+ * SEARCH_SCAN hits by relevance; a held-book guard passes a scan it can
+ * prove complete (lib/heldBooks.ts titleScan).
+ */
+export type TitleScan = (text: string) => Promise<Doc<"series">[]>;
+
 // Merge chains are short (a repair merges into a survivor, rarely twice);
 // the bound only guards against a corrupt cycle.
 const MAX_MERGE_HOPS = 8;
@@ -154,10 +200,9 @@ const MAX_MERGE_HOPS = 8;
  * it: the row itself when not merged, null when the chain dead-ends. How
  * importers respect a repair's merges instead of recreating the loser.
  */
-export async function survivorOf<T extends "series" | "volumes" | "releases">(
-  ctx: QueryCtx | MutationCtx,
-  doc: Doc<T> | null,
-): Promise<Doc<T> | null> {
+export async function survivorOf<
+  T extends "series" | "volumes" | "editionLines" | "editions" | "releases",
+>(ctx: QueryCtx | MutationCtx, doc: Doc<T> | null): Promise<Doc<T> | null> {
   let current = doc;
   for (let hops = 0; current !== null && current.status === "merged"; hops++) {
     if (current.mergedIntoId === undefined || hops >= MAX_MERGE_HOPS) return null;
@@ -167,7 +212,8 @@ export async function survivorOf<T extends "series" | "volumes" | "releases">(
 }
 
 /**
- * Every Release row carrying this ISBN-13, each merged one answered by its
+ * Every Release carrying this ISBN-13 as its own or as one of its Other
+ * Printings (lib/releaseIsbns.ts), each merged one answered by its
  * survivor (null where the merge chain dead-ends). Survivors can repeat.
  */
 export async function isbnHolders(
@@ -178,7 +224,8 @@ export async function isbnHolders(
     .query("releases")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
     .collect();
-  return await Promise.all(rows.map((row) => survivorOf<"releases">(ctx, row)));
+  const printed = await printingReleases(ctx, isbn13);
+  return await Promise.all([...rows, ...printed].map((row) => survivorOf<"releases">(ctx, row)));
 }
 
 /**
@@ -195,16 +242,19 @@ export async function isbnHolders(
 async function seriesByTitle(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
+  scan?: TitleScan,
 ): Promise<{ active: Doc<"series">[]; hidden: Doc<"series">[] }> {
   const wanted = normalizeTitle(seriesTitle);
   if (wanted === "") return { active: [], hidden: [] };
   const queries = new Set([decodeEntities(seriesTitle), wanted.replace(NOVEL_KEY, "")]);
   const seen = new Map<Id<"series">, Doc<"series">>();
   for (const text of queries) {
-    const hits = await ctx.db
-      .query("series")
-      .withSearchIndex("search_title", (q) => q.search("searchText", text))
-      .take(SEARCH_SCAN);
+    const hits = scan
+      ? await scan(text)
+      : await ctx.db
+          .query("series")
+          .withSearchIndex("search_title", (q) => q.search("searchText", text))
+          .take(SEARCH_SCAN);
     for (const hit of hits) seen.set(hit._id, hit);
   }
   const all = [...seen.values()];
@@ -246,8 +296,9 @@ async function seriesByTitle(
 export async function candidateSeries(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
+  scan?: TitleScan,
 ): Promise<Doc<"series">[]> {
-  return (await seriesByTitle(ctx, seriesTitle)).active;
+  return (await seriesByTitle(ctx, seriesTitle, scan)).active;
 }
 
 /**
@@ -258,8 +309,9 @@ export async function candidateSeries(
 export async function hiddenSeriesTitled(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
+  scan?: TitleScan,
 ): Promise<Doc<"series">[]> {
-  return (await seriesByTitle(ctx, seriesTitle)).hidden;
+  return (await seriesByTitle(ctx, seriesTitle, scan)).hidden;
 }
 
 /** What a source knows about a work beyond its title (ANN's staff and books). */
@@ -276,6 +328,7 @@ const EVIDENCE_VOLUMES = 150;
  * title alone links Doubt to Doubt!!, E'S to ES, and Citrus to Citrus+ (an
  * alt title); once linked, the source builds its Volumes and credits there.
  *   "same"          — one of the work's ISBNs is already a Release of the Series
+ *                     (its own ISBN or another printing's)
  *   "different"     — both sides know their creators (ANN person ids) and
  *                     share none
  *   "disjointBooks" — both hold ISBNs in a common format and share none (a
@@ -296,7 +349,13 @@ export async function workMatch(
       .query("releases")
       .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
       .collect();
-    if (releases.some((r) => r.status === "active" && r.seriesIds.includes(seriesId))) {
+    // Another printing of one of its books is its book too.
+    const printed = await printingReleases(ctx, isbn13);
+    if (
+      [...releases, ...printed].some(
+        (r) => r?.status === "active" && r.seriesIds.includes(seriesId),
+      )
+    ) {
       return "same";
     }
   }
@@ -347,16 +406,19 @@ export async function workMatch(
 
 /**
  * Whether an Edition is an ordinary book of one whole Volume: its only
- * Volume Coverage row is complete and it belongs to no Edition Line. A
- * single-volume record keyed by label (rung ③, ANN's label and page
- * fallbacks) may link only onto such an Edition; a split part, an omnibus,
- * or a line's packaging of the same Volume is another book.
+ * Volume Coverage row is complete, it belongs to no Edition Line, and it is
+ * not Unmapped Packaging (whose rows, if any remain, are not its stated
+ * contents). A single-volume record keyed by label (rung ③, ANN's label and
+ * page fallbacks) may link only onto such an Edition, and only such an
+ * Edition takes a Volume's ordinary slot; a split part, an omnibus, or a
+ * line's packaging of the same Volume is another book. The label does not
+ * matter: a whole Volume 14.5 is as ordinary as a Volume 14.
  */
 export async function isWholeSingleVolume(
   ctx: QueryCtx | MutationCtx,
   edition: Doc<"editions">,
 ): Promise<boolean> {
-  if (edition.editionLineId !== undefined) return false;
+  if (edition.editionLineId !== undefined || edition.coverageUnmapped === true) return false;
   const coverage = await ctx.db
     .query("volumeCoverages")
     .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
@@ -435,8 +497,8 @@ export async function matchRelease(
   // Rungs ③/④: walk title-matching Series → label-matching Volumes → their
   // covering Editions → Releases, splitting strict full-key hits from
   // loose title-only candidates. A candidate that matches the full key
-  // except Format or a known Binding is a SIBLING, not ambiguity: Releases
-  // of one Edition differ exactly in Format/Binding (spec §2), so a
+  // except Format, a known Binding or a known file format is a SIBLING, not
+  // ambiguity: Releases of one Edition differ exactly there (spec §2), so a
   // publisher's digital counterpart or hardcover of an existing paperback
   // volume is the creation path, never a review — the creation helper
   // attaches it to the sibling's Edition.
@@ -472,8 +534,10 @@ export async function matchRelease(
           if (contradicts(release.language, fact.language)) continue;
           const sameEdition =
             wholeVolume && fact.publisherId !== null && edition.publisherId === fact.publisherId;
+          // Known, different file formats are siblings, like Bindings.
           const sameRelease =
-            release.format === fact.format && !contradicts(release.binding, fact.binding);
+            takesFormatSlot(release, fact.format, fact.digitalFileFormat) &&
+            !contradicts(release.binding, fact.binding);
           const bucket = !sameEdition ? loose : sameRelease ? strict : siblings;
           bucket.set(release._id, release);
         }

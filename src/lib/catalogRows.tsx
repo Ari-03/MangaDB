@@ -26,23 +26,57 @@ export type CoverageChipData = Pick<
   "volumePublicId" | "position" | "label" | "volumeTitle" | "extent" | "note"
 >;
 
-/** Format chip: the one fact that separates two Releases of an Edition. */
-function FormatChip({ format }: { format: ReleaseRowData["format"] }) {
+/** Format chip: what separates two Releases of an Edition, with a known PDF/EPUB file format. */
+function FormatChip({
+  format,
+  digitalFileFormat,
+}: Pick<ReleaseRowData, "format" | "digitalFileFormat">) {
   return format === "physical" ? (
     <span className="chip chip--physical">Physical</span>
   ) : (
-    <span className="chip chip--digital">Digital</span>
+    <span className="chip chip--digital">
+      {digitalFileFormat ? `Digital · ${digitalFileFormat.toUpperCase()}` : "Digital"}
+    </span>
   );
+}
+
+/**
+ * A Release row's Other Printings line, or null when it has none to show:
+ * each ISBN with its year, and, when the list is only the first recorded
+ * (catalogPages releaseRow `morePrintings`), that others may not be shown.
+ * A digital Release's are its alternate ebook ISBNs, listed, not printed.
+ */
+export function otherPrintingsText(
+  release: Pick<ReleaseRowData, "otherPrintings" | "morePrintings"> &
+    Partial<Pick<ReleaseRowData, "format">>,
+): string | null {
+  const verb = release.format === "digital" ? "listed" : "printed";
+  const shown = release.otherPrintings.map((printing) =>
+    printing.year !== null
+      ? `ISBN ${printing.isbn13}, ${printing.year}`
+      : `ISBN ${printing.isbn13}`,
+  );
+  if (shown.length === 0) {
+    return release.morePrintings ? `Also ${verb} under other ISBNs, not shown here.` : null;
+  }
+  const more = release.morePrintings
+    ? ` (the first ${shown.length} recorded; others may not be shown)`
+    : "";
+  return `Also ${verb} as ${shown.join("; ")}${more}`;
 }
 
 /**
  * A Release row, anchored by ISBN when present, else document ID (spec §8) —
  * the `/isbn/{isbn}` redirect lands on this fragment, which `:target`
- * highlights. Variants render beneath their Release; containing Bundles link
- * to their Bundle pages. The signed-in collection and reading-pass controls
- * sit in the row's right-hand column and collapse it when signed out.
+ * highlights, for the Release's own ISBN and its Other Printings' alike.
+ * The other printings' ISBNs are listed beneath its own, with their year,
+ * the first recorded only and saying so when others may remain;
+ * Variants render beneath their Release; containing Bundles link to their
+ * Bundle pages. The signed-in collection and reading-pass controls sit in
+ * the row's right-hand column and collapse it when signed out.
  */
 export function ReleaseRow({ release }: { release: ReleaseRowData }) {
+  const printings = otherPrintingsText(release);
   const date = formatPartialDate(release.pubDate);
   const price = formatPrice(release.price);
   // Binding describes physical construction only (glossary: Binding).
@@ -51,7 +85,7 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
     <li className="release-row" id={release.anchor}>
       <div className="release-main">
         <p className="release-line">
-          <FormatChip format={release.format} />
+          <FormatChip format={release.format} digitalFileFormat={release.digitalFileFormat} />
           {binding ? <span className="release-binding">{binding}</span> : null}
           {date ? <span className="release-date">{date}</span> : null}
           {price ? <span className="release-price">{price}</span> : null}
@@ -72,9 +106,15 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
             ) : null}
           </p>
         ) : null}
+        {printings !== null ? <p className="release-printings">{printings}</p> : null}
         {release.variants.length > 0 ? (
           <p className="release-variants">
-            Cover variants: {release.variants.map((variant) => variant.name).join(", ")}
+            Cover variants:{" "}
+            {release.variants
+              .map((variant) =>
+                variant.isbn13 ? `${variant.name} (ISBN ${variant.isbn13})` : variant.name,
+              )
+              .join(", ")}
           </p>
         ) : null}
         {release.bundles.length > 0 ? (

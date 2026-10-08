@@ -5,6 +5,15 @@ import type { Id } from "./_generated/dataModel";
 import { todaySortKey } from "./lib/dates";
 import { seriesSearchText } from "./lib/searchMatch";
 import { letterFor, sortKeyFor } from "./seriesBrowse";
+import { readTally } from "./test.catalog";
+import {
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+} from "./test.factories";
 import { makeT } from "./test.helpers";
 
 // Three Series with different shapes — a long-running one with a follower
@@ -230,6 +239,81 @@ describe("seriesBrowse.rebuild", () => {
       expect(rows.map((r) => r.title).sort()).toEqual(["The Quiet Cartographer", "Tokyo Ghoul"]);
       expect(new Set(rows.map((r) => r.rebuiltAt)).size).toBe(1);
     });
+  });
+});
+
+describe("seriesBrowse.rebuild — Publisher reads", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // Four Series whose nine Editions name four Publishers between them: an
+  // active one, an adult-only one, a hidden adult-only one, and one deleted
+  // since (its id still on two Editions).
+  async function sharedPublishers() {
+    const t = makeT({ transactionLimits: true });
+    const ids = await t.run(async (ctx) => {
+      const viz = await insertPublisher(ctx, { name: "VIZ Media" });
+      const fakku = await insertPublisher(ctx, { name: "FAKKU", contentRating: "mature" });
+      const hiddenAdult = await insertPublisher(ctx, {
+        status: "hidden",
+        name: "Old Adult Imprint",
+        contentRating: "mature",
+      });
+      const gone = await insertPublisher(ctx, { name: "Gone Press" });
+      await ctx.db.delete(gone);
+      const series = async (
+        title: string,
+        publishers: Array<Id<"publishers">>,
+        contentRating?: "general",
+      ) => {
+        const seriesId = await insertSeries(ctx, { title, contentRating });
+        const volumeId = await insertVolume(ctx, { seriesId });
+        for (const publisherId of publishers) {
+          const editionId = await insertEdition(ctx, { publisherId });
+          await insertCoverage(ctx, { editionId, volumeId });
+          await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] });
+        }
+      };
+      await series("Alpha", [viz, viz, gone]);
+      await series("Bravo", [viz, fakku]);
+      // The Data Team rated it general: an adult-only Publisher does not override that.
+      await series("Charlie", [fakku, viz], "general");
+      await series("Delta", [gone, hiddenAdult]);
+      return { publishers: [viz, fakku, hiddenAdult, gone] };
+    });
+    return { t, ids };
+  }
+
+  it("reads each Publisher once per batch, a missing one included, with the same rows", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T12:00:00Z"));
+    const { t, ids } = await sharedPublishers();
+    const batch = { afterPublicId: null, rebuiltAt: 1 };
+    // The first batch inserts the rows; the measured one replaces them, as
+    // every scheduled rebuild after the first does.
+    await t.mutation(internal.seriesBrowse.rebuildBatch, batch);
+    const { gets } = await readTally(() =>
+      t.mutation(internal.seriesBrowse.rebuildBatch, { ...batch, rebuiltAt: 2 }),
+    );
+    // Nine Edition lookups, four distinct Publishers: one get each.
+    expect(ids.publishers.map((id) => gets.get(id))).toEqual([1, 1, 1, 1]);
+
+    const rows = await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      const stats = await ctx.db.query("seriesStats").collect();
+      return series.map((doc) => ({
+        title: doc.title,
+        mature: doc.mature === true,
+        publishers: stats.find((row) => row.seriesId === doc._id)?.publishers.map((p) => p.name),
+      }));
+    });
+    // Only active Publishers are listed; an adult-only one is evidence even
+    // when hidden, unless the Data Team has rated the Series.
+    expect(rows).toEqual([
+      { title: "Alpha", mature: false, publishers: ["VIZ Media"] },
+      { title: "Bravo", mature: true, publishers: ["FAKKU", "VIZ Media"] },
+      { title: "Charlie", mature: false, publishers: ["FAKKU", "VIZ Media"] },
+      { title: "Delta", mature: true, publishers: [] },
+    ]);
   });
 });
 
@@ -732,6 +816,38 @@ describe("seriesBrowse filters first, then the sort", () => {
       (await ctx.db.query("seriesStatsPacks").collect()).map((p) => p.block),
     );
     expect(blocks).toEqual([0]);
+  });
+
+  it("skips unchanged pack writes, still publishes and cleans up, and writes changed facts", async () => {
+    const t = await shelf();
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("seriesStats").collect())
+        await ctx.db.patch(row._id, { rebuiltAt: row.rebuiltAt + 1 });
+      for (const config of await ctx.db.query("appConfig").collect())
+        await ctx.db.delete(config._id);
+      await ctx.db.insert("seriesStatsPacks", { block: 7, entries: [] });
+    });
+    await t.run(async (ctx) => {
+      const before = await ctx.meta.getTransactionMetrics();
+      expect(await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: 0 })).toBe(false);
+      // Only delete the stale pack and publish appConfig; do not rewrite block 0.
+      const after = await ctx.meta.getTransactionMetrics();
+      expect(after.documentsWritten.used - before.documentsWritten.used).toBe(2);
+      expect((await ctx.db.query("seriesStatsPacks").collect()).map((p) => p.block)).toEqual([0]);
+      expect(await ctx.db.query("appConfig").first()).toMatchObject({ seriesPacksReady: true });
+    });
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("seriesStats").first())!;
+      await ctx.db.patch(row._id, { volumeCount: row.volumeCount + 1 });
+      const before = await ctx.meta.getTransactionMetrics();
+      await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: 0 });
+      const after = await ctx.meta.getTransactionMetrics();
+      expect(after.documentsWritten.used - before.documentsWritten.used).toBe(1);
+      const pack = (await ctx.db.query("seriesStatsPacks").first())!;
+      expect(pack.entries.find((entry) => entry.publicId === row.publicId)?.volumeCount).toBe(
+        row.volumeCount + 1,
+      );
+    });
   });
 
   it("filters from the rows themselves before any pack is written", async () => {

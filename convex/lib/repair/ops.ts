@@ -6,12 +6,32 @@
 // and — once its Volumes are placed — Series. The stock Series merge appends
 // loser Volumes after the survivor's, so Volumes are placed by label first.
 
+import { applyGapEntry } from "./gaps";
+import { isbnScope } from "../scope";
+import { getBootstrapMode } from "../../importSources";
+import { placeEdition } from "../../openLibrary";
+import type { OlEditionSnapshot } from "../openLibrary";
+import { projectSourceFormat } from "../sourceFormat";
+import { reader, releaseContents, volumesForLabels } from "../heldBooks";
+import { referenceAudit, convertedClaim, conversionState } from "../heldRepair";
+import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
+import type { Contents } from "../heldBooks";
 import type { MutationCtx } from "../../_generated/server";
+import type { DigitalFileFormat } from "../bookFacts";
+import { type IsbnField, isbn13To10, isbnFieldValue, toIsbn13 } from "../isbn";
 import { followMerges } from "../merges";
-import { linkObservation } from "../observations";
+import { getObservation, holdOf, linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
+import {
+  assignedIsbnRefusal,
+  primaryIsbnsOf,
+  isbnClaims,
+  claimResolver,
+  statedIsbns,
+  storedClaims,
+} from "../releaseIsbns";
 import { seriesSearchText } from "../searchMatch";
 import {
   OWNERSHIP,
@@ -24,10 +44,11 @@ import {
   carryEditionTracking,
   carryVisibility,
   editionGovernance,
+  restoreRefusal,
   type EditionGovernance,
   type OverrideSink,
 } from "../sensitiveOps";
-import { sameValue } from "../values";
+import { sameValue, valueHash } from "../values";
 import {
   activeEditionsCovering,
   activeVolumes,
@@ -37,6 +58,7 @@ import {
   createEdition,
   ensureVolume,
   labelNumber,
+  REPAIR_KEY_FIELD,
   refreshReleaseDenorms,
   releasesOf,
   replaceCoverage,
@@ -63,12 +85,19 @@ export async function applyEntry(
   entry: RepairEntry,
 ): Promise<Result> {
   switch (entry.kind) {
+    case "otherPrinting":
+    case "createPublisher":
+    case "amendProposalEvidence":
+    case "releaseVariant":
+      return await applyGapEntry(ctx, audit, entry);
     case "publisherMerge":
       return await publisherMerge(ctx, audit, entry);
     case "publisherParent":
       return await publisherParent(ctx, audit, entry);
     case "editionPublisher":
       return await editionPublisher(ctx, audit, entry);
+    case "editionLinePublisher":
+      return await editionLinePublisher(ctx, audit, entry);
     case "hideSeries":
       return await hideSeries(ctx, audit, entry);
     case "hideRelease":
@@ -95,10 +124,18 @@ export async function applyEntry(
       return await hideEditionLine(ctx, audit, entry);
     case "createRelease":
       return await createRelease(ctx, audit, entry);
+    case "createVolume":
+      return await createVolume(ctx, audit, entry);
     case "releaseBundle":
       return await releaseBundle(ctx, audit, entry);
     case "setCoverage":
       return await setCoverage(ctx, audit, entry);
+    case "seriesFamily":
+      return await seriesFamily(ctx, audit, entry);
+    case "splitEdition":
+      return await splitEdition(ctx, audit, entry);
+    case "addVolume":
+      return await addVolume(ctx, audit, entry);
   }
 }
 
@@ -159,6 +196,9 @@ async function restore(
 ) {
   if (doc.status === "active") return false;
   if (doc.locked) skip(`${ref.type} ${ref.id} is locked`);
+  // Restore's own check (its ISBNs still its own), reported as this entry's skip.
+  const refusal = await restoreRefusal(ctx, ref);
+  if (refusal !== null) skip(refusal);
   audit.op({ kind: "restore", ref });
   await applyRestore(ctx, ref, await audit.meta());
   return true;
@@ -310,6 +350,229 @@ function companySlug(slug: string): string {
   return DUPLICATE_SLUGS[slug] ?? slug;
 }
 
+/**
+ * PRH's prose imprint shares Vertical's name; the PRH importer keeps it out of
+ * scope (lib/prh.ts DENIED_IMPRINTS), so it is never manga imprint evidence.
+ */
+const PRH_PROSE_IMPRINT = /^\s*vertical\s*$/i;
+
+type EditionMove = Pick<
+  EntryOf<"editionPublisher">,
+  "observationIds" | "otherReleases" | "expectedReleaseIds"
+>;
+
+/**
+ * The plan's publisher rows for a move. With `imprint`, `to` must be exactly
+ * that known imprint's row and name `from`'s company as its parent, in the
+ * catalog as in lib/publishers.ts.
+ */
+async function movePublishers(
+  ctx: MutationCtx,
+  fromId: Id<"publishers">,
+  toId: Id<"publishers">,
+  imprint: string | null,
+) {
+  const from = await ctx.db.get(fromId);
+  const to = await ctx.db.get(toId);
+  if (!from || !to || to.status !== "active") return skip("publisher rows missing");
+  if (imprint === null) return { from, to };
+  // Owner rule: PRH's imprint outranks Seven Seas/OpenLibrary attribution
+  // to the parent, but only toward a known imprint of the same company.
+  if (PRH_PROSE_IMPRINT.test(imprint)) skip(`"${imprint}" is PRH's prose imprint`);
+  const resolved = canonicalPublisherFor(imprint);
+  if (!resolved || resolved.parentSlug === undefined) skip(`"${imprint}" is not a known imprint`);
+  if (companySlug(resolved!.slug) !== to.slug)
+    skip(`"${imprint}" resolves to ${resolved!.slug}, not ${to.slug}`);
+  if (resolved!.parentSlug !== companySlug(from.slug)) {
+    skip(`${resolved!.slug} is not an imprint of ${companySlug(from.slug)}`);
+  }
+  const parent = to.parentPublisherId ? await ctx.db.get(to.parentPublisherId) : null;
+  if (!parent || companySlug(parent.slug) !== companySlug(from.slug))
+    skip(`${to.slug} does not name ${companySlug(from.slug)} as its parent`);
+  return { from, to };
+}
+
+/** Skip unless a record's publisher row is the company the plan expected to move it from. */
+async function expectOnCompany(
+  ctx: MutationCtx,
+  what: string,
+  publisherId: Id<"publishers">,
+  from: Doc<"publishers">,
+) {
+  const current = await ctx.db.get(publisherId);
+  if (!current) return skip(`${what}'s publisher row is missing`);
+  if (companySlug(current.slug) !== companySlug(from.slug))
+    skip(`${what} is on ${current.slug}, plan expected ${from.slug}`);
+}
+
+/**
+ * The Edition's Releases, any status (refreshReleaseDenorms rewrites them
+ * all), when they are exactly `expected`. Read in the same transaction as the
+ * write, so an added, removed or moved Release refuses.
+ */
+async function expectReleaseClosure(
+  ctx: MutationCtx,
+  editionId: Id<"editions">,
+  expected: Id<"releases">[] | undefined,
+) {
+  if (expected === undefined)
+    return skip("expectedReleaseIds is required to move an Edition's publisher");
+  const expectedSet = new Set(expected);
+  if (expectedSet.size !== expected.length) skip("expectedReleaseIds lists a Release twice");
+  const releases = await releasesOf(ctx, editionId);
+  const actual = new Set(releases.map((release) => release._id));
+  const added = [...actual].filter((id) => !expectedSet.has(id));
+  const missing = expected.filter((id) => !actual.has(id));
+  if (added.length > 0 || missing.length > 0) {
+    skip(
+      `edition releases drifted: unexpected [${added.join(", ")}], missing [${missing.join(", ")}]`,
+    );
+  }
+  return releases;
+}
+
+/** The Releases among `releases` that one of `observationIds` is linked to (legacy evidence). */
+async function linkedReleases(
+  ctx: MutationCtx,
+  releases: Doc<"releases">[],
+  observationIds: Id<"sourceObservations">[],
+) {
+  const ids = new Set(releases.map((release) => release._id));
+  const evidenced = new Set<Id<"releases">>();
+  for (const observationId of observationIds) {
+    const ref = (await ctx.db.get(observationId))?.recordRef;
+    if (ref?.type === "release" && ids.has(ref.id)) evidenced.add(ref.id);
+  }
+  return evidenced;
+}
+
+/**
+ * The Releases an imprint move's observations evidence. Each must be PRH's
+ * own record of a Release in `releases`: linked to it, not withdrawn, not
+ * the record of an Other Printing, with its record ID, snapshot ISBN and the
+ * Release's ISBN all one ISBN, stating exactly `imprint`. Any other
+ * observation refuses the entry rather than being ignored.
+ */
+async function imprintEvidence(
+  ctx: MutationCtx,
+  releases: Doc<"releases">[],
+  observationIds: Id<"sourceObservations">[],
+  imprint: string,
+) {
+  if (observationIds.length === 0) skip("an imprint move needs PRH evidence");
+  const byId = new Map(releases.map((release) => [release._id as string, release]));
+  const evidenced = new Set<Id<"releases">>();
+  for (const observationId of new Set(observationIds)) {
+    const observation = await ctx.db.get(observationId);
+    if (!observation) return skip(`observation ${observationId} is missing`);
+    const ref = observation.recordRef;
+    const release = ref?.type === "release" ? byId.get(ref.id) : undefined;
+    const snapshot: { isbn13?: unknown; imprint?: unknown } = observation.snapshot ?? {};
+    const refusal =
+      observation.sourceKey !== "prh"
+        ? `is a ${observation.sourceKey} record, not PRH's`
+        : release === undefined
+          ? "is not linked to a Release of the Edition"
+          : observation.withdrawn
+            ? "is withdrawn"
+            : observation.printingIsbn13 !== undefined
+              ? `records Other Printing ${observation.printingIsbn13}`
+              : release.isbn13 === undefined ||
+                  observation.sourceRecordId !== release.isbn13 ||
+                  snapshot.isbn13 !== release.isbn13
+                ? `is not the Release's own ISBN record (${observation.sourceRecordId}, release ${release.isbn13 ?? "no ISBN"})`
+                : snapshot.imprint !== imprint
+                  ? `states ${JSON.stringify(snapshot.imprint)}, not "${imprint}"`
+                  : null;
+    if (refusal !== null) skip(`observation ${observationId} ${refusal}`);
+    evidenced.add(release!._id);
+  }
+  return evidenced;
+}
+
+/**
+ * Refuse when PRH's own record of any Release's ISBN states an imprint that
+ * is not `imprint` and does not resolve to `to`, linked or not: the move
+ * would contradict the publisher's own statement for that book.
+ */
+async function expectNoContraryImprint(
+  ctx: MutationCtx,
+  releases: Doc<"releases">[],
+  imprint: string,
+  to: Doc<"publishers">,
+) {
+  for (const release of releases) {
+    if (release.isbn13 === undefined) continue;
+    const observation = await getObservation(ctx, "prh", release.isbn13);
+    if (!observation || observation.withdrawn) continue;
+    const stated: unknown = observation.snapshot?.imprint;
+    if (typeof stated !== "string" || stated === imprint) continue;
+    const resolved = canonicalPublisherFor(stated);
+    if (resolved && companySlug(resolved.slug) === to.slug) continue;
+    skip(`PRH states "${stated}" for ${release.isbn13}, not ${to.slug}`);
+  }
+}
+
+/**
+ * Everything a whole-Edition publisher move must hold before it writes,
+ * shared by editionPublisher and editionLinePublisher: the Edition unlocked
+ * with no publisher Human Override, its exact Release closure and evidence
+ * count, no contrary PRH imprint, no Release in another publisher's Bundle,
+ * and no Other Printing or Alternate Ebook ISBN rows (their publisher would
+ * move with no evidence for them).
+ */
+async function expectEditionMove(
+  ctx: MutationCtx,
+  edition: Doc<"editions">,
+  move: EditionMove,
+  to: Doc<"publishers">,
+  imprint: string | null,
+) {
+  if (edition.locked) skip(`edition ${edition.publicId} is locked`);
+  if ((edition.overriddenFields ?? []).includes("publisherId"))
+    skip(`edition ${edition.publicId} has a publisher override`);
+  const releases = await expectReleaseClosure(ctx, edition._id, move.expectedReleaseIds);
+  const evidenced =
+    imprint === null
+      ? await linkedReleases(ctx, releases, move.observationIds)
+      : await imprintEvidence(ctx, releases, move.observationIds, imprint);
+  const others = releases.length - evidenced.size;
+  if (others !== move.otherReleases)
+    skip(
+      `edition ${edition.publicId} has ${others} releases without evidence, plan expected ${move.otherReleases}`,
+    );
+  if (imprint !== null) await expectNoContraryImprint(ctx, releases, imprint, to);
+  for (const release of releases) {
+    const printing = await ctx.db
+      .query("releaseIsbns")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .first();
+    if (printing) skip(`release ${release._id} has other ISBN ${printing.isbn13}`);
+    const memberships = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .collect();
+    for (const membership of memberships) {
+      const bundle = await ctx.db.get(membership.bundleId);
+      if (bundle && bundle.publisherId !== to._id)
+        skip(`release ${release._id} is in bundle ${bundle.publicId} of another publisher`);
+    }
+  }
+}
+
+/** Write a checked move: the Edition's publisher with its Revision, then its Releases' denorm. */
+async function moveEdition(
+  ctx: MutationCtx,
+  audit: Audit,
+  edition: Doc<"editions">,
+  to: Doc<"publishers">,
+) {
+  await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
+    publisherId: to._id,
+  });
+  await refreshReleaseDenorms(ctx, edition._id);
+}
+
 async function editionPublisher(
   ctx: MutationCtx,
   audit: Audit,
@@ -318,49 +581,100 @@ async function editionPublisher(
   const edition = await ctx.db.get(entry.editionId);
   if (!edition || edition.status !== "active") return skip("edition not active");
   if (edition.publisherId === entry.toPublisherId) return already;
-  const current = await ctx.db.get(edition.publisherId);
-  const from = await ctx.db.get(entry.fromPublisherId);
-  const to = await ctx.db.get(entry.toPublisherId);
-  if (!current || !from || !to || to.status !== "active") return skip("publisher rows missing");
-  if (companySlug(current.slug) !== companySlug(from.slug)) {
-    skip(`edition is on ${current.slug}, plan expected ${from.slug}`);
-  }
-  if (entry.imprint !== null) {
-    // Owner rule: PRH's imprint outranks Seven Seas/OpenLibrary attribution
-    // to the parent, but only toward a known imprint of the same company.
-    const resolved = canonicalPublisherFor(entry.imprint);
-    if (!resolved || resolved.parentSlug === undefined)
-      skip(`"${entry.imprint}" is not a known imprint`);
-    if (companySlug(resolved!.slug) !== to.slug)
-      skip(`"${entry.imprint}" resolves to ${resolved!.slug}, not ${to.slug}`);
-    if (resolved!.parentSlug !== companySlug(from.slug)) {
-      skip(`${resolved!.slug} is not an imprint of ${companySlug(from.slug)}`);
-    }
-    const releaseIds = new Set((await releasesOf(ctx, edition._id)).map((r) => r._id));
-    let stillEvidenced = false;
-    for (const observationId of entry.observationIds) {
-      const observation = await ctx.db.get(observationId);
-      const ref = observation?.recordRef;
-      const snapshot: { imprint?: unknown } | undefined = observation?.snapshot;
-      if (
-        ref?.type === "release" &&
-        releaseIds.has(ref.id) &&
-        snapshot?.imprint === entry.imprint
-      ) {
-        stillEvidenced = true;
-      }
-    }
-    if (!stillEvidenced) skip("the PRH imprint evidence is no longer linked");
-  }
+  const { from, to } = await movePublishers(
+    ctx,
+    entry.fromPublisherId,
+    entry.toPublisherId,
+    entry.imprint,
+  );
+  await expectOnCompany(ctx, "edition", edition.publisherId, from);
+  await expectEditionMove(ctx, edition, entry, to, entry.imprint);
   if (edition.editionLineId) {
     const line = await ctx.db.get(edition.editionLineId);
     if (line && line.publisherId !== to._id)
       skip("edition sits in another publisher's edition line");
   }
-  await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
-    publisherId: to._id,
+  await moveEdition(ctx, audit, edition, to);
+  return applied;
+}
+
+/**
+ * Move an Edition Line and its members to an imprint in one transaction
+ * (entries.ts editionLinePublisherEntry). Every non-merged member is read:
+ * an active one the entry omits, a hidden one not already on `to`, or a
+ * listed Edition outside the line refuses; merged members are tombstones.
+ */
+async function editionLinePublisher(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"editionLinePublisher">,
+): Promise<Result> {
+  const line = await ctx.db.get(entry.lineId);
+  if (!line || line.status !== "active") return skip("edition line not active");
+  const listed = new Map(entry.editions.map((move) => [move.editionId as string, move]));
+  if (listed.size !== entry.editions.length) skip("the entry lists an Edition twice");
+  const members = await ctx.db
+    .query("editions")
+    .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+    .collect();
+  const byId = new Map(members.map((member) => [member._id as string, member]));
+  for (const member of members) {
+    if (member.status === "merged" || listed.has(member._id)) continue;
+    if (member.status === "active")
+      skip(`active line member edition ${member.publicId} is not in the entry`);
+    if (member.publisherId !== entry.toPublisherId)
+      skip(`hidden line member edition ${member.publicId} is on another publisher`);
+  }
+  for (const id of listed.keys()) {
+    const member = byId.get(id);
+    if (!member) skip(`edition ${id} is not in line "${line.name}"`);
+    if (member!.status !== "active") skip(`edition ${member!.publicId} is not active`);
+  }
+  const moving = entry.editions.flatMap((move) => {
+    const edition = byId.get(move.editionId)!;
+    return edition.publisherId === entry.toPublisherId ? [] : [{ edition, move }];
   });
-  await refreshReleaseDenorms(ctx, edition._id);
+  // Members already on `to` are not re-checked, so their Releases' denorm
+  // must already agree, or the rerun would report alreadyApplied over it.
+  for (const member of members) {
+    if (member.status === "merged" || member.publisherId !== entry.toPublisherId) continue;
+    const stale = (await releasesOf(ctx, member._id)).find(
+      (release) => release.publisherId !== member.publisherId,
+    );
+    if (stale)
+      skip(`line member edition ${member.publicId} has release ${stale._id} on another publisher`);
+  }
+  if (moving.length === 0) {
+    if (line.publisherId === entry.toPublisherId) return already;
+    // Only a moving member's PRH evidence is checked; none means nothing evidences the line.
+    skip(`no listed member of line "${line.name}" moves, so nothing evidences the line's move`);
+  }
+
+  const { from, to } = await movePublishers(
+    ctx,
+    entry.fromPublisherId,
+    entry.toPublisherId,
+    entry.imprint,
+  );
+  if (line.locked) skip(`edition line "${line.name}" is locked`);
+  if ((line.overriddenFields ?? []).includes("publisherId"))
+    skip(`edition line "${line.name}" has a publisher override`);
+  if (line.publisherId !== to._id)
+    await expectOnCompany(ctx, "edition line", line.publisherId, from);
+  for (const { edition, move } of moving) {
+    await expectOnCompany(ctx, `edition ${edition.publicId}`, edition.publisherId, from);
+    await expectEditionMove(ctx, edition, move, to, entry.imprint);
+  }
+
+  if (line.publisherId !== to._id) {
+    await audit.meta();
+    await ctx.db.patch(line._id, { publisherId: to._id });
+    const ref = { type: "editionLine" as const, id: line._id };
+    const changes = [{ field: "publisherId", before: line.publisherId, after: to._id }];
+    audit.op({ kind: "update", ref, changes });
+    await audit.revise(ref, changes);
+  }
+  for (const { edition } of moving) await moveEdition(ctx, audit, edition, to);
   return applied;
 }
 
@@ -510,7 +824,18 @@ async function restoreRecord(
   }
   for (const edition of editions) {
     const coverage = await coverageOf(ctx, edition._id);
-    if (coverage.length === 0) skip(`edition ${edition.publicId} covers no volume`);
+    if (coverage.length === 0) {
+      const line = edition.editionLineId ? await ctx.db.get(edition.editionLineId) : null;
+      if (
+        !edition.coverageUnmapped ||
+        !line ||
+        line.status !== "active" ||
+        line.locked ||
+        line.publisherId !== edition.publisherId ||
+        !(await liveAfter(line.seriesId))
+      )
+        skip(`edition ${edition.publicId} covers no volume and has no active unmapped line`);
+    }
     for (const cover of coverage) {
       if (!(await liveAfter(cover.volumeId)))
         skip(`edition ${edition.publicId} covers a volume that stays hidden`);
@@ -544,12 +869,20 @@ async function unlinkObservation(
   const observation = await ctx.db.get(entry.observationId);
   if (!observation) return skip("observation missing");
   const ref = observation.recordRef;
-  if (!ref) return already;
+  if (!ref) {
+    // An Other Printing's mark (`printingIsbn13`) belongs to a link; one
+    // left on an unlinked record is cleared, and nothing else changes.
+    if (observation.printingIsbn13 === undefined) return already;
+    await ctx.db.patch(observation._id, { printingIsbn13: undefined });
+    audit.note(`cleared printing mark ${observation.printingIsbn13} of an unlinked observation`);
+    return applied;
+  }
   if (ref.type !== entry.recordType || ref.id !== entry.recordId) {
     return skip(`observation now links ${ref.type} ${ref.id}`);
   }
   await audit.meta();
-  await ctx.db.patch(observation._id, { recordRef: undefined });
+  // The printing mark goes with the link (lib/observations.ts linkObservation).
+  await ctx.db.patch(observation._id, { recordRef: undefined, printingIsbn13: undefined });
   const source = `${observation.sourceKey} ${observation.sourceRecordId}`;
   audit.op({ kind: "update", ref, changes: [{ field: "sourceObservation", before: source }] });
   await audit.revise(ref, [{ field: "sourceObservation", before: source }]);
@@ -778,19 +1111,6 @@ async function findOrCreateLine(
   return id;
 }
 
-/** The publisher rows one company answers to: itself, its parent, its imprints. */
-async function companyRows(ctx: MutationCtx, publisherId: Id<"publishers">) {
-  const row = await ctx.db.get(publisherId);
-  const ids = new Set<Id<"publishers">>([publisherId]);
-  if (row?.parentPublisherId) ids.add(row.parentPublisherId);
-  const imprints = await ctx.db
-    .query("publishers")
-    .withIndex("by_parent", (q) => q.eq("parentPublisherId", publisherId))
-    .collect();
-  for (const imprint of imprints) ids.add(imprint._id);
-  return ids;
-}
-
 /**
  * Pick the member Release a box set holds for one Volume: an active
  * same-company, same-format Release of a single-Volume Edition outside any
@@ -805,12 +1125,15 @@ async function memberReleaseFor(
   const candidates: Doc<"releases">[] = [];
   for (const edition of await activeEditionsCovering(ctx, volumeId)) {
     if (!publishers.has(edition.publisherId) || edition.editionLineId) continue;
-    if ((await coverageOf(ctx, edition._id)).length !== 1) continue;
+    const coverage = await coverageOf(ctx, edition._id);
+    if (edition.coverageUnmapped || coverage.length !== 1 || coverage[0]!.extent !== "complete")
+      continue;
     for (const release of await releasesOf(ctx, edition._id)) {
       if (release.status === "active" && release.format === format) candidates.push(release);
     }
   }
-  candidates.sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));
+  if (candidates.length > 1)
+    skip("Box member has multiple eligible Releases; name exact members in releaseBundle.");
   return candidates[0] ?? null;
 }
 
@@ -819,6 +1142,7 @@ async function remodelEdition(
   audit: Audit,
   entry: EntryOf<"remodelEdition">,
 ): Promise<Result> {
+  if (entry.groups.some((group) => group.into)) return await moveIntoExisting(ctx, audit, entry);
   const edition = await ctx.db.get(entry.editionId);
   const target = await ctx.db.get(entry.targetSeriesId);
   if (!edition) return skip("edition missing");
@@ -923,6 +1247,227 @@ async function remodelEdition(
   return audit.wrote ? applied : already;
 }
 
+type Into = NonNullable<EntryOf<"remodelEdition">["groups"][number]["into"]>;
+
+/**
+ * A remodel whose later groups name `into` (entries.ts): move exactly those
+ * Releases off the Edition into existing, empty Unmapped members of a line
+ * of the target Series, and write nothing else. Group 0 stays as it is: it
+ * restates the Edition's coverage by Volume id and names every Release that
+ * stays. Every fact the move depends on is checked first, and any drift
+ * refuses the whole entry, including on a re-run: no coverage, line,
+ * position, Volume, Bundle or denorm is ever written or normalized, because
+ * each Release must already carry the publisher and Series both Editions
+ * derive. The one catalog write is each moving Release's `editionId`,
+ * audited. It runs in carryingTracking like every repair move: no Series
+ * changes, so no visibility is carried, but its follow sweeps still re-file
+ * any personal row of these Editions that an earlier change left stale,
+ * logged on the trail as always. Past SWEEP_BUDGET the move commits and
+ * reports partial, and the next call, finding every Release moved, goes on
+ * with the unfinished sweeps saved under the entry's key, moving nothing
+ * again. That call checks the current catalog and that the saved sweep names
+ * are exactly this move's; it cannot tell which call saved them, so equal
+ * same-scope work under a reused key is finished too (docs/operations.md).
+ * A re-run that finds every Release moved and no sweep saved returns
+ * alreadyApplied before any write.
+ */
+async function moveIntoExisting(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"remodelEdition">,
+): Promise<Result> {
+  const [first, ...later] = entry.groups;
+  if (!first || first.into) {
+    return skip("group 0 stays on the edition; only a later group moves into another");
+  }
+  if (entry.line !== null || entry.bundle !== null || entry.retireVolumeIds.length > 0) {
+    skip("a move into an existing edition changes no line, bundle or retired volume");
+  }
+  if (first.linePosition !== null) skip("group 0 states no line position");
+  const staying = first.releaseIds ?? skip("group 0 names the releases that stay");
+  const groups: Array<{ into: Into; releaseIds: Array<Id<"releases">> }> = [];
+  for (const { into, coverage, linePosition, releaseIds } of later) {
+    if (!into) return skip("every later group moves into an existing edition");
+    if (coverage.length > 0 || linePosition !== null) {
+      skip("a group moving into an existing edition states no coverage or line position");
+    }
+    if (!releaseIds?.length) {
+      return skip("a group moving into an existing edition names its releases");
+    }
+    groups.push({ into, releaseIds });
+  }
+  const named = [...staying, ...groups.flatMap((group) => group.releaseIds)];
+  for (const [i, id] of named.entries()) {
+    if (named.indexOf(id) !== i) skip(`release ${id} is named twice`);
+  }
+
+  const edition = await ctx.db.get(entry.editionId);
+  if (!edition) return skip("edition missing");
+  if (edition.locked) skip("edition locked");
+  if (edition.status !== "active") skip(`edition is ${edition.status}`);
+  const series = await ctx.db.get(entry.targetSeriesId);
+  if (!series || series.status !== "active" || series.locked)
+    return skip("target series not active and unlocked");
+  const publisher = await ctx.db.get(edition.publisherId);
+  if (!publisher || publisher.status !== "active" || publisher.locked)
+    return skip("publisher not active and unlocked");
+
+  // Group 0's coverage is the Edition's, row for row, each an active Volume
+  // of the target Series: so the Edition derives exactly that Series.
+  const coverage = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
+  if (coverage.length !== first.coverage.length) {
+    skip("group 0 does not restate the edition's coverage");
+  }
+  for (const [i, row] of coverage.entries()) {
+    const stated = first.coverage[i];
+    const volume = await ctx.db.get(row.volumeId);
+    if (
+      stated?.volumeId !== row.volumeId ||
+      stated.extent !== row.extent ||
+      volume?.status !== "active" ||
+      volume.locked ||
+      volume.seriesId !== series._id ||
+      (stated.label !== null && !sameLabel(volume.label, stated.label))
+    ) {
+      skip("group 0 does not restate the edition's coverage");
+    }
+  }
+  if (!coverage.some((row) => row.volumeId === entry.volumeId)) {
+    skip("edition no longer covers the planned volume");
+  }
+  const carries = (release: Doc<"releases">) =>
+    release.publisherId === edition.publisherId && sameValue(release.seriesIds, [series._id]);
+
+  const targets = new Set<Id<"editions">>();
+  const moving: Array<{ release: Doc<"releases">; into: Id<"editions"> }> = [];
+  for (const { into, releaseIds } of groups) {
+    const target = await intoTarget(ctx, edition, series._id, into);
+    if (targets.has(target._id)) skip(`two groups move into edition ${target.publicId}`);
+    targets.add(target._id);
+    for (const member of await releasesOf(ctx, target._id)) {
+      if (!releaseIds.includes(member._id)) {
+        skip(`edition ${target.publicId} holds release ${member._id} the move does not name`);
+      }
+    }
+    const formats = new Set<Doc<"releases">["format"]>();
+    for (const id of releaseIds) {
+      const release = await ctx.db.get(id);
+      if (!release || release.status !== "active") return skip(`release ${id} not active`);
+      if (release.locked) skip(`release ${id} is locked`);
+      if (release.editionId !== edition._id && release.editionId !== target._id) {
+        skip(`release ${id} sits on another edition`);
+      }
+      if (!carries(release)) {
+        skip(`release ${id} does not carry the edition's publisher and series`);
+      }
+      if (formats.has(release.format)) {
+        skip(`edition ${target.publicId} would hold two active ${release.format} releases`);
+      }
+      formats.add(release.format);
+      if (release.editionId === edition._id) moving.push({ release, into: target._id });
+    }
+  }
+  // The Edition keeps exactly group 0's Releases, of any status.
+  for (const release of await releasesOf(ctx, edition._id)) {
+    if (moving.some((move) => move.release._id === release._id)) continue;
+    if (!staying.includes(release._id)) {
+      skip(`the edition holds release ${release._id} no group names`);
+    }
+    if (!carries(release)) {
+      skip(`release ${release._id} does not carry the edition's publisher and series`);
+    }
+  }
+  for (const id of staying) {
+    if ((await ctx.db.get(id))?.editionId !== edition._id) {
+      skip(`release ${id} of group 0 is not on the edition`);
+    }
+  }
+
+  // Sweeps saved under this entry's key (closeMoves). A saved row holds only
+  // the key, sweep name, cursor and done flag, not the kind, reason, args or
+  // actor of the call that saved it. A leg of this move that saves sweeps has
+  // also moved every Release, so a move still to make refuses any, and a
+  // finished move with none saved is a no-op.
+  const saved = await ctx.db
+    .query("repairSweeps")
+    .withIndex("by_entry_sweep", (q) => q.eq("entryKey", entry.key))
+    .collect();
+  if (moving.length > 0 && saved.length > 0) {
+    skip("personal tracking saved under this entry's key belongs to no move it has made");
+  }
+  if (moving.length === 0) {
+    if (saved.length === 0) return already;
+    if (saved.every((row) => row.done)) skip("this entry's saved personal tracking is finished");
+    audit.note("continues the personal tracking an earlier call left");
+  }
+  const moves = newMoves(entry.key);
+  await carryingTracking(ctx, audit, moves, { editionIds: [edition._id, ...targets] }, async () => {
+    for (const { release, into } of moving) {
+      await updateRecord(ctx, audit, { type: "release", id: release._id }, release, {
+        editionId: into,
+      });
+    }
+  });
+  // A continuation goes on only when the sweeps this move runs are exactly
+  // the saved ones: one that would start another sweep, or leave a saved
+  // one, is not this move's work, and refusing rolls the leg back. Equal
+  // names prove the same Releases and Edition are in scope now, not that
+  // this entry saved them; such work finishes as this call's audited
+  // re-filing.
+  const sweeps = (names: Iterable<string>) => [...names].sort();
+  if (
+    moving.length === 0 &&
+    !sameValue(sweeps(moves.sweeps.keys()), sweeps(saved.map((row) => row.sweep)))
+  ) {
+    skip("this entry's saved personal tracking is not this move's");
+  }
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  return moves.unfinished ? partial : applied;
+}
+
+/**
+ * The Edition a group moves into, as the plan saw it: active and unlocked,
+ * of `edition`'s publisher, at `linePosition` of the named active, unlocked
+ * line of `seriesId` and that publisher, and empty and Unmapped (no
+ * coverage, so it derives that Series from its line). The line is named by
+ * id, never found by name, so none is created and none of another Series or
+ * publisher is used.
+ */
+async function intoTarget(
+  ctx: MutationCtx,
+  edition: Doc<"editions">,
+  seriesId: Id<"series">,
+  into: Into,
+): Promise<Doc<"editions">> {
+  const target = await ctx.db.get(into.editionId);
+  if (!target || target._id === edition._id) {
+    return skip(`edition ${into.editionId} is not another existing edition`);
+  }
+  if (target.status !== "active") skip(`edition ${target.publicId} is ${target.status}`);
+  if (target.locked) skip(`edition ${target.publicId} is locked`);
+  if (target.publisherId !== edition.publisherId) {
+    skip(`edition ${target.publicId} has another publisher`);
+  }
+  if (
+    target.editionLineId !== into.editionLineId ||
+    (target.linePosition ?? null) !== into.linePosition
+  ) {
+    skip(
+      `edition ${target.publicId} is not at position ${into.linePosition ?? "(none)"} of line ${into.editionLineId}`,
+    );
+  }
+  const line = await ctx.db.get(into.editionLineId);
+  if (!line || line.status !== "active" || line.locked) {
+    return skip(`line ${into.editionLineId} is not an active, unlocked line`);
+  }
+  if (line.seriesId !== seriesId) skip(`line ${line._id} is not the target series'`);
+  if (line.publisherId !== edition.publisherId) skip(`line ${line._id} has another publisher`);
+  if (!target.coverageUnmapped || (await coverageOf(ctx, target._id)).length > 0) {
+    skip(`edition ${target.publicId} is not an empty Unmapped edition`);
+  }
+  return target;
+}
+
 /** The target-Series Volume one coverage row names (by id, else by label, created if missing). */
 async function coveredVolume(
   ctx: MutationCtx,
@@ -994,8 +1539,8 @@ async function carryBundleOwners(
  * the bundle, so an Owned box set stays in its owner's library (and its
  * members with it, by Derived Ownership). A User already holding an entry
  * on the bundle keeps that one, raised to the stronger state (Owned over
- * Ordered over Wanted), and the box-set entry folds into it. A pinned
- * Release Variant was the box-set Release's own and is dropped. Ownership
+ * Ordered over Wanted), and the box-set entry folds into it. The shared
+ * preflight refuses pinned Release Variants before any transfer. Ownership
  * the box set's Series kept private stays private on the bundle's member
  * Series (carryVisibility); a bundle with no member Series would fall back
  * to the owner's default, so it cannot take an Owned box set that had one.
@@ -1058,18 +1603,51 @@ async function entriesToBundle(
   return !more;
 }
 
-/** An existing bundle for this box-set Release: same ISBN, else same name/publisher/format. */
+/**
+ * A box-set Release's ISBNs as the Bundle made from it stores them, or why
+ * they cannot be. A valid ISBN, in either field and any spelling, is stored
+ * as its field's one spelling (lib/isbn.ts isbnFieldValue). Text that is no
+ * valid ISBN is kept as it was (compacted when it has an ISBN's shape): it
+ * can hide no claim. A valid ISBN with no form in its field (a 979 ISBN
+ * kept as `isbn10`) is the Bundle's ISBN-13 when that field is free, and
+ * dropped when it is the same book as the ISBN-13; beside another `isbn13`
+ * it is refused, as are two valid ISBNs naming different books: a person
+ * corrects the Release first, so no barcode is lost or replaced.
+ */
+function bundleIsbns(
+  box: Pick<Doc<"releases">, "isbn13" | "isbn10">,
+): { isbn13?: string; isbn10?: string } | { refusal: string } {
+  const text = (field: IsbnField, raw: string | undefined) =>
+    raw === undefined ? undefined : (isbnFieldValue(field, raw) ?? raw);
+  const key13 = toIsbn13(box.isbn13);
+  const key10 = toIsbn13(box.isbn10);
+  if (key13 !== undefined && key10 !== undefined && key13 !== key10) {
+    return { refusal: `box-set release names two ISBNs (${key13}, ${key10})` };
+  }
+  const isbn13 = key13 ?? text("isbn13", box.isbn13);
+  if (key10 === undefined) return { isbn13, isbn10: text("isbn10", box.isbn10) };
+  const isbn10 = isbn13To10(key10);
+  if (isbn10 !== undefined) return { isbn13, isbn10 };
+  if (key13 === key10) return { isbn13 };
+  if (isbn13 === undefined) return { isbn13: key10 };
+  return {
+    refusal: `box-set release keeps ISBN ${key10}, which has no ISBN-10, as its isbn10 beside isbn13 "${isbn13}"`,
+  };
+}
+
+/** An existing bundle for this box-set Release: same ISBN-13, else same name/publisher/format. */
 async function existingBundle(
   ctx: MutationCtx,
   release: Doc<"releases">,
+  isbn13: string | undefined,
   name: string,
   publisherId: Id<"publishers">,
 ) {
-  if (release.isbn13) {
+  if (isbn13) {
     return await ctx.db
       .query("releaseBundles")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", release.isbn13))
-      .first();
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .unique();
   }
   // Bundles are few (box sets only); a scan is fine for a one-time repair.
   return (
@@ -1077,6 +1655,154 @@ async function existingBundle(
       (b) => b.name === name && b.publisherId === publisherId && b.format === release.format,
     ) ?? null
   );
+}
+
+/** Same-transaction reference closure before any conversion effects, including origin continuations. */
+async function boxConversionPreflight(
+  ctx: MutationCtx,
+  box: Doc<"releases">,
+  bundleId: Id<"releaseBundles"> | undefined,
+  retireVolumeIds: Id<"volumes">[],
+) {
+  const r = reader(ctx);
+  try {
+    if (box.status !== "active" || box.locked) skip("Box must be active and unlocked.");
+    await r.active(box._id);
+    const refs = await referenceAudit(ctx, box._id, bundleId);
+    const publisher = await r.active(box.publisherId);
+    if (refs.edition.publisherId !== publisher._id)
+      skip("Box Edition and Release publishers disagree.");
+    if (refs.edition.editionLineId) {
+      const line = await r.active(refs.edition.editionLineId);
+      if (line.publisherId !== publisher._id || !box.seriesIds.includes(line.seriesId))
+        skip("Box Edition Line identity differs.");
+    }
+    if (!refs.complete || !refs.eligible)
+      skip("Personal-data preservation required before box conversion.");
+    for (const id of retireVolumeIds) {
+      if (!refs.volumes.some((v) => v._id === id))
+        skip("Retirement must name the box's own current placeholder Volumes.");
+      if (Object.entries(refs.counts).some(([name, count]) => count && name.endsWith(`.${id}`)))
+        skip("Placeholder has personal references; retain its identity and history.");
+    }
+    return refs;
+  } catch (error) {
+    if (
+      error instanceof ConvexError &&
+      typeof error.data === "object" &&
+      error.data &&
+      "held" in error.data
+    )
+      skip(String(error.data.held));
+    throw error;
+  }
+}
+
+/** Box claims permit only this box and its intended Bundle, including origin continuations. */
+async function conversionClaims(
+  ctx: MutationCtx,
+  box: Doc<"releases">,
+  bundle: Doc<"releaseBundles"> | null,
+) {
+  for (const key of primaryIsbnsOf(box)) {
+    const scope = await isbnScope(ctx, key);
+    if (scope) skip(scope);
+    const claims = await isbnClaims(ctx, key, { resolver: claimResolver(ctx) });
+    if (
+      !claims?.complete ||
+      claims.unresolved.length ||
+      claims.printed ||
+      [...claims.owners.values()].some(
+        (owner) => owner.doc._id !== box._id && owner.doc._id !== bundle?._id,
+      )
+    )
+      skip(
+        `ISBN ${key} belongs to Release/Bundle claims outside this conversion or an Other Printing.`,
+      );
+    if (bundle && !primaryIsbnsOf(bundle).has(key)) skip("Box and Bundle ISBNs disagree.");
+  }
+}
+
+/** Exact current members resolved before Bundle creation, membership, ownership or audit writes. */
+async function conversionMembers(
+  ctx: MutationCtx,
+  planned: EntryOf<"releaseBundle">["members"],
+  publisherId: Id<"publishers">,
+  format: Doc<"releases">["format"],
+  boxId?: Id<"releases">,
+) {
+  const r = reader(ctx);
+  await r.active(publisherId);
+  if (
+    !planned.length ||
+    planned.length > 80 ||
+    new Set(planned.map((p) => p.order)).size !== planned.length
+  )
+    skip("Box conversion needs complete nonempty uniquely ordered members.");
+  const selected: Array<{
+    release: Contents["release"];
+    contents: Contents["contents"];
+    order: number;
+  }> = [];
+  for (const member of planned) {
+    const key = toIsbn13(member.isbn13);
+    const scope = await isbnScope(ctx, key);
+    if (scope) skip(scope);
+    let releaseId: Id<"releases">;
+    if (key) {
+      const claims = await isbnClaims(ctx, key, {
+        resolver: claimResolver(ctx, { room: r.room }),
+        room: r.room,
+      });
+      if (!claims?.complete || claims.unresolved.length || claims.owners.size !== 1)
+        return skip(`member ${member.isbn13}: ownership is incomplete or ambiguous`);
+      const owner = [...claims.owners.values()][0]!;
+      if (owner.kind !== "release") return skip("Box member must be a Release.");
+      releaseId = owner.doc._id;
+    } else {
+      // Legacy non-ISBN text has no normalized namespace claim. Preserve
+      // the old exact selector, requiring one unambiguous stored Release.
+      const exact = await r.many(
+        ctx.db.query("releases").withIndex("by_isbn13", (q) => q.eq("isbn13", member.isbn13)),
+      );
+      if (exact.length !== 1) skip("Legacy member selector is absent or ambiguous.");
+      releaseId = exact[0]!._id;
+    }
+    if (releaseId === boxId) skip("Box must not be its own member.");
+    const content = await releaseContents(ctx, releaseId, r, true);
+    const bundlePublisher = await r.active(publisherId);
+    const samePublisher = content.publisher._id === publisherId;
+    const directImprint =
+      content.publisher.parentPublisherId === publisherId ||
+      bundlePublisher.parentPublisherId === content.publisher._id;
+    if ((!samePublisher && !directImprint) || content.release.format !== format)
+      skip("Member publisher or format differs from Bundle.");
+    selected.push({ release: content.release, contents: content.contents, order: member.order });
+  }
+  if (new Set(selected.map((m) => m.release._id)).size !== selected.length)
+    skip("Box repeats the same member Release.");
+  return selected;
+}
+
+/** Both callable converters finish with the same exact immutable proof. */
+async function completeBoxConversion(
+  ctx: MutationCtx,
+  audit: Audit,
+  box: Doc<"releases">,
+  bundle: Doc<"releaseBundles">,
+) {
+  if (!(await hide(ctx, audit, { type: "release", id: box._id }, box))) return;
+  const revision = await audit.revise({ type: "release", id: box._id }, [
+    { field: "convertedToBundle", after: `#${bundle.publicId} ${bundle.name}` },
+  ]);
+  if (!revision) return skip("Conversion audit missing.");
+  await ctx.db.insert("bundleConversions", {
+    releaseId: box._id,
+    bundleId: bundle._id,
+    proposalId: (await audit.meta()).proposalId,
+    revisionId: revision.revisionId,
+    isbnKeys: valueHash([...primaryIsbnsOf(box)].sort()),
+  });
 }
 
 /**
@@ -1092,23 +1818,129 @@ async function toBundle(
   edition: Doc<"editions">,
   name: string,
 ): Promise<Result> {
-  const boxes = (await releasesOf(ctx, edition._id)).filter((r) => r.status !== "merged");
-  if (boxes.length === 0) return skip("box set has no release");
-  if (
-    edition.status !== "active" &&
-    !(await existingBundle(ctx, boxes[0]!, name, edition.publisherId))
-  ) {
-    return skip(`edition is ${edition.status}`);
-  }
-  const labels = (entry.groups[0]?.coverage ?? []).flatMap((c) =>
-    c.label === null ? [] : [c.label],
+  const r = reader(ctx);
+  const target = await r.active(entry.targetSeriesId);
+  const boxes = await r.many(
+    ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", edition._id)),
   );
-  const company = await companyRows(ctx, edition.publisherId);
-  let firstMemberVolume: Id<"volumes"> | null = null;
+  const actualBoxes = boxes.filter((b) => b.status !== "merged");
+  if (!actualBoxes.length) skip("box set has no release");
+  if (entry.groups.length !== 1 || entry.groups[0]!.coverage.some((c) => c.extent !== "complete"))
+    skip("Box conversion needs one complete content group.");
+  const coverage = entry.groups[0]!.coverage;
+  if (coverage.length > 80) skip("Requested box contents exceed 80 Volumes; incomplete.");
+  const plans = [];
+  for (const box of actualBoxes) {
+    const isbns = bundleIsbns(box);
+    if ("refusal" in isbns) return skip(isbns.refusal);
+    const bundle = await existingBundle(ctx, box, isbns.isbn13, name, edition.publisherId);
+    if (
+      bundle &&
+      (bundle.status !== "active" ||
+        bundle.locked ||
+        bundle.publisherId !== box.publisherId ||
+        bundle.format !== box.format)
+    )
+      skip("Existing Bundle identity or eligibility differs.");
+    const origin = bundle
+      ? await ctx.db
+          .query("repairBundleOrigins")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+          .unique()
+      : null;
+    if (bundle && (origin?.releaseId !== box._id || origin.entryKey !== entry.key))
+      skip("Existing Bundle remodel needs an explicit guarded releaseBundle conversion.");
+    const proof = bundle ? await convertedClaim(ctx, box, bundle) : null;
+    if (!proof) {
+      await boxConversionPreflight(ctx, box, bundle?._id, entry.retireVolumeIds);
+      if (!(await coverageOf(ctx, edition._id)).some((c) => c.volumeId === entry.volumeId))
+        skip("Box Edition no longer covers the planned placeholder.");
+      await conversionClaims(ctx, box, bundle);
+    }
+    const selected: Array<{
+      release: Contents["release"];
+      contents: Contents["contents"];
+      order: number;
+    }> = [];
+    const labels = coverage.flatMap((row) =>
+      row.volumeId === null && row.label !== null ? [row.label] : [],
+    );
+    const volumes = labels.length ? await volumesForLabels(ctx, target._id, labels, r) : [];
+    for (const [i, row] of coverage.entries()) {
+      const matches =
+        row.volumeId !== null
+          ? [await r.active(row.volumeId)].filter((v) => v.seriesId === target._id)
+          : volumes.filter((v) => v.status === "active" && sameLabel(v.label, row.label));
+      if (matches.length !== 1) skip("Box contents need one exact current Volume for each member.");
+      const volume = await r.active(matches[0]!._id);
+      if (row.label !== null && !sameLabel(volume.label, row.label))
+        skip("Box member Volume label drifted.");
+      const member = await memberReleaseFor(
+        ctx,
+        volume._id,
+        new Set([edition.publisherId]),
+        box.format,
+      );
+      if (!member || member._id === box._id)
+        return skip("Box contents incomplete: no exact member Release.");
+      const content = await releaseContents(ctx, member._id, r);
+      if (
+        content.publisher._id !== edition.publisherId ||
+        content.contents.length !== 1 ||
+        content.contents[0]!.volume._id !== volume._id ||
+        content.release.format !== box.format
+      )
+        skip("Box member identity differs.");
+      for (const key of primaryIsbnsOf(content.release)) {
+        const scope = await isbnScope(ctx, key);
+        if (scope) skip(scope);
+        const claims = await isbnClaims(ctx, key, {
+          resolver: claimResolver(ctx, { room: r.room }),
+          room: r.room,
+        });
+        if (
+          !claims?.complete ||
+          claims.unresolved.length ||
+          claims.owners.size !== 1 ||
+          !claims.owners.has(content.release._id)
+        )
+          skip("Box member primary claims are incomplete or ambiguous.");
+      }
+      selected.push({ release: content.release, contents: content.contents, order: i + 1 });
+    }
+    if (!selected.length || new Set(selected.map((m) => m.release._id)).size !== selected.length)
+      skip("Box conversion needs nonempty unique members.");
+    const current = bundle
+      ? await r.many(
+          ctx.db
+            .query("bundleMemberships")
+            .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id)),
+        )
+      : [];
+    if (
+      current.some(
+        (m) => !selected.some((p) => p.release._id === m.releaseId && p.order === m.order),
+      ) ||
+      (proof && current.length !== selected.length)
+    )
+      skip("Existing Bundle members drifted.");
+    plans.push({ box, bundle, isbns, selected, current, proof });
+  }
+  // Placeholders retire after the last box set converts, so a continuation
+  // whose earlier legs converted only some box sets still finds them active.
+  if (plans.every((p) => p.proof)) {
+    for (const id of entry.retireVolumeIds) {
+      const volume = await ctx.db.get(id);
+      if (!volume || volume.status === "active") skip("Converted placeholder retirement drifted.");
+    }
+    return already;
+  }
   const moves = newMoves(entry.key);
-
-  for (const box of boxes) {
-    let bundle = await existingBundle(ctx, box, name, edition.publisherId);
+  let firstMemberVolume: Id<"volumes"> | null = null;
+  for (const plan of plans) {
+    if (plan.proof) continue;
+    const { box, selected, current, isbns } = plan;
+    let bundle = plan.bundle;
     if (!bundle) {
       await audit.meta();
       const fields = {
@@ -1117,8 +1949,8 @@ async function toBundle(
         name,
         publisherId: edition.publisherId,
         format: box.format,
-        isbn13: box.isbn13,
-        isbn10: box.isbn10,
+        isbn13: isbns.isbn13,
+        isbn10: isbns.isbn10,
         pubDate: box.pubDate,
         price: box.price,
         description: box.description,
@@ -1126,6 +1958,12 @@ async function toBundle(
         bootstrapUnreviewed: true,
       };
       const id = await ctx.db.insert("releaseBundles", fields);
+      await ctx.db.insert("repairBundleOrigins", {
+        bundleId: id,
+        releaseId: box._id,
+        entryKey: entry.key,
+        proposalId: (await audit.meta()).proposalId,
+      });
       audit.op({ kind: "create", table: "releaseBundles", tempId: id, fields });
       await audit.revise(
         { type: "releaseBundle", id },
@@ -1136,41 +1974,28 @@ async function toBundle(
       bundle = await ctx.db.get(id);
     }
     if (!bundle) return skip("bundle vanished");
-    const bundleId = bundle._id;
-    const seriesBefore = await bundleSeries(ctx, bundleId);
-    const members = await ctx.db
-      .query("bundleMemberships")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
-      .collect();
-    const missing: string[] = [];
-    const volumes = await activeVolumes(ctx, entry.targetSeriesId);
-    for (const [i, label] of labels.entries()) {
-      const volume = volumes.find((v) => sameLabel(v.label, label));
-      if (volume && firstMemberVolume === null) firstMemberVolume = volume._id;
-      const member = volume ? await memberReleaseFor(ctx, volume._id, company, box.format) : null;
-      if (!member) {
-        missing.push(label);
-        continue;
-      }
-      if (members.some((m) => m.releaseId === member._id)) continue;
+    const seriesBefore = await bundleSeries(ctx, bundle._id);
+    for (const member of selected) {
+      firstMemberVolume ??= member.contents[0]!.volume._id;
+      if (current.some((m) => m.releaseId === member.release._id)) continue;
       await audit.meta();
-      await ctx.db.insert("bundleMemberships", { bundleId, releaseId: member._id, order: i + 1 });
-      await audit.revise({ type: "releaseBundle", id: bundleId }, [
-        { field: "member", after: `release ${member.isbn13 ?? member._id} (vol ${label})` },
+      await ctx.db.insert("bundleMemberships", {
+        bundleId: bundle._id,
+        releaseId: member.release._id,
+        order: member.order,
+      });
+      await audit.revise({ type: "releaseBundle", id: bundle._id }, [
+        {
+          field: "member",
+          after: `release ${member.release.isbn13 ?? member.release._id} (order ${member.order})`,
+        },
       ]);
     }
-    if (missing.length > 0)
-      audit.note(`bundle ${bundle.publicId}: no member release for vol ${missing.join(", ")}`);
-    await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundleId, seriesBefore);
-    if (!(await entriesToBundle(ctx, audit, moves, box, bundleId))) continue;
-    if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
-      await audit.revise({ type: "release", id: box._id }, [
-        { field: "convertedToBundle", after: `#${bundle.publicId} ${name}` },
-      ]);
-    }
+    await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundle._id, seriesBefore);
+    if (await entriesToBundle(ctx, audit, moves, box, bundle._id))
+      await completeBoxConversion(ctx, audit, box, bundle);
   }
   await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
-  // Box sets still holding entries stay up until a later leg empties them.
   if (moves.unfinished) return partial;
   await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   await retireVolumes(ctx, audit, entry.retireVolumeIds, firstMemberVolume);
@@ -1228,6 +2053,22 @@ async function foldEdition(
 const stored = <T>(value: T | null): T | undefined => (value === null ? undefined : value);
 
 /**
+ * A plan's ISBN as its field stores it (lib/isbn.ts isbnFieldValue: the one
+ * spelling every claim check finds), before any collision check, write or
+ * audit uses it; a plan value that is no ISBN of that kind skips the entry.
+ * Null (absent) stays null.
+ */
+function plannedIsbn(field: IsbnField, value: string): string;
+function plannedIsbn(field: IsbnField, value: string | null): string | null;
+function plannedIsbn(field: IsbnField, value: string | null): string | null {
+  if (value === null) return null;
+  return (
+    isbnFieldValue(field, value) ??
+    skip(`"${value}" is not an ${field === "isbn13" ? "ISBN-13" : "ISBN-10"}`)
+  );
+}
+
+/**
  * Check each change against the record: already at `after` is fine, at
  * `before` gets applied, anything else is drift. Returns the fields to patch.
  */
@@ -1245,6 +2086,13 @@ function pendingChanges<C extends { field: string; before: unknown; after: unkno
   });
 }
 
+/** Add `field` to the Human Overrides `patch` will leave on `release`. */
+function override(patch: Partial<Doc<"releases">>, release: Doc<"releases">, field: string) {
+  patch.overriddenFields = [
+    ...new Set([...(patch.overriddenFields ?? release.overriddenFields ?? []), field]),
+  ];
+}
+
 async function updateFields(
   ctx: MutationCtx,
   audit: Audit,
@@ -1259,6 +2107,7 @@ async function updateFields(
     const patch: Partial<Doc<"series">> = {};
     for (const change of pending) {
       if (change.field === "title") patch.title = change.after;
+      else if (change.field === "synopsis") patch.synopsis = stored(change.after);
       else patch.altTitles = change.after;
     }
     const title = patch.title ?? series.title;
@@ -1268,10 +2117,29 @@ async function updateFields(
     return applied;
   }
 
+  if (entry.table === "volumes") {
+    const volume = await ctx.db.get(entry.id);
+    if (!volume || volume.status !== "active") return skip("volume not active");
+    if (volume.locked) return skip("volume locked");
+    const pending = pendingChanges(volume, entry.changes);
+    if (pending.length === 0) return already;
+    await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
+      synopsis: stored(pending[0]!.after),
+    });
+    return applied;
+  }
+
   const release = await ctx.db.get(entry.id);
   if (!release || release.status !== "active") return skip("release not active");
   if (release.locked) return skip("release locked");
-  const pending = pendingChanges(release, entry.changes);
+  // A new ISBN is written, checked and audited as its field stores it; the
+  // value it replaces is compared as stored.
+  const changes = entry.changes.map((change) =>
+    change.field === "isbn13" || change.field === "isbn10"
+      ? { ...change, after: plannedIsbn(change.field, change.after) }
+      : change,
+  );
+  const pending = pendingChanges(release, changes);
   if (pending.length === 0) return already;
   const patch: Partial<Doc<"releases">> = {};
   for (const change of pending) {
@@ -1280,12 +2148,35 @@ async function updateFields(
         patch.pubDate = stored(change.after);
         break;
       case "coverImage":
-        patch.coverImage = undefined;
+        if (change.after?.storageId && (await ctx.storage.getUrl(change.after.storageId)) === null)
+          skip("the planned cover's stored file does not exist");
+        patch.coverImage = stored(change.after);
+        // An operator's art is a Human Override: no import replaces it.
+        if (change.after !== null) override(patch, release, "coverImage");
+        break;
+      case "description":
+        patch.description = stored(change.after);
+        if (change.after !== null) override(patch, release, "description");
         break;
       case "format":
+        if (change.after === "digital") {
+          const printing = await ctx.db
+            .query("releaseIsbns")
+            .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+            .first();
+          if (printing !== null)
+            skip(
+              `The Release has other printings (ISBN ${printing.isbn13}), and only a physical Release has other printings. Keep its format physical.`,
+            );
+        }
         patch.format = change.after;
         // Binding describes physical construction only (glossary: Binding).
         if (change.after === "digital" && release.binding !== undefined) patch.binding = undefined;
+        if (change.after === "physical" && release.digitalFileFormat !== undefined)
+          patch.digitalFileFormat = undefined;
+        break;
+      case "digitalFileFormat":
+        patch.digitalFileFormat = stored(change.after);
         break;
       default:
         patch[change.field] = stored(change.after);
@@ -1296,13 +2187,65 @@ async function updateFields(
     const clash = await ctx.db
       .query("releases")
       .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-      .first();
+      .unique();
     if (clash && clash._id !== release._id) skip(`ISBN ${isbn13} already on another release`);
   }
+  // An ISBN with Other Printings is one Release's alone (lib/releaseIsbns.ts).
+  const printed = await assignedIsbnRefusal(ctx, [patch.isbn13, patch.isbn10], release._id);
+  if (printed !== null) skip(printed);
   if (release.format === "digital" && patch.binding !== undefined)
     skip("binding on a digital release");
+  const fileFormat = pending.find(
+    (change): change is Extract<typeof change, { field: "digitalFileFormat" }> =>
+      change.field === "digitalFileFormat",
+  );
+  if (fileFormat?.after) {
+    const refusal = await fileFormatRefusal(
+      ctx,
+      { ...release, ...patch },
+      entry.evidenceObservationId,
+      fileFormat,
+    );
+    if (refusal) skip(refusal);
+  }
   await updateRecord(ctx, audit, { type: "release", id: release._id }, release, patch);
   return applied;
+}
+
+/**
+ * Why a planned PDF/EPUB classification is unsupported, or null. The Release
+ * must be digital with an ISBN-13, and the evidence a present source record
+ * linked to it under that ISBN, digital, stating no other file format. A
+ * known file format changes only where that record states the new one.
+ */
+async function fileFormatRefusal(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+  evidenceId: Id<"sourceObservations"> | null,
+  change: { before: DigitalFileFormat | null; after: DigitalFileFormat | null },
+): Promise<string | null> {
+  if (release.format !== "digital") return "a file format on a physical release";
+  if (!release.isbn13) return "a file format needs the release's own ISBN-13";
+  const observation = evidenceId ? await ctx.db.get(evidenceId) : null;
+  if (!observation) return "a file format needs its linked source record";
+  const snapshot = observation.snapshot as {
+    isbn13?: unknown;
+    format?: unknown;
+    digitalFileFormat?: unknown;
+  } | null;
+  if (
+    observation.withdrawn ||
+    observation.recordRef?.type !== "release" ||
+    observation.recordRef.id !== release._id ||
+    snapshot?.isbn13 !== release.isbn13 ||
+    snapshot.format !== "digital"
+  )
+    return "the evidence is not a present digital record linked to this release under its ISBN";
+  if (snapshot.digitalFileFormat !== undefined && snapshot.digitalFileFormat !== change.after)
+    return `the linked record states ${String(snapshot.digitalFileFormat)}`;
+  if (change.before !== null && snapshot.digitalFileFormat !== change.after)
+    return "reclassifying a known file format needs a record that states the new one";
+  return null;
 }
 
 async function normalizeVolumes(
@@ -1383,6 +2326,7 @@ type Moves = {
   left: number;
   unfinished: boolean;
   sweeps: Map<string, SweepState>;
+  carried: Set<string>;
 };
 
 const newMoves = (key: string): Moves => ({
@@ -1391,6 +2335,7 @@ const newMoves = (key: string): Moves => ({
   left: SWEEP_BUDGET,
   unfinished: false,
   sweeps: new Map(),
+  carried: new Set(),
 });
 
 /** The status of an entry that left personal work for its next leg. */
@@ -1536,6 +2481,7 @@ async function closeMoves(ctx: MutationCtx, audit: Audit, ref: Ref, moves: Moves
 function trailSink(ctx: MutationCtx, audit: Audit, moves: Moves): OverrideSink {
   return {
     reversible: false,
+    carried: moves.carried,
     write: async (userId, seriesId, state, patch) => {
       if (state) return await refile(ctx, audit, moves, "userSeriesStates", state, patch);
       await audit.meta();
@@ -1735,7 +2681,7 @@ async function followEdition(
 // ---------- stage 12: series splits ----------
 
 /** Creation-Revision field naming the plan entry that split a Series off. */
-const SPLIT_KEY_FIELD = "repairKey";
+const SPLIT_KEY_FIELD = REPAIR_KEY_FIELD;
 
 /**
  * The Series an earlier run of this split created, or null. Every row the
@@ -1853,8 +2799,14 @@ async function splitSeries(
   const source = await ctx.db.get(entry.sourceSeriesId);
   if (!source || source.status !== "active") return skip("source series not active");
   if (source.locked) return skip("source series locked");
-  if (entry.volumes.length + entry.editions.length + entry.observationIds.length === 0) {
-    return skip("the split moves no volume, edition, or observation");
+  if (
+    entry.volumes.length +
+      entry.editions.length +
+      entry.observationIds.length +
+      entry.placeholderLabels.length ===
+    0
+  ) {
+    return skip("the split moves no volume, edition, or observation, and adds no volume");
   }
 
   let target = await splitTarget(ctx, entry);
@@ -2042,8 +2994,14 @@ async function hideEditionLine(
 async function createRelease(
   ctx: MutationCtx,
   audit: Audit,
-  entry: EntryOf<"createRelease">,
+  planned: EntryOf<"createRelease">,
 ): Promise<Result> {
+  // Its ISBNs as their fields store them, for every check and the write.
+  const entry = {
+    ...planned,
+    isbn13: plannedIsbn("isbn13", planned.isbn13),
+    isbn10: plannedIsbn("isbn10", planned.isbn10),
+  };
   const clashes = await ctx.db
     .query("releases")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
@@ -2061,6 +3019,8 @@ async function createRelease(
       .first();
     if (clash10) skip(`ISBN-10 ${isbn10} already exists`);
   }
+  const printed = await assignedIsbnRefusal(ctx, [entry.isbn13, isbn10 ?? undefined]);
+  if (printed !== null) skip(printed);
   const bundle = await ctx.db
     .query("releaseBundles")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
@@ -2077,9 +3037,12 @@ async function createRelease(
     if (!volume || volume.status !== "active") return skip(`volume ${row.volumeId} not active`);
     volumes.push(volume);
   }
-  const first = volumes[0];
-  if (!first) return skip("plan error: no coverage");
-  const series = await ctx.db.get(first.seriesId);
+  const unmapped = entry.unmappedSeriesId !== undefined;
+  if (unmapped && (volumes.length > 0 || entry.line === null))
+    return skip("plan error: an unmapped member states a line and no coverage");
+  const seriesId = entry.unmappedSeriesId ?? volumes[0]?.seriesId;
+  if (!seriesId) return skip("plan error: no coverage");
+  const series = await ctx.db.get(seriesId);
   if (!series || series.status !== "active") return skip("series not active");
 
   const line = entry.line;
@@ -2087,6 +3050,7 @@ async function createRelease(
     status: "active",
     publisherId: entry.publisherId,
     bootstrapUnreviewed: true,
+    ...(unmapped ? { coverageUnmapped: true } : {}),
     ...(line
       ? {
           editionLineId: await findOrCreateLine(
@@ -2113,7 +3077,7 @@ async function createRelease(
     ...(entry.pubDate === null ? {} : { pubDate: entry.pubDate }),
     ...(entry.price === null ? {} : { price: entry.price }),
     publisherId: entry.publisherId,
-    seriesIds: [...new Set(volumes.map((v) => v.seriesId))],
+    seriesIds: unmapped ? [series._id] : [...new Set(volumes.map((v) => v.seriesId))],
     bootstrapUnreviewed: true,
   };
   const id = await ctx.db.insert("releases", fields);
@@ -2123,6 +3087,140 @@ async function createRelease(
     { field: SPLIT_KEY_FIELD, after: entry.key },
   ]);
   await refreshReleaseDenorms(ctx, editionId);
+  return applied;
+}
+
+/** Why a createVolume entry's sources are not HTTPS pages citing more than Open Library, or null. */
+function sourcesRefusal(sources: string[]): string | null {
+  const hosts: string[] = [];
+  for (const text of sources) {
+    let url: URL;
+    try {
+      url = new URL(text);
+    } catch {
+      return `plan error: source ${JSON.stringify(text)} is not a URL`;
+    }
+    if (url.protocol !== "https:" || !url.hostname)
+      return `plan error: source ${JSON.stringify(text)} is not an HTTPS page`;
+    hosts.push(url.hostname.toLowerCase());
+  }
+  return hosts.some((host) => host !== "openlibrary.org" && !host.endsWith(".openlibrary.org"))
+    ? null
+    : "plan error: no source beyond Open Library";
+}
+
+/**
+ * Create the one numbered backbone Volume a held Open Library edition is
+ * missing. Every fact the plan states is re-read (drift = skip), and the
+ * edition must still place, through the importer's own placeEdition, as
+ * exactly this Series' missing Volume. A re-run finds its own Volume by the
+ * creation Revision's entry key. Only the Volume is written: the hold, the
+ * observation and its Release are left to the held book's native replay.
+ */
+async function createVolume(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"createVolume">,
+): Promise<Result> {
+  if (!(await getBootstrapMode(ctx))) return skip("Bootstrap Mode is off");
+  const series = await ctx.db.get(entry.seriesId);
+  if (!series || series.status !== "active" || series.mergedIntoId !== undefined)
+    return skip("series not active");
+  if (series.locked) return skip("series locked");
+  if (series.title !== entry.seriesTitle)
+    return skip(`series retitled: ${JSON.stringify(series.title)}`);
+  if (!/^[1-9]\d*$/.test(entry.label))
+    return skip("plan error: label is not a plain volume number");
+  const sources = sourcesRefusal(entry.sources);
+  if (sources) return skip(sources);
+
+  // Every Volume of the Series, hidden and merged too: none may hold the label.
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+    .collect();
+  const labelled = volumes.filter((vol) => sameLabel(vol.label, entry.label));
+  const [existing] = labelled;
+  if (
+    labelled.length === 1 &&
+    existing?.status === "active" &&
+    (await createdByEntry(ctx, { type: "volume", id: existing._id }, entry.key))
+  )
+    return already;
+  if (existing)
+    return skip(
+      `series already has ${existing.status} Volume ${entry.label} (${existing.publicId})`,
+    );
+  const active = volumes
+    .filter((vol) => vol.status === "active")
+    .sort((a, b) => a.position - b.position)
+    .map((vol) => ({ volumeId: vol._id, label: vol.label ?? null }));
+  if (!sameValue(active, entry.expectedActiveVolumes))
+    return skip("series' active Volumes differ from the plan");
+  const contiguous = entry.expectedActiveVolumes.every((row, i) => row.label === String(i + 1));
+  if (!contiguous || entry.label !== String(entry.expectedActiveVolumes.length + 1))
+    return skip(`plan error: Volume ${entry.label} does not follow Volumes 1-n without a gap`);
+
+  const hold = await ctx.db.get(entry.holdId);
+  if (
+    !hold ||
+    hold.observationId !== entry.observationId ||
+    hold.sourceKey !== "openlibrary" ||
+    hold.kind !== "volumeMissing" ||
+    hold.seriesId !== series._id ||
+    (await holdOf(ctx, entry.observationId))?._id !== hold._id
+  )
+    return skip("hold no longer names this Series' missing Volume");
+  const observation = await ctx.db.get(entry.observationId);
+  if (
+    !observation ||
+    observation.sourceKey !== "openlibrary" ||
+    observation.withdrawn ||
+    observation.recordRef ||
+    observation.printingIsbn13 !== undefined
+  )
+    return skip("observation is not a present, unlinked Open Library edition");
+  const queued = observation.queuedProposalId
+    ? await ctx.db.get(observation.queuedProposalId)
+    : null;
+  if (queued?.state === "draft" || queued?.state === "inReview")
+    return skip(`observation's Proposal is ${queued.state}`);
+  const effective = projectSourceFormat(observation);
+  if (effective.status === "stale") return skip(effective.reason);
+  const snapshot = effective.snapshot as OlEditionSnapshot;
+  const isbn13 = toIsbn13(entry.isbn13);
+  const stated = new Set(statedIsbns(snapshot).map(toIsbn13));
+  if (
+    isbn13 !== entry.isbn13 ||
+    snapshot.kind !== "olEdition" ||
+    stated.size !== 1 ||
+    !stated.has(isbn13) ||
+    snapshot.seriesTitle !== entry.seriesTitle ||
+    snapshot.volumeLabel !== entry.label ||
+    snapshot.multiVolume ||
+    snapshot.packaging ||
+    snapshot.bareNumber ||
+    snapshot.bareRoman ||
+    snapshot.bareSplit
+  )
+    return skip(
+      "observation does not state this ISBN as an ordinary numbered Volume of the Series",
+    );
+  const placement = await placeEdition(ctx, snapshot);
+  if (
+    placement.kind !== "hold" ||
+    placement.hold.kind !== "volumeMissing" ||
+    placement.hold.seriesId !== series._id
+  )
+    return skip(`observation no longer places as this Series' missing Volume (${placement.kind})`);
+  const scope = await isbnScope(ctx, isbn13);
+  if (scope) return skip(scope);
+  const claims = await storedClaims(ctx, isbn13);
+  if (!claims?.complete || claims.printed || claims.raw.length > 0)
+    return skip(`ISBN ${isbn13} already has an owner`);
+
+  const volume = await ensureVolume(ctx, audit, series._id, entry.label, entry.key);
+  audit.note(`created Volume ${volume.publicId} (${entry.label}) of Series ${series.publicId}`);
   return applied;
 }
 
@@ -2137,112 +3235,195 @@ async function releaseBundle(
   audit: Audit,
   entry: EntryOf<"releaseBundle">,
 ): Promise<Result> {
+  const r = reader(ctx);
   let bundle: Doc<"releaseBundles"> | null = null;
   let box: Doc<"releases"> | null = null;
+  let isbns: { isbn13?: string; isbn10?: string } = {};
+  let converted = false;
   if (entry.bundleId !== null && entry.box === null) {
-    bundle = await ctx.db.get(entry.bundleId);
+    bundle = await r.active(entry.bundleId);
   } else if (entry.box !== null && entry.bundleId === null) {
     box = await ctx.db.get(entry.box.releaseId);
     if (!box) return skip("box-set release missing");
-    const isbn13 = box.isbn13;
-    if (isbn13 === undefined) return skip("box-set release has no ISBN");
+    const read = bundleIsbns(box);
+    if ("refusal" in read) return skip(read.refusal);
+    isbns = read;
+    if (!isbns.isbn13) skip("box-set release has no ISBN");
     bundle = await ctx.db
       .query("releaseBundles")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-      .first();
-    if (!bundle) {
-      if (box.status !== "active") return skip(`box-set release is ${box.status}`);
-      if (box.locked) skip("box-set release is locked");
-      const edition = await ctx.db.get(box.editionId);
-      if (!edition) return skip("box-set edition missing");
-      await audit.meta();
-      const fields = {
-        status: "active" as const,
-        publicId: await allocatePublicId(ctx, "bundle"),
-        name: entry.box.name,
-        publisherId: edition.publisherId,
-        format: box.format,
-        isbn13,
-        isbn10: box.isbn10,
-        pubDate: box.pubDate,
-        price: box.price,
-        description: box.description,
-        coverImage: box.coverImage,
-        bootstrapUnreviewed: true,
-      };
-      const id = await ctx.db.insert("releaseBundles", fields);
-      audit.op({ kind: "create", table: "releaseBundles", tempId: id, fields });
-      await audit.revise(
-        { type: "releaseBundle", id },
-        Object.entries(fields)
-          .filter(([, after]) => after !== undefined)
-          .map(([field, after]) => ({ field, after })),
-      );
-      bundle = await ctx.db.get(id);
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbns.isbn13))
+      .unique();
+    if (bundle) {
+      if (
+        bundle.locked ||
+        bundle.status !== "active" ||
+        bundle.publisherId !== box.publisherId ||
+        bundle.format !== box.format
+      )
+        skip("Existing Bundle identity or eligibility differs.");
+      converted = Boolean(await convertedClaim(ctx, box, bundle));
+      if (!converted) {
+        const origin = await ctx.db
+          .query("repairBundleOrigins")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
+          .unique();
+        if (origin?.releaseId !== box._id || origin.entryKey !== entry.key) {
+          if (!entry.expectedConversion)
+            skip("An existing Bundle conversion needs a current expectedConversion guard.");
+          const state = await conversionState(ctx, box._id, bundle._id);
+          if (state.expected !== entry.expectedConversion) skip("Conversion state drifted.");
+          const planned = entry.members.map((m) => ({
+            isbn13: toIsbn13(m.isbn13),
+            order: m.order,
+          }));
+          const actual = state.contents.map((c, i) => ({
+            isbn13: toIsbn13(c.release.isbn13),
+            order: state.members[i]!.order,
+          }));
+          if (!sameValue(planned, actual))
+            skip("Conversion needs the exact complete member set and order.");
+          if (entry.retireVolumeIds.length)
+            skip("Placeholder retirement requires a separate preservation-backed repair.");
+        }
+      }
     }
-  } else {
-    return skip("plan error: name either a bundle or a box set");
+    if (!converted) {
+      await boxConversionPreflight(ctx, box, bundle?._id, entry.retireVolumeIds);
+      await conversionClaims(ctx, box, bundle);
+    }
+  } else if (entry.create && entry.bundleId === null && entry.box === null) {
+    // A box set no Release stands for: the Bundle is made from its stated
+    // facts, or found again by the entry that made it.
+    const isbn13 = toIsbn13(entry.create.isbn13);
+    if (!isbn13) return skip("plan error: the box set's ISBN is not an ISBN");
+    const existing = await ctx.db
+      .query("releaseBundles")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .unique();
+    if (
+      existing &&
+      !(await createdByEntry(ctx, { type: "releaseBundle", id: existing._id }, entry.key))
+    )
+      return skip(`ISBN ${isbn13} is already Bundle ${existing.publicId}`);
+    if (!existing) {
+      const claims = await isbnClaims(ctx, isbn13, {
+        resolver: claimResolver(ctx, { room: r.room }),
+        room: r.room,
+      });
+      if (!claims?.complete || claims.owners.size > 0)
+        return skip(`ISBN ${isbn13} is claimed: convert its box Release instead`);
+    }
+    // An ISBN-10 is stored only as the same book's other spelling, so the
+    // ISBN-13's claims above stand for it too.
+    const isbn10 = entry.create.isbn10 ? plannedIsbn("isbn10", entry.create.isbn10) : null;
+    if (isbn10 !== null && toIsbn13(isbn10) !== isbn13)
+      return skip(`plan error: ISBN-10 ${isbn10} is not ISBN ${isbn13}'s`);
+    bundle = existing;
+    isbns = { isbn13, ...(isbn10 === null ? {} : { isbn10 }) };
+  } else skip("plan error: name a bundle, a box set, or a box set to create");
+
+  const publisherId = bundle?.publisherId ?? box?.publisherId ?? entry.create!.publisherId;
+  const format = bundle?.format ?? box?.format ?? entry.create!.format;
+  const selected = await conversionMembers(ctx, entry.members, publisherId, format, box?._id);
+  const current = bundle
+    ? await r.many(
+        ctx.db
+          .query("bundleMemberships")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id)),
+      )
+    : [];
+  // An origin continuation may still lack members, but must not gain other contents.
+  if (
+    box &&
+    current.some((m) => !selected.some((p) => p.release._id === m.releaseId && p.order === m.order))
+  )
+    skip("Existing Bundle has unplanned members or order.");
+  if (converted) {
+    if (current.length !== selected.length) skip("Converted Bundle members drifted.");
+    for (const id of entry.retireVolumeIds) {
+      const volume = await ctx.db.get(id);
+      if (!volume || volume.status === "active") skip("Converted placeholder retirement drifted.");
+    }
+    return already;
   }
-  if (!bundle || bundle.status !== "active") return skip("bundle not active");
+  for (const member of selected) {
+    const row = current.find((m) => m.releaseId === member.release._id);
+    if (row && row.order !== member.order)
+      skip(`member ${member.release.isbn13} sits at order ${row.order}`);
+    if (!row && current.some((m) => m.order === member.order))
+      skip(`order ${member.order} is taken by another member`);
+  }
+  // Every dependency and personal reference has been read before the first effect.
+  if (!bundle) {
+    await audit.meta();
+    const created = entry.create;
+    const fields = {
+      status: "active" as const,
+      publicId: await allocatePublicId(ctx, "bundle"),
+      name: box ? entry.box!.name : created!.name,
+      publisherId,
+      format,
+      isbn13: isbns.isbn13,
+      isbn10: isbns.isbn10,
+      pubDate: box ? box.pubDate : (created!.pubDate ?? undefined),
+      price: box ? box.price : (created!.price ?? undefined),
+      description: box ? box.description : undefined,
+      coverImage: box ? box.coverImage : undefined,
+      bootstrapUnreviewed: true,
+    };
+    const id = await ctx.db.insert("releaseBundles", fields);
+    if (box) {
+      await ctx.db.insert("repairBundleOrigins", {
+        bundleId: id,
+        releaseId: box._id,
+        entryKey: entry.key,
+        proposalId: (await audit.meta()).proposalId,
+      });
+    }
+    audit.op({ kind: "create", table: "releaseBundles", tempId: id, fields });
+    await audit.revise({ type: "releaseBundle", id }, [
+      ...Object.entries(fields)
+        .filter(([, after]) => after !== undefined)
+        .map(([field, after]) => ({ field, after })),
+      ...(box ? [] : [{ field: SPLIT_KEY_FIELD, after: entry.key }]),
+    ]);
+    bundle = await ctx.db.get(id);
+  }
+  if (!bundle) return skip("bundle vanished");
   const bundleRef = { type: "releaseBundle" as const, id: bundle._id };
   const moves = newMoves(entry.key);
   const seriesBefore = await bundleSeries(ctx, bundle._id);
-
-  const memberships = await ctx.db
-    .query("bundleMemberships")
-    .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-    .collect();
-  let firstVolume: Id<"volumes"> | null = null;
-  for (const planned of entry.members) {
-    const hits = (
-      await ctx.db
-        .query("releases")
-        .withIndex("by_isbn13", (q) => q.eq("isbn13", planned.isbn13))
-        .collect()
-    ).filter((r) => r.status === "active");
-    const member = hits[0];
-    if (!member || hits.length > 1)
-      return skip(`member ${planned.isbn13}: ${hits.length} active releases`);
-    if (box && member._id === box._id) skip("plan error: the box set is its own member");
-    firstVolume ??=
-      (await coverageOf(ctx, member.editionId)).sort((a, b) => a.order - b.order)[0]?.volumeId ??
-      null;
-    const row = memberships.find((m) => m.releaseId === member._id);
-    if (row) {
-      if (row.order !== planned.order) skip(`member ${planned.isbn13} sits at order ${row.order}`);
-      continue;
-    }
-    if (memberships.some((m) => m.order === planned.order))
-      skip(`order ${planned.order} is taken by another member`);
+  for (const member of selected) {
+    if (current.some((m) => m.releaseId === member.release._id)) continue;
     await audit.meta();
-    const id = await ctx.db.insert("bundleMemberships", {
+    await ctx.db.insert("bundleMemberships", {
       bundleId: bundle._id,
-      releaseId: member._id,
-      order: planned.order,
+      releaseId: member.release._id,
+      order: member.order,
     });
-    const inserted = await ctx.db.get(id);
-    if (inserted) memberships.push(inserted);
-    const change = { field: "member", after: `release ${planned.isbn13} (order ${planned.order})` };
+    const change = {
+      field: "member",
+      after: `release ${member.release.isbn13 ?? member.release._id} (order ${member.order})`,
+    };
     audit.op({ kind: "update", ref: bundleRef, changes: [change] });
     await audit.revise(bundleRef, [change]);
   }
-
   await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundle._id, seriesBefore);
   if (box && (await entriesToBundle(ctx, audit, moves, box, bundle._id))) {
-    if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
-      await audit.revise({ type: "release", id: box._id }, [
-        { field: "convertedToBundle", after: `#${bundle.publicId} ${bundle.name}` },
-      ]);
-    }
+    await completeBoxConversion(ctx, audit, box, bundle);
     const edition = await ctx.db.get(box.editionId);
     const live = (await releasesOf(ctx, box.editionId)).filter((r) => r.status === "active");
-    if (edition && live.length === 0)
+    if (edition && !live.length)
       await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   }
   await closeMoves(ctx, audit, box ? { type: "release", id: box._id } : bundleRef, moves);
-  // A box set still holding entries stays up until a later leg empties it.
   if (moves.unfinished) return partial;
-  await retireVolumes(ctx, audit, entry.retireVolumeIds, firstVolume);
+  await retireVolumes(
+    ctx,
+    audit,
+    entry.retireVolumeIds,
+    selected[0]?.contents[0]?.volume._id ?? null,
+  );
   return audit.wrote ? applied : already;
 }
 
@@ -2272,12 +3453,16 @@ async function setCoverage(
     }
     rows.push({ volumeId: volume._id, extent: row.extent });
   }
+  if (entry.unmapped) return await unmapIntoLine(ctx, audit, entry, edition, rows.length);
   if (rows.length === 0) return skip("plan error: empty coverage");
 
+  if (entry.clearLine && entry.line !== null)
+    return skip("plan error: clearLine takes the Edition out of its line, so states none");
   const current = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
   const done =
     current.length === rows.length &&
-    current.every((c, i) => c.volumeId === rows[i]?.volumeId && c.extent === rows[i]?.extent);
+    current.every((c, i) => c.volumeId === rows[i]?.volumeId && c.extent === rows[i]?.extent) &&
+    !(entry.clearLine && edition.editionLineId !== undefined);
   if (
     !done &&
     !sameValue(
@@ -2292,6 +3477,10 @@ async function setCoverage(
   const moves = newMoves(entry.key);
   await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
     await replaceCoverage(ctx, audit, edition._id, rows);
+    await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
+      coverageUnmapped: undefined,
+      ...(entry.clearLine ? { editionLineId: undefined, linePosition: undefined } : {}),
+    });
 
     if (entry.line) {
       const { seriesId, name, position } = entry.line;
@@ -2311,4 +3500,265 @@ async function setCoverage(
   if (moves.unfinished) return partial;
   await retireVolumes(ctx, audit, entry.retireVolumeIds, rows[0]!.volumeId);
   return audit.wrote ? applied : already;
+}
+
+/**
+ * setCoverage's `unmapped` form: the Edition becomes Unmapped Packaging in
+ * the planned line, its coverage removed and `coverageUnmapped` set. The
+ * coverage it has now must be the plan's `before` (drift = skip).
+ */
+async function unmapIntoLine(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"setCoverage">,
+  edition: Doc<"editions">,
+  plannedRows: number,
+): Promise<Result> {
+  if (plannedRows > 0 || entry.line === null)
+    return skip("plan error: an unmapped member states a line and no coverage");
+  const { seriesId, name, position } = entry.line;
+  const current = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
+  const line = edition.editionLineId ? await ctx.db.get(edition.editionLineId) : null;
+  const done =
+    current.length === 0 &&
+    edition.coverageUnmapped === true &&
+    line?.seriesId === seriesId &&
+    line.name === name &&
+    (edition.linePosition ?? null) === position;
+  if (done) return already;
+  if (
+    !sameValue(
+      current.map((c) => c.volumeId),
+      entry.before,
+    )
+  ) {
+    skip(`edition ${edition.publicId} coverage drifted`);
+  }
+  const moves = newMoves(entry.key);
+  await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
+    const lineId = await findOrCreateLine(ctx, audit, seriesId, edition.publisherId, name);
+    await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
+      editionLineId: lineId,
+      linePosition: position ?? undefined,
+      coverageUnmapped: true,
+    });
+    await replaceCoverage(ctx, audit, edition._id, []);
+    await refreshReleaseDenorms(ctx, edition._id);
+  });
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  if (moves.unfinished) return partial;
+  await retireVolumes(ctx, audit, entry.retireVolumeIds, null);
+  return audit.wrote ? applied : already;
+}
+
+/** Group the plan's Series in one Series Family, created by name when none is active. */
+async function seriesFamily(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"seriesFamily">,
+): Promise<Result> {
+  const rows: Array<Doc<"series">> = [];
+  for (const planned of entry.series) {
+    const series = await ctx.db.get(planned.seriesId);
+    if (!series || series.status !== "active") return skip(`series ${planned.seriesId} not active`);
+    if (series.title !== planned.title)
+      return skip(`series ${series.publicId} title drifted: ${JSON.stringify(series.title)}`);
+    rows.push(series);
+  }
+  let family = (
+    await ctx.db
+      .query("seriesFamilies")
+      .withIndex("by_name", (q) => q.eq("name", entry.name))
+      .collect()
+  ).find((one) => one.status === "active");
+  for (const series of rows) {
+    if (series.familyId !== undefined && series.familyId !== family?._id)
+      return skip(`series ${series.publicId} is already in another family`);
+  }
+  if (!family) {
+    await audit.meta();
+    const fields = { status: "active" as const, name: entry.name, bootstrapUnreviewed: true };
+    const id = await ctx.db.insert("seriesFamilies", fields);
+    audit.op({ kind: "create", table: "seriesFamilies", tempId: id, fields });
+    await audit.revise(
+      { type: "seriesFamily", id },
+      Object.entries(fields).map(([field, after]) => ({ field, after })),
+    );
+    family = (await ctx.db.get(id))!;
+  }
+  // The plan's Series follow, in its order, the members it does not name, so
+  // an entry adding one Part to an existing Family shelves it after the rest.
+  const familyId = family._id;
+  const planned = new Set(rows.map((series) => series._id));
+  const members = await ctx.db
+    .query("series")
+    .withIndex("by_family", (q) => q.eq("familyId", familyId))
+    .collect();
+  const placed = rows.map((series) => series.familyPosition);
+  const inOrder =
+    rows.every((series) => series.familyId === familyId) &&
+    placed.every((at, i) => at !== undefined && (i === 0 || at > (placed[i - 1] ?? 0)));
+  if (inOrder) return already;
+  const after = members
+    .filter((series) => series.status === "active" && !planned.has(series._id))
+    .reduce((max, series) => Math.max(max, series.familyPosition ?? 0), 0);
+  for (const [i, series] of rows.entries()) {
+    await updateRecord(ctx, audit, { type: "series", id: series._id }, series, {
+      familyId,
+      familyPosition: after + i + 1,
+    });
+  }
+  return audit.wrote ? applied : already;
+}
+
+/** Move the planned Releases out of an Edition into a new one (entries.ts splitEditionEntry). */
+async function splitEdition(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"splitEdition">,
+): Promise<Result> {
+  const unmapped = entry.unmapped === true;
+  if (entry.releaseIds.length === 0 || entry.keepReleaseIds.length === 0)
+    return skip("plan error: a split moves some Releases and keeps some");
+  if (unmapped ? entry.coverage.length > 0 || entry.line === null : entry.coverage.length === 0)
+    return skip("plan error: state coverage, or a line and no coverage when unmapped");
+  const edition = await ctx.db.get(entry.editionId);
+  if (!edition || edition.status !== "active") return skip("edition not active");
+  if (edition.locked) return skip(`edition ${edition.publicId} is locked`);
+
+  const moving: Array<Doc<"releases">> = [];
+  for (const id of entry.releaseIds) {
+    const release = await ctx.db.get(id);
+    if (!release || release.status !== "active") return skip(`release ${id} not active`);
+    moving.push(release);
+  }
+  const elsewhere = new Set(moving.map((r) => r.editionId).filter((id) => id !== edition._id));
+  if (elsewhere.size > 1) return skip("the planned Releases sit in several Editions");
+  const kept = (await releasesOf(ctx, edition._id)).filter((r) => r.status === "active");
+  const expected =
+    elsewhere.size === 0 ? [...entry.keepReleaseIds, ...entry.releaseIds] : entry.keepReleaseIds;
+  if (!sameValue(idSet(kept.map((r) => r._id)), idSet(expected)))
+    return skip(
+      `edition ${edition.publicId} releases drifted: now ${kept.map((r) => r.isbn13 ?? r._id).join(", ")}`,
+    );
+
+  // A re-run finds the planned Releases already moved: only an Edition this
+  // entry created, still holding exactly them, is its own to finish.
+  let targetId = [...elsewhere][0];
+  const rerun = targetId ? await ctx.db.get(targetId) : null;
+  if (targetId) {
+    if (!rerun || rerun.status !== "active") return skip("split-off edition not active");
+    if (rerun.locked) return skip(`edition ${rerun.publicId} is locked`);
+    if (!(await createdByEntry(ctx, { type: "edition", id: targetId }, entry.key)))
+      return skip(
+        `the planned Releases sit in edition ${rerun.publicId}, which this entry did not create`,
+      );
+    const holds = (await releasesOf(ctx, targetId)).filter((r) => r.status === "active");
+    if (!sameValue(idSet(holds.map((r) => r._id)), idSet(entry.releaseIds)))
+      return skip(`edition ${rerun.publicId} releases drifted since the split`);
+  }
+
+  const moves = newMoves(entry.key);
+  await carryingTracking(
+    ctx,
+    audit,
+    moves,
+    { editionIds: [edition._id, ...(targetId ? [targetId] : [])] },
+    async () => {
+      if (!targetId) {
+        targetId = await createEdition(
+          ctx,
+          audit,
+          {
+            status: "active",
+            publisherId: edition.publisherId,
+            bootstrapUnreviewed: true,
+            ...(unmapped ? { coverageUnmapped: true } : {}),
+          },
+          entry.key,
+        );
+        for (const release of moving) {
+          await updateRecord(ctx, audit, { type: "release", id: release._id }, release, {
+            editionId: targetId,
+          });
+        }
+      }
+      const rows: Parameters<typeof replaceCoverage>[3] = [];
+      for (const row of entry.coverage) {
+        rows.push({
+          volumeId: (await ensureVolume(ctx, audit, row.seriesId, row.label))._id,
+          extent: row.extent,
+        });
+      }
+      if (rerun) {
+        // The split already wrote its coverage; anything else is a later edit.
+        const now = (await coverageOf(ctx, targetId)).sort((a, b) => a.order - b.order);
+        const planned = rows.map((r) => [r.volumeId, r.extent]);
+        if (
+          now.length > 0 &&
+          !sameValue(
+            now.map((c) => [c.volumeId, c.extent]),
+            planned,
+          )
+        )
+          return skip(`edition ${rerun.publicId} coverage drifted since the split`);
+      }
+      await replaceCoverage(ctx, audit, targetId, rows);
+      if (entry.line) {
+        const target = await ctx.db.get(targetId);
+        if (!target) return skip("new edition vanished");
+        const lineId = await findOrCreateLine(
+          ctx,
+          audit,
+          entry.line.seriesId,
+          target.publisherId,
+          entry.line.name,
+        );
+        if (rerun?.editionLineId !== undefined && rerun.editionLineId !== lineId)
+          return skip(`edition ${rerun.publicId} moved to another line since the split`);
+        await updateRecord(ctx, audit, { type: "edition", id: targetId }, target, {
+          editionLineId: lineId,
+          linePosition: entry.line.position ?? undefined,
+        });
+      }
+      await refreshReleaseDenorms(ctx, targetId);
+      await refreshReleaseDenorms(ctx, edition._id);
+    },
+  );
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  if (moves.unfinished) return partial;
+  return audit.wrote ? applied : already;
+}
+
+/** Add one numbered or named extra Volume to a Series (entries.ts addVolumeEntry). */
+async function addVolume(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"addVolume">,
+): Promise<Result> {
+  const series = await ctx.db.get(entry.seriesId);
+  if (!series || series.status !== "active") return skip("series not active");
+  if (series.locked) return skip(`series ${series.publicId} is locked`);
+  if (series.title !== entry.seriesTitle)
+    return skip(`series ${series.publicId} title drifted: ${JSON.stringify(series.title)}`);
+  const volumes = await activeVolumes(ctx, series._id);
+  const label = canonicalLabel(entry.label);
+  if (label === null) return skip("plan error: a Volume to add needs a label");
+  if (volumes.some((v) => sameLabel(v.label, label))) return already;
+  await audit.meta();
+  const fields = {
+    status: "active" as const,
+    publicId: await allocatePublicId(ctx, "volume"),
+    seriesId: series._id,
+    label,
+    position: labelNumber(label) ?? volumes.reduce((max, v) => Math.max(max, v.position), 0) + 1,
+    bootstrapUnreviewed: true,
+  };
+  const id = await ctx.db.insert("volumes", fields);
+  audit.op({ kind: "create", table: "volumes", tempId: id, fields });
+  await audit.revise({ type: "volume", id }, [
+    ...Object.entries(fields).map(([field, after]) => ({ field, after })),
+    { field: SPLIT_KEY_FIELD, after: entry.key },
+  ]);
+  return applied;
 }

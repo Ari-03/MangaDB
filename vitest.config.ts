@@ -39,6 +39,6 @@ export default defineConfig({
         ],
       },
     },
-    include: ["src/**/*.test.ts", "convex/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "convex/**/*.test.ts", "build/**/*.test.ts"],
   },
 });

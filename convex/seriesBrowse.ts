@@ -12,12 +12,13 @@
 //
 // Those facts are packed about a thousand Series to a document
 // (`seriesStatsPacks`, written at the end of each rebuild and read once a
-// complete set exists) because reads cost per document: scanning the 5,488
-// rows took ~2.2 s on the local backend, the packs ~100-170 ms. Measured
-// with getTransactionMetrics, a filtered page reads 65 documents and 2.0 MB
-// (8 packs, the largest ~380 KB of the 1 MB document limit); per-query
-// limits are 16 MiB and 32,000 documents (8 MiB / 16,384 on older Convex),
-// so bytes are the ceiling, at about 8x (4x) today's catalog.
+// complete set exists) because reading thousands of small documents is
+// slow: scanning the 5,488 rows took ~2.2 s on the local backend, the packs
+// ~100-170 ms. Measured with getTransactionMetrics, a filtered page reads
+// 65 documents and 2.0 MB (8 packs, the largest ~380 KB of the 1 MB
+// document limit); per-query limits are 16 MiB and 32,000 documents
+// (8 MiB / 16,384 on older Convex), so bytes are the ceiling, at about 8x
+// (4x) today's catalog.
 
 import { ConvexError, v, type Infer, type ObjectType } from "convex/values";
 
@@ -56,6 +57,8 @@ import {
   type PackEntry as Entry,
 } from "./lib/seriesStats";
 import { withExceptionCapture } from "./lib/posthog";
+import { sameValue } from "./lib/values";
+import { memoize } from "./releases";
 
 export const SORTS = [
   "title",
@@ -168,11 +171,14 @@ export const rebuildBatch = internalMutation({
         afterPublicId === null ? q : q.gt("publicId", afterPublicId),
       )
       .take(REBUILD_BATCH);
+    // Editions across the batch share a few Publishers: read each once, a
+    // missing one included. One transaction, so no row can change under it.
+    const publisherOf = memoize((id: Id<"publishers">) => ctx.db.get(id));
     let count = 0;
     for (const series of docs) {
       if (series.status !== "active") continue;
       await syncSearchText(ctx, series);
-      await upsertStats(ctx, series, rebuiltAt);
+      await upsertStats(ctx, series, rebuiltAt, publisherOf);
       count++;
     }
     const last = docs[docs.length - 1];
@@ -297,8 +303,12 @@ export const repackBlock = internalMutation({
       .withIndex("by_block", (q) => q.eq("block", block))
       .unique();
     if (existing && entries.length === 0) await ctx.db.delete(existing._id);
-    else if (existing) await ctx.db.replace(existing._id, { block, entries });
-    else if (entries.length > 0) await ctx.db.insert("seriesStatsPacks", { block, entries });
+    else if (existing) {
+      // Keep unchanged packs so scheduled rebuilds do not write large documents
+      // or invalidate browse queries just because the rebuild timestamp changed.
+      if (!sameValue(existing.entries, entries))
+        await ctx.db.replace(existing._id, { block, entries });
+    } else if (entries.length > 0) await ctx.db.insert("seriesStatsPacks", { block, entries });
 
     const more = await ctx.db
       .query("seriesStats")
@@ -321,9 +331,15 @@ export const repackBlock = internalMutation({
 
 /**
  * Compute and write one Series' row from its canonical records, deriving
- * the Series' `bookless` and `mature` flags on the way.
+ * the Series' `bookless` and `mature` flags on the way. `publisherOf` is
+ * the batch's memoized Publisher get (`rebuildBatch`).
  */
-async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: number) {
+async function upsertStats(
+  ctx: MutationCtx,
+  series: Doc<"series">,
+  rebuiltAt: number,
+  publisherOf: (id: Id<"publishers">) => Promise<Doc<"publishers"> | null>,
+) {
   const volumes = await activeVolumes(ctx, series._id);
 
   // The Series' books, Unmapped Packaging included; only an active Edition
@@ -374,7 +390,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   const today = todaySortKey(new Date());
 
   for (const [editionId, edition] of editions) {
-    const publisher = await ctx.db.get(edition.publisherId);
+    const publisher = await publisherOf(edition.publisherId);
     if (publisher && publisher.status === "active") {
       publishers.set(publisher.slug, { name: publisher.name, slug: publisher.slug });
     }

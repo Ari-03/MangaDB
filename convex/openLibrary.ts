@@ -1,3 +1,4 @@
+import { invalidateSourceFormat, projectSourceFormat } from "./lib/sourceFormat";
 // The OpenLibrary adapter (spec §6/§7): the monthly bulk-dump
 // pass — seeding stage ④ and the steady-state ISBN fill. OpenLibrary's flat
 // records only match *into* the existing skeleton and never define Series
@@ -14,7 +15,9 @@
 //   publisher is the first listed name that resolves (records often lead
 //   with an imprint label: ["SHONEN JUMP", "viz media"]); library rebinds
 //   never count; and a Volume gets at most one OpenLibrary leaf per
-//   (publisher, format) — another ISBN there is a reprint or duplicate
+//   (publisher, format) — another ISBN there is a reprint or duplicate,
+//   unless a reviewed record and the existing Release both know their
+//   digital file formats and they differ (a PDF beside an EPUB)
 // - it never creates a Series, Volume, or Publisher, and never queues a
 //   match or creation review — OpenLibrary is crowd-sourced and
 //   weak-titled, so an ambiguous or structure-shaped record stays on its
@@ -37,7 +40,10 @@
 // edition observed before its Release existed (ANN created most VIZ books
 // later) stayed unlinked, so its description never reached the Release.
 
-import { v } from "convex/values";
+import { repairCountsValidator } from "./lib/descriptionRepair";
+import { isbnScope } from "./lib/scope";
+import { valueHash } from "./lib/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -58,9 +64,16 @@ import {
   stampHandOff,
   stopAtGate,
 } from "./lib/importRuns";
+import { takesFormatSlot } from "./lib/bookFacts";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { coveringOf, releasesOf } from "./lib/editionRows";
-import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
+import {
+  isbnHolders,
+  isWholeSingleVolume,
+  labelsEqual,
+  matchRelease,
+  type ReleaseFact,
+} from "./lib/matching";
 import {
   clearHold,
   getObservation,
@@ -78,7 +91,6 @@ import {
   isbnHeldElsewhere,
   needsEditionLine,
   recleaned,
-  repairCountsValidator,
   repairLinkedDescription,
   runDescriptionRepair,
   REPAIR_SCAN,
@@ -316,19 +328,30 @@ export const sync = internalAction({
 export const REBINDER =
   /^(?:turtleback|perfection learning|selbite|paw prints|demco|topeka bindery|san val|bound to stay bound|findaway|library binding)\b/i;
 
-/** An active Release of this format under the Volume from this publisher. */
+/**
+ * The Volume's ordinary slot for this publisher and format: an active
+ * Release of that format on one of the publisher's whole single-Volume
+ * Editions (isWholeSingleVolume). An omnibus, a line's book, a partial or
+ * an unmapped Edition covering the Volume is another book and leaves the
+ * slot free, as ANN's and the catalog feeds' slots do. A digital Release
+ * takes it unless both file formats are known and differ (takesFormatSlot).
+ */
 async function sameFormatRelease(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   volumeId: Id<"volumes">,
   publisherId: Id<"publishers">,
-  format: "physical" | "digital",
+  snapshot: Pick<OlEditionSnapshot, "format" | "digitalFileFormat">,
 ): Promise<Doc<"releases"> | null> {
   const coverages = await coveringOf(ctx, volumeId);
   for (const coverage of coverages) {
     const edition = await ctx.db.get(coverage.editionId);
     if (!edition || edition.status !== "active" || edition.publisherId !== publisherId) continue;
+    if (!(await isWholeSingleVolume(ctx, edition))) continue;
     const releases = await releasesOf(ctx, edition._id);
-    const hit = releases.find((r) => r.status === "active" && r.format === format);
+    const hit = releases.find(
+      (r) =>
+        r.status === "active" && takesFormatSlot(r, snapshot.format, snapshot.digitalFileFormat),
+    );
     if (hit) return hit;
   }
   return null;
@@ -346,9 +369,7 @@ type ApplyResult = {
  * and Kodansha keys by slug, so Yen Press is the one to ask.
  */
 export async function outOfScopeElsewhere(ctx: QueryCtx, isbn13: string): Promise<string | null> {
-  const yen = await getObservation(ctx, "yenpress", isbn13);
-  const reason = (yen?.snapshot as { outOfScope?: string } | undefined)?.outOfScope;
-  return reason !== undefined ? `Yen Press (${reason})` : null;
+  return await isbnScope(ctx, isbn13);
 }
 
 /** The fields this source offers on a linked Release, per its authority row. */
@@ -386,7 +407,7 @@ function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unkno
  *   unlabeled Volume, or a book another source holds out of scope.
  */
 export async function placeEdition(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   snapshot: OlEditionSnapshot,
 ): Promise<
   | { kind: "match"; release: Doc<"releases"> }
@@ -407,6 +428,8 @@ export async function placeEdition(
   // label or a distributor (["SHONEN JUMP", "viz media"]) — but a library
   // rebinder's record is another book (its own ISBN), never the
   // publisher's edition.
+  if (await outOfScopeElsewhere(ctx, snapshot.isbn13 ?? snapshot.isbn10 ?? ""))
+    return { kind: "skip" };
   if (snapshot.publishers.some((name) => REBINDER.test(name))) return { kind: "skip" };
   let publisher: Doc<"publishers"> | null = null;
   for (const name of snapshot.publishers) {
@@ -426,6 +449,7 @@ export async function placeEdition(
     multiVolume: packaged,
     format: snapshot.format,
     binding: snapshot.binding,
+    digitalFileFormat: snapshot.digitalFileFormat,
     language: IMPORT_LANGUAGE,
     isbn13: snapshot.isbn13,
     publisherId: publisher?._id ?? null,
@@ -525,14 +549,19 @@ export async function placeEdition(
   // already linked a same-format sibling without an ISBN unless its known
   // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
   // reprint, a library binding, a hardcover, or an OL duplicate. Never a
-  // second Release; the record is held.
-  const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
+  // second Release; the record is held. Packaging that also covers the
+  // Volume (a VIZBIG, a line's book) is not that slot (sameFormatRelease).
+  const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot);
   if (sibling) {
+    const format =
+      sibling.format === "digital" && sibling.digitalFileFormat === undefined
+        ? "digital (file format unknown)"
+        : (sibling.digitalFileFormat ?? sibling.format);
     return {
       kind: "hold",
       hold: {
         kind: "isbn",
-        reason: `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
+        reason: `Volume ${volume.label ?? "(unlabeled)"} already has a ${format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
         seriesId: series._id,
       },
     };
@@ -578,8 +607,15 @@ async function noteFlag(
  * One atomic mutation per record.
  */
 export const applyEdition = internalMutation({
-  args: { snapshot: olEditionValidator },
-  handler: async (ctx, { snapshot }): Promise<ApplyResult> => {
+  args: { snapshot: olEditionValidator, storedDescriptionReplay: v.optional(v.boolean()) },
+  handler: async (ctx, { snapshot, storedDescriptionReplay }): Promise<ApplyResult> => {
+    // Selection can race a Format review. Stored maintenance is not a source
+    // sighting and must leave reviewed observations, including undo pins, intact.
+    if (
+      storedDescriptionReplay &&
+      (await getObservation(ctx, SOURCE_KEY, snapshot.key))?.reviewedSourceFormat
+    )
+      return { status: "recordOnly", changed: false };
     const now = Date.now();
     const source = await getSourceByKey(ctx, SOURCE_KEY);
     const citation = {
@@ -594,6 +630,14 @@ export const applyEdition = internalMutation({
       now,
     });
 
+    const projection = projectSourceFormat(observation);
+    if (
+      projection.status === "stale" ||
+      (observation.reviewedSourceFormat && !observation.recordRef)
+    )
+      return { status: "recordOnly", changed: false };
+    const effective = projection.snapshot as OlEditionSnapshot;
+
     // Rung ①: stored source-id link.
     if (observation.recordRef?.type === "release") {
       const release = await ctx.db.get(observation.recordRef.id);
@@ -603,14 +647,14 @@ export const applyEdition = internalMutation({
       if (!changed) return { status: "unchanged", changed: false };
       // An ISBN another Release holds is that book's: none of the record's
       // facts are filled onto this link; the pair stays on the observation.
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      if (await isbnHeldElsewhere(ctx, observation, release, effective, now)) {
         return { status: "recordOnly", changed: false, releaseId: release._id };
       }
       const result = await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
         doc: release,
-        offered: offeredReleaseFields(snapshot),
+        offered: offeredReleaseFields(effective),
         observation,
         citation,
         now,
@@ -622,67 +666,7 @@ export const applyEdition = internalMutation({
       };
     }
 
-    const placement = await placeEdition(ctx, snapshot);
-    const flag =
-      placement.kind === "review"
-        ? placement.reason
-        : placement.kind === "hold"
-          ? placement.review
-          : undefined;
-    await noteFlag(ctx, observation._id, snapshot.title, flag, now);
-
-    if (placement.kind === "match") {
-      const release = placement.release;
-      await linkObservation(ctx, observation._id, { type: "release", id: release._id });
-      await reconcileFields(ctx, {
-        sourceKey: SOURCE_KEY,
-        ref: { type: "release", id: release._id },
-        doc: release,
-        offered: offeredReleaseFields(snapshot),
-        observation,
-        citation,
-        now,
-      });
-      return { status: "linked", changed: true, releaseId: release._id };
-    }
-
-    if (placement.kind === "review") {
-      await clearHold(ctx, observation._id);
-      return { status: "recordOnly", changed: false };
-    }
-
-    if (placement.kind === "hold") {
-      await recordUnplaced(ctx, observation, placement.hold, now);
-      return { status: "recordOnly", changed: false };
-    }
-
-    if (placement.kind === "skip") {
-      await clearHold(ctx, observation._id);
-      return { status: "recordOnly", changed: false };
-    }
-
-    const { series, seriesTitle, volumeLabel, publisher } = placement;
-    const creation = await createCanonicalRecords(ctx, {
-      sourceKey: SOURCE_KEY,
-      observation,
-      citation,
-      importComment: IMPORT_COMMENT,
-      seriesId: series._id,
-      seriesTitle,
-      labels: volumeLabel !== null ? [volumeLabel] : [],
-      release: {
-        format: snapshot.format,
-        binding: snapshot.binding,
-        isbn13: snapshot.isbn13,
-        isbn10: snapshot.isbn10,
-        pubDate: snapshot.publishDate ? toPartialDate(snapshot.publishDate) : undefined,
-        description: snapshot.description,
-        publisher: { name: publisher.name, slug: publisher.slug },
-      },
-      tagBootstrapUnreviewed: false,
-      now,
-    });
-    return { status: "created", changed: true, releaseId: creation.releaseId };
+    return await applyStored(ctx, observation, effective, citation, now);
   },
 });
 
@@ -723,7 +707,7 @@ export const unlinkedDescribedEditions = internalQuery({
     let next: string | null = null;
     for (const doc of docs) {
       next = doc.sourceRecordId;
-      if (doc.recordRef !== undefined) continue;
+      if (doc.recordRef !== undefined || doc.reviewedSourceFormat) continue;
       const snapshot = doc.snapshot as OlEditionSnapshot;
       if (snapshot.description === undefined || snapshot.isbn13 === undefined) continue;
       const declined = doc.conflicts?.some(
@@ -764,7 +748,8 @@ type ReplayResult = {
  * since most observations do not qualify); safe to rerun. An edition the
  * matcher declines (a shared ISBN, a dissimilar title) stays unlinked with
  * its `match` note, and a rerun skips it rather than replaying it again;
- * each replay bumps the observation's `lastSeenAt`, as a dump pass would.
+ * each ordinary replay bumps the observation's `lastSeenAt`, as a dump pass would.
+ * Reviewed Format observations are skipped in selection and in the mutation.
  * The monthly dump pass still retries declined editions. An explicit
  * operator command: it runs whatever the source's enabled flag says and
  * opens no Import Run.
@@ -814,7 +799,10 @@ export const replayDescriptions = internalAction({
         if (replayed > (args.replayed ?? 0) && outOfTime()) return await handOff();
         replayed++;
         try {
-          const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, { snapshot });
+          const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, {
+            snapshot,
+            storedDescriptionReplay: true,
+          });
           if (result.status === "linked") linked++;
         } catch (e) {
           errors.push(`${snapshot.key}: ${errorMessage(e)}`);
@@ -868,7 +856,12 @@ export const repairDescriptionLine = internalMutation({
     if (observation === null) return { snapshotFixed: false, release: null };
     const snapshot = observation.snapshot as OlEditionSnapshot;
     const fixed = recleaned(snapshot, cleanOlDescription);
-    if (fixed !== null) await ctx.db.patch(observation._id, { snapshot: fixed });
+    if (fixed !== null)
+      await ctx.db.patch(observation._id, {
+        snapshot: fixed,
+        reviewedSourceFormat: invalidateSourceFormat(observation, Date.now()),
+      });
+    if (observation.reviewedSourceFormat) return { snapshotFixed: fixed !== null, release: null };
     const release = await repairLinkedDescription(ctx, observation, {
       sourceKey: SOURCE_KEY,
       clean: cleanOlDescription,
@@ -906,4 +899,114 @@ export const repairDescriptions = internalAction({
       repair: internal.openLibrary.repairDescriptionLine,
       self: internal.openLibrary.repairDescriptions,
     }),
+});
+
+/** Place authoritative stored input; no synthetic source sighting or snapshot replacement. */
+async function applyStored(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  snapshot: OlEditionSnapshot,
+  citation: { sourceName: string; url: string },
+  now: number,
+): Promise<ApplyResult> {
+  const placement = await placeEdition(ctx, snapshot);
+  const flag =
+    placement.kind === "review"
+      ? placement.reason
+      : placement.kind === "hold"
+        ? placement.review
+        : undefined;
+  await noteFlag(ctx, observation._id, snapshot.title, flag, now);
+
+  if (placement.kind === "match") {
+    const release = placement.release;
+    await linkObservation(ctx, observation._id, { type: "release", id: release._id });
+    await reconcileFields(ctx, {
+      sourceKey: SOURCE_KEY,
+      ref: { type: "release", id: release._id },
+      doc: release,
+      offered: offeredReleaseFields(snapshot),
+      observation,
+      citation,
+      now,
+    });
+    return { status: "linked", changed: true, releaseId: release._id };
+  }
+
+  if (placement.kind === "review") {
+    // A classifier review is unresolved; an existing hold stays visible.
+    return { status: "recordOnly", changed: false };
+  }
+
+  if (placement.kind === "hold") {
+    await recordUnplaced(ctx, observation, placement.hold, now);
+    return { status: "recordOnly", changed: false };
+  }
+
+  if (placement.kind === "skip") {
+    if (snapshot.isbn13 && (await outOfScopeElsewhere(ctx, snapshot.isbn13)))
+      await clearHold(ctx, observation._id);
+    return { status: "recordOnly", changed: false };
+  }
+
+  const { series, seriesTitle, volumeLabel, publisher } = placement;
+  const creation = await createCanonicalRecords(ctx, {
+    sourceKey: SOURCE_KEY,
+    observation,
+    citation,
+    importComment: IMPORT_COMMENT,
+    seriesId: series._id,
+    seriesTitle,
+    labels: volumeLabel !== null ? [volumeLabel] : [],
+    release: {
+      format: snapshot.format,
+      binding: snapshot.binding,
+      digitalFileFormat: snapshot.digitalFileFormat,
+      isbn13: snapshot.isbn13,
+      isbn10: snapshot.isbn10,
+      pubDate: snapshot.publishDate ? toPartialDate(snapshot.publishDate) : undefined,
+      description: snapshot.description,
+      publisher: { name: publisher.name, slug: publisher.slug },
+    },
+    tagBootstrapUnreviewed: false,
+    now,
+  });
+  if (creation.blocked !== undefined) return { status: "recordOnly", changed: true };
+  return { status: "created", changed: true, releaseId: creation.releaseId };
+}
+
+export const applyStoredInternal = internalMutation({
+  args: {
+    observationId: v.id("sourceObservations"),
+    expectedSnapshot: v.string(),
+    expectedDecision: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<ApplyResult> => {
+    const observation = await ctx.db.get(args.observationId);
+    if (
+      !observation ||
+      observation.sourceKey !== SOURCE_KEY ||
+      observation.recordRef ||
+      observation.withdrawn ||
+      valueHash(observation.snapshot) !== args.expectedSnapshot ||
+      valueHash(observation.reviewedSourceFormat ?? null) !==
+        (args.expectedDecision ?? valueHash(null))
+    )
+      throw new ConvexError("Stored placement source changed.");
+    if (
+      observation.queuedProposalId &&
+      (await ctx.db.get(observation.queuedProposalId))?.state === "inReview"
+    )
+      throw new ConvexError("Placement is in review.");
+    const projection = projectSourceFormat(observation);
+    if (projection.status === "stale") throw new ConvexError(projection.reason);
+    const snapshot = projection.snapshot as OlEditionSnapshot;
+    return await applyStored(
+      ctx,
+      observation,
+      snapshot,
+      { sourceName: "Open Library stored placement", url: snapshot.url },
+      Date.now(),
+    );
+  },
 });

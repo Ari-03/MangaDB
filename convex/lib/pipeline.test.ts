@@ -17,11 +17,11 @@ import {
   insertVolume,
 } from "../test.factories";
 import { makeT } from "../test.helpers";
-import { upsertObservation } from "./observations";
+import { holdOf, upsertObservation } from "./observations";
 import {
   type CreationArgs,
   createCanonicalRecords,
-  createReleaseBundle,
+  createReleaseBundle as createOrHoldBundle,
   ensurePublisher,
   findPublisherByName,
   queueCreationProposal,
@@ -38,12 +38,15 @@ const CITATION = {
 /** The fields every creation case shares: PRH as the source, the test citation, untagged, at time 1. */
 type Shared = "sourceKey" | "citation" | "importComment" | "tagBootstrapUnreviewed" | "now";
 
-/** createCanonicalRecords with the shared fields defaulted; a case overrides the source or the tag. */
-const create = (
+/**
+ * createCanonicalRecords with the shared fields defaulted; a case overrides
+ * the source or the tag. These cases always create (or find a hidden Series).
+ */
+const create = async (
   ctx: MutationCtx,
   args: Omit<CreationArgs, Shared> & Partial<Pick<CreationArgs, Shared>>,
-) =>
-  createCanonicalRecords(ctx, {
+) => {
+  const result = await createCanonicalRecords(ctx, {
     sourceKey: "prh",
     citation: CITATION,
     importComment: "test",
@@ -51,6 +54,16 @@ const create = (
     now: 1,
     ...args,
   });
+  if (result.seriesId === null) throw new Error(`not created: ${result.blocked}`);
+  return { ...result, seriesId: result.seriesId };
+};
+
+/** createReleaseBundle for the cases below, none of which is held. */
+const createReleaseBundle = async (...args: Parameters<typeof createOrHoldBundle>) => {
+  const result = await createOrHoldBundle(...args);
+  if ("held" in result) throw new Error(`held: ${result.held}`);
+  return result;
+};
 
 async function observation(ctx: MutationCtx, sourceRecordId: string) {
   const { observation } = await upsertObservation(ctx, {
@@ -532,6 +545,36 @@ describe("createReleaseBundle", () => {
   });
 });
 
+describe("createReleaseBundle — a printing's ISBN", () => {
+  it("holds a box whose ISBN is a Release's other printing, creating nothing", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const kodansha = await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", ["1"]);
+      const editionId = await insertEdition(ctx, { publisherId: kodansha });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId: kodansha,
+        seriesIds: [seriesId],
+      });
+      await ctx.db.insert("releaseIsbns", {
+        releaseId,
+        isbn13: "9798888772584",
+        reason: "Another printing.",
+        sourceKey: "ann",
+      });
+      const obs = await observation(ctx, "box");
+      expect(
+        await createOrHoldBundle(ctx, { ...fireForceBox(seriesId, ["1"]), observation: obs }),
+      ).toEqual({
+        held: expect.stringContaining("Bundle ISBN is reserved by a Release"),
+      });
+      expect(await ctx.db.query("releaseBundles").collect()).toEqual([]);
+      expect(await holdOf(ctx, obs._id)).toMatchObject({ kind: "isbn", seriesId });
+    });
+  });
+});
+
 describe("createReleaseBundle — members that arrive later (B15)", () => {
   it("a box imported before its books picks them up when retried", async () => {
     const t = makeT();
@@ -631,7 +674,9 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
         { status: "active" as const, locked: true },
       ]) {
         await ctx.db.patch(early.bundleId, patch);
-        await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+        expect(
+          await createOrHoldBundle(ctx, { ...box, observation: await observation(ctx, "box") }),
+        ).toMatchObject({ held: expect.any(String) });
         expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(0);
       }
     });
@@ -767,7 +812,7 @@ describe("createReleaseBundle — an existing bundle keeps its identity (W08)", 
   it.each([
     ["another Series", "series"],
     ["another Format", "format"],
-  ] as const)("links but adds nothing when the box names %s", async (_, change) => {
+  ] as const)("holds without linking when the box names %s", async (_, change) => {
     const t = makeT();
     await t.run(async (ctx) => {
       await publisher(ctx, "Kodansha", "kodansha");
@@ -783,15 +828,14 @@ describe("createReleaseBundle — an existing bundle keeps its identity (W08)", 
       });
       expect(first).toMatchObject({ created: true, members: 1 });
 
-      const other = await createReleaseBundle(ctx, {
+      const other = await createOrHoldBundle(ctx, {
         ...box,
         ...(change === "series"
           ? { seriesId: beta }
           : { release: { ...box.release, format: "digital" as const } }),
         observation: await observation(ctx, "other-source-box"),
       });
-      expect(other).toMatchObject({ created: false, bundleId: first.bundleId, members: 0 });
-      expect(other.conflict).toMatch(change === "series" ? /Series/ : /Format/);
+      expect(other).toMatchObject({ held: expect.any(String) });
       expect((await membershipsOf(ctx, first.bundleId)).map((m) => m.releaseId)).toEqual([
         alphaOne,
       ]);
@@ -801,7 +845,7 @@ describe("createReleaseBundle — an existing bundle keeps its identity (W08)", 
           q.eq("sourceKey", "prh").eq("sourceRecordId", "other-source-box"),
         )
         .unique();
-      expect(obs!.recordRef).toEqual({ type: "releaseBundle", id: first.bundleId });
+      expect(obs!.recordRef).toBeUndefined();
       expect(obs!.conflicts?.map((c) => c.field)).toEqual(["placement"]);
     });
   });

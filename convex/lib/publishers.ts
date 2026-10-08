@@ -195,6 +195,7 @@ export const DUPLICATE_ALIASES: Record<string, string> = {
   "square enix manga and books": "square-enix",
   "dark horse manga": "dark-horse",
   "dark horse manhwa": "dark-horse",
+  "dark horse comics": "dark-horse",
   "seven seas": "seven-seas",
   viz: "viz-media",
   "viz communications": "viz-media",
@@ -215,6 +216,16 @@ export const DUPLICATE_ALIASES: Record<string, string> = {
   "cpm manga": "central-park-media",
   dmp: "digital-manga",
   "irodori inc": "irodori-comics",
+  "kaiten books llc": "kaiten-books",
+  // One Peace's own catalogs name the company "One Peace Books Inc." at the
+  // trade name's address; OpenLibrary records "One Peace Books, Incorporated".
+  "one peace books incorporated": "one-peace-books",
+  "one peace books inc": "one-peace-books",
+  // OpenLibrary's legal-company string for Tokyopop. The legal parent only:
+  // its TOKYOPOP Classics imprint is never implied by it (lib/sourceFormat.ts
+  // reads an imprint from the product's own evidence).
+  "tokyopop incorporated": "tokyopop",
+  "tokyopop inc": "tokyopop",
   // Deliberately absent: "yen on" and "del rey"/"ballantine" name prose
   // lines (light novels, SF), never their manga siblings.
 };

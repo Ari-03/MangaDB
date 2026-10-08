@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { type BoxSetPart, boxSetContents } from "./lib/boxSets";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
@@ -15,6 +16,7 @@ import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { groupEditions } from "./lib/editionGroups";
+import { pathCombination } from "./lib/pathCombination";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { canonicalPublisherFor } from "./lib/publishers";
 import { creditsFor } from "./people";
@@ -378,6 +380,32 @@ function nearMissCards(ctx: QueryCtx, misses: Awaited<ReturnType<typeof nearMiss
 }
 
 /**
+ * Search hits with each Series Family kept together in reading order
+ * (`familyPosition`), at the place of its best-ranked member: "jojo" lists
+ * Part 1, Part 2, … rather than the index's relevance order among Parts.
+ * Series outside a Family keep their rank.
+ */
+export function familiesTogether<T extends Pick<Doc<"series">, "familyId" | "familyPosition">>(
+  ranked: ReadonlyArray<T>,
+): T[] {
+  const byFamily = new Map<string, T[]>();
+  for (const doc of ranked) {
+    if (doc.familyId) byFamily.set(doc.familyId, [...(byFamily.get(doc.familyId) ?? []), doc]);
+  }
+  const placed = new Set<string>();
+  return ranked.flatMap((doc) => {
+    if (!doc.familyId) return [doc];
+    if (placed.has(doc.familyId)) return [];
+    placed.add(doc.familyId);
+    return [...byFamily.get(doc.familyId)!].sort(
+      (a, b) =>
+        (a.familyPosition ?? Number.MAX_SAFE_INTEGER) -
+        (b.familyPosition ?? Number.MAX_SAFE_INTEGER),
+    );
+  });
+}
+
+/**
  * v1 search (spec §8): Series only, matched through the title + alt-titles
  * search index (`searchText` is both concatenated on write), hits containing
  * every typed word first, each with its jacket from the Series library;
@@ -409,9 +437,11 @@ export const search = query({
       authorHits(ctx, trimmed, SEARCH_AUTHORS, showMature),
     ]);
     const wholeIds = new Set(hits.whole.map((doc) => doc._id));
-    const ranked = [...hits.whole, ...hits.active.filter((doc) => !wholeIds.has(doc._id))].slice(
-      0,
-      SEARCH_LIMIT,
+    const ranked = familiesTogether(
+      [...hits.whole, ...hits.active.filter((doc) => !wholeIds.has(doc._id))].slice(
+        0,
+        SEARCH_LIMIT,
+      ),
     );
     const [series, didYouMean] = await Promise.all([
       Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
@@ -457,7 +487,7 @@ export const suggest = query({
         ? await nearMisses(ctx, trimmed, hits.active, showMature)
         : [];
     const better = hits.whole.length > 0 || misses.length > 0 || names || authors.length > 0;
-    const shown = better ? hits.whole : hits.active;
+    const shown = familiesTogether(better ? hits.whole : hits.active);
     const [series, didYouMean] = await Promise.all([
       Promise.all(
         shown.slice(0, SUGGEST_LIMIT).map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
@@ -605,19 +635,44 @@ async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
   }
   return {
     name: familyDoc.name,
-    members: members
-      .sort((a, b) => a.publicId - b.publicId)
-      .map((m) => ({ publicId: m.publicId, title: m.title })),
+    // Reading order (familyPosition), then age; unplaced Series last. Each
+    // with its jacket from the Series library, as search shows it, and
+    // whether its art is Mature (the shelf conceals it per cover).
+    members: await Promise.all(
+      members
+        .sort(
+          (a, b) =>
+            (a.familyPosition ?? Number.MAX_SAFE_INTEGER) -
+              (b.familyPosition ?? Number.MAX_SAFE_INTEGER) || a.publicId - b.publicId,
+        )
+        .map(async (m) => {
+          const stats = await ctx.db
+            .query("seriesStats")
+            .withIndex("by_series", (q) => q.eq("seriesId", m._id))
+            .first();
+          return {
+            publicId: m.publicId,
+            title: m.title,
+            mature: m.mature === true,
+            coverUrl: stats?.coverUrl ?? null,
+            coverIsbn: statsCoverIsbns(stats),
+          };
+        }),
+    ),
     relationships,
   };
 }
+
+/** Box sets read per Release on the Series page; a book is in a few at most. */
+const BOX_SETS_PER_RELEASE = 8;
 
 /**
  * Everything the Series page renders, shaped as the Reading Path hierarchy
  * (spec §10): the canonical Volume sequence leads
  * (ordered by Volume Position — the Label is display-only); each
  * Volume carries every covering Edition with its full ordered Coverage,
- * Edition Line membership, Releases, Variants, and Bundle cross-links.
+ * Edition Line membership, Releases, Variants, and Bundle cross-links. The
+ * box sets holding its books come last, each with what it holds here.
  *
  * Returns null for unknown or hidden Series. For a merged Series it returns
  * the survivor's page — the route compares the requested public ID and slug
@@ -648,6 +703,9 @@ export const seriesPage = query({
     // READ_CONCURRENCY reads at a time; Promise.all keeps them in the order
     // seriesEditions met them, which the reading paths are built from.
     const { editions: editionDocs } = await seriesEditions(ctx, series._id, volumeDocs);
+    // Each box set holding a book of this Series, with what each such book
+    // holds here (lib/boxSets.ts), filled while the Editions hydrate.
+    const boxSetParts = new Map<Id<"releaseBundles">, BoxSetPart[]>();
     const editions = await Promise.all(
       [...editionDocs.values()].map(async (edition) => {
         const [publisher, line, coverageRows, releaseDocs] = await Promise.all([
@@ -681,6 +739,28 @@ export const seriesPage = query({
           editionCover = await coverUrl(ctx, release.coverImage.storageId);
           if (editionCover !== null) break;
         }
+        const memberships = await Promise.all(
+          releaseDocs.map((release) =>
+            ctx.db
+              .query("bundleMemberships")
+              .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+              .take(BOX_SETS_PER_RELEASE),
+          ),
+        );
+        const part: BoxSetPart = {
+          seriesTitle: series.title,
+          labels: coverage.map((cov) => cov.label),
+          line:
+            line && line.status === "active"
+              ? { name: line.name, position: edition.linePosition ?? null }
+              : null,
+        };
+        for (const membership of memberships.flat()) {
+          boxSetParts.set(membership.bundleId, [
+            ...(boxSetParts.get(membership.bundleId) ?? []),
+            part,
+          ]);
+        }
         const releases = releaseDocs.map((release) => ({
           // The document id is what the signed-in overlay (collection and
           // reading quick actions on the shelf) addresses a Release by.
@@ -705,13 +785,29 @@ export const seriesPage = query({
 
     // The reading paths the page offers; the first path's first book fronts
     // the Series (its cover and social card).
-    const editionGroups = groupEditions(editions);
+    const editionGroups = groupEditions(editions, await pathCombination(ctx, series));
     const volumes = volumeDocs.map((volume) => ({
       publicId: volume.publicId,
       position: volume.position,
       label: volume.label ?? null,
       synopsis: volume.synopsis ?? null,
     }));
+
+    // The box sets, oldest first: each its own cover and what it holds here.
+    const boxSets = [];
+    for (const [bundleId, parts] of boxSetParts) {
+      const bundle = await ctx.db.get(bundleId);
+      if (!bundle || bundle.status !== "active") continue;
+      boxSets.push({
+        publicId: bundle.publicId,
+        name: bundle.name,
+        isbn13: bundle.isbn13 ?? null,
+        pubDate: bundle.pubDate ?? null,
+        coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
+        contents: boxSetContents(parts, false),
+      });
+    }
+    boxSets.sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));
 
     return {
       series: {
@@ -729,6 +825,7 @@ export const seriesPage = query({
       credits,
       volumes,
       editionGroups,
+      boxSets,
       coverUrl: editionGroups[0]?.books[0]?.coverUrl ?? null,
     };
   },

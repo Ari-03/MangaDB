@@ -463,13 +463,32 @@ describe("kodansha covers — stored once, kept current", () => {
     const old = print!.coverImage!.storageId!;
     const art = new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/webp" });
     const upload = () => t.run((ctx) => ctx.storage.store(art));
-    const attach = (releaseId: Id<"releases">, storageId: Id<"_storage">, sourceUrl: string) =>
-      t.mutation(internal.imports.attachCover, {
+    // The Release's own record offers `sourceUrl` (attachCover checks it does).
+    const attach = async (
+      releaseId: Id<"releases">,
+      storageId: Id<"_storage">,
+      sourceUrl: string,
+    ) => {
+      const observationId = await t.run(async (ctx) => {
+        const record = await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_record", (q) =>
+            q.eq("recordRef.type", "release").eq("recordRef.id", releaseId),
+          )
+          .first();
+        await ctx.db.patch(record!._id, {
+          snapshot: { ...(record!.snapshot as object), coverUrl: sourceUrl },
+        });
+        return record!._id;
+      });
+      return await t.mutation(internal.imports.attachCover, {
         releaseId,
+        observationId,
         storageId,
         sourceUrl,
         attribution: "Kodansha",
       });
+    };
     const exists = (id: Id<"_storage">) =>
       t.run(async (ctx) => (await ctx.storage.getUrl(id)) !== null);
 
@@ -2357,5 +2376,556 @@ describe("kodansha.recordListingRatings — listing age ratings", () => {
 
     await t.mutation(internal.kodansha.recordListingRatings, { entries: ratings(100, () => true) });
     expect(await projectionJobs(t)).toEqual([]);
+  });
+});
+
+// ---------- which house a new book is filed under (Kodansha or Vertical) ----------
+
+// kodansha.us lists Vertical's books with Kodansha's and names no imprint.
+// The identities are real books (staging, 2026-10-07 imprint audit): every
+// Vertical one has a PRH "Vertical Comics" record of its own ISBN, and My
+// Unique Skill 2 shares Vertical's 978-1-64729 block with no such record.
+// Which house's Editions each catalog holds is set per test.
+
+type ImprintBook = {
+  series: string;
+  slug: string;
+  label: string;
+  format: "physical" | "digital";
+  /** Absent for the calendar's ISBN-less record. */
+  isbn13?: string;
+  binding?: string;
+};
+
+const SERAPH_GUREN_5: ImprintBook = {
+  series: "Seraph of the End: Guren Ichinose: Catastrophe at Sixteen",
+  slug: "seraph-of-the-end-guren-ichinose-catastrophe-at-sixteen",
+  label: "5",
+  format: "physical",
+  isbn13: "9781647293529",
+  binding: "Paperback",
+};
+const MY_UNIQUE_SKILL_2: ImprintBook = {
+  series: "My Unique Skill Makes Me OP Even at Level 1",
+  slug: "my-unique-skill-makes-me-op-even-at-level-1",
+  label: "2",
+  format: "physical",
+  isbn13: "9781647292072",
+  binding: "Paperback",
+};
+const NAGATORO = "Don't Toy With Me, Miss Nagatoro";
+const nagatoro = (label: string, format: "physical" | "digital", isbn13?: string): ImprintBook => ({
+  series: NAGATORO,
+  slug: "dont-toy-with-me-miss-nagatoro",
+  label,
+  format,
+  isbn13,
+  binding: format === "physical" ? "Paperback" : undefined,
+});
+const BLUE_LOCK_1: ImprintBook = {
+  series: "Blue Lock",
+  slug: "blue-lock",
+  label: "1",
+  format: "physical",
+  isbn13: "9781646516544",
+  binding: "Paperback",
+};
+
+/** One volume page's (volume, format) record, as the backlist crawl offers it. */
+function applyBook(t: TestT, book: ImprintBook, packaging?: { lineName: string }) {
+  const seriesUrl = `${BASE}/series/${book.slug}/`;
+  return t.mutation(internal.kodansha.applyVolume, {
+    sourceRecordId: `${book.slug}/volume-${book.label}#${book.format}`,
+    snapshot: {
+      kind: "kodanshaVolume",
+      url: `${seriesUrl}volume-${book.label}/`,
+      title: `${book.series} Volume ${book.label}`,
+      seriesTitle: book.series,
+      seriesSlug: book.slug,
+      seriesUrl,
+      ...(packaging
+        ? {
+            packaging: {
+              lineName: packaging.lineName,
+              linePosition: book.label,
+              coverRange: null,
+            },
+          }
+        : { volumeLabel: book.label }),
+      format: book.format,
+      creators: [],
+      isbn13: book.isbn13,
+      binding: book.binding,
+    },
+  });
+}
+
+/** A PRH record of an ISBN as lib/prh.ts stores it; `fields` bends it. */
+async function prhRecord(
+  t: TestT,
+  isbn13: string,
+  imprint: string,
+  fields: {
+    withdrawn?: boolean;
+    printingIsbn13?: string;
+    snapshotIsbn13?: string;
+    linkedTo?: Id<"releases">;
+  } = {},
+) {
+  await t.run(async (ctx) => {
+    await insertObservation(ctx, {
+      sourceKey: "prh",
+      sourceRecordId: isbn13,
+      withdrawn: fields.withdrawn ?? false,
+      ...(fields.printingIsbn13 ? { printingIsbn13: fields.printingIsbn13 } : {}),
+      ...(fields.linkedTo ? { recordRef: { type: "release" as const, id: fields.linkedTo } } : {}),
+      snapshot: {
+        kind: "prhTitle",
+        url: `https://www.penguinrandomhouse.com/search/site-search?q=${isbn13}`,
+        isbn13: fields.snapshotIsbn13 ?? isbn13,
+        title: "A title",
+        format: "physical",
+        imprint,
+      },
+    });
+  });
+}
+
+type Shelf = {
+  label: string;
+  house: "kodansha" | "vertical";
+  isbn13: string;
+  line?: string;
+  locked?: boolean;
+};
+
+/**
+ * A Series with one whole-Volume Edition per shelf entry (an Edition Line
+ * member instead when `line` is set; locked when `locked` is), each holding
+ * one physical Release.
+ */
+async function seedShelf(t: TestT, title: string, shelves: Shelf[]) {
+  return await t.run(async (ctx) => {
+    const seriesId = await insertSeries(ctx, { title });
+    const house = async (name: string, slug: string) =>
+      (
+        await ctx.db
+          .query("publishers")
+          .withIndex("by_slug", (q) => q.eq("slug", slug))
+          .unique()
+      )?._id ?? (await insertPublisher(ctx, { name, slug }));
+    const houses = {
+      kodansha: await house("Kodansha", "kodansha"),
+      vertical: await house("Vertical", "vertical"),
+    };
+    const volumes = new Map<string, Id<"volumes">>();
+    const editions: Record<string, Id<"editions">> = {};
+    const releases: Record<string, Id<"releases">> = {};
+    for (const shelf of shelves) {
+      const publisherId = houses[shelf.house];
+      let volumeId = volumes.get(shelf.label);
+      if (volumeId === undefined) {
+        volumeId = await insertVolume(ctx, { seriesId, position: Number(shelf.label) });
+        volumes.set(shelf.label, volumeId);
+      }
+      const editionLineId =
+        shelf.line !== undefined
+          ? await ctx.db.insert("editionLines", {
+              status: "active",
+              name: shelf.line,
+              seriesId,
+              publisherId,
+            })
+          : undefined;
+      const editionId = await insertEdition(ctx, {
+        publisherId,
+        ...(editionLineId ? { editionLineId, linePosition: shelf.label } : {}),
+      });
+      if (shelf.locked) await ctx.db.patch(editionId, { locked: true });
+      await insertCoverage(ctx, { editionId, volumeId });
+      releases[shelf.isbn13] = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: shelf.isbn13,
+        binding: "paperback",
+      });
+      editions[shelf.isbn13] = editionId;
+    }
+    return { seriesId, houses, editions, releases };
+  });
+}
+
+/** How many Editions the catalog holds. */
+async function editionCount(t: TestT) {
+  return await t.run(async (ctx) => (await ctx.db.query("editions").collect()).length);
+}
+
+/** The publisher slug of the Release holding this ISBN, and its Edition's. */
+async function filedUnder(t: TestT, isbn13: string) {
+  return await t.run(async (ctx) => {
+    const release = (await ctx.db.query("releases").collect()).find((r) => r.isbn13 === isbn13);
+    if (!release) return null;
+    const edition = (await ctx.db.get(release.editionId))!;
+    return {
+      release: (await ctx.db.get(release.publisherId))!.slug,
+      edition: (await ctx.db.get(edition.publisherId))!.slug,
+      editionId: edition._id,
+    };
+  });
+}
+
+/** Every publisher slug a queued Proposal's ops pre-fill. */
+async function queuedPublisherSlugs(t: TestT) {
+  const versions = await t.run((ctx) => ctx.db.query("proposalVersions").collect());
+  return [
+    ...new Set(
+      versions.flatMap((p) =>
+        [...JSON.stringify(p.ops).matchAll(/"publisherSlug":"([^"]+)"/g)].map((m) => m[1]),
+      ),
+    ),
+  ];
+}
+
+describe("kodansha.applyVolume — a new book's house (Kodansha or Vertical)", () => {
+  it("files a new Series' book under Vertical when PRH names its own ISBN Vertical Comics", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await prhRecord(t, SERAPH_GUREN_5.isbn13!, "Vertical Comics");
+    expect(await applyBook(t, SERAPH_GUREN_5)).toMatchObject({ status: "created" });
+    expect(await filedUnder(t, SERAPH_GUREN_5.isbn13!)).toMatchObject({
+      release: "vertical",
+      edition: "vertical",
+    });
+  });
+
+  it("never reads the ISBN's prefix: a Vertical-block ISBN with no PRH record stays Kodansha", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // 978-1-64729 is Vertical's block, yet OpenLibrary's record of this very
+    // book (OL39195624M) says "Kodansha America, Incorporated".
+    expect(await applyBook(t, MY_UNIQUE_SKILL_2)).toMatchObject({ status: "created" });
+    expect(await filedUnder(t, MY_UNIQUE_SKILL_2.isbn13!)).toMatchObject({
+      release: "kodansha",
+      edition: "kodansha",
+    });
+  });
+
+  it.each([
+    ["withdrawn", "Vertical Comics", { withdrawn: true }],
+    ["an Other Printing's", "Vertical Comics", { printingIsbn13: "9781647293529" }],
+    ["of another ISBN", "Vertical Comics", { snapshotIsbn13: "9781647293536" }],
+    ["of the prose imprint", "Vertical", {}],
+    ["of another house", "Seven Seas", {}],
+    ["of an unknown imprint", "Vertical Inc.", {}],
+  ] as const)("ignores a PRH record %s and stays Kodansha", async (_, imprint, fields) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await prhRecord(t, SERAPH_GUREN_5.isbn13!, imprint, fields);
+    expect(await applyBook(t, SERAPH_GUREN_5)).toMatchObject({ status: "created" });
+    expect(await filedUnder(t, SERAPH_GUREN_5.isbn13!)).toMatchObject({
+      release: "kodansha",
+      edition: "kodansha",
+    });
+  });
+
+  it("holds its own ISBN's Kodansha Comics book when its Volume is only Vertical's", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const { editions } = await seedShelf(t, "Blue Lock", [
+      { label: "1", house: "vertical", isbn13: "9780316473996" },
+    ]);
+    await prhRecord(t, BLUE_LOCK_1.isbn13!, "Kodansha Comics");
+    // Kodansha's, yet Volume 1's only Edition is Vertical's: a second Edition
+    // beside it is a guess, so an Editor gets a Kodansha creation guess.
+    expect(await applyBook(t, BLUE_LOCK_1)).toMatchObject({ status: "needsReview" });
+    expect(await queuedPublisherSlugs(t)).toEqual(["kodansha"]);
+    expect(await filedUnder(t, BLUE_LOCK_1.isbn13!)).toBeNull();
+    expect(await filedUnder(t, "9780316473996")).toMatchObject({
+      release: "vertical",
+      editionId: editions["9780316473996"],
+    });
+  });
+
+  it("files a new ebook in a mixed Series with its Volume's Edition, Vertical or Kodansha", async () => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    const { editions } = await seedShelf(t, NAGATORO, [
+      { label: "1", house: "kodansha", isbn13: "9781647291846" },
+      { label: "7", house: "vertical", isbn13: "9781647290108" },
+      { label: "9", house: "kodansha", isbn13: "9781647290726" },
+    ]);
+    // Another Series' Vertical Volume 9 is not this Series'.
+    await seedShelf(t, "Seraph of the End", [
+      { label: "9", house: "vertical", isbn13: "9781647290001" },
+    ]);
+    expect(await applyBook(t, nagatoro("7", "digital", "9781636990842"))).toMatchObject({
+      status: "created",
+    });
+    expect(await filedUnder(t, "9781636990842")).toEqual({
+      release: "vertical",
+      edition: "vertical",
+      editionId: editions["9781647290108"],
+    });
+    expect(await applyBook(t, nagatoro("9", "digital", "9781636995755"))).toMatchObject({
+      status: "created",
+    });
+    expect(await filedUnder(t, "9781636995755")).toEqual({
+      release: "kodansha",
+      edition: "kodansha",
+      editionId: editions["9781647290726"],
+    });
+  });
+
+  it("guesses no house when both have a whole Edition of the Volume, nor from a line member", async () => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    const { editions } = await seedShelf(t, NAGATORO, [
+      // Volume 1's two paperbacks, one each (staging holds both in one Edition).
+      { label: "1", house: "kodansha", isbn13: "9781647291846" },
+      { label: "1", house: "vertical", isbn13: "9781947194861" },
+      { label: "9", house: "kodansha", isbn13: "9781647290726" },
+      // A Vertical Edition Line's member covering Volume 12 is not its book.
+      { label: "12", house: "vertical", isbn13: "9781647291501", line: "Deluxe" },
+    ]);
+    // Volume 1 names no house, so the mixed Series files the calendar's
+    // ISBN-less ebook under Kodansha, and the Vertical paperback it might
+    // also belong to sends it to an Editor rather than either Edition.
+    expect(await applyBook(t, nagatoro("1", "digital"))).toMatchObject({
+      status: "needsReview",
+    });
+    expect(await queuedPublisherSlugs(t)).toEqual(["kodansha"]);
+    expect(
+      (await t.run((ctx) => ctx.db.query("releases").collect())).filter(
+        (r) => r.format === "digital",
+      ),
+    ).toEqual([]);
+    // The line member is not Volume 12's own book: no Vertical guess, and
+    // the ebook gets an Edition of its own instead of joining the line.
+    expect(await applyBook(t, nagatoro("12", "digital", "9781684916160"))).toMatchObject({
+      status: "created",
+    });
+    const filed = await filedUnder(t, "9781684916160");
+    expect(filed).toMatchObject({ release: "kodansha", edition: "kodansha" });
+    expect(filed?.editionId).not.toBe(editions["9781647291501"]);
+  });
+
+  it("holds an ebook its own PRH names Vertical when its Volume's only Edition is Kodansha's", async () => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    // Ode to Kirihito (R1 k1701t9q…): both ISBNs have own PRH "Vertical
+    // Comics", and the paperback's Edition is Kodansha's until R1 moves it.
+    const { editions } = await seedShelf(t, "Ode to Kirihito", [
+      { label: "1", house: "kodansha", isbn13: "9781647291198" },
+    ]);
+    await prhRecord(t, "9781647291198", "Vertical Comics");
+    await prhRecord(t, "9781942993209", "Vertical Comics");
+    const ebook: ImprintBook = {
+      series: "Ode to Kirihito",
+      slug: "ode-to-kirihito",
+      label: "1",
+      format: "digital",
+      isbn13: "9781942993209",
+    };
+    // A Vertical Edition beside the Kodansha one would split the book.
+    expect(await applyBook(t, ebook)).toMatchObject({ status: "needsReview" });
+    expect(await queuedPublisherSlugs(t)).toEqual(["vertical"]);
+    expect(await filedUnder(t, "9781942993209")).toBeNull();
+    expect(await editionCount(t)).toBe(Object.keys(editions).length);
+  });
+
+  it("holds an ISBN-bearing ebook of a Volume both houses hold", async () => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    // Nagatoro vol 1 (B2): paperbacks 9781647291846 (no PRH) and
+    // 9781947194861 (PRH Vertical Comics); the ebook is 9781646591275.
+    await seedShelf(t, NAGATORO, [
+      { label: "1", house: "kodansha", isbn13: "9781647291846" },
+      { label: "1", house: "vertical", isbn13: "9781947194861" },
+    ]);
+    await prhRecord(t, "9781947194861", "Vertical Comics");
+    expect(await applyBook(t, nagatoro("1", "digital", "9781646591275"))).toMatchObject({
+      status: "needsReview",
+    });
+    expect(await filedUnder(t, "9781646591275")).toBeNull();
+    expect(await editionCount(t)).toBe(2);
+  });
+
+  it("ignores a PRH record linked to a Release of another ISBN", async () => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    // Ode to Kirihito again, but the ebook's PRH record is linked to the
+    // paperback's Release: it describes that book, so the ebook has no PRH
+    // statement of its own and joins its Volume's Kodansha Edition.
+    const { editions, releases } = await seedShelf(t, "Ode to Kirihito", [
+      { label: "1", house: "kodansha", isbn13: "9781647291198" },
+    ]);
+    await prhRecord(t, "9781942993209", "Vertical Comics", {
+      linkedTo: releases["9781647291198"],
+    });
+    const ebook: ImprintBook = {
+      series: "Ode to Kirihito",
+      slug: "ode-to-kirihito",
+      label: "1",
+      format: "digital",
+      isbn13: "9781942993209",
+    };
+    expect(await applyBook(t, ebook)).toMatchObject({ status: "created" });
+    expect(await filedUnder(t, "9781942993209")).toEqual({
+      release: "kodansha",
+      edition: "kodansha",
+      editionId: editions["9781647291198"],
+    });
+  });
+
+  it("holds an ebook whose Volume's only Edition of its house is locked", async () => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    // Nagatoro vol 7: the Vertical paperback's Edition is locked, so the
+    // ebook cannot join it and a second Vertical Edition would split it.
+    await seedShelf(t, NAGATORO, [
+      { label: "7", house: "vertical", isbn13: "9781647290108", locked: true },
+    ]);
+    expect(await applyBook(t, nagatoro("7", "digital", "9781636990842"))).toMatchObject({
+      status: "needsReview",
+    });
+    expect(await queuedPublisherSlugs(t)).toEqual(["vertical"]);
+    expect(await filedUnder(t, "9781636990842")).toBeNull();
+    expect(await editionCount(t)).toBe(1);
+  });
+
+  it.each([
+    ["an unmerged duplicate slug's row", "active"],
+    ["a row merged into Vertical's", "merged"],
+  ] as const)("holds an ebook whose Volume's Vertical Edition is under %s", async (_, status) => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    const { houses } = await seedShelf(t, NAGATORO, [
+      { label: "7", house: "vertical", isbn13: "9781647290108" },
+    ]);
+    // Move the Edition to a "vertical-comics" row: the house reads as
+    // Vertical, but placement files under the "vertical" row and would not
+    // find it as a sibling.
+    await t.run(async (ctx) => {
+      const alias = await insertPublisher(ctx, {
+        name: "Vertical Comics",
+        slug: "vertical-comics",
+        status,
+        ...(status === "merged" ? { mergedIntoId: houses.vertical } : {}),
+      });
+      for (const edition of await ctx.db.query("editions").collect()) {
+        await ctx.db.patch(edition._id, { publisherId: alias });
+      }
+    });
+    expect(await applyBook(t, nagatoro("7", "digital", "9781636990842"))).toMatchObject({
+      status: "needsReview",
+    });
+    expect(await queuedPublisherSlugs(t)).toEqual(["vertical"]);
+    expect(await editionCount(t)).toBe(1);
+  });
+
+  it.each([
+    ["its own PRH names Vertical beside a Kodansha-only Edition", "kodansha", false, true],
+    ["its Vertical Edition is locked", "vertical", true, false],
+  ] as const)(
+    "holds a oneshot's ebook (no volume label) when %s",
+    async (_, house, locked, prh) => {
+      const t = makeT();
+      await seedRegistry(t, false);
+      // Kodansha's volume-0 oneshot pages carry no label: the matcher and
+      // creation take the Series' unlabeled Volume, so the hold must read it.
+      await seedShelf(t, "Ode to Kirihito", [
+        { label: "1", house, isbn13: "9781647291198", locked },
+      ]);
+      await t.run(async (ctx) => {
+        for (const volume of await ctx.db.query("volumes").collect()) {
+          await ctx.db.patch(volume._id, { label: undefined });
+        }
+      });
+      if (prh) await prhRecord(t, "9781942993209", "Vertical Comics");
+      const seriesUrl = `${BASE}/series/ode-to-kirihito/`;
+      const result = await t.mutation(internal.kodansha.applyVolume, {
+        sourceRecordId: "ode-to-kirihito/volume-0#digital",
+        snapshot: {
+          kind: "kodanshaVolume",
+          url: `${seriesUrl}volume-0/`,
+          title: "Ode to Kirihito",
+          seriesTitle: "Ode to Kirihito",
+          seriesSlug: "ode-to-kirihito",
+          seriesUrl,
+          format: "digital",
+          creators: [],
+          isbn13: "9781942993209",
+        },
+      });
+      expect(result).toMatchObject({ status: "needsReview" });
+      expect(await queuedPublisherSlugs(t)).toEqual(["vertical"]);
+      expect(await filedUnder(t, "9781942993209")).toBeNull();
+      expect(await editionCount(t)).toBe(1);
+    },
+  );
+
+  it("holds a packaging volume whatever PRH says, and links it by ISBN without moving it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const book = { ...SERAPH_GUREN_5, slug: "seraph-guren-omnibus" };
+    await prhRecord(t, book.isbn13!, "Vertical Comics");
+    // Packaging is never placed by this importer, so no house is guessed.
+    expect(await applyBook(t, book, { lineName: "Omnibus" })).toMatchObject({
+      status: "recordOnly",
+      reason: "packaging without coverage",
+    });
+    expect(await queuedPublisherSlugs(t)).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(0);
+
+    // A Kodansha Release already holding the ISBN is linked, not moved.
+    await t.run(async (ctx) => {
+      const seriesId = await insertSeries(ctx, { title: book.series });
+      const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: book.isbn13,
+      });
+    });
+    expect(
+      await applyBook(t, { ...book, binding: "Hardcover" }, { lineName: "Omnibus" }),
+    ).toMatchObject({ status: "linked" });
+    expect(await filedUnder(t, book.isbn13!)).toMatchObject({
+      release: "kodansha",
+      edition: "kodansha",
+    });
+  });
+
+  it("re-applying a book linked by ISBN, then by its stored link, never moves its Vertical Edition", async () => {
+    const t = makeT();
+    await seedRegistry(t, false);
+    const { seriesId, houses } = await seedShelf(t, NAGATORO, [
+      { label: "1", house: "kodansha", isbn13: "9781647291846" },
+    ]);
+    // A reviewed Vertical paperback whose Volume this Series does not hold,
+    // so the Series rule alone would file the record under Kodansha.
+    const { editionId, releaseId } = await t.run(async (ctx) => {
+      const editionId = await insertEdition(ctx, { publisherId: houses.vertical });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        publisherId: houses.vertical,
+        seriesIds: [seriesId],
+        isbn13: "9781647290108",
+        binding: "paperback",
+      });
+      return { editionId, releaseId };
+    });
+    const book = nagatoro("7", "physical", "9781647290108");
+    expect(await applyBook(t, book)).toMatchObject({ status: "linked", releaseId });
+    expect(await applyBook(t, { ...book, binding: "paperback" })).toMatchObject({ releaseId });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(editionId))!.publisherId).toBe(houses.vertical);
+      expect((await ctx.db.get(releaseId))!.publisherId).toBe(houses.vertical);
+      const revisions = await ctx.db.query("revisions").collect();
+      expect(revisions.filter((r) => JSON.stringify(r).includes("publisherId"))).toEqual([]);
+    });
   });
 });

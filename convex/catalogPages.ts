@@ -12,6 +12,7 @@
 // Edition Description, Volume Synopsis) instead of printing every Release's
 // stored Release Description on its row.
 
+import { type BoxSetPart, boxSetContents } from "./lib/boxSets";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
@@ -21,6 +22,7 @@ import { representativeDescription } from "./lib/descriptions";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
+import { otherPrintingsOf, printingReleases } from "./lib/releaseIsbns";
 import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
@@ -150,12 +152,24 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
 
 /**
  * One Release row as the Edition and Volume pages render it: publication
- * facts with both ISBNs, Variants beneath their Release, and containing
- * Bundles cross-linked (spec §2/§10). `anchor` is the row's fragment on the
- * Edition page — ISBN when present, else document ID (spec §8). No Release
+ * facts with both ISBNs, the ISBNs of its Other Printings (the first
+ * recorded, oldest first, with their year; `morePrintings` when others may
+ * remain unshown), Variants beneath their Release, and containing Bundles
+ * cross-linked (spec §2/§10). `anchor` is the row's fragment on the Edition
+ * page — ISBN when present, else document ID (spec §8). No Release
  * Description: the page shows one resolved description instead.
  */
 async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
+  const printed = await otherPrintingsOf(ctx, release);
+  const otherPrintings = printed.printings.map((row) => ({
+    isbn13: row.isbn13,
+    year: row.pubDate?.year ?? null,
+  }));
+
+  const variantIsbns = await ctx.db
+    .query("releaseIsbns")
+    .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+    .take(80);
   const variants = (
     await ctx.db
       .query("releaseVariants")
@@ -163,7 +177,10 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
       .collect()
   )
     .filter((doc) => doc.status === "active")
-    .map((doc) => ({ name: doc.name }));
+    .map((doc) => ({
+      name: doc.name,
+      isbn13: variantIsbns.find((row) => row.variantId === doc._id)?.isbn13 ?? null,
+    }));
 
   const memberships = await ctx.db
     .query("bundleMemberships")
@@ -181,9 +198,12 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     anchor: releaseAnchor(release),
     format: release.format,
     binding: release.binding ?? null,
+    digitalFileFormat: release.digitalFileFormat ?? null,
     language: release.language,
     isbn13: release.isbn13 ?? null,
     isbn10: release.isbn10 ?? null,
+    otherPrintings,
+    morePrintings: printed.more,
     pubDate: release.pubDate ?? null,
     price: release.price ?? null,
     coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
@@ -485,9 +505,33 @@ export async function bundleMembers(ctx: QueryCtx, bundle: Doc<"releaseBundles">
     const coverage = await editionCoverage(ctx, edition);
     if (coverage.mature) mature = true;
     if (release.status !== "active" || edition.status !== "active") continue;
-    members.push({ membership, release, edition, title: coverage.title });
+    members.push({
+      membership,
+      release,
+      edition,
+      title: coverage.title,
+      parts: boxSetParts(coverage, edition),
+    });
   }
   return { publisher, mature, members };
+}
+
+/** A member Edition as lib/boxSets.ts reads it: its covered Volumes per Series, else its line position. */
+function boxSetParts(
+  coverage: Awaited<ReturnType<typeof editionCoverage>>,
+  edition: Doc<"editions">,
+): BoxSetPart[] {
+  const line = coverage.lineName
+    ? { name: coverage.lineName, position: edition.linePosition ?? null }
+    : null;
+  if (coverage.coverage.length === 0) {
+    return coverage.series ? [{ seriesTitle: coverage.series.title, labels: [], line }] : [];
+  }
+  const bySeries = new Map<string, Array<string | null>>();
+  for (const row of coverage.coverage) {
+    bySeries.set(row.series.title, [...(bySeries.get(row.series.title) ?? []), row.label]);
+  }
+  return [...bySeries].map(([seriesTitle, labels]) => ({ seriesTitle, labels, line }));
 }
 
 /**
@@ -546,6 +590,11 @@ export const bundlePage = query({
         description: bundle.description ?? null,
         publisher: publisherLink(publisher),
         coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
+        /** What it holds in words (lib/boxSets.ts), "" when no member says. */
+        contents: boxSetContents(
+          resolved.flatMap((member) => member.parts),
+          true,
+        ),
       },
       /** Art hidden from viewers who have not opted in (lib/mature.ts). */
       mature,
@@ -559,17 +608,20 @@ export const bundlePage = query({
 /**
  * Resolve a normalized ISBN (separators stripped, checksum-verified by the
  * route) to its 301 target (spec §11): a Release match wins any conflict and
- * redirects to the owning Edition anchored at the matching Release row; a
- * box-set ISBN redirects to its Bundle page. Merged records resolve to their
- * survivor — the anchor is the surviving Release's — and hidden records
- * never match. Null means no active match: the route 404s.
+ * redirects to the owning Edition anchored at the matching Release row; an
+ * Other Printing's ISBN (lib/releaseIsbns.ts) finds its Release the same
+ * way, after the Releases' own ISBNs; a box-set ISBN redirects to its Bundle
+ * page. Merged records resolve to their survivor — the anchor is the
+ * surviving Release's — and hidden records never match, so a hidden
+ * Release's printings find nothing either. Null means no active match: the
+ * route 404s.
  */
 export const isbnLookup = query({
   args: { isbn: v.string() },
   handler: async (ctx, { isbn }) => {
     const is13 = isbn.length === 13;
 
-    const releaseDocs = is13
+    const ownDocs = is13
       ? await ctx.db
           .query("releases")
           .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn))
@@ -578,6 +630,7 @@ export const isbnLookup = query({
           .query("releases")
           .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn))
           .collect();
+    const releaseDocs = [...ownDocs, ...(await printingReleases(ctx, isbn))];
     for (const doc of releaseDocs) {
       const release = await followMerges(ctx, "releases", doc);
       if (!release) continue;

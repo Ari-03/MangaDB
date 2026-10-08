@@ -14,8 +14,13 @@
 // title/publisher keys matching needs.
 
 import { v, type Infer } from "convex/values";
-import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
-import { parsedTitleFields } from "./catalogTitle";
+import { bindingFacts, digitalFileFormat } from "./bookFacts";
+import {
+  outOfScopeReason,
+  packagingValidator,
+  parseBookTitle,
+  parsedTitleFields,
+} from "./bookTitle";
 import { calendarDay, datePartsValidator, monthFromAbbreviation, type DateParts } from "./dates";
 import { isbn10To13, isbn13CheckOk, toIsbn13 } from "./isbn";
 import { cleanBlurb } from "./text";
@@ -30,6 +35,13 @@ export const olEditionValidator = v.object({
   /** The book title: OpenLibrary's title, joined with its subtitle when the
    * subtitle completes the volume title. */
   title: v.string(),
+  /**
+   * OpenLibrary's subtitle as given, when it is not joined into `title`:
+   * the parser read it beside the title ("Mashle" + "Vol. 3" is Vol. 3), so
+   * a later reading needs both. Snapshots stored before this field lack it;
+   * their seriesTitle and volumeLabel stand as first read.
+   */
+  subtitle: v.optional(v.string()),
   /** The base Series title (lib/bookTitle.ts), never the book title. */
   seriesTitle: v.string(),
   /** The single covered Volume; absent for oneshots and all packaging. */
@@ -51,7 +63,14 @@ export const olEditionValidator = v.object({
   isbn13: v.optional(v.string()),
   isbn10: v.optional(v.string()),
   format: v.union(v.literal("physical"), v.literal("digital")),
+  /**
+   * Never parsed from Open Library: only a reviewed interpretation's
+   * projection (lib/sourceFormat.ts) states a digital file format.
+   */
+  digitalFileFormat: v.optional(digitalFileFormat),
   binding: v.optional(v.string()),
+  /** Fresh physical_format verbatim, so normalization cannot hide a second known fact. */
+  physicalFormat: v.optional(v.string()),
   /** The edition's blurb, cleaned to one paragraph. */
   description: v.optional(v.string()),
 });
@@ -213,19 +232,15 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   // Manga-only scope: novels, merchandise, samplers, other-language editions.
   if (outOfScopeReason(`${title}${subtitle ? ` (${subtitle})` : ""}`) !== null) return null;
 
-  const physicalFormat =
-    typeof edition.physical_format === "string" ? edition.physical_format.trim() : "";
+  const rawPhysicalFormat =
+    typeof edition.physical_format === "string" ? edition.physical_format : "";
+  const physicalFormat = rawPhysicalFormat.trim();
   // Audio metadata often lives only in physical_format, not the title.
   // An audiobook must never become a physical manga Release.
   if (/audio|cassette|mp3/i.test(physicalFormat)) return null;
   const digital = DIGITAL_FORMAT.test(physicalFormat);
-  const binding = !digital
-    ? /hardcover/i.test(physicalFormat)
-      ? "hardcover"
-      : /paperback/i.test(physicalFormat)
-        ? "paperback"
-        : undefined
-    : undefined;
+  const bindings = new Set(bindingFacts(physicalFormat));
+  const binding = !digital && bindings.size === 1 ? [...bindings][0] : undefined;
 
   // OpenLibrary often splits a volume title across title + subtitle
   // ("Mashle" + "Magic and Muscles, Vol. 3", "Kingdom" + "Hearts II"). A
@@ -254,6 +269,9 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     key,
     url: `https://openlibrary.org${key}`,
     title: bookTitle,
+    ...(subtitle !== undefined && subtitle.trim() !== "" && bookTitle === title
+      ? { subtitle }
+      : {}),
     ...parsedTitleFields(parsed),
     publishers,
     publishDate:
@@ -261,6 +279,7 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     ...isbns,
     format: digital ? "digital" : "physical",
     binding,
+    ...(physicalFormat !== "" ? { physicalFormat: rawPhysicalFormat } : {}),
     description: descriptionOf(edition.description),
   };
 }

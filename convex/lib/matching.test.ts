@@ -18,6 +18,7 @@ import {
   labelsEqual,
   matchRelease,
   normalizeTitle,
+  sameWorkTitle,
   titlesSimilar,
   type ReleaseFact,
 } from "./matching";
@@ -83,6 +84,64 @@ describe("titlesSimilar", () => {
 
   it("never finds a novel similar to its manga", () => {
     expect(titlesSimilar("The Seven Deadly Sins", "The Seven Deadly Sins (Novel)")).toBe(false);
+  });
+});
+
+describe("sameWorkTitle", () => {
+  it.each([
+    ["Citrus", "Citrus+"],
+    ["E'S", "ES"],
+    ["Bastard", "Bastard!!"],
+    ["Doubt", "Doubt!!"],
+    ["Dragon Ball", "Dragon Ball Z"],
+    ["Kingdom Hearts", "Kingdom Hearts II"],
+    ["Alpha", "Alpha 2"],
+    ["Alpha", "Alpha (Light Novel)"],
+    ["Alpha", "Alpha (Manga)"],
+    ["Title", "Title (Side Story)"],
+    ["Alpha", "The Alpha"],
+    ["Alpha-Beta", "Alpha Beta"],
+    ["Alpha-Beta", "AlphaBeta"],
+    ["Alpha Beta", "AlphaBeta"],
+    ["Alpha–Beta", "Alpha - Beta"],
+    ["Alpha- Beta", "Alpha-Beta"],
+    // The acute is an apostrophe, never a space or nothing.
+    ["E´S", "ES"],
+    ["E´S", "E S"],
+    ["E&#180;S", "E S"],
+    ["", ""],
+    ["", "Alpha"],
+  ])("keeps %s and %s apart", (a, b) => {
+    expect(sameWorkTitle(a, b)).toBe(false);
+    expect(sameWorkTitle(b, a)).toBe(false);
+  });
+
+  it.each([
+    ["ALPHA", "alpha"],
+    [" Alpha   Beta ", "Alpha Beta"],
+    ["Candy &amp; Cigarettes", "Candy & Cigarettes"],
+    ["Candy & Cigarettes", "Candy and Cigarettes"],
+    ["E’S", "E'S"],
+    ["E‘S", "E'S"],
+    ["E`S", "E'S"],
+    ["E´S", "E'S"],
+    ["E&#180;S", "E'S"],
+    ["E&#xB4;S", "E'S"],
+    ["E&amp;apos;S", "E'S"],
+    ["Fushigi Yûgi", "Fushigi Yugi"],
+    ["Ａｌｐｈａ＋", "Alpha+"],
+    ["Alpha–Beta", "Alpha-Beta"],
+    ["Alpha—Beta", "Alpha-Beta"],
+    ["Alpha – Beta", "Alpha - Beta"],
+    ["Citrus+", "Citrus+"],
+  ])("reads %s and %s as one work", (a, b) => {
+    expect(sameWorkTitle(a, b)).toBe(true);
+    expect(sameWorkTitle(b, a)).toBe(true);
+  });
+
+  it("leaves the looser search key as it was", () => {
+    expect(normalizeTitle("E'S")).toBe(normalizeTitle("ES"));
+    expect(normalizeTitle("Citrus+")).toBe(normalizeTitle("Citrus"));
   });
 });
 
@@ -259,6 +318,14 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
       kind: "review",
       rung: 4,
     });
+  });
+
+  it("never auto-links onto Unmapped Packaging that kept a complete coverage row (HB-13)", async () => {
+    // The flag says no source stated what the Edition collects, so a row
+    // left on it is no proof it is the ordinary Volume 1.
+    const t = makeT();
+    const unmapped = await buildCatalog(t, { edition: { coverageUnmapped: true } });
+    expect(await match(t, fact(unmapped.publisherId))).toMatchObject({ kind: "review", rung: 4 });
   });
 
   it("a hardcover or another language is another Release, never the paperback (B14)", async () => {

@@ -151,28 +151,107 @@ confirmation, checked again on the server. Each applies as an immediately
 approved Proposal, so the reason lands in public history.
 
 - **Hide** sets `status` to `hidden`. The record leaves public discovery
-  but keeps its ID, history and every tracking reference. **Restore**
-  brings it back. Restore never undoes a merge.
+  but keeps its ID, history and every tracking reference. A hidden
+  Release's Other Printings find nothing on `/isbn/{isbn}` either, and an
+  import treats their ISBNs as the hidden Release's. **Restore** brings it
+  back. Restore never undoes a merge, and refuses a Release whose ISBNs are
+  someone else's now: an ISBN with Other Printings may have no other owner,
+  active or hidden, and no Bundle; any other ISBN no other active Release.
+  A Release with more than 100 printings is left to an administrator. A
+  Bundle whose ISBN is now a printing is refused too. Merge or correct the
+  other record first.
 - **Merge** moves everything from the loser to a survivor: observations,
-  relationships, child records, user tracking (the survivor's row wins
-  where a user tracked both), ratings, reviews, favorites and comments.
+  relationships, child records, a Release's Other Printings (an ISBN the
+  survivor already carries as its ISBN-13 or a printing stays the
+  survivor's; one it has only as its ISBN-10 moves, so the ISBN-13 still
+  finds it; at most 100 printings per Release), user tracking (the
+  survivor's row wins where a user tracked both), ratings, reviews,
+  favorites and comments.
   The loser keeps its ID and points at the survivor, so its URLs 301.
-  Release Variants merge only within one Release, so merge the Releases
-  first. A variant merge moves at most 250 pins (Collection Entries and
+  A Release with Other Printings merges only into a physical Release,
+  since only a physical Release has them. Release Variants merge only
+  within one Release, so merge the Releases first. A variant merge moves at
+  most 250 pins (Collection Entries and
   Bundle Memberships naming the variant). Split puts every pin back in one
   transaction, which reads several index ranges per pin; 250 pins of Owned
   entries, of memberships of one-Release Bundles, or of both, can be split.
   A merge that moved a membership of a Bundle with very many owners or many
   Releases can still be too large to Split
   ([known issues](known-issues.md#catalog-and-imports)). The merge form
-  shows either refusal before you confirm.
+  shows any of these refusals before you confirm.
 - **Split** is the only way back from a merge. Every merge stores a
   `mergeManifests` row with each moved reference and removed row. Split
   replays it backwards, skipping references changed since, and reactivates
-  the loser.
+  the loser. A Release's Split decides its Other Printings first, writing
+  nothing until each one has an answer: a printing row returns to the
+  loser when nobody but the loser would claim its ISBN, stays with the
+  survivor when the survivor claims it now (it took the ISBN as its own, or
+  the merge found it a duplicate), and the Split is refused when anyone
+  else claims it, when an ISBN coming back with the loser (its own, or that
+  of a Release merged into it) would collide with a survivor's row, or when
+  a claim cannot be followed. A merge's manifest keeps each moved row's
+  ISBN: a row whose ISBN was changed since (not merely respelled) is a
+  later decision and stays where it is (`changedSinceMerge`), and a row
+  moved by a merge recorded before manifests kept the ISBN refuses the
+  Split, since nothing shows the row still carries what the merge moved.
+  Records of a printing go where the printing goes, including records
+  linked to the survivor since the merge, with their mark and maturity as
+  a link gives them; a record the survivor keeps keeps its mark. A record
+  is a printing's when it is marked, or when the ISBN its snapshot states
+  now has a printing row: a record linked as its Release's own printing
+  goes with that printing once a correction makes it another one. A
+  removed row comes back stored under its ISBN-13, whatever spelling the
+  merge's manifest kept, so the barcode lookup and every check find it.
+  A record
+  that was unlinked or relinked by an audited decision since the merge,
+  on the survivor or on any other Release it was linked to meanwhile (a
+  repair unlink, a reviewed link that was not the record's first), refuses
+  the Split, naming the Revision, because nothing can tell that link from
+  the merge's: every Revision written since the merge is read once to find
+  them. Both Revisions list each printing (`otherPrintings`: restored,
+  kept on the survivor, or changed since the merge) and each record
+  (`sourceObservations`: from, to, mark before and after). A Release Split
+  decides at most 40 ISBNs, reads at most 400 of the survivor's records and
+  1,000 Revisions written since the merge, moves at most 100 records,
+  replays at most 4,000 manifest entries, and keeps each audit under 64
+  KiB. It reads only the latest merge's manifests, never an earlier one
+  already split. Every read it makes, of manifests, printing rows, claims
+  and their merges, records and history, is one document at a time and
+  only while the transaction can still read the largest document and keep
+  its reserve; before writing it checks room for its writes, that reserve,
+  and the fresh ownership check it makes after them (measured while it
+  planned). Past any of these it refuses with the count or the metric,
+  writing nothing, rather than meeting the platform's limit. The whole
+  Split (finding who tracks what, planning, the replay, the Series,
+  visibility, rating and maturity work after it, and the fresh check) runs
+  as one nested mutation capped at what the transaction has left
+  (`lib/bounded.ts`): past any of the seven limits anywhere in it, it is
+  undone and refused as `badSplit`, never the platform's abort. Every
+  Split, of any record, runs this way. A Series many records answer to is
+  read once for all of them.
 - **Lock** closes an active record to edits during a dispute; unlock when
   it is resolved. Hidden and merged records are locked by their status.
   Hide and merge refuse a locked record until it is unlocked.
+
+## Combining reading paths
+
+On a Series page, **Combine reading paths** opens the Reading paths section
+of its Manage page. A Moderator or Administrator can select two to eight
+standard publisher runs and show them as one shelf, in canonical volume
+order. Choose a lead publisher, review the volume and gap preview, give a
+reason, and confirm the change. Existing links to either run open the
+combined shelf. Omnibus and deluxe Edition Lines stay separate.
+
+This is a display choice for one Series. Editions, publisher attribution,
+Releases, ISBNs, collection entries, and reading progress keep their original
+identities. The personal library uses the same combined path. Runs with
+overlapping volume coverage cannot be combined; any overlap imported later
+remains visible on the shelf and in the moderator preview.
+
+Each save creates an approved Proposal and a public Revision on the Series.
+Competing changes to the grouping require reloading the choices. **Undo
+combination** restores the separate publisher shelves and records its own
+reason in history. A locked Series must be unlocked before either action.
 
 ## Packaging, bookless Series and held books
 
@@ -187,8 +266,9 @@ kind and source. Each row shows the source's own title, link and ISBN, the
 Series and label it proposes, the matched Series, and the reason. A book
 leaves the list when an importer links its observation, queues a creation
 Proposal for it (it is then in the review queue), or its source stops
-listing it. Books no one can place or that are out of scope are not
-listed. See [imports](imports.md#held-books) for the kinds.
+listing it, and when the operator records it as another printing of a
+Release ([operations](operations.md#recording-decided-other-printings)).
+Books no one can place or that are out of scope are not listed. See [imports](imports.md#held-books) for the kinds.
 
 "Prepare placement" on a row (`convex/placement.ts`) drafts a creation
 Proposal for the book under its Series, authored by you and citing the
@@ -210,6 +290,14 @@ approve their own, as with any Proposal. Readers cannot prepare. A
 placement Draft is edited only on that page; the ordinary draft save
 refuses it, and refuses a hand-written placement or an op marked to join
 an existing record.
+
+Approval refuses a placement whose source now names another work, line
+or publisher than when you stated it (the Proposal shows as stale): ask
+for changes and state it again against the source as it stands. A
+position or coverage the source restates differently later does not
+refuse it when the title's work and line can be read. For an unclear title,
+its complete text must still match the reviewed source; a change requires
+stating the placement again.
 
 It does nothing for a book whose hold needs another decision first, and
 says why: no single active, unlocked Series (link, unlock or merge it), an
@@ -236,9 +324,10 @@ held as another kind or under another Series, given another ISBN or
 format, linked, or the Edition it joins already has a Release in its
 format, and it refuses a Release placed under a stored Edition instead of
 one the Proposal creates or joins. It marks the Proposal stale when it
-would join a hidden or merged Volume or Edition Line, or a hidden, merged
-or locked Edition, or when its Series was hidden, merged or locked; a
-locked active Volume or line is joined, as imports join them. After a
+would join a hidden or merged Volume, when its Edition Line or exact
+member cannot resolve to one active, unlocked identity, or when its Series
+was hidden, merged or locked. Compatible merged lines and members join
+their surviving identity; a locked active Volume can still be joined. After a
 rejection the book is held again and can be prepared anew; its import
 does not queue a creation Proposal of its own for it until its source's
 record changes.

@@ -50,6 +50,7 @@ import {
   type BundleReconcile,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
+import { ofOtherPrinting, printingIsbnOf } from "./lib/releaseIsbns";
 import {
   BOOK_PAGE_VERSION,
   bookSnapshotValidator,
@@ -296,7 +297,8 @@ export const sync = internalAction({
  * whether the book page is worth fetching. When it is not, `cover` is art
  * the linked Release still lacks from the snapshot's cover URL (a download
  * that failed after the book applied), for the action to retry without the
- * page, and `replay` is a stored snapshot for the action to apply again
+ * page; a record of one of the Release's Other Printings asks for neither
+ * art nor its blurb. `replay` is a stored snapshot for the action to apply again
  * without the page (an unplaced book an older planner judged). `review` is
  * why a linked box its stored snapshot could not fill went to review.
  */
@@ -358,7 +360,14 @@ export const noteListing = internalMutation({
         },
       };
     }
+    // A record of one of the Release's Other Printings offers it no art and
+    // no blurb (applyBook says the same once its page is read): marked, or
+    // made another printing's by a correction since it was linked.
+    if (obs.printingIsbn13 !== undefined) return { needsDetail: false };
     const release = obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
+    if (release !== null && (await ofOtherPrinting(ctx, release, obs))) {
+      return { needsDetail: false };
+    }
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
     // budget, so the backfill needs no forced run. So is one an aggregator
@@ -377,7 +386,7 @@ export const noteListing = internalMutation({
     // hold yet; applyBook's rung ① serves only active, unlocked Releases.
     const cover =
       release !== null && release.status === "active" && !release.locked
-        ? coverRequest(release, stored?.coverUrl)
+        ? coverRequest(release, stored?.coverUrl, obs._id)
         : undefined;
     return cover ? { needsDetail: false, cover } : { needsDetail: false };
   },
@@ -521,6 +530,11 @@ export const applyBook = internalMutation({
       if (!release || release.status !== "active" || release.locked) {
         return { status: "recordOnly", changed: false };
       }
+      // A record of one of the Release's Other Printings offers it nothing,
+      // its art included (lib/releaseIsbns.ts ofOtherPrinting).
+      if (await ofOtherPrinting(ctx, release, observation)) {
+        return { status: "recordOnly", changed: false, releaseId: release._id };
+      }
       // An unchanged snapshot is done unless its art moved to a new URL.
       // An unchanged listing still reconciles once while it carries a blurb
       // the Release lacks (descriptions predate their import, so the first
@@ -530,13 +544,13 @@ export const applyBook = internalMutation({
         snapshot.description !== undefined &&
         snapshot.description !== release.description &&
         (await blurbOutranked(ctx, release, SOURCE_KEY));
-      const cover = coverRequest(release, snapshot.coverUrl);
+      const cover = coverRequest(release, snapshot.coverUrl, observation._id);
       if (!changed && !blurbPending && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
       // An ISBN another Release holds is that book's: none of its facts
       // are reconciled onto this link until an Editor resolves the pair.
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      if (await isbnHeldElsewhere(ctx, observation, release, { isbn13: snapshot.isbn13 }, now)) {
         return {
           status: "needsReview",
           changed,
@@ -655,6 +669,7 @@ export const applyBook = internalMutation({
         tagBootstrapUnreviewed: true,
         now,
       });
+      if ("held" in bundle) return { status: "recordOnly", changed: true, reason: bundle.held };
       if (bundle.conflict !== undefined) {
         return { status: "needsReview", changed: true, reason: bundle.conflict };
       }
@@ -698,11 +713,13 @@ export const applyBook = internalMutation({
         citation,
         now,
       });
+      // Linked through one of its Other Printings, the book's art is that printing's.
+      const printing = (await printingIsbnOf(ctx, release._id, snapshot.isbn13)) !== undefined;
       return {
         status: "linked",
         changed: true,
         releaseId: release._id,
-        cover: coverRequest(release, snapshot.coverUrl),
+        cover: printing ? undefined : coverRequest(release, snapshot.coverUrl, observation._id),
       };
     }
 
@@ -739,6 +756,9 @@ export const applyBook = internalMutation({
     // A created Release's art is the action's to store.
     if (result.status !== "created" || result.releaseId === undefined) return result;
     const created = await ctx.db.get(result.releaseId);
-    return { ...result, cover: created ? coverRequest(created, snapshot.coverUrl) : undefined };
+    return {
+      ...result,
+      cover: created ? coverRequest(created, snapshot.coverUrl, observation._id) : undefined,
+    };
   },
 });

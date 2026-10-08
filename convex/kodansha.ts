@@ -43,10 +43,17 @@
 //
 // Neither feed is a withdrawal sweep: the calendar is a rolling window, and
 // the crawl skips fresh series, so absence proves nothing.
+//
+// kodansha.us lists Vertical's books too and names no imprint, so a new
+// book's publisher (`publisherForRecord`) comes from its own ISBN's PRH
+// record, else its Volume's existing Edition, else its Series; never from
+// the ISBN's prefix. A creation that would have to guess between Editions
+// (the Volume's Edition is the other house's, or both houses hold it) goes
+// to an Editor. A Release already in the catalog keeps its publisher.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
   internalMutation,
@@ -93,21 +100,37 @@ import {
   type SeriesCrawl,
   type SeriesListingEntry,
 } from "./lib/kodansha";
-import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
+import { coveringOf } from "./lib/editionRows";
+import {
+  candidateSeries,
+  isWholeSingleVolume,
+  labelsEqual,
+  type MatchOutcome,
+  matchRelease,
+  type ReleaseFact,
+} from "./lib/matching";
+import { mergeSurvivor } from "./lib/merges";
 import { getObservation, linkObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
   isbnHolderBesides,
+  joinableEdition,
   linkSeriesObservation,
   publisherBySlug,
   reconcileLinkedSeries,
   recordIsbnConflict,
-  seriesEditions,
   toPartialDate,
 } from "./lib/pipeline";
-import type { CanonicalPublisher } from "./lib/publishers";
+import type { PrhTitleSnapshot } from "./lib/prh";
+import {
+  canonicalPublisherBySlug,
+  canonicalPublisherFor,
+  publisherNameKey,
+  type CanonicalPublisher,
+} from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
+import { ofOtherPrinting, printingIsbnOf } from "./lib/releaseIsbns";
 import { sameValue } from "./lib/values";
 import { withExceptionCapture } from "./lib/posthog";
 import { placeUnmatched, type ApplyResult } from "./lib/unmatched";
@@ -734,8 +757,14 @@ export const applyVolume = internalMutation({
       if (!release || release.status !== "active" || release.locked) {
         return { status: "recordOnly", changed: false };
       }
+      // A record of one of the Release's Other Printings offers it nothing,
+      // its art included, and its other ISBN is no conflict (lib/releaseIsbns.ts
+      // ofOtherPrinting).
+      if (await ofOtherPrinting(ctx, release, observation)) {
+        return { status: "recordOnly", changed: false, releaseId: release._id };
+      }
       // An unchanged snapshot is done unless its art moved to a new URL.
-      const cover = coverRequest(release, snapshot.coverUrl);
+      const cover = coverRequest(release, snapshot.coverUrl, observation._id);
       if (!changed && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
@@ -763,7 +792,7 @@ export const applyVolume = internalMutation({
       }
       // So is an ISBN another Release holds, whatever this link lacks: a
       // calendar duplicate awaiting a merge, or a legacy record's facts.
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      if (await isbnHeldElsewhere(ctx, observation, release, { isbn13: snapshot.isbn13 }, now)) {
         return {
           status: "needsReview",
           changed,
@@ -835,8 +864,13 @@ export const applyVolume = internalMutation({
     // read: it links by ISBN (multiVolume skips the label rungs) or is left
     // for an Editor — never a Volume, never a Series of its own.
     const packaging = snapshot.packaging ?? null;
-    const publisherRef = packaging ? PUBLISHER : await publisherForSeries(ctx, seriesId);
-    const publisher = packaging ? null : await publisherBySlug(ctx, publisherRef.slug);
+    // Its publisher (publisherForRecord) files a created or queued book;
+    // packaging still matches by ISBN alone (no publisher in the fact).
+    const {
+      publisher: publisherRef,
+      row: publisher,
+      hold,
+    } = await publisherForRecord(ctx, seriesId, snapshot);
     const fact: ReleaseFact = {
       seriesTitle: snapshot.seriesTitle,
       volumeLabel: packaging ? null : (snapshot.volumeLabel ?? null),
@@ -847,7 +881,13 @@ export const applyVolume = internalMutation({
       isbn13: snapshot.isbn13,
       publisherId: publisher && publisher.status === "active" ? publisher._id : null,
     };
-    const match = await matchRelease(ctx, fact);
+    const matched = await matchRelease(ctx, fact);
+    // A creation the house evidence cannot place without guessing an
+    // Edition (publisherForRecord's hold) goes to an Editor instead.
+    const match: MatchOutcome =
+      matched.kind === "create" && hold !== null
+        ? { kind: "review", rung: 4, reason: hold }
+        : matched;
 
     if (match.kind === "match") {
       const release = match.release;
@@ -873,11 +913,13 @@ export const applyVolume = internalMutation({
         citation,
         now,
       });
+      // Linked through one of its Other Printings, the book's art is that printing's.
+      const printing = (await printingIsbnOf(ctx, release._id, snapshot.isbn13)) !== undefined;
       return {
         status: "linked",
         changed: true,
         releaseId: release._id,
-        cover: coverRequest(release, snapshot.coverUrl),
+        cover: printing ? undefined : coverRequest(release, snapshot.coverUrl, observation._id),
       };
     }
 
@@ -927,7 +969,10 @@ export const applyVolume = internalMutation({
     // A created Release's art is the action's to store.
     if (result.status !== "created" || result.releaseId === undefined) return result;
     const created = await ctx.db.get(result.releaseId);
-    return { ...result, cover: created ? coverRequest(created, snapshot.coverUrl) : undefined };
+    return {
+      ...result,
+      cover: created ? coverRequest(created, snapshot.coverUrl, observation._id) : undefined,
+    };
   },
 });
 
@@ -976,24 +1021,171 @@ async function offerRecordId(
 }
 
 /**
- * The publisher a Kodansha record belongs to. kodansha.us also lists its
- * Vertical imprint's books and neither feed names an imprint, so a Series
- * whose existing Editions are Vertical's (and none Kodansha's) is
- * Vertical's — never hard-coded Kodansha. A new or Kodansha Series stays
- * Kodansha.
+ * The publisher a new Kodansha record is placed under. kodansha.us also
+ * lists its Vertical imprint's books and neither feed names an imprint, so
+ * the first rule that applies decides (never the ISBN's prefix):
+ *
+ * 1. its own ISBN's PRH record (ownPrhImprint): "Vertical Comics" is
+ *    Vertical's, "Kodansha Comics" Kodansha's, even inside a Series of the
+ *    other house;
+ * 2. the one Kodansha-family publisher of the whole single-Volume Editions
+ *    of its Volume in its Series (houseEvidence), so a new ebook of a
+ *    reviewed Vertical paperback joins that Edition in a mixed Series;
+ * 3. a Series whose active Editions are Vertical's (and none Kodansha's);
+ * 4. else Kodansha: the feed's silence is no evidence.
+ *
+ * `row` is the house's publisher row (null for packaging, which matches by
+ * ISBN alone and is otherwise held, so it spends no Series reads). `hold`
+ * is set when creating the book would guess an Edition: rule 1 names a
+ * house the Volume's whole Editions lack (a second Edition beside an
+ * unrepaired one), both houses hold the Volume and the book has no PRH
+ * record of its own, or the chosen house's whole Edition of the Volume is
+ * one the book cannot join (locked, or filed under another publisher row).
+ * Only placement reads it (matching ladder rungs ③/④ and the unmatched
+ * tail); a linked or ISBN-matched Release never has its publisher rewritten.
  */
-async function publisherForSeries(
+async function publisherForRecord(
   ctx: MutationCtx,
   seriesId: Id<"series"> | null,
-): Promise<CanonicalPublisher> {
-  if (seriesId === null) return PUBLISHER;
-  const slugs = new Set<string>();
-  for (const edition of await seriesEditions(ctx, seriesId)) {
-    if (edition.status !== "active") continue;
-    const publisher = await ctx.db.get(edition.publisherId);
-    if (publisher) slugs.add(publisher.slug);
+  snapshot: KodanshaSnapshot,
+): Promise<{
+  publisher: CanonicalPublisher;
+  row: Doc<"publishers"> | null;
+  hold: string | null;
+}> {
+  const own = await ownPrhImprint(ctx, snapshot.isbn13);
+  if (snapshot.packaging !== undefined) {
+    return { publisher: own ?? PUBLISHER, row: null, hold: null };
   }
-  const vertical = (slug: string) => slug === "vertical" || slug === "vertical-comics";
-  const kodansha = (slug: string) => slug === "kodansha" || slug === "kodansha-comics";
-  return [...slugs].some(vertical) && ![...slugs].some(kodansha) ? VERTICAL : PUBLISHER;
+  const label = snapshot.volumeLabel;
+  const volumeName = label ?? "(unlabeled)";
+  const evidence = seriesId === null ? null : await houseEvidence(ctx, seriesId, label);
+  const volume = evidence?.volume ?? new Map<string, HouseEditions>();
+  let publisher = PUBLISHER;
+  let hold: string | null = null;
+  if (own !== null) {
+    publisher = own;
+    if (volume.size > 0 && !volume.has(own.slug)) {
+      hold = `its ISBN's PRH record names ${own.name}, but Volume ${volumeName}'s Editions are another house's`;
+    }
+  } else if (volume.size > 1) {
+    hold = `both Kodansha and Vertical hold a whole Edition of Volume ${volumeName}`;
+  } else if (volume.size === 1) {
+    publisher = [...volume.values()][0]!.house;
+  } else if (evidence?.series.has(VERTICAL.slug) && !evidence.series.has(PUBLISHER.slug)) {
+    publisher = VERTICAL;
+  }
+  const row = await publisherBySlug(ctx, publisher.slug);
+  const siblings = volume.get(publisher.slug)?.editions ?? [];
+  if (
+    hold === null &&
+    siblings.length > 0 &&
+    !siblings.some((edition) => edition.publisherId === row?._id && joinableEdition(edition))
+  ) {
+    hold = `Volume ${volumeName}'s ${publisher.name} Edition is locked or under another publisher row, so the book would get a second one`;
+  }
+  return { publisher, row, hold };
+}
+
+const PRH_KEY = "prh";
+
+/**
+ * The Kodansha-family imprint PRH states for this very ISBN, or null. Only a
+ * current PRH record of the ISBN itself counts: not withdrawn, not one of an
+ * Other Printing's ISBNs, its snapshot naming the same ISBN, and not linked
+ * to a Release (merges followed) that holds another ISBN. PRH's plain
+ * "Vertical" is Vertical's prose imprint (lib/prh.ts DENIED_IMPRINTS), and
+ * any imprint outside the family is no statement about this house.
+ */
+async function ownPrhImprint(
+  ctx: MutationCtx,
+  isbn13: string | undefined,
+): Promise<CanonicalPublisher | null> {
+  if (isbn13 === undefined) return null;
+  const observation = await getObservation(ctx, PRH_KEY, isbn13);
+  if (!observation || observation.withdrawn || observation.printingIsbn13 !== undefined) {
+    return null;
+  }
+  const stated = observation.snapshot as Partial<PrhTitleSnapshot>;
+  if (stated.isbn13 !== isbn13 || typeof stated.imprint !== "string") return null;
+  if (publisherNameKey(stated.imprint) === "vertical") return null;
+  const imprint = canonicalPublisherFor(stated.imprint);
+  const house =
+    imprint?.slug === VERTICAL.slug
+      ? VERTICAL
+      : imprint?.slug === PUBLISHER.slug
+        ? PUBLISHER
+        : null;
+  if (house === null) return null;
+  const ref = observation.recordRef;
+  if (ref !== undefined) {
+    const linked =
+      ref.type === "release"
+        ? await mergeSurvivor(ctx, "releases", await ctx.db.get(ref.id))
+        : null;
+    if (linked?.isbn13 !== isbn13) return null;
+  }
+  return house;
+}
+
+/** One house's active whole single-Volume Editions of a Volume. */
+type HouseEditions = { house: CanonicalPublisher; editions: Doc<"editions">[] };
+
+/**
+ * What the Series' Editions say about a new book's house, in one pass over
+ * its Volumes: `series`, the Kodansha-family houses of its active Editions;
+ * `volume`, by house, the active whole single-Volume Editions
+ * (isWholeSingleVolume: no Edition Line, no Unmapped Packaging) of the
+ * Volume with this label (a oneshot's unlabeled Volume when it has none).
+ * A publisher row counts as the house of its merge survivor's slug
+ * (duplicate slugs folded).
+ */
+async function houseEvidence(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+  label: string | undefined,
+): Promise<{ series: Set<string>; volume: Map<string, HouseEditions> }> {
+  const series = new Set<string>();
+  const volume = new Map<string, HouseEditions>();
+  const seen = new Set<Id<"editions">>();
+  const houses = new Map<Id<"publishers">, CanonicalPublisher | null>();
+  const houseOf = async (publisherId: Id<"publishers">) => {
+    if (!houses.has(publisherId)) houses.set(publisherId, await kodanshaFamilyOf(ctx, publisherId));
+    return houses.get(publisherId) ?? null;
+  };
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  for (const each of volumes) {
+    // An unlabeled record is a oneshot's: the matcher and creation both take
+    // the Series' unlabeled Volume for it.
+    const ours = each.status === "active" && labelsEqual(each.label, label ?? null);
+    for (const coverage of await coveringOf(ctx, each._id)) {
+      // A whole single-Volume Edition has one coverage row, so an Edition
+      // already seen through another Volume is never the label's.
+      if (seen.has(coverage.editionId)) continue;
+      seen.add(coverage.editionId);
+      const edition = await ctx.db.get(coverage.editionId);
+      if (!edition || edition.status !== "active") continue;
+      const house = await houseOf(edition.publisherId);
+      if (house === null) continue;
+      series.add(house.slug);
+      if (!ours || !(await isWholeSingleVolume(ctx, edition))) continue;
+      const entry = volume.get(house.slug) ?? { house, editions: [] };
+      entry.editions.push(edition);
+      volume.set(house.slug, entry);
+    }
+  }
+  return { series, volume };
+}
+
+/** Kodansha or Vertical for a publisher row of either (merges followed, duplicate slugs folded), else null. */
+async function kodanshaFamilyOf(
+  ctx: MutationCtx,
+  publisherId: Id<"publishers">,
+): Promise<CanonicalPublisher | null> {
+  const row = await mergeSurvivor(ctx, "publishers", await ctx.db.get(publisherId));
+  const slug = row ? canonicalPublisherBySlug(row.slug)?.slug : undefined;
+  return slug === VERTICAL.slug ? VERTICAL : slug === PUBLISHER.slug ? PUBLISHER : null;
 }

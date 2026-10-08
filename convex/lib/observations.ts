@@ -1,8 +1,10 @@
+import { invalidateSourceFormat } from "./sourceFormat";
 // Source Observation bookkeeping (spec §6): identity is
 // (source, source-record-id); `snapshot` holds the latest normalized form —
-// what reconciliation reads — and every superseded snapshot is retained
+// the raw source facts — and every superseded snapshot is retained
 // append-only in observationSnapshots. Unchanged fetches bump last-seen
-// only. Retention is indefinite in v1; withdrawal marks, never deletes.
+// only. Reviewed Format decisions are separate and latch invalidation on
+// raw OL changes. Retention is indefinite in v1; withdrawal marks, never deletes.
 // A record seen again stops being withdrawn, and the possible-cancellation
 // review its withdrawal queued is retired with it.
 //
@@ -18,12 +20,15 @@
 // linked one seen again make its Series mature at once when it is 18+
 // evidence (lib/mature.ts applyMatureEvidence), for every importer.
 
-import type { Infer } from "convex/values";
+import { isbnScope } from "./scope";
+import { ConvexError, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { holdKind, recordRef } from "../schema";
 import { applyMatureEvidence } from "./mature";
-import { sameValue } from "./values";
+import { observedIsbn13, printingIsbnOf } from "./releaseIsbns";
+import { sameValue, valueHash } from "./values";
+import { sha256Hex } from "./olDump";
 
 export type HoldKind = Infer<typeof holdKind>;
 
@@ -111,6 +116,19 @@ export async function markSeen(
   return seen;
 }
 
+/** Preserve one prior raw snapshot without importer or placement side effects. */
+export async function archiveObservationSnapshot(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  now: number,
+) {
+  return await ctx.db.insert("observationSnapshots", {
+    observationId: observation._id,
+    snapshot: observation.snapshot,
+    supersededAt: now,
+  });
+}
+
 /**
  * Record one fetch of a source record. New identity → new observation;
  * same snapshot → bump lastSeenAt (and clear a stale withdrawn mark — the
@@ -145,18 +163,17 @@ export async function upsertObservation(
     return { observation, changed: false };
   }
 
-  await ctx.db.insert("observationSnapshots", {
-    observationId: existing._id,
-    snapshot: existing.snapshot,
-    supersededAt: args.now,
-  });
+  await archiveObservationSnapshot(ctx, existing, args.now);
+  const reviewedSourceFormat = invalidateSourceFormat(existing, args.now);
   await ctx.db.patch(existing._id, {
+    reviewedSourceFormat,
     snapshot: args.snapshot,
     lastSeenAt: args.now,
     withdrawn: false,
   });
   const observation = {
     ...existing,
+    ...(reviewedSourceFormat ? { reviewedSourceFormat } : {}),
     snapshot: args.snapshot,
     lastSeenAt: args.now,
     withdrawn: false,
@@ -226,6 +243,23 @@ export async function holdOf(
     .unique();
 }
 
+/** The SHA-256 a dismissal pins: the snapshot's canonical form (lib/values.ts valueHash). */
+export function snapshotSha256(snapshot: unknown): string {
+  return sha256Hex(valueHash(snapshot));
+}
+
+/**
+ * Whether a person dismissed this record's hold and the source has not
+ * changed the book since (schema `dismissedHold`): such a record is never
+ * listed as a Held Book.
+ */
+export function holdDismissed(observation: Doc<"sourceObservations">): boolean {
+  const dismissed = observation.dismissedHold;
+  return (
+    dismissed !== undefined && dismissed.snapshotSha256 === snapshotSha256(observation.snapshot)
+  );
+}
+
 /**
  * Leave a record the importer cannot place on its observation (spec §6:
  * record, never guess): the reason becomes its `placement` note, and an
@@ -244,6 +278,7 @@ export async function recordUnplaced(
   observation: Doc<"sourceObservations">,
   hold: Hold,
   now: number,
+  keepHeldAt = false,
 ): Promise<boolean> {
   // The caller's copy may predate a write earlier in this mutation.
   const current = (await ctx.db.get(observation._id)) ?? observation;
@@ -259,6 +294,7 @@ export async function recordUnplaced(
   const listed =
     current.recordRef === undefined &&
     !current.withdrawn &&
+    !holdDismissed(current) &&
     !(await proposalInReview(ctx, current));
   const kind = listed ? hold.kind : null;
   if (kind === null) {
@@ -277,7 +313,11 @@ export async function recordUnplaced(
     return true;
   }
   if (row.kind !== kind) {
-    await ctx.db.patch(row._id, { kind, heldAt: now, seriesId: hold.seriesId });
+    await ctx.db.patch(row._id, {
+      kind,
+      heldAt: keepHeldAt ? row.heldAt : now,
+      seriesId: hold.seriesId,
+    });
     return true;
   }
   if (row.seriesId !== hold.seriesId) {
@@ -317,15 +357,31 @@ export async function clearHold(
  * every importer and repair writes the link (a merge or Split repoints
  * links directly, lib/sensitiveOps.ts). A linked record is placed, so
  * its hold and `placement` note go (clearHold), and its Series becomes
- * mature at once if the link is 18+ evidence (applyMatureEvidence).
+ * mature at once if the link is 18+ evidence (applyMatureEvidence). A
+ * record of one of a Release's Other Printings, linked to that Release, is
+ * marked with the printing's ISBN (`printingIsbn13`); any other link
+ * clears the mark.
  */
 export async function linkObservation(
   ctx: MutationCtx,
   observationId: Id<"sourceObservations">,
   ref: Infer<typeof recordRef>,
 ): Promise<void> {
+  const previous = await ctx.db.get(observationId);
+  if (ref.type === "release" || ref.type === "releaseBundle") {
+    const scope = await isbnScope(ctx, observedIsbn13(previous?.snapshot));
+    if (scope && !sameValue(previous?.recordRef, ref)) throw new ConvexError(scope);
+  }
   await ctx.db.patch(observationId, { recordRef: ref });
   await clearHold(ctx, observationId);
   const observation = await ctx.db.get(observationId);
-  if (observation) await applyMatureEvidence(ctx, observation);
+  if (!observation) return;
+  const printingIsbn13 =
+    ref.type === "release"
+      ? await printingIsbnOf(ctx, ref.id, observedIsbn13(observation.snapshot))
+      : undefined;
+  if (printingIsbn13 !== observation.printingIsbn13) {
+    await ctx.db.patch(observationId, { printingIsbn13 });
+  }
+  await applyMatureEvidence(ctx, { ...observation, printingIsbn13 });
 }

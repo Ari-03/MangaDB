@@ -42,6 +42,8 @@ import {
   type IsbnUpdate,
 } from "./lib/proposalCreates";
 import { fail } from "./lib/errors";
+import { toIsbn13 } from "./lib/isbn";
+import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
@@ -55,7 +57,7 @@ import {
 } from "./lib/sensitiveOps";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
-import { checkPlacement, placementView } from "./placement";
+import { checkPlacement, placementChanged, placementView } from "./placement";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
 
@@ -221,8 +223,22 @@ async function buildDraftOps(ctx: MutationCtx, submitted: OpInput[]): Promise<St
  */
 async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
   const isbnUpdates: IsbnUpdate[] = [];
+  const bundleAssignments = new Set<string>();
   for (const op of ops) {
-    if (op.kind !== "update" || op.ref.type !== "release") continue;
+    if (op.kind !== "update") continue;
+    // A Bundle never takes an ISBN with Other Printings (lib/releaseIsbns.ts).
+    if (op.ref.type === "releaseBundle") {
+      const isbns = op.changes.flatMap(({ field, after }) =>
+        (field === "isbn13" || field === "isbn10") && typeof after === "string" ? [after] : [],
+      );
+      for (const isbn of isbns) {
+        const key = toIsbn13(isbn);
+        if (key) bundleAssignments.add(key);
+      }
+      const printed = await primaryNamespaceRefusal(ctx, isbns, "bundle", op.ref.id);
+      if (printed !== null) fail("invalidField", `${printed} Correct that first.`);
+    }
+    if (op.ref.type !== "release") continue;
     for (const { field, after } of op.changes) {
       if (field !== "isbn13" && field !== "isbn10") continue;
       isbnUpdates.push({
@@ -232,11 +248,23 @@ async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
       });
     }
   }
-  return await planCreateOps(
+  const plans = await planCreateOps(
     ctx,
     ops.filter((op): op is CreateOpInput => op.kind === "create"),
     isbnUpdates,
   );
+  const releaseAssignments = [
+    ...isbnUpdates.map((update) => update.isbn),
+    ...plans.flatMap((plan) =>
+      plan.table === "releases" ? [plan.fields.isbn13, plan.fields.isbn10] : [],
+    ),
+  ];
+  for (const isbn of releaseAssignments) {
+    const key = toIsbn13(isbn);
+    if (key && bundleAssignments.has(key))
+      fail("invalidField", `A Release and Bundle in this proposal would share ISBN ${key}.`);
+  }
+  return plans;
 }
 
 /** Malformed evidence never reaches a version: check each row now. */
@@ -1266,9 +1294,12 @@ export const proposalDetail = query({
     }
 
     const current = versions.find((version) => version.versionNo === proposal.currentVersionNo);
+    // A placement whose source now names another book than its author
+    // reviewed is stale too: approval refuses it (placement.ts).
     const stale =
       proposal.state === "inReview" && current
-        ? (await staleRecordsOf(ctx, current.ops)).length > 0
+        ? (await staleRecordsOf(ctx, current.ops)).length > 0 ||
+          (await placementChanged(ctx, current.ops))
         : Boolean(proposal.stale);
 
     return {

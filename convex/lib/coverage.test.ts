@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseBookTitle } from "./bookTitle";
-import { coverageFromLine, coverageFromText, inferCoverage } from "./coverage";
+import { coverageFromLine, coverageFromText, inferCoverage, statementCoverage } from "./coverage";
 import { cleanBlurb } from "./text";
 
 // The packagings most cases read against: a 3-in-1 line at positions 1 and 2
@@ -51,6 +51,52 @@ describe("coverageFromText — explicit lists (B18)", () => {
   });
 });
 
+// A title's statement is evidence: read to its end, or no range at all.
+describe("statementCoverage — a title's own statement, read whole", () => {
+  it("is silent on text with no collect-verb", () => {
+    for (const text of ["Wano", "Vols. 4-6", "The Collector's Pick"]) {
+      expect(statementCoverage(text), text).toBeUndefined();
+    }
+  });
+
+  it("reads one verb and one list that reads one way", () => {
+    for (const [text, from, to] of [
+      ["Includes Vols. 4-6", "4", "6"],
+      ["Includes Vols. 1-3 plus 4-6", "1", "6"],
+      ["Collects Volumes 1, 2 & 3", "1", "3"],
+      ["Contains Vol. 4", "4", "4"],
+      ["Including volumes one through three", "1", "3"],
+    ] as const) {
+      expect(statementCoverage(text), text).toEqual({ from, to });
+    }
+  });
+
+  it("rejects a statement read only in part, with a gap, or two ways", () => {
+    for (const text of [
+      "Includes Vols. 1-3 plus 7-9",
+      "Includes Vols. 1-3 plus #7-9",
+      "Includes Vols. 1-3 along with 7-9",
+      "Includes Vols. 1-3 plus 4-6 in one book",
+      "Includes Vols. 4-6 and Volume 7 of Beta",
+      "Includes Vols. 1-3. Contains Vols. 4-6.",
+      "Includes Vols. 1-3 / Vols. 4-6",
+      "Includes Vols. 1-3-5",
+      "Includes Vols. 6-4",
+      "Includes Vols. 1.5-3.5",
+      "Includes Vols. 1-80",
+      "Includes Vols. 4",
+      "Includes a bonus story",
+    ]) {
+      expect(statementCoverage(text), text).toBeNull();
+    }
+    // The blurb reader takes the first statement alone; a title's never does.
+    expect(coverageFromText("Includes Vols. 1-3. Contains Vols. 4-6.")).toEqual({
+      from: "1",
+      to: "3",
+    });
+  });
+});
+
 describe("coverageFromLine — line names that declare their size", () => {
   it("maps N-in-1 and VIZBIG positions onto volume ranges", () => {
     expect(coverageFromLine("3-in-1 Edition", "1")).toEqual({ from: "1", to: "3" });
@@ -68,6 +114,37 @@ describe("coverageFromLine — line names that declare their size", () => {
     expect(coverageFromLine("Collector's Edition", "1")).toBeNull();
     expect(coverageFromLine("Perfect Edition", "1")).toBeNull();
     expect(coverageFromLine("Fullmetal Edition", "1")).toBeNull();
+  });
+
+  it("trusts an implied size only short of the Series' end, where a book may hold more", () => {
+    // VIZ's Inuyasha: 56 Volumes in 18 VIZBIG books, 17 and 18 holding four
+    // each (49–52, 53–56). Two whole books must follow a sized book.
+    const inuyasha = { lastVolume: 56 };
+    expect(coverageFromLine("VIZBIG Edition", "16", inuyasha)).toEqual({ from: "46", to: "48" });
+    expect(coverageFromLine("VIZBIG Edition", "17", inuyasha)).toBeNull();
+    expect(coverageFromLine("VIZBIG Edition", "18", inuyasha)).toBeNull();
+    // Vagabond: 37 Volumes in 12 books, the last holding 34–37.
+    const vagabond = { lastVolume: 37 };
+    expect(coverageFromLine("VIZBIG Edition", "10", vagabond)).toEqual({ from: "28", to: "30" });
+    expect(coverageFromLine("VIZBIG Edition", "12", vagabond)).toBeNull();
+    // Dragon Ball's 5 books ("GN 5 / 5"), the last holding 13–16: the line's
+    // own count stops it where the Series' Volumes (Z's too) would not.
+    const dragonBall = { lastVolume: 26, lastPosition: 5 };
+    expect(coverageFromLine("VIZBIG Edition", "3", dragonBall)).toEqual({ from: "7", to: "9" });
+    expect(coverageFromLine("VIZBIG Edition", "4", dragonBall)).toBeNull();
+    expect(coverageFromLine("VIZBIG Edition", "5", dragonBall)).toBeNull();
+    // Attack on Titan's 34 Volumes: a five-Volume book needs four after it.
+    expect(coverageFromLine("Colossal Edition", "2", { lastVolume: 34 })).toEqual({
+      from: "6",
+      to: "10",
+    });
+    expect(coverageFromLine("Colossal Edition", "3", { lastVolume: 34 })).toBeNull();
+    // "n-in-1" states its size; without the end nothing is cut.
+    expect(coverageFromLine("3-in-1 Edition", "2", { lastVolume: 6, lastPosition: 2 })).toEqual({
+      from: "4",
+      to: "6",
+    });
+    expect(coverageFromLine("VIZBIG Edition", "17")).toEqual({ from: "49", to: "51" });
   });
 
   it("never guesses for an undeclared size or a non-numeric position", () => {

@@ -1,3 +1,4 @@
+import { sourceFormatDecisionValidator } from "./lib/sourceFormat";
 // MangaDB Convex schema.
 //
 // Open vocabularies (language codes, binding, currency, reserved usernames)
@@ -9,6 +10,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { digitalFileFormat } from "./lib/bookFacts";
 import { scoreFormatValidator } from "./lib/scoreFormat";
 
 // ---------- shared validators ----------
@@ -140,7 +142,7 @@ export const holdKind = v.union(
 );
 
 // Human authors record their role at authorship; promotions never rewrite it.
-const authorRef = v.union(
+export const authorRef = v.union(
   v.object({
     kind: v.literal("user"),
     userId: v.id("users"),
@@ -490,7 +492,7 @@ export default defineSchema({
   seriesFamilies: defineTable({
     ...canonical("seriesFamilies"),
     name: v.string(),
-  }),
+  }).index("by_name", ["name"]),
 
   series: defineTable({
     ...canonical("series"),
@@ -500,10 +502,17 @@ export default defineSchema({
     // title + altTitles concatenated on write; search indexes take one field.
     searchText: v.string(),
     familyId: v.optional(v.id("seriesFamilies")),
+    // Its place on its Series Family's shelf (JoJo Part 1, Part 2, …): the
+    // reading order, which neither titles nor IDs give. Unset sorts last.
+    familyPosition: v.optional(v.number()),
     // What the Series is about, shown under its title; absent until a source
     // or an Editor supplies one.
     synopsis: v.optional(v.string()),
     sourceStatus: v.optional(sourceStatus),
+    // A moderator can combine up to eight publishers' standard runs into
+    // one reading path. The first publisher supplies its key; source books
+    // retain their publishers. Only readingPaths.setCombinedPath writes this.
+    combinedPathPublisherIds: v.optional(v.array(v.id("publishers"))),
     // Bookless Series (CONTEXT.md): active, but no Edition covers any of its
     // Volumes and no Edition Line member exists — a backbone a source built
     // whose books never attached. Derived by the Series library rebuild
@@ -520,6 +529,7 @@ export default defineSchema({
     // has not opted in, and its pages hide their cover art.
     mature: v.optional(v.literal(true)),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_family", ["familyId"])
     .index("by_bootstrap", ["bootstrapUnreviewed"])
@@ -556,6 +566,7 @@ export default defineSchema({
     label: v.optional(v.string()),
     synopsis: v.optional(v.string()),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_series", ["seriesId", "position"])
     .index("by_bootstrap", ["bootstrapUnreviewed"]),
@@ -583,6 +594,7 @@ export default defineSchema({
     // a Moderator maps it (moderation.mapEditionCoverage clears the flag).
     coverageUnmapped: v.optional(v.literal(true)),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_line", ["editionLineId"])
     .index("by_publisher", ["publisherId"])
@@ -607,6 +619,9 @@ export default defineSchema({
     editionId: v.id("editions"),
     format: releaseFormat,
     binding: v.optional(v.string()),
+    // Digital only: PDF and EPUB of one Edition are separate Releases, each
+    // with its own ISBN. Absent is unknown (lib/bookFacts.ts digitalFileFormat).
+    digitalFileFormat: v.optional(digitalFileFormat),
     language: v.string(),
     isbn13: v.optional(v.string()),
     isbn10: v.optional(v.string()),
@@ -620,12 +635,13 @@ export default defineSchema({
     publisherId: v.id("publishers"),
     seriesIds: v.array(v.id("series")),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_edition", ["editionId"])
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
     .index("by_date", ["pubDate.sort"])
     // The month window of the Releases browser (releases.monthBrowse) and
-    // the Publishers board (publisher.ts visibleMonth): active rows only, so
+    // the Publishers board (publisher.ts monthRows): active rows only, so
     // hidden and merged ones neither cost reads nor crowd the cap.
     .index("by_status_date", ["status", "pubDate.sort"])
     .index("by_publisher_date", ["publisherId", "pubDate.sort"])
@@ -633,12 +649,116 @@ export default defineSchema({
     // Who shows a stored cover, so replacing one never strands a sharer.
     .index("by_cover", ["coverImage.storageId"]),
 
+  // Other Printings (CONTEXT.md): the ISBNs a Release was also printed
+  // under, an older or later printing by its Publisher with the same
+  // content, Format and Binding. The Release's own `isbn13` stays its
+  // printing; a row here only finds it (lib/releaseIsbns.ts) and is shown
+  // on its row. One is recorded by decision (printings.ts, with evidence a
+  // person or reviewed agent weighed), never by an importer on its own,
+  // and no record of the printing writes its date, price or blurb onto the
+  // Release. A row follows its Release on a merge and comes back on Split
+  // unless the survivor claims the ISBN now. An ISBN with a row belongs to
+  // that row's Release alone (lib/releaseIsbns.ts). An ISBN-10 is looked
+  // up by its ISBN-13. A row of kind `alternateEbook` is instead another
+  // ISBN of a digital Release's same ebook (CONTEXT.md Alternate Ebook
+  // ISBN, alternateEbooks.ts), and its owner is digital.
+  // A row with variantId identifies an exclusive cover instead of another
+  // printing. Its ISBN still resolves to the base Release, and its source
+  // record is marked to suppress reconciliation of base publication facts.
+  releaseIsbns: defineTable({
+    releaseId: v.id("releases"),
+    isbn13: v.string(),
+    kind: v.optional(v.literal("alternateEbook")),
+    // A distinct cover ISBN belongs to its base Release and pins this Variant.
+    // It suppresses source reconciliation just like an Other Printing.
+    variantId: v.optional(v.id("releaseVariants")),
+    pubDate: v.optional(partialDate),
+    // Why it was decided another printing, and the source record it came from.
+    reason: v.string(),
+    sourceKey: v.string(),
+    observationId: v.optional(v.id("sourceObservations")),
+  })
+    .index("by_isbn13", ["isbn13"])
+    .index("by_release", ["releaseId"])
+    .index("by_variantId", ["variantId"]),
+
   releaseVariants: defineTable({
     ...canonical("releaseVariants"),
     releaseId: v.id("releases"),
     name: v.string(),
     coverImage: v.optional(cover),
   }).index("by_release", ["releaseId"]),
+
+  // Immutable keyed receipts for reviewed repair tools, tied to their audit Proposal.
+  repairToolReceipts: defineTable({
+    key: v.string(),
+    entryHash: v.string(),
+    proposalId: v.id("proposals"),
+  }).index("by_key", ["key"]),
+
+  repairBundleOrigins: defineTable({
+    bundleId: v.id("releaseBundles"),
+    releaseId: v.id("releases"),
+    entryKey: v.string(),
+    proposalId: v.id("proposals"),
+  }).index("by_bundle", ["bundleId"]),
+
+  bundleConversions: defineTable({
+    releaseId: v.id("releases"),
+    bundleId: v.id("releaseBundles"),
+    proposalId: v.id("proposals"),
+    revisionId: v.id("revisions"),
+    isbnKeys: v.string(),
+  }).index("by_release", ["releaseId"]),
+
+  heldRepairLedger: defineTable({
+    observationId: v.id("sourceObservations"),
+    operation: v.string(),
+    proposalId: v.id("proposals"),
+    before: v.string(),
+    after: v.string(),
+    target: v.optional(
+      v.union(
+        v.object({ type: v.literal("release"), id: v.id("releases") }),
+        v.object({ type: v.literal("bundle"), id: v.id("releaseBundles") }),
+      ),
+    ),
+    createdReleaseId: v.optional(v.id("releases")),
+    replayedReleaseId: v.optional(v.id("releases")),
+    // Human Overrides a linkByIsbn added to its Release, lifted again on undo.
+    protectedFields: v.optional(v.array(v.string())),
+    createdStructure: v.optional(
+      v.object({
+        editionId: v.id("editions"),
+        volumeIds: v.array(v.id("volumes")),
+        sharedEdition: v.boolean(),
+        newEdition: v.boolean(),
+        newVolumeIds: v.array(v.id("volumes")),
+        newCoverageIds: v.array(v.id("volumeCoverages")),
+        lineId: v.optional(v.id("editionLines")),
+        newLine: v.boolean(),
+      }),
+    ),
+  }).index("by_observation", ["observationId"]),
+
+  scopeDecisions: defineTable({
+    isbn13: v.string(),
+    reason: v.union(
+      v.literal("novel"),
+      v.literal("merchandise"),
+      v.literal("sampler"),
+      v.literal("nonEnglish"),
+      v.literal("childrensBook"),
+      v.literal("audio"),
+      v.literal("libraryRebind"),
+    ),
+    evidenceUrls: v.array(v.string()),
+    decidedBy: v.id("users"),
+    proposalId: v.id("proposals"),
+    decidedAt: v.number(),
+    revokedAt: v.optional(v.number()),
+    revokedByProposalId: v.optional(v.id("proposals")),
+  }).index("by_isbn13", ["isbn13"]),
 
   releaseBundles: defineTable({
     ...canonical("releaseBundles"),
@@ -653,6 +773,7 @@ export default defineSchema({
     description: v.optional(v.string()),
     coverImage: v.optional(cover),
   })
+    .index("by_mergedInto", ["mergedIntoId"])
     .index("by_publicId", ["publicId"])
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
@@ -689,10 +810,11 @@ export default defineSchema({
     consecutiveFailures: v.number(),
   }).index("by_key", ["key"]),
 
-  // Identity = (source, source-record-id). `snapshot` is the latest normalized
-  // form — what reconciliation reads; prior snapshots are retained append-only
-  // in observationSnapshots. Retention is indefinite in v1.
+  // Identity = (source, source-record-id). `snapshot` keeps the latest normalized
+  // raw facts; reviewedSourceFormat supplies a separate placement interpretation.
+  // Prior raw snapshots are retained append-only in observationSnapshots.
   sourceObservations: defineTable({
+    reviewedSourceFormat: v.optional(sourceFormatDecisionValidator),
     sourceKey: v.string(),
     sourceRecordId: v.string(),
     // Linked once matched (matching-ladder rung 1); a rename at the source is
@@ -718,6 +840,24 @@ export default defineSchema({
     // reconciliation's dedup anchor: one open queue item per observation,
     // and a rejected one never re-queues until the snapshot changes.
     queuedProposalId: v.optional(v.id("proposals")),
+    // Set while it is linked to a Release as the record of one of that
+    // Release's Other Printings (lib/observations.ts linkObservation): the
+    // printing's ISBN. Reconciliation offers the Release nothing from it,
+    // whatever its snapshot later says.
+    printingIsbn13: v.optional(v.string()),
+    // Set when a person dismissed its hold as not a book of its own (a
+    // phantom or duplicate ISBN; heldBooks.dismissInternal): it stays off
+    // Held Books while its snapshot still hashes to `snapshotSha256`, so a
+    // source that changes the book lists it again (lib/observations.ts
+    // holdDismissed). Restoring the ledger entry clears it.
+    dismissedHold: v.optional(
+      v.object({
+        reason: v.string(),
+        at: v.number(),
+        snapshotSha256: v.string(),
+        proposalId: v.id("proposals"),
+      }),
+    ),
   })
     .index("by_source_record", ["sourceKey", "sourceRecordId"])
     .index("by_record", ["recordRef.type", "recordRef.id"])
@@ -851,6 +991,10 @@ export default defineSchema({
         field: v.string(),
         before: v.optional(v.any()),
         after: v.optional(v.any()),
+        // A moved `releaseIsbns` row's ISBN-13 as the merge moved it, so a
+        // Split replays only the printing the merge moved (lib/sensitiveOps.ts
+        // planPrintingSplit). Manifests written before it was kept lack it.
+        isbn13: v.optional(v.string()),
       }),
     ),
     removed: v.array(v.object({ table: v.string(), doc: v.any() })),
@@ -1237,7 +1381,7 @@ export default defineSchema({
       v.object({ kind: v.literal("system") }),
     ),
     reason: v.optional(v.string()),
-  }),
+  }).index("by_review", ["reviewId"]),
 
   // Comments (convex/comments.ts, CONTEXT.md: Comment): short public plain
   // text on a Series or Volume page, one level of replies. Unlike Ratings

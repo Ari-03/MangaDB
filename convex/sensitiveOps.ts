@@ -7,28 +7,30 @@
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import {
   displayInfo,
   getCanonical,
   insertApprovedProposal,
   insertFirstVersion,
   resolveEditTarget,
-  revisionsOf,
+  latestRevisionOf,
   type RecordRef,
 } from "./moderation";
 import {
   applyMerge,
   impactOf,
+  releaseMergeRefusal,
   reversibleManifestOf,
   SINGLE_RECORD_OPS,
+  replaySplit,
   variantMergeRefusal,
   type OpMeta,
   type SingleRecordOp,
 } from "./lib/sensitiveOps";
 import { fail } from "./lib/errors";
 import { requireModerator } from "./lib/roles";
-import { recordRef, recordType } from "./schema";
+import { authorRef, recordRef, recordType } from "./schema";
 
 // ---------- the manage panel query ----------
 
@@ -67,7 +69,9 @@ export const manageForm = query({
     const mergeRefusal =
       ref.type === "releaseVariant" && mergeFrom?.type === "releaseVariant"
         ? await variantMergeRefusal(ctx, ref.id, mergeFrom.id)
-        : null;
+        : ref.type === "release" && mergeFrom?.type === "release"
+          ? await releaseMergeRefusal(ctx, ref.id, mergeFrom.id)
+          : null;
 
     return {
       ref: { type, id: doc._id as string },
@@ -106,7 +110,7 @@ async function beginOperation(
   if (!args.confirmImpact) {
     fail("confirmRequired", "Review the impact preview and confirm the operation explicitly.");
   }
-  const baseOf = async (ref: RecordRef) => (await revisionsOf(ctx, ref))[0]?._id;
+  const baseOf = async (ref: RecordRef) => (await latestRevisionOf(ctx, ref))?._id;
   const storedOp = await op(baseOf);
 
   const author = {
@@ -153,6 +157,26 @@ function singleRecordMutation(kind: SingleRecordOp) {
 }
 
 // ---------- the operations ----------
+
+/**
+ * A Split's own work, which lib/sensitiveOps.ts applySplit runs as a nested
+ * mutation capped at what its transaction has left, so that past any limit
+ * the Split is undone and refused, never aborted. Not called on its own:
+ * replaySplit, Revisions and all, with the operation's `meta`.
+ */
+export const splitInternal = internalMutation({
+  args: {
+    ref: recordRef,
+    meta: v.object({
+      proposalId: v.id("proposals"),
+      author: authorRef,
+      approvedBy: v.optional(v.id("users")),
+      comment: v.string(),
+    }),
+  },
+  handler: async (ctx, { ref, meta }): Promise<Id<"revisions">[]> =>
+    await replaySplit(ctx, ref, meta),
+});
 
 /** Hide: remove from public discovery, preserving identity/history/tracking. */
 export const hideRecord = singleRecordMutation("hide");

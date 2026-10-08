@@ -8,6 +8,8 @@
 // `applyClearOverride`, `validateChanges`, and the record plumbing exported
 // here.
 
+import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
+import { isbnScope } from "./lib/scope";
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
@@ -56,6 +58,15 @@ export async function getCanonical(
   ref: RecordRef,
 ): Promise<CatalogDoc | null> {
   return await ctx.db.get(ref.id);
+}
+
+/** One record's newest Revision, read alone: its history can be long. */
+export async function latestRevisionOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
+  return await ctx.db
+    .query("revisions")
+    .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id))
+    .order("desc")
+    .first();
 }
 
 /** Revisions of one record, newest first (the by_record index ends on seq). */
@@ -225,6 +236,26 @@ export async function applyUpdate(
   const patch: Record<string, unknown> = {};
   for (const change of changes) patch[change.field] = change.after;
 
+  if (ref.type === "release" || ref.type === "releaseBundle") {
+    const isbns = changes.flatMap((c) =>
+      (c.field === "isbn13" || c.field === "isbn10") && typeof c.after === "string"
+        ? [c.after]
+        : [],
+    );
+    if (isbns.length) {
+      for (const isbn of isbns) {
+        const scope = await isbnScope(ctx, isbn);
+        if (scope) fail("invalidField", scope);
+      }
+      const refusal = await primaryNamespaceRefusal(
+        ctx,
+        isbns,
+        ref.type === "release" ? "release" : "bundle",
+        ref.id,
+      );
+      if (refusal) fail("invalidField", refusal);
+    }
+  }
   // Derived fields maintained by the shared write path (spec §8): the Series
   // search index concatenates title + altTitles.
   if (ref.type === "series") {
