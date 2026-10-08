@@ -425,6 +425,27 @@ export const createReleaseEntry = v.object({
 });
 
 /**
+ * Undo a one-book "box set": a Release Bundle holding a single Volume's
+ * Release that is really that Volume sold with an extra, such as a special
+ * edition with a DVD. It becomes a Release of a new Edition covering that
+ * Volume completely, in an Edition Line of its Series, with the Bundle's
+ * facts. The Bundle gives up its ISBNs and is hidden (identity and history
+ * kept), and its source records link the new Release. Refused while anyone
+ * tracks the Bundle. `isbn13` and `memberReleaseId` are what the plan saw
+ * (drift = skip); `sources` land on the Proposal as URLs.
+ */
+export const bundleToReleaseEntry = v.object({
+  kind: v.literal("bundleToRelease"),
+  ...base,
+  bundleId: v.id("releaseBundles"),
+  isbn13: v.string(),
+  memberReleaseId: v.id("releases"),
+  line: v.object({ name: v.string(), position: nullableString }),
+  binding: nullableString,
+  sources: v.array(v.string()),
+});
+
+/**
  * Create the one missing numbered backbone Volume a held Open Library
  * edition names, under its existing Series, once publisher evidence proves
  * the book. Bootstrap only. `label` must be the next number after
@@ -656,6 +677,7 @@ export const repairEntry = v.union(
   splitSeriesEntry,
   hideEditionLineEntry,
   createReleaseEntry,
+  bundleToReleaseEntry,
   createVolumeEntry,
   releaseBundleEntry,
   setCoverageEntry,

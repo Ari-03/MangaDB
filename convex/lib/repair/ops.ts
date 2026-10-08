@@ -41,6 +41,7 @@ import {
   applyRestore,
   bundleOwners,
   bundleSeries,
+  bundleTracked,
   carryEditionTracking,
   carryVisibility,
   editionGovernance,
@@ -124,6 +125,8 @@ export async function applyEntry(
       return await hideEditionLine(ctx, audit, entry);
     case "createRelease":
       return await createRelease(ctx, audit, entry);
+    case "bundleToRelease":
+      return await bundleToRelease(ctx, audit, entry);
     case "createVolume":
       return await createVolume(ctx, audit, entry);
     case "releaseBundle":
@@ -3087,6 +3090,143 @@ async function createRelease(
     { field: SPLIT_KEY_FIELD, after: entry.key },
   ]);
   await refreshReleaseDenorms(ctx, editionId);
+  return applied;
+}
+
+/**
+ * A one-book "box set" (a Volume sold with an extra) becomes a Release of
+ * its own Edition in an Edition Line. The Bundle's ISBNs move to the new
+ * Release, so the hidden Bundle claims none, and its source records follow.
+ * ISBN ownership is checked once the Bundle has given its ISBNs up, since
+ * until then it is their owner; a refusal there rolls the entry back.
+ */
+async function bundleToRelease(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"bundleToRelease">,
+): Promise<Result> {
+  const isbn13 = plannedIsbn("isbn13", entry.isbn13);
+  const clashes = await ctx.db
+    .query("releases")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+    .collect();
+  const own =
+    clashes.length === 1 &&
+    (await createdByEntry(ctx, { type: "release", id: clashes[0]!._id }, entry.key));
+  if (own) return already;
+  if (clashes.length > 0) return skip(`ISBN ${isbn13} already exists`);
+
+  const bundle = await ctx.db.get(entry.bundleId);
+  if (!bundle) return skip("bundle missing");
+  if (bundle.status !== "active") return skip(`bundle is ${bundle.status}`);
+  if (bundle.locked) skip("bundle locked");
+  if (bundle.isbn13 !== isbn13) skip(`bundle ISBN is now ${bundle.isbn13 ?? "none"}`);
+  const format = bundle.format ?? "physical";
+  if (format === "digital" && entry.binding !== null)
+    skip("plan error: binding on a digital release");
+  if (await bundleTracked(ctx, bundle._id))
+    skip("bundle is tracked; move its Collection Entries first");
+
+  const members = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+    .collect();
+  const membership = members[0];
+  if (
+    members.length !== 1 ||
+    membership?.releaseId !== entry.memberReleaseId ||
+    membership.variantId
+  )
+    skip("bundle no longer holds exactly the planned Release");
+  const member = await ctx.db.get(entry.memberReleaseId);
+  if (!member || member.status !== "active") return skip("member release not active");
+  if (member.publisherId !== bundle.publisherId) skip("member release has another publisher");
+  const coverage = await coverageOf(ctx, member.editionId);
+  if (coverage.length !== 1 || coverage[0]!.extent !== "complete")
+    skip("member release does not cover exactly one complete Volume");
+  const volume = await ctx.db.get(coverage[0]!.volumeId);
+  if (!volume || volume.status !== "active") return skip("member volume not active");
+  const series = await ctx.db.get(volume.seriesId);
+  if (!series || series.status !== "active") return skip("series not active");
+
+  const isbn10 = bundle.isbn10;
+  if (isbn10 !== undefined) {
+    const clash10 = await ctx.db
+      .query("releases")
+      .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))
+      .first();
+    if (clash10) skip(`ISBN-10 ${isbn10} already exists`);
+  }
+  const observations = await ctx.db
+    .query("sourceObservations")
+    .withIndex("by_record", (q) =>
+      q.eq("recordRef.type", "releaseBundle").eq("recordRef.id", bundle._id),
+    )
+    .collect();
+
+  const bundleRef = { type: "releaseBundle" as const, id: bundle._id };
+  await updateRecord(ctx, audit, bundleRef, bundle, { isbn13: undefined, isbn10: undefined });
+  const printed = await assignedIsbnRefusal(ctx, [isbn13, isbn10]);
+  if (printed !== null) skip(printed);
+  const emptied = await ctx.db.get(bundle._id);
+  if (!emptied) return skip("bundle vanished");
+  await hide(ctx, audit, bundleRef, emptied);
+
+  const editionId = await createEdition(ctx, audit, {
+    status: "active",
+    publisherId: bundle.publisherId,
+    bootstrapUnreviewed: true,
+    editionLineId: await findOrCreateLine(
+      ctx,
+      audit,
+      series._id,
+      bundle.publisherId,
+      entry.line.name,
+    ),
+    ...(entry.line.position === null ? {} : { linePosition: entry.line.position }),
+  });
+  await replaceCoverage(ctx, audit, editionId, [{ volumeId: volume._id, extent: "complete" }]);
+  const fields = {
+    status: "active" as const,
+    editionId,
+    format,
+    language: "en",
+    isbn13,
+    ...(isbn10 === undefined ? {} : { isbn10 }),
+    ...(entry.binding === null ? {} : { binding: entry.binding }),
+    ...(bundle.pubDate === undefined ? {} : { pubDate: bundle.pubDate }),
+    ...(bundle.price === undefined ? {} : { price: bundle.price }),
+    ...(bundle.description === undefined ? {} : { description: bundle.description }),
+    ...(bundle.coverImage === undefined ? {} : { coverImage: bundle.coverImage }),
+    publisherId: bundle.publisherId,
+    seriesIds: [series._id],
+    bootstrapUnreviewed: true,
+  };
+  const id = await ctx.db.insert("releases", fields);
+  audit.op({ kind: "create", table: "releases", tempId: id, fields });
+  await audit.revise({ type: "release", id }, [
+    ...Object.entries(fields).map(([field, after]) => ({ field, after })),
+    { field: SPLIT_KEY_FIELD, after: entry.key },
+  ]);
+  await refreshReleaseDenorms(ctx, editionId);
+
+  const releaseRef = { type: "release" as const, id };
+  for (const observation of observations) {
+    const record = `${observation.sourceKey} ${observation.sourceRecordId}`;
+    await linkObservation(ctx, observation._id, releaseRef);
+    audit.op({
+      kind: "update",
+      ref: bundleRef,
+      changes: [{ field: "sourceObservation", before: record }],
+    });
+    audit.op({
+      kind: "update",
+      ref: releaseRef,
+      changes: [{ field: "sourceObservation", after: record }],
+    });
+    await audit.revise(bundleRef, [{ field: "sourceObservation", before: record }]);
+    await audit.revise(releaseRef, [{ field: "sourceObservation", after: record }]);
+  }
   return applied;
 }
 

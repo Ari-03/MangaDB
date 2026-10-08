@@ -635,7 +635,7 @@ async function refuseSeriesChange(
 }
 
 /** Whether any User has a collection entry on a Bundle. */
-async function bundleTracked(ctx: MutationCtx, bundleId: Id<"releaseBundles">) {
+export async function bundleTracked(ctx: MutationCtx, bundleId: Id<"releaseBundles">) {
   return (
     (await ctx.db
       .query("collectionEntries")

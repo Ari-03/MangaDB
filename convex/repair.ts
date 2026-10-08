@@ -82,6 +82,7 @@ function evidenceFor(entry: RepairEntry) {
       ];
     case "createPublisher":
     case "createRelease":
+    case "bundleToRelease":
       return [...entry.sources.map((url) => ({ kind: "url" as const, url })), note];
     case "createVolume":
       return [
