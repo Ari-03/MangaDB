@@ -267,6 +267,7 @@ describe("researched repair gaps", () => {
     expect((await t.run((ctx) => ctx.db.get(rowId.other)))?.printingIsbn13).toBe(ISBN);
     expect((await t.run((ctx) => ctx.db.get(rowId.id)))?.variantId).toBeDefined();
     const undo = await t.mutation(internal.printings.undoDecidedInternal, {
+      actor: "ari",
       observationId: s.observationId,
       reason: "Should refuse variant",
       hold: { kind: "isbn", reason: "Needs review", seriesId: s.seriesId },
