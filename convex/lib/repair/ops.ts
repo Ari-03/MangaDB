@@ -6,6 +6,7 @@
 // and — once its Volumes are placed — Series. The stock Series merge appends
 // loser Volumes after the survivor's, so Volumes are placed by label first.
 
+import { applyGapEntry } from "./gaps";
 import { isbnScope } from "../scope";
 import { getBootstrapMode } from "../../importSources";
 import { placeEdition } from "../../openLibrary";
@@ -84,6 +85,11 @@ export async function applyEntry(
   entry: RepairEntry,
 ): Promise<Result> {
   switch (entry.kind) {
+    case "otherPrinting":
+    case "createPublisher":
+    case "amendProposalEvidence":
+    case "releaseVariant":
+      return await applyGapEntry(ctx, audit, entry);
     case "publisherMerge":
       return await publisherMerge(ctx, audit, entry);
     case "publisherParent":
@@ -818,7 +824,18 @@ async function restoreRecord(
   }
   for (const edition of editions) {
     const coverage = await coverageOf(ctx, edition._id);
-    if (coverage.length === 0) skip(`edition ${edition.publicId} covers no volume`);
+    if (coverage.length === 0) {
+      const line = edition.editionLineId ? await ctx.db.get(edition.editionLineId) : null;
+      if (
+        !edition.coverageUnmapped ||
+        !line ||
+        line.status !== "active" ||
+        line.locked ||
+        line.publisherId !== edition.publisherId ||
+        !(await liveAfter(line.seriesId))
+      )
+        skip(`edition ${edition.publicId} covers no volume and has no active unmapped line`);
+    }
     for (const cover of coverage) {
       if (!(await liveAfter(cover.volumeId)))
         skip(`edition ${edition.publicId} covers a volume that stays hidden`);
@@ -1753,7 +1770,12 @@ async function conversionMembers(
     }
     if (releaseId === boxId) skip("Box must not be its own member.");
     const content = await releaseContents(ctx, releaseId, r, true);
-    if (content.publisher._id !== publisherId || content.release.format !== format)
+    const bundlePublisher = await r.active(publisherId);
+    const samePublisher = content.publisher._id === publisherId;
+    const directImprint =
+      content.publisher.parentPublisherId === publisherId ||
+      bundlePublisher.parentPublisherId === content.publisher._id;
+    if ((!samePublisher && !directImprint) || content.release.format !== format)
       skip("Member publisher or format differs from Bundle.");
     selected.push({ release: content.release, contents: content.contents, order: member.order });
   }

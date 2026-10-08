@@ -1032,7 +1032,12 @@ export const undoDecidedInternal = internalMutation({
       .query("releaseIsbns")
       .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
       .unique();
-    if (row === null || row.kind !== undefined || row.releaseId !== ref.id) {
+    if (
+      row === null ||
+      row.kind !== undefined ||
+      row.variantId !== undefined ||
+      row.releaseId !== ref.id
+    ) {
       return refuse(`ISBN ${isbn13} is not an Other Printing of the linked Release.`);
     }
     if (row.observationId !== observationId) {
@@ -1387,6 +1392,26 @@ async function checkRow(
       rowId: row._id,
       message: `ISBN ${isbn13}'s owner, Release ${sole.owner._id}, is not ${ownerFormat}.`,
     });
+  }
+  if (row.variantId !== undefined) {
+    await room();
+    const variant = await ctx.db.get(row.variantId);
+    const owner = variant ? await resolver.release(variant.releaseId) : null;
+    if (
+      !variant ||
+      variant.status === "merged" ||
+      !owner ||
+      !("doc" in owner) ||
+      owner.doc._id !== sole.owner._id ||
+      row.kind !== undefined
+    ) {
+      findings.push({
+        severity: "violation",
+        isbn13,
+        rowId: row._id,
+        message: "Variant ISBN does not pin a Variant of its physical Release owner.",
+      });
+    }
   }
   if (row.observationId !== undefined) {
     await room();

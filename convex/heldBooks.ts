@@ -809,7 +809,7 @@ const linkByIsbnArgs = {
    * Release fields the source gets wrong, made Human Overrides so its later
    * syncs never write them (a feed calling a hardcover a paperback).
    */
-  protectFields: v.optional(v.array(v.literal("binding"))),
+  protectFields: v.optional(v.array(v.union(v.literal("binding"), v.literal("format")))),
 };
 type LinkedByIsbn = {
   status: "applied";

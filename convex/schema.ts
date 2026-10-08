@@ -662,10 +662,16 @@ export default defineSchema({
   // up by its ISBN-13. A row of kind `alternateEbook` is instead another
   // ISBN of a digital Release's same ebook (CONTEXT.md Alternate Ebook
   // ISBN, alternateEbooks.ts), and its owner is digital.
+  // A row with variantId identifies an exclusive cover instead of another
+  // printing. Its ISBN still resolves to the base Release, and its source
+  // record is marked to suppress reconciliation of base publication facts.
   releaseIsbns: defineTable({
     releaseId: v.id("releases"),
     isbn13: v.string(),
     kind: v.optional(v.literal("alternateEbook")),
+    // A distinct cover ISBN belongs to its base Release and pins this Variant.
+    // It suppresses source reconciliation just like an Other Printing.
+    variantId: v.optional(v.id("releaseVariants")),
     pubDate: v.optional(partialDate),
     // Why it was decided another printing, and the source record it came from.
     reason: v.string(),
@@ -673,7 +679,8 @@ export default defineSchema({
     observationId: v.optional(v.id("sourceObservations")),
   })
     .index("by_isbn13", ["isbn13"])
-    .index("by_release", ["releaseId"]),
+    .index("by_release", ["releaseId"])
+    .index("by_variantId", ["variantId"]),
 
   releaseVariants: defineTable({
     ...canonical("releaseVariants"),
@@ -681,6 +688,13 @@ export default defineSchema({
     name: v.string(),
     coverImage: v.optional(cover),
   }).index("by_release", ["releaseId"]),
+
+  // Immutable keyed receipts for reviewed repair tools, tied to their audit Proposal.
+  repairToolReceipts: defineTable({
+    key: v.string(),
+    entryHash: v.string(),
+    proposalId: v.id("proposals"),
+  }).index("by_key", ["key"]),
 
   repairBundleOrigins: defineTable({
     bundleId: v.id("releaseBundles"),

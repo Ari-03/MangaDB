@@ -584,7 +584,59 @@ export const withdrawProposalEntry = v.object({
   observationId: v.id("sourceObservations"),
 });
 
+/** Create a researched publisher; aliases and normalized names remain unique. */
+export const createPublisherEntry = v.object({
+  kind: v.literal("createPublisher"),
+  ...base,
+  name: v.string(),
+  slug: v.string(),
+  parentPublisherId: v.union(v.id("publishers"), v.null()),
+  sources: v.array(v.string()),
+});
+
+/** Append a corrected evidence version without changing the approved operations. */
+export const amendProposalEvidenceEntry = v.object({
+  kind: v.literal("amendProposalEvidence"),
+  ...base,
+  proposalId: v.id("proposals"),
+  expectedVersionNo: v.number(),
+  replacements: v.array(v.object({ before: v.string(), after: v.string() })),
+});
+
+/** Record a reviewed cover variant, optionally correcting an existing printing row. */
+export const releaseVariantEntry = v.object({
+  kind: v.literal("releaseVariant"),
+  ...base,
+  observationId: v.id("sourceObservations"),
+  releaseId: v.id("releases"),
+  expected: v.string(),
+  name: v.string(),
+  printingRowId: v.union(v.id("releaseIsbns"), v.null()),
+  // Evidence states these unchanged publication facts and exact ordered coverage.
+  publisherId: v.id("publishers"),
+  binding: nullableString,
+  coverage: v.array(
+    v.object({
+      volumeId: v.id("volumes"),
+      extent: v.union(v.literal("complete"), v.literal("partial")),
+    }),
+  ),
+  sources: v.array(v.string()),
+});
+
+/** Record a researched same-content printing, including an omnibus or an isolated mistaken Release. */
+export const otherPrintingEntry = v.object({
+  ...releaseVariantEntry.omit("name", "printingRowId").fields,
+  kind: v.literal("otherPrinting"),
+  sourceReleaseId: v.union(v.id("releases"), v.null()),
+  expectedSource: nullableString,
+});
+
 export const repairEntry = v.union(
+  otherPrintingEntry,
+  createPublisherEntry,
+  amendProposalEvidenceEntry,
+  releaseVariantEntry,
   publisherMergeEntry,
   publisherParentEntry,
   editionPublisherEntry,

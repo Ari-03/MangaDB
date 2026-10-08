@@ -235,3 +235,26 @@ unknown as absent was ruled out: it empties the shelves in an outage.
 
 One shared staging environment instead of a deployment per branch. The
 reasons are in [deployment.md](deployment.md#why-it-is-built-this-way).
+
+## Exclusive-cover ISBNs belong to the base Release
+
+The existing Release Variant model already represents alternate covers and
+supports collection and Bundle member pins. A distinct store-cover ISBN is
+stored in `releaseIsbns` with `variantId`, rather than creating a second
+Release or classifying it as an Other Printing. This keeps the single-owner
+ISBN resolver and source-reconciliation suppression shared with existing
+secondary ISBNs. Public Release rows list these ISBNs beside their cover
+variants and omit them from Other Printings. Variant merges carry the ISBN
+pins in their reversible manifest.
+
+A reviewed `releaseVariant` repair names the held observation, base Release,
+cover name, exact coverage, Publisher and Binding, evidence URLs and a fresh
+preview hash. It can also correct a plain Other Printing by naming its row.
+The actor's approved Proposal and immutable Revisions record the decision.
+Neither the source's mistaken Series routing nor its publication facts are
+copied onto the base Release. No importer can create a Variant by itself.
+
+Proposal URL corrections append a new immutable Proposal version, preserving
+approved operations and every older evidence version. An actor-attributed
+note links that version to the correction's audit Proposal. Keyed repair
+receipts reject reuse of a key with different arguments.
