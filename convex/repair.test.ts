@@ -1867,7 +1867,7 @@ describe("bundleToRelease", () => {
       return { ...s, bundleId, observationId };
     });
   }
-  const entryFor = (s: Awaited<ReturnType<typeof seedSpecial>>): RepairEntry => ({
+  const entryFor = (s: Awaited<ReturnType<typeof seedSpecial>>): EntryOf<"bundleToRelease"> => ({
     kind: "bundleToRelease",
     key: "special-1",
     reason: "A volume sold with a DVD is a special edition, not a box set.",
