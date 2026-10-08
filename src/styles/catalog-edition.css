@@ -114,6 +114,22 @@
 .blurb-text {
   white-space: pre-line;
 }
+/* Where a blurb's text came from (lib/contextEdit.tsx BlurbSource), under it
+   on the Edition, Volume, Series and Bundle pages. */
+.blurb-source,
+.synopsis p.blurb-source {
+  margin-top: 6px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+.blurb-source a {
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+.blurb-source a:hover {
+  border-bottom-color: var(--accent);
+}
 .detail-note {
   margin-top: 18px;
   max-width: 58ch;

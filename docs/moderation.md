@@ -90,6 +90,49 @@ A Proposal may clear overrides beside other ops, on the same record or
 others, and applies all of them or none. It may not both change a field
 and clear that field's override: the change is itself a human correction.
 
+### Covers
+
+Release and Bundle forms have a Cover section (`#cover`), where a person
+drops, chooses or pastes a JPEG, PNG or WebP (2 KB to 10 MB, at least 300
+px wide), reuses art an Edition sibling or a containing Bundle stores, or
+removes the stored art. The file uploads first: `coverUploads.uploadUrl`
+issues a URL on this deployment's `/cover-upload` HTTP action
+(`convex/http.ts`) carrying the upload's id and token, the action stores
+the file and records the blob on that upload, and `coverUploads.uploaded`
+checks it. An upload can only name a blob it stored, so no one can claim,
+or have deleted, art they did not upload. The cover is then one more
+field of the same Save or Proposal:
+`coverImage`. Only the uploader, or art the catalog already shows or
+History names, can go into a change.
+
+A person's cover change, removal included, is always a Human Override on
+`coverImage`, since importers attach art without a Revision.
+`imports.attachCover` refuses a Release with that override until it is
+cleared. No blob is deleted while a Release, Bundle or Variant shows it, a
+Revision names it, or a Draft or In-Review Proposal names it (`coverRefs`,
+`convex/lib/coverRefs.ts`). An hourly sweep deletes uploads nothing came to
+use a day after upload. Revisions written before `coverRefs` existed get
+their pins from `coverUploads.pinRevisionCovers`, which a ten-minute cron
+starts after a deploy and restarts if it stalls (its cursor is the
+`coverPinBackfill` row). Until it is done, neither `attachCover` nor the
+sweep deletes any cover art.
+
+### Description sources
+
+The Description section (`#description`) shows the text with a preview of
+the page, the sources' own blurbs with "Use this description", and a
+choice of source: keep the current one, a blurb used from a source, another
+page (a name and an https URL), or original prose. The choice is the
+`update` op's `citation` and lands on the Revision with `citedField`. A
+source change with the text unchanged is a change of its own, tied to the
+text it was chosen for (`citedText`): if that text changes before the
+Proposal is approved, submission and approval refuse it and a rebase drops
+the source, so it has to be chosen again. Public pages
+end each blurb with `Source: …` from `convex/lib/attribution.ts`: the
+newest Revision that wrote or cited the text decides it, a person's edit
+that stated nothing credits nobody, and text no Revision wrote is credited
+only when exactly one source's linked record offers exactly that text.
+
 ## Proposals and the review queue
 
 Any Data Team member drafts a Proposal (`proposals.saveDraft`) and submits

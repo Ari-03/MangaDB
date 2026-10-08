@@ -232,7 +232,7 @@ describe("catalogPages.editionPage", () => {
     });
     expect(digital).toMatchObject({ format: "digital", isbn13: null, variants: [] });
     // One description for the book, none per row.
-    expect(page?.description).toEqual({ source: "release", text: "Back-cover blurb." });
+    expect(page?.description).toMatchObject({ source: "release", text: "Back-cover blurb." });
     for (const row of page!.releases) expect(row).not.toHaveProperty("description");
   });
 
@@ -326,7 +326,7 @@ describe("Edition Description", () => {
       await ctx.db.patch(r2, { description: "Corrected.", overriddenFields: ["description"] });
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
-    expect(page?.description).toEqual({ source: "release", text: "Corrected." });
+    expect(page?.description).toMatchObject({ source: "release", text: "Corrected." });
   });
 
   it("falls back to the print blurb once the digital Human Override is cleared", async () => {
@@ -342,7 +342,7 @@ describe("Edition Description", () => {
       comment: "The print blurb speaks for this Edition again.",
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
-    expect(page?.description).toEqual({ source: "release", text: "Back-cover blurb." });
+    expect(page?.description).toMatchObject({ source: "release", text: "Back-cover blurb." });
   });
 
   it("fills an Edition from its one described Release", async () => {
@@ -353,7 +353,7 @@ describe("Edition Description", () => {
       await ctx.db.patch(r2, { description: "Digital blurb." });
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
-    expect(page?.description).toEqual({ source: "release", text: "Digital blurb." });
+    expect(page?.description).toMatchObject({ source: "release", text: "Digital blurb." });
   });
 
   it("borrows the Volume Synopsis only for one whole Volume, else the flagged Series synopsis", async () => {
@@ -367,11 +367,14 @@ describe("Edition Description", () => {
     });
     const page = (publicId: number) => t.query(api.catalogPages.editionPage, { publicId });
     // The blurbless standard Edition of Vol 1 borrows its Volume's.
-    expect((await page(21))?.description).toEqual({ source: "volume", text: "Vol 1 synopsis." });
+    expect((await page(21))?.description).toMatchObject({
+      source: "volume",
+      text: "Vol 1 synopsis.",
+    });
     // The omnibus (Vols 1–3) never borrows one Volume's, nor does the split
     // part of Vol 3: both fall to the Series synopsis, flagged as such.
-    expect((await page(22))?.description).toEqual(SERIES_FALLBACK);
-    expect((await page(23))?.description).toEqual(SERIES_FALLBACK);
+    expect((await page(22))?.description).toMatchObject(SERIES_FALLBACK);
+    expect((await page(23))?.description).toMatchObject(SERIES_FALLBACK);
   });
 
   it("never uses a hidden or merged Release's blurb", async () => {
@@ -405,7 +408,7 @@ describe("Edition Description", () => {
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 27 });
     expect(page?.coverage.map((c) => c.volumePublicId)).toEqual([11]);
-    expect(page?.description).toEqual(SERIES_FALLBACK);
+    expect(page?.description).toMatchObject(SERIES_FALLBACK);
   });
 
   it("falls back to its line's Series synopsis for Unmapped Packaging", async () => {
@@ -424,7 +427,7 @@ describe("Edition Description", () => {
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 28 });
     expect(page?.coverage).toEqual([]);
-    expect(page?.description).toEqual(SERIES_FALLBACK);
+    expect(page?.description).toMatchObject(SERIES_FALLBACK);
   });
 
   it("is null when nothing at all describes the book", async () => {
@@ -491,7 +494,7 @@ describe("Volume page description", () => {
     await seedLenders(t);
     const page = await volume(t, 11);
     // Kodansha's 2010 paperback outranks VIZ's 2015 one; the omnibus never lends.
-    expect(page?.description).toEqual({
+    expect(page?.description).toMatchObject({
       source: "edition",
       text: "Kodansha blurb.",
       edition: { publicId: 26, title: "S Vol 1", publisherName: "Kodansha" },
@@ -511,7 +514,7 @@ describe("Volume page description", () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(seriesId, { synopsis: "Series synopsis." });
     });
-    expect((await volume(t, 12))?.description).toEqual(SERIES_FALLBACK);
+    expect((await volume(t, 12))?.description).toMatchObject(SERIES_FALLBACK);
   });
 
   it("skips a hidden lender Edition", async () => {
@@ -520,7 +523,7 @@ describe("Volume page description", () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(early, { status: "hidden" });
     });
-    expect((await volume(t, 11))?.description).toEqual({
+    expect((await volume(t, 11))?.description).toMatchObject({
       source: "edition",
       text: "Back-cover blurb.",
       edition: { publicId: 21, title: "S Vol 1", publisherName: "VIZ Media" },
@@ -558,7 +561,7 @@ describe("Volume page description", () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(v1, { synopsis: "Curated synopsis." });
     });
-    expect((await volume(t, 11))?.description).toEqual({
+    expect((await volume(t, 11))?.description).toMatchObject({
       source: "volume",
       text: "Curated synopsis.",
     });

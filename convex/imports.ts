@@ -33,6 +33,7 @@ import { ofOtherPrinting } from "./lib/releaseIsbns";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { LOCK_NOTE } from "./lib/unmatched";
 import { revisionsOf } from "./moderation";
+import { coverInUse } from "./lib/coverRefs";
 import { type AnnReleaseSnapshot, lineOutOfScope, SOURCE_KEY as ANN } from "./ann";
 import { outOfScopeElsewhere, placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
 import { holdKind } from "./schema";
@@ -568,11 +569,15 @@ async function coverOfferRefusal(
  * longer exists (an overlapping run replaced it: `stale`). Otherwise the
  * Release takes the blob of an active sibling in its Edition with the same
  * `sourceUrl` (print and digital share one file), else the incoming one,
- * replacing art the publisher has since changed. A blob nothing shows any
+ * replacing art the publisher has since changed. A blob nothing needs any
  * more, the incoming one or the replaced one, is deleted; one another
- * Release or a Bundle still shows is kept, wherever a split or merge has
- * moved it (`by_cover`). Returns what the Release now holds for
- * `sourceUrl`: its blob, "placeholder", or null when nothing.
+ * Release, a Bundle or a Variant still shows, a Revision names or a pending
+ * Proposal names is kept (lib/coverRefs.ts coverInUse), wherever a split
+ * or merge has moved it, and nothing is deleted before older Revisions'
+ * covers are pinned. A Release whose cover is a Human Override (a
+ * person set or removed it) is refused: imports never replace that art.
+ * Returns what the Release now holds for `sourceUrl`: its blob,
+ * "placeholder", or null when nothing.
  */
 export const attachCover = internalMutation({
   args: {
@@ -596,22 +601,11 @@ export const attachCover = internalMutation({
     refused?: string;
   }> => {
     const incoming = args.storageId;
-    // Shown by any Release but this one, or by a Bundle made from a Release.
-    const shown = async (id: Id<"_storage">) => {
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
-        .collect();
-      if (releases.some((r) => r._id !== args.releaseId)) return true;
-      const bundle = await ctx.db
-        .query("releaseBundles")
-        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
-        .first();
-      return bundle !== null;
-    };
-    // Delete `id` unless it is `keep` or something still shows it.
+    // Delete `id` unless it is `keep` or something still needs it.
     const drop = async (id: Id<"_storage"> | undefined, keep: Id<"_storage"> | undefined) => {
-      if (id !== undefined && id !== keep && !(await shown(id))) await ctx.storage.delete(id);
+      if (id === undefined || id === keep) return;
+      if (await coverInUse(ctx, id, args.releaseId)) return;
+      await ctx.storage.delete(id);
     };
 
     if (incoming !== undefined && (await ctx.db.system.get(incoming)) === null) {
@@ -626,7 +620,9 @@ export const attachCover = internalMutation({
     // download is deleted only when nothing shows it: not this Release
     // (an action's cache can hand back the very blob it shows), another
     // Release, or a Bundle. `held: null` makes the action forget it.
-    const refused = await coverOfferRefusal(ctx, release, args);
+    const refused = release.overriddenFields?.includes("coverImage")
+      ? "cover is a Human Override"
+      : await coverOfferRefusal(ctx, release, args);
     if (refused !== null) {
       await drop(incoming, release.coverImage?.storageId);
       return { attached: false, held: null, refused };

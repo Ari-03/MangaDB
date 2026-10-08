@@ -7,6 +7,7 @@ import { Cover } from "~/lib/cover";
 import { formatPartialDate, formatPrice, plural } from "~/lib/format";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
+import { BlurbSource, ContextEditLink, EditLinks } from "~/lib/contextEdit";
 import { bundleTitleTag, isoPartialDate, pageHead, truncateDescription } from "~/lib/seo";
 import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
@@ -73,6 +74,11 @@ function ConcealedBundlePage() {
   );
 }
 
+/** The box set as the edit links' owner. */
+function bundleOwner(bundle: { publicId: number }) {
+  return { type: "releaseBundle" as const, key: String(bundle.publicId), label: "this box set" };
+}
+
 function BundlePage() {
   const { bundle, members } = Route.useLoaderData();
   const date = formatPartialDate(bundle.pubDate);
@@ -96,6 +102,11 @@ function BundlePage() {
           {/* Collection Entry controls; render nothing signed out.
               Owning the box set confers Derived Ownership on every member. */}
           <BundleCollectionControls bundleId={bundle.id} />
+          <EditLinks id="cover">
+            <ContextEditLink owner={bundleOwner(bundle)} anchor="cover">
+              {bundle.coverUrl ? "Change cover" : "Add a cover"}
+            </ContextEditLink>
+          </EditLinks>
         </div>
 
         <div className="detail-body">
@@ -137,7 +148,17 @@ function BundlePage() {
               ) : null}
             </p>
           ) : null}
-          {bundle.description ? <p className="detail-blurb">{bundle.description}</p> : null}
+          {bundle.description ? (
+            <div className="detail-blurb">
+              <p>{bundle.description}</p>
+              <BlurbSource attribution={bundle.attribution} />
+            </div>
+          ) : null}
+          <EditLinks>
+            <ContextEditLink owner={bundleOwner(bundle)} anchor="description">
+              {bundle.description ? "Edit description" : "Write a description"}
+            </ContextEditLink>
+          </EditLinks>
           <p className="detail-note">
             A box set has its own publication facts. Each book inside keeps its own release identity
             — and its own place in your collection.

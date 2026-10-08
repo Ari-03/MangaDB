@@ -16,7 +16,8 @@ import { type BoxSetPart, boxSetContents } from "./lib/boxSets";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
-import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
+import { editionTitle, releaseAnchor, releaseLabel, volumeTitle } from "./lib/titles";
+import { fieldAttribution } from "./lib/attribution";
 import { coverUrl, jacketCache } from "./lib/covers";
 import { representativeDescription } from "./lib/descriptions";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
@@ -267,19 +268,84 @@ async function editionReleases(ctx: QueryCtx, editionId: Id<"editions">) {
 }
 
 /**
+ * The record a shown description or cover belongs to, for the data team's
+ * edit links: its edit-form type and key (a document ID for a Release, the
+ * public ID otherwise) and how a sentence names it.
+ */
+export type Owner = {
+  type: "series" | "volume" | "release" | "releaseBundle";
+  key: string;
+  label: string;
+};
+
+/** A Release as an Owner. */
+function releaseOwner(release: Doc<"releases">): Owner {
+  return { type: "release", key: release._id, label: releaseLabel(release) };
+}
+
+/**
  * The Series synopsis as a page's last-resort description, flagged
  * `source: "series"` and naming the Series so the page labels it "About
- * {title}" rather than passing it off as the book's.
+ * {title}" rather than passing it off as the book's. Carries its owner and
+ * source credit (lib/attribution.ts), as every resolved description does.
  */
-function seriesSynopsis(series: Doc<"series"> | null) {
+async function seriesSynopsis(ctx: QueryCtx, series: Doc<"series"> | null) {
   const text = series?.synopsis?.trim();
   return series && text
     ? {
         source: "series" as const,
         text,
         series: { publicId: series.publicId, title: series.title },
+        owner: {
+          type: "series",
+          key: String(series.publicId),
+          label: "the series synopsis",
+        } satisfies Owner,
+        attribution: await fieldAttribution(
+          ctx,
+          { type: "series", id: series._id },
+          "synopsis",
+          text,
+        ),
       }
     : null;
+}
+
+/** A Volume's own synopsis as a page's description, with its owner and credit. */
+async function volumeSynopsis(ctx: QueryCtx, volume: Doc<"volumes">, text: string) {
+  return {
+    source: "volume" as const,
+    text,
+    owner: {
+      type: "volume",
+      key: String(volume.publicId),
+      label: "the volume synopsis",
+    } satisfies Owner,
+    attribution: await fieldAttribution(ctx, { type: "volume", id: volume._id }, "synopsis", text),
+  };
+}
+
+/** A Release Description as a page's description, with its owner and credit. */
+async function releaseDescription(ctx: QueryCtx, release: Doc<"releases">, text: string) {
+  return {
+    owner: releaseOwner(release),
+    attribution: await fieldAttribution(
+      ctx,
+      { type: "release", id: release._id },
+      "description",
+      text,
+    ),
+  };
+}
+
+/**
+ * The Release an Edition's page fronts when no stored art decides it: the
+ * earliest dated physical Release, else the earliest dated one (`docs` are
+ * date-sorted, undated last). Where "Add a cover" and "Write a description
+ * for this book" lead; null for an Edition with no Release.
+ */
+function frontingRelease(docs: ReadonlyArray<Doc<"releases">>): Doc<"releases"> | null {
+  return docs.find((doc) => doc.format === "physical") ?? docs[0] ?? null;
 }
 
 /**
@@ -294,7 +360,13 @@ async function editionDescription(
   covered: Pick<Awaited<ReturnType<typeof editionCoverage>>, "coverage" | "volumeCount" | "series">,
 ) {
   const own = representativeDescription(releases);
-  if (own) return { source: "release" as const, text: own.text };
+  if (own) {
+    return {
+      source: "release" as const,
+      text: own.text,
+      ...(await releaseDescription(ctx, own.release, own.text)),
+    };
+  }
 
   const only = covered.volumeCount === 1 ? covered.coverage[0] : undefined;
   if (only?.extent === "complete") {
@@ -303,7 +375,7 @@ async function editionDescription(
       .withIndex("by_publicId", (q) => q.eq("publicId", only.volumePublicId))
       .unique();
     const synopsis = volume?.synopsis?.trim();
-    if (synopsis) return { source: "volume" as const, text: synopsis };
+    if (volume && synopsis) return await volumeSynopsis(ctx, volume, synopsis);
   }
 
   if (!covered.series) return null;
@@ -312,7 +384,7 @@ async function editionDescription(
     .query("series")
     .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
     .unique();
-  return seriesSynopsis(series);
+  return await seriesSynopsis(ctx, series);
 }
 
 // ---------- Volume page ----------
@@ -393,10 +465,16 @@ export const volumePage = query({
     const borrowed = representativeDescription(lendingReleases);
     const lender = borrowed ? lenders.get(borrowed.release.editionId) : undefined;
     const description = synopsis
-      ? { source: "volume" as const, text: synopsis }
+      ? await volumeSynopsis(ctx, volume, synopsis)
       : borrowed && lender
-        ? { source: "edition" as const, text: borrowed.text, edition: lender }
-        : seriesSynopsis(series);
+        ? {
+            source: "edition" as const,
+            text: borrowed.text,
+            edition: lender,
+            ...(await releaseDescription(ctx, borrowed.release, borrowed.text)),
+          }
+        : await seriesSynopsis(ctx, series);
+    const coverUrl = representativeCover(editions.flatMap((e) => e.releases));
 
     return {
       volume: {
@@ -411,10 +489,29 @@ export const volumePage = query({
       credits: await creditsFor(ctx, series._id),
       description,
       editions,
-      coverUrl: representativeCover(editions.flatMap((e) => e.releases)),
+      coverUrl,
+      /**
+       * The Edition whose page holds this cover's edit link (its `#cover`):
+       * the one whose Release shows the art, else the first with a physical
+       * ISBN to fetch a jacket by, else the first with any Release.
+       */
+      coverEdition: coverEditionOf(editions, coverUrl),
     };
   },
 });
+
+/** The Volume page's `coverEdition` (see there), as `{ publicId, title }`. */
+function coverEditionOf(
+  editions: Array<{ publicId: number; title: string; releases: ReleaseRow[] }>,
+  coverUrl: string | null,
+) {
+  const holding =
+    (coverUrl !== null &&
+      editions.find((e) => e.releases.some((row) => row.coverUrl === coverUrl))) ||
+    editions.find((e) => e.releases.some((row) => row.format === "physical" && row.isbn13)) ||
+    editions.find((e) => e.releases.length > 0);
+  return holding ? { publicId: holding.publicId, title: holding.title } : null;
+}
 
 // ---------- Edition page ----------
 
@@ -474,9 +571,29 @@ export const editionPage = query({
       // elsewhere: `coverUrl` is the representative cover, and `coverIsbns`
       // the ISBNs to look art up by when there is none.
       ...(await jacketCache(ctx).jacket(edition._id)),
+      ...fronts(docs, releases),
     };
   },
 });
+
+/**
+ * Which Releases an Edition page's edit links lead to: `coverOwner`, the
+ * Release whose stored art is the jacket (`stored`), else the fronting
+ * Release, where a cover would be added; `frontRelease`, where a
+ * description for the book would be written. Both null without Releases.
+ */
+function fronts(docs: ReadonlyArray<Doc<"releases">>, rows: ReadonlyArray<ReleaseRow>) {
+  const byId = new Map(docs.map((doc) => [doc._id as string, doc]));
+  const sorted = rows.flatMap((row) => byId.get(row.id) ?? []);
+  const front = frontingRelease(sorted);
+  const shown = rows.find((row) => row.coverUrl !== null);
+  const holder = shown ? byId.get(shown.id) : undefined;
+  const coverOwner = holder ?? front;
+  return {
+    coverOwner: coverOwner ? { ...releaseOwner(coverOwner), stored: holder !== undefined } : null,
+    frontRelease: front ? releaseOwner(front) : null,
+  };
+}
 
 // ---------- Bundle page ----------
 
@@ -588,6 +705,13 @@ export const bundlePage = query({
         pubDate: bundle.pubDate ?? null,
         price: bundle.price ?? null,
         description: bundle.description ?? null,
+        /** Its description's source credit (lib/attribution.ts). */
+        attribution: await fieldAttribution(
+          ctx,
+          { type: "releaseBundle", id: bundle._id },
+          "description",
+          bundle.description,
+        ),
         publisher: publisherLink(publisher),
         coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
         /** What it holds in words (lib/boxSets.ts), "" when no member says. */

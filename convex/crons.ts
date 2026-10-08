@@ -27,4 +27,13 @@ crons.interval("publisher boards near", { hours: 1 }, internal.publisher.rebuild
 });
 crons.interval("publisher boards", { hours: 6 }, internal.publisher.rebuildBoards, {});
 
+// Cover uploads nothing came to use are deleted a day after they were
+// uploaded (coverUploads.ts sweep).
+crons.interval("cover upload sweep", { hours: 1 }, internal.coverUploads.sweep, {});
+
+// Pins the covers older Revisions name (coverUploads.pinRevisionCovers):
+// starts it after a deploy and restarts it if it stalls. Until it is done,
+// nothing deletes cover art; once it is, each tick reads one row.
+crons.interval("cover pin backfill", { minutes: 10 }, internal.coverUploads.pinRevisionCovers, {});
+
 export default crons;

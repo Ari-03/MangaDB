@@ -6,15 +6,21 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import type { RecordType } from "../../convex/lib/moderationFields";
+import { editorialField, type RecordType } from "../../convex/lib/moderationFields";
+import { CoverField } from "~/lib/coverField";
+import { DescriptionField } from "~/lib/descriptionField";
 import {
   draftChanges,
+  draftCitation,
   draftIsStale,
   editDraft,
   FieldInput,
   freshDraft,
+  initialFormState,
   isRecordType,
+  revertDraft,
   type EditDraft,
+  type FormState,
 } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
 import { CLEAR_OVERRIDE_HINT, renderFieldValue, writtenByLabel } from "~/lib/moderation";
@@ -33,7 +39,10 @@ import { useIsModerator } from "~/lib/viewer";
  * follows the live record; after it, values and base are pinned together,
  * and a newer Revision arriving asks the Moderator to reload before saving.
  * The inputs lock while a save is in flight, since its success resets the
- * form to the live record. Each Human Override on the record has a Clear
+ * form to the live record. A Release or Bundle has a Cover section and every
+ * record with editorial text a Description section (lib/coverField.tsx,
+ * lib/descriptionField.tsx), saved by the same Save; a cover still
+ * uploading holds it. Each Human Override on the record has a Clear
  * control that lifts it the same way: a reason, a preview of what stays,
  * and an immediately approved Proposal with one public Revision, anchored
  * on the base Revision the preview was captured from.
@@ -95,6 +104,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedSeq, setSavedSeq] = useState<number | null>(null);
+  const [uploading, setUploading] = useState(false);
   // Held here, not in the panel: clearing the last override unmounts it.
   const [cleared, setCleared] = useState<{ label: string; seq: number } | null>(null);
 
@@ -122,6 +132,17 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const setValue = (key: string, value: string) => {
     if (!busy) setDraft(editDraft(current, key, value));
   };
+  const setValues = (patch: FormState) => {
+    if (busy) return;
+    setDraft(
+      Object.entries(patch).reduce((next, [key, value]) => editDraft(next, key, value), current),
+    );
+  };
+  const initial = initialFormState(form.fields);
+  const coverField = form.fields.find((field) => field.kind === "image");
+  const textName = editorialField(type)?.name;
+  const textField = form.fields.find((field) => field.name === textName);
+  const plainFields = form.fields.filter((field) => field !== coverField && field !== textField);
   // Someone else saved this record after the draft's values were loaded.
   const stale = draftIsStale(current, form.baseRevisionId);
 
@@ -133,11 +154,20 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
     try {
       const built = draftChanges(form.fields, current);
       if (!built.ok) throw new ConvexError({ message: built.message });
+      const cited = draftCitation(
+        textField ?? null,
+        current.values,
+        current.dirty,
+        form.attribution,
+      );
+      if (!cited.ok) throw new ConvexError({ message: cited.message });
       const { seq } = await submitDirectEdit({
         ref: form.ref as never,
         baseRevisionId: current.baseRevisionId ?? undefined,
         changes: built.changes,
         comment,
+        citation: cited.citation,
+        evidence: cited.evidence,
       });
       setSavedSeq(seq);
       // Follow the live record again, which now includes this Revision.
@@ -213,7 +243,24 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
               </button>
             </div>
           ) : null}
-          {form.fields.map((field) => (
+          {form.cover && coverField ? (
+            <CoverField
+              cover={form.cover}
+              boxSet={type === "releaseBundle"}
+              title={form.title}
+              value={current.values[coverField.name] ?? ""}
+              initial={initial[coverField.name] ?? ""}
+              setValue={(value) => setValue(coverField.name, value)}
+              revert={() => {
+                if (!busy) setDraft(revertDraft(current, [coverField.name], initial));
+              }}
+              onUploading={setUploading}
+              overridden={form.overriddenFields.includes(coverField.name)}
+              disabled={busy}
+              proposing={false}
+            />
+          ) : null}
+          {plainFields.map((field) => (
             <FieldInput
               key={field.name}
               field={field}
@@ -222,6 +269,19 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
               disabled={busy}
             />
           ))}
+          {textField ? (
+            <DescriptionField
+              type={type}
+              recordId={form.ref.id}
+              field={textField}
+              attribution={form.attribution}
+              values={current.values}
+              dirty={current.dirty}
+              initialText={initial[textField.name] ?? ""}
+              setValues={setValues}
+              disabled={busy}
+            />
+          ) : null}
           <label>
             Change comment (required)
             <textarea
@@ -239,9 +299,11 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={busy || stale || current.dirty.size === 0 || comment.trim() === ""}
+              disabled={
+                busy || uploading || stale || current.dirty.size === 0 || comment.trim() === ""
+              }
             >
-              {busy ? "Saving…" : "Save as approved change"}
+              {busy ? "Saving…" : uploading ? "Uploading…" : "Save as approved change"}
             </button>
           </div>
           {error ? <p className="form-error">{error}</p> : null}
@@ -250,9 +312,6 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
           ) : null}
         </form>
       )}
-      {type === "release" || type === "series" ? (
-        <SourceDescriptions recordRef={{ type, id: form.ref.id }} />
-      ) : null}
     </main>
   );
 }
@@ -407,6 +466,7 @@ function HumanOverrides({
               : form.importReviewPending
                 ? "; an import's Proposal still in review on this record goes stale, so approve it first if you want its value."
                 : "."}
+            {clearing.field === "coverImage" ? " Imports may attach art again." : null}
           </p>
           <label>
             Reason (required)
@@ -444,95 +504,6 @@ function HumanOverrides({
         </form>
       ) : null}
       {error ? <p className="form-error">{error}</p> : null}
-    </section>
-  );
-}
-
-/**
- * Every blurb the sources offered for this Release (description) or Series
- * (synopsis), beside the canonical one, so a reviewer can compare them and
- * copy a better text into the form above. Imports pick by authority: the
- * publisher's own text, then the distributor's, then aggregators'.
- */
-function SourceDescriptions({
-  recordRef,
-}: {
-  recordRef: { type: "release" | "series"; id: string };
-}) {
-  const result = useQuery(api.moderation.sourceBlurbs, { ref: recordRef });
-  if (result === undefined) {
-    return (
-      <section className="mod-panel">
-        <h2>Source descriptions</h2>
-        <p className="mod-empty">Loading…</p>
-      </section>
-    );
-  }
-  if (result === null) return null;
-
-  const { canonical, blurbs } = result;
-  const noun = result.field === "description" ? "description" : "synopsis";
-  const authorship =
-    canonical.author === null
-      ? "predates revision history"
-      : canonical.author.kind === "user"
-        ? `was written by ${
-            canonical.author.username ? `@${canonical.author.username}` : "a deleted account"
-          }`
-        : `was imported from ${canonical.author.sourceKey}`;
-
-  return (
-    <section className="mod-panel">
-      <h2>Source descriptions</h2>
-      <p className="section-hint">
-        {canonical.text === null
-          ? `No ${noun} yet: the first source to offer one fills it, or write one above.`
-          : `The current ${noun} ${authorship}.`}
-        {canonical.overridden ? " It is a Human Override: imports never replace it." : null}
-        {result.truncated ? " Showing the first 50 linked source records." : null}
-      </p>
-      {blurbs.length === 0 ? (
-        <p className="mod-empty">No source has offered a {noun} for this record.</p>
-      ) : (
-        <div>
-          <ol className="revision-list">
-            {blurbs.map((blurb) => (
-              <li key={`${blurb.observationId}:${blurb.text}`} className="revision">
-                <div className="revision-meta">
-                  <span className="revision-author">{blurb.sourceName}</span>
-                  {blurb.current ? (
-                    <span className="chip mod-chip mod-chip--ok">current</span>
-                  ) : null}
-                  {blurb.recordedOnly ? (
-                    <span className="chip mod-chip mod-chip--mute">
-                      recorded only ({blurb.recordedOnly.reason})
-                    </span>
-                  ) : null}
-                  {blurb.withdrawn ? (
-                    <span className="chip mod-chip mod-chip--warn">withdrawn at source</span>
-                  ) : null}
-                  <time dateTime={new Date(blurb.lastSeenAt).toISOString()}>
-                    seen{" "}
-                    {new Date(blurb.lastSeenAt).toLocaleDateString(undefined, {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </time>
-                </div>
-                <p className="revision-comment">{blurb.text}</p>
-                {blurb.url ? (
-                  <p className="revision-citation">
-                    <a href={blurb.url} target="_blank" rel="noreferrer">
-                      View at {blurb.sourceName}
-                    </a>
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
     </section>
   );
 }

@@ -19,17 +19,23 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import {
   applyClearOverride,
   applyUpdate,
+  coverArtOf,
   displayInfo,
   getCanonical,
   insertRevision,
   requireOverridden,
   revisionsOf,
   validateChanges,
+  validateUpdate,
   writtenBy,
+  type CatalogDoc,
   type FieldChange,
   type RecordRef,
 } from "./moderation";
-import { evidence, recordRef } from "./schema";
+import { citation as citationValidator, evidence, recordRef } from "./schema";
+import { fieldAttribution } from "./lib/attribution";
+import { checkCoverUse, coverBlobsOf, pinCovers } from "./lib/coverRefs";
+import { checkEvidence } from "./lib/evidence";
 import {
   applyCreatePlan,
   carriesPlacement,
@@ -44,7 +50,7 @@ import {
 import { fail } from "./lib/errors";
 import { toIsbn13 } from "./lib/isbn";
 import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
-import { fieldDescriptor } from "./lib/moderationFields";
+import { editorialField, fieldDescriptor, type Citation } from "./lib/moderationFields";
 import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
 import type { ProposalWarning } from "./lib/proposalWarnings";
@@ -96,6 +102,8 @@ const opInput = v.union(
     kind: v.literal("update"),
     ref: recordRef,
     changes: v.array(v.object({ field: v.string(), value: v.any() })),
+    // The source of the record's editorial text (moderation.ts validateUpdate).
+    citation: v.optional(v.union(citationValidator, v.null())),
   }),
   v.object({
     kind: v.literal("clearOverride"),
@@ -118,6 +126,7 @@ type OpInput =
       kind: "update";
       ref: RecordRef;
       changes: Array<{ field: string; value: unknown }>;
+      citation?: Citation | null;
     }
   | { kind: "clearOverride"; ref: RecordRef; field: string };
 
@@ -134,7 +143,11 @@ type OpInput =
  * human correction, and which of the two applied last would decide the
  * outcome.
  */
-async function buildDraftOps(ctx: MutationCtx, submitted: OpInput[]): Promise<StoredOp[]> {
+async function buildDraftOps(
+  ctx: MutationCtx,
+  submitted: OpInput[],
+  author: Id<"users">,
+): Promise<StoredOp[]> {
   if (submitted.length === 0) {
     fail("noOps", "A proposal needs at least one operation.");
   }
@@ -184,11 +197,20 @@ async function buildDraftOps(ctx: MutationCtx, submitted: OpInput[]): Promise<St
     }
     const latest = (await revisionsOf(ctx, ref))[0];
     if (op.kind === "update") {
+      const { changes, citation, citedText } = await validateUpdate(ctx, {
+        ref,
+        doc,
+        changes: op.changes,
+        citation: op.citation,
+        author,
+      });
       ops.push({
         kind: "update",
         ref,
         baseRevisionId: latest?._id,
-        changes: validateChanges(ref.type, doc, op.changes),
+        changes,
+        ...(citation !== undefined ? { citation } : {}),
+        ...(citedText !== undefined ? { citedText } : {}),
       });
     } else {
       requireOverridden(ref.type, doc, op.field);
@@ -267,21 +289,48 @@ async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
   return plans;
 }
 
-/** Malformed evidence never reaches a version: check each row now. */
-async function checkEvidence(ctx: MutationCtx, rows: Evidence[]): Promise<void> {
-  for (const row of rows) {
-    if (row.kind === "url") {
-      if (!/^https?:\/\/\S+$/.test(row.url)) {
-        fail("invalidEvidence", "Evidence URLs must be http(s) links.");
-      }
-    } else if (row.kind === "note") {
-      if (row.text.trim() === "") {
-        fail("invalidEvidence", "Evidence notes cannot be empty.");
-      }
-    } else if (!(await ctx.db.get(row.observationId))) {
-      fail("invalidEvidence", "Evidence references a missing observation.");
-    }
+/**
+ * Keep every cover blob `ops` name while the Proposal is undecided
+ * (lib/coverRefs.ts), so neither an import nor the upload sweep deletes
+ * art a reviewer has yet to see.
+ */
+async function pinProposalCovers(ctx: MutationCtx, proposalId: Id<"proposals">, ops: StoredOp[]) {
+  const changes = ops.flatMap((op) => (op.kind === "update" ? op.changes : []));
+  await pinCovers(ctx, coverBlobsOf(changes), { proposalId });
+}
+
+/**
+ * The editorial text an update op's citation is about, when the op leaves
+ * that text alone: what it was chosen for (`citedText`). Undefined when the
+ * op cites nothing or writes the text itself.
+ */
+function citedTextOf(op: Extract<StoredOp, { kind: "update" }>): string | undefined {
+  const field = editorialField(op.ref.type);
+  if (op.citation === undefined || !field) return undefined;
+  if (op.changes.some((change) => change.field === field.name)) return undefined;
+  return op.citedText ?? "";
+}
+
+/**
+ * Re-validate an update op exactly as stored: its values against today's
+ * record and hard invariants, an op that only cites a source included,
+ * which is refused once the text it was chosen for has changed.
+ */
+function revalidate(op: Extract<StoredOp, { kind: "update" }>, doc: CatalogDoc) {
+  const cited = citedTextOf(op);
+  const field = editorialField(op.ref.type);
+  if (cited !== undefined && field && (doc as Record<string, unknown>)[field.name] !== cited) {
+    fail(
+      "stale",
+      "The text this source was chosen for has changed. Rebase, then choose its source again.",
+    );
   }
+  return validateChanges(
+    op.ref.type,
+    doc,
+    op.changes.map((c) => ({ field: c.field, value: c.after })),
+    op.citation !== undefined,
+  );
 }
 
 // ---------- warnings (surfaced at submit, acknowledged explicitly) ----------
@@ -390,7 +439,7 @@ export const saveDraft = mutation({
       key: user._id,
       throws: true,
     });
-    const ops = await buildDraftOps(ctx, args.ops as OpInput[]);
+    const ops = await buildDraftOps(ctx, args.ops as OpInput[], user._id);
     await checkEvidence(ctx, args.evidence);
     const draft: Draft = {
       ops,
@@ -412,6 +461,7 @@ export const saveDraft = mutation({
         );
       }
       await ctx.db.patch(args.proposalId, { draft });
+      await pinProposalCovers(ctx, args.proposalId, ops);
       return { proposalId: args.proposalId };
     }
     const proposalId = await ctx.db.insert("proposals", {
@@ -424,6 +474,7 @@ export const saveDraft = mutation({
       currentVersionNo: 0,
       draft,
     });
+    await pinProposalCovers(ctx, proposalId, ops);
     return { proposalId };
   },
 });
@@ -470,14 +521,16 @@ export const submitProposal = mutation({
     await checkPlacement(ctx, args.proposalId, await planOps(ctx, draft.ops));
     for (const op of draft.ops) {
       if (op.kind !== "update") continue;
-      const ref = op.ref;
-      const doc = await getCanonical(ctx, ref);
-      validateChanges(
-        ref.type,
-        doc!,
-        op.changes.map((c) => ({ field: c.field, value: c.after })),
-      );
+      const doc = await getCanonical(ctx, op.ref);
+      const changes = revalidate(op, doc!);
+      // A cover must still be the author's upload or catalog art, and stored.
+      for (const change of changes) {
+        if (change.field === "coverImage") {
+          await checkCoverUse(ctx, doc as Doc<"releases">, change, user._id);
+        }
+      }
     }
+    await pinProposalCovers(ctx, args.proposalId, draft.ops);
 
     if (
       needsSourceEvidence(draft.ops) &&
@@ -609,8 +662,13 @@ export const rebaseProposal = mutation({
         if (sameValue(current, change.after)) continue; // already true
         changes.push({ field: change.field, before: current, after: change.after });
       }
-      if (changes.length === 0) {
-        dropped.push(`${ref.type} already matches the proposed values`);
+      const cited = await rebasedCitation(ctx, op, doc, changes);
+      if (cited === "moved") {
+        dropped.push(`${ref.type} text changed since its source was chosen`);
+      }
+      const { citation, citedText } = cited === "moved" ? {} : (cited ?? {});
+      if (changes.length === 0 && citation === undefined) {
+        if (cited !== "moved") dropped.push(`${ref.type} already matches the proposed values`);
         continue;
       }
       const latest = (await revisionsOf(ctx, ref))[0];
@@ -619,12 +677,14 @@ export const rebaseProposal = mutation({
         ref: op.ref,
         baseRevisionId: latest?._id,
         changes,
+        ...(citation !== undefined ? { citation } : {}),
+        ...(citedText !== undefined ? { citedText } : {}),
       });
     }
     if (ops.length === 0) {
       fail(
         "emptyRebase",
-        "Nothing survives the rebase — every proposed change already happened or its record is gone.",
+        "Nothing survives the rebase: every proposed change already happened, its record is gone, or the text a source was chosen for has changed.",
       );
     }
     await ctx.db.patch(args.proposalId, {
@@ -636,6 +696,31 @@ export const rebaseProposal = mutation({
     return { dropped };
   },
 });
+
+/**
+ * An update op's source statement after a rebase: kept while the op still
+ * changes the text. Otherwise it is about the text the op wrote or was
+ * drafted against: "moved" when today's text is different (the source must
+ * be chosen again), else kept, with that text as its `citedText`, only
+ * when today's credit differs from it (the rule moderation.ts
+ * validateUpdate applies to a fresh op).
+ */
+async function rebasedCitation(
+  ctx: MutationCtx,
+  op: Extract<StoredOp, { kind: "update" }>,
+  doc: CatalogDoc,
+  changes: FieldChange[],
+): Promise<{ citation: Citation | null; citedText?: string } | "moved" | undefined> {
+  const field = editorialField(op.ref.type);
+  if (op.citation === undefined || !field) return undefined;
+  if (changes.some((change) => change.field === field.name)) return { citation: op.citation };
+  const text = (doc as Record<string, unknown>)[field.name];
+  const wrote = op.changes.find((change) => change.field === field.name);
+  if (text !== (wrote ? wrote.after : citedTextOf(op))) return "moved";
+  if (typeof text !== "string" || text.trim() === "") return undefined;
+  const current = await fieldAttribution(ctx, op.ref, field.name, text);
+  return sameValue(current, op.citation) ? undefined : { citation: op.citation, citedText: text };
+}
 
 // ---------- the Moderator lifecycle: claim → approve/reject/changes ----------
 
@@ -894,11 +979,7 @@ export const approveProposal = mutation({
         const ref = op.ref;
         const doc = await getCanonical(ctx, ref);
         // Re-validate the exact reviewed values against hard invariants.
-        const changes = validateChanges(
-          ref.type,
-          doc!,
-          op.changes.map((c) => ({ field: c.field, value: c.after })),
-        );
+        const changes = revalidate(op, doc!);
         const { revisionId } = await applyUpdate(ctx, {
           ref,
           doc: doc!,
@@ -908,6 +989,7 @@ export const approveProposal = mutation({
           author: proposal.author,
           approvedBy: user._id,
           comment: version.changeComment,
+          citation: op.citation,
         });
         revisedHere.set(ref.id, revisionId);
         revisionIds.push(revisionId);
@@ -1083,6 +1165,8 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boo
         recordId: ref.id as string,
         recordTitle: title,
         changes: op.changes,
+        // The source the op states for the record's text; undefined says nothing.
+        citation: op.citation,
         base: base ? { seq: base.seq, comment: base.comment } : { seq: 0, comment: null },
         stale:
           live &&
@@ -1322,6 +1406,12 @@ export const proposalDetail = query({
           }
         : null,
       notes: renderedNotes,
+      coverArt: await coverArtOf(
+        ctx,
+        [...versions.flatMap((version) => version.ops), ...(proposal.draft?.ops ?? [])].flatMap(
+          (op) => (op.kind === "update" ? op.changes : []),
+        ),
+      ),
       // A held book's placement (placement.ts): the Draft's, else the current version's.
       placement: await placementView(ctx, proposal.draft?.ops ?? current?.ops ?? []),
       viewer: {

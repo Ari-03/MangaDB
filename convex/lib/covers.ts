@@ -42,16 +42,18 @@ export type CoverRequest = {
 
 /**
  * The cover to store on `release` from `coverUrl`, offered by record
- * `observationId`, or undefined when there is none to fetch or the
+ * `observationId`, or undefined when there is none to fetch, the
  * Release's cover already came from that URL (art, or a placeholder it
- * recorded).
+ * recorded), or a person set or removed its cover (a Human Override, which
+ * imports.attachCover would refuse after the download).
  */
 export function coverRequest(
-  release: Pick<Doc<"releases">, "_id" | "editionId" | "coverImage">,
+  release: Pick<Doc<"releases">, "_id" | "editionId" | "coverImage" | "overriddenFields">,
   coverUrl: string | undefined,
   observationId: Id<"sourceObservations">,
 ): CoverRequest | undefined {
   if (coverUrl === undefined || release.coverImage?.sourceUrl === coverUrl) return undefined;
+  if (release.overriddenFields?.includes("coverImage")) return undefined;
   return {
     releaseId: release._id,
     editionId: release.editionId,

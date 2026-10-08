@@ -8,6 +8,7 @@ import { Cover } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, ModReleaseEditLinks, RecordHistory } from "~/lib/moderation";
+import { BlurbSource, ContextEditLink, EditLinks } from "~/lib/contextEdit";
 import { RatingAggregate } from "~/lib/ratings";
 import { TakePanel } from "~/lib/reviews";
 import {
@@ -153,6 +154,48 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
   notFoundComponent: () => <NotFound noun="Edition" />,
 });
 
+type EditionDescription = ReturnType<typeof Route.useLoaderData>["description"];
+
+/**
+ * The data team's links under the book's description, to the record that
+ * owns the text shown. Inherited text says whose it is and offers a
+ * description of this book's own instead, on its fronting Release; an
+ * omnibus never borrows a Volume synopsis, so it never offers that link.
+ */
+function EditionDescriptionLinks({
+  description,
+  frontRelease,
+}: {
+  description: EditionDescription;
+  frontRelease: ReturnType<typeof Route.useLoaderData>["frontRelease"];
+}) {
+  const local = frontRelease ? (
+    <ContextEditLink owner={frontRelease} anchor="description">
+      {description ? "write a description for this book" : "Write a description"}
+    </ContextEditLink>
+  ) : null;
+  if (!description) return local ? <EditLinks>{local}</EditLinks> : null;
+  if (description.source === "release") {
+    return (
+      <EditLinks>
+        <ContextEditLink owner={description.owner} anchor="description">
+          Edit description
+        </ContextEditLink>
+      </EditLinks>
+    );
+  }
+  const noun = description.source === "volume" ? "volume's" : "series";
+  return (
+    <EditLinks note={`This is the ${noun} synopsis.`}>
+      <ContextEditLink owner={description.owner} anchor="description">
+        Edit the {noun === "series" ? "series" : "volume"} synopsis
+      </ContextEditLink>
+      {local ? <span>or</span> : null}
+      {local}
+    </EditLinks>
+  );
+}
+
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
 function ConcealedEditionPage() {
   return (
@@ -172,6 +215,8 @@ function EditionPage() {
     releases,
     coverUrl,
     coverIsbns,
+    coverOwner,
+    frontRelease,
     rating,
   } = Route.useLoaderData();
   const primarySeries = series[0];
@@ -219,6 +264,15 @@ function EditionPage() {
               lazy={false}
             />
           </div>
+          {/* The Release whose stored art this is, or the one a cover would
+              be added to (convex/catalogPages.ts fronts). */}
+          {coverOwner ? (
+            <EditLinks id="cover">
+              <ContextEditLink owner={coverOwner} anchor="cover">
+                {coverOwner.stored ? "Change cover" : "Add a cover"}
+              </ContextEditLink>
+            </EditLinks>
+          ) : null}
         </div>
 
         {/* The viewer's take under the cover, saying what it rates: the
@@ -298,6 +352,7 @@ function EditionPage() {
                 <AboutSeriesNote series={description.series} />
               ) : null}
               <p className="blurb-text">{description.text}</p>
+              <BlurbSource attribution={description.attribution} />
             </div>
           ) : (
             <p className="detail-note">
@@ -305,6 +360,7 @@ function EditionPage() {
               row below.
             </p>
           )}
+          <EditionDescriptionLinks description={description} frontRelease={frontRelease} />
 
           <div className="section-head detail-section-head" id="releases">
             <h2 className="section-title">Releases</h2>

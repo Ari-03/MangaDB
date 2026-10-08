@@ -5,8 +5,12 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { editorialField } from "../../convex/lib/moderationFields";
 import { mutationErrorMessage } from "~/lib/errors";
 import {
+  FieldChangeItem,
+  StatedSource,
+  type CoverArt,
   CLEAR_OVERRIDE_HINT,
   ModGate,
   ProposalStateChip,
@@ -305,7 +309,7 @@ function PlacementPanel({
   );
 }
 
-function OpsList({ ops }: { ops: RenderedOps }) {
+function OpsList({ ops, art }: { ops: RenderedOps; art: CoverArt }) {
   return (
     <ol className="proposal-ops">
       {ops.map((op, i) => (
@@ -343,12 +347,15 @@ function OpsList({ ops }: { ops: RenderedOps }) {
               </p>
               <ul className="revision-changes">
                 {op.changes.map((change) => (
-                  <li key={change.field}>
-                    <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
-                    <ins>{renderFieldValue(change.after)}</ins>
-                  </li>
+                  <FieldChangeItem key={change.field} change={change} art={art} />
                 ))}
               </ul>
+              {op.citation !== undefined ? (
+                <StatedSource
+                  field={editorialField(op.recordType)?.name ?? "text"}
+                  citation={op.citation}
+                />
+              ) : null}
             </>
           ) : op.kind === "clearOverride" ? (
             <>
@@ -700,7 +707,7 @@ function ProposalDetail({ id }: { id: string }) {
               Will warn on submit: {detail.draft.warnings.map(warningLabel).join("; ")}
             </p>
           ) : null}
-          <OpsList ops={detail.draft.ops} />
+          <OpsList ops={detail.draft.ops} art={detail.coverArt} />
           <h3>Evidence</h3>
           <EvidenceList evidence={detail.draft.evidence} />
         </section>
@@ -719,7 +726,7 @@ function ProposalDetail({ id }: { id: string }) {
               Acknowledged warnings: {version.warnings.map(warningLabel).join("; ")}
             </p>
           ) : null}
-          <OpsList ops={version.ops} />
+          <OpsList ops={version.ops} art={detail.coverArt} />
           <h3>Evidence</h3>
           <EvidenceList evidence={version.evidence} />
         </section>

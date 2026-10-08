@@ -551,7 +551,7 @@ describe("moderation.sourceBlurbs", () => {
     });
   });
 
-  it("reports a human author and is Moderator-only", async () => {
+  it("reports a human author and is Data-Team-only", async () => {
     const t = makeT();
     await setup(t);
     const releaseId = await seedRelease(t);
@@ -573,9 +573,14 @@ describe("moderation.sourceBlurbs", () => {
     });
     expect(result?.blurbs.every((b) => !b.current)).toBe(true);
 
+    // Editors pick from the same blurbs on the proposal form.
+    const asEditor = await t
+      .withIdentity({ subject: EDITOR })
+      .query(api.moderation.sourceBlurbs, { ref: { type: "release", id: releaseId } });
+    expect(asEditor?.blurbs).toHaveLength(2);
     await expect(
       t
-        .withIdentity({ subject: EDITOR })
+        .withIdentity({ subject: PLAIN })
         .query(api.moderation.sourceBlurbs, { ref: { type: "release", id: releaseId } }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
   });

@@ -11,6 +11,7 @@ import { FavoriteButton } from "~/lib/favorites";
 import { SeriesFollowControls } from "~/lib/follows";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, ProposeNewRecordsLink, RecordHistory } from "~/lib/moderation";
+import { BlurbSource, ContextEditLink, EditionCoverLink, EditLinks } from "~/lib/contextEdit";
 import { RatingAggregate } from "~/lib/ratings";
 import { SeriesReadingControls, SeriesReadingProgress } from "~/lib/reading";
 import { SeriesReportAffordance } from "~/lib/report";
@@ -140,7 +141,7 @@ function ConcealedSeriesPage() {
 function SeriesPage() {
   const page = Route.useLoaderData();
   const { edition: editionKey } = Route.useSearch();
-  const { series, family, credits, volumes, editionGroups, coverUrl } = page;
+  const { series, family, credits, volumes, editionGroups, coverUrl, coverEdition } = page;
   const ratingTarget = { kind: "series" as const, publicId: series.publicId };
   const facts = packagingFacts(editionGroups);
   // The first path's first book fronts the Series — the standard run leads,
@@ -177,6 +178,7 @@ function SeriesPage() {
                 binding rather than a broken image. */}
             <Cover src={coverUrl} isbn13={heroIsbns} title={series.title} lazy={false} />
           </div>
+          {coverEdition ? <EditionCoverLink edition={coverEdition} /> : null}
           {facts.dateSpan ? (
             <p className="note">English releases on file: {facts.dateSpan}.</p>
           ) : null}
@@ -208,7 +210,20 @@ function SeriesPage() {
             ) : null}
           </div>
 
-          {series.synopsis ? <p className="series-synopsis">{series.synopsis}</p> : null}
+          {series.synopsis ? (
+            <div className="series-synopsis">
+              <p>{series.synopsis}</p>
+              <BlurbSource attribution={series.synopsisAttribution} />
+            </div>
+          ) : null}
+          <EditLinks>
+            <ContextEditLink
+              owner={{ type: "series", key: String(series.publicId), label: "the series synopsis" }}
+              anchor="description"
+            >
+              {series.synopsis ? "Edit synopsis" : "Write a synopsis"}
+            </ContextEditLink>
+          </EditLinks>
 
           <dl className="facts">
             {series.sourceStatus ? (

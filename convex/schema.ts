@@ -38,6 +38,11 @@ export const cover = v.object({
   attribution: v.optional(v.string()),
 });
 
+// Where a description's text came from, as a Revision records it: an
+// import's source page, or the page a person cited for the text they wrote
+// (moderation.ts `normalizeCitation`).
+export const citation = v.object({ sourceName: v.string(), url: v.string() });
+
 const visibility = v.union(v.literal("public"), v.literal("private"));
 
 export const releaseFormat = v.union(v.literal("physical"), v.literal("digital"));
@@ -176,6 +181,15 @@ const proposalOp = v.union(
     ref: recordRef,
     baseRevisionId: v.optional(v.id("revisions")),
     changes: v.array(fieldChange),
+    // The source of the record type's editorial text (lib/moderationFields.ts
+    // editorialField) as this op states it: a citation, or null for text with
+    // no external source. Absent when the op says nothing about it, as a
+    // facts-only change does. It may be the op's only change.
+    citation: v.optional(v.union(citation, v.null())),
+    // With a `citation` and no change to the text: the text it was chosen
+    // for. Once the record's text is different, a rebase drops the
+    // citation and submission and approval refuse it (proposals.ts).
+    citedText: v.optional(v.string()),
   }),
   v.object({
     kind: v.literal("merge"),
@@ -687,7 +701,10 @@ export default defineSchema({
     releaseId: v.id("releases"),
     name: v.string(),
     coverImage: v.optional(cover),
-  }).index("by_release", ["releaseId"]),
+  })
+    .index("by_release", ["releaseId"])
+    // Who shows a stored cover (lib/coverRefs.ts coverInUse).
+    .index("by_cover", ["coverImage.storageId"]),
 
   // Immutable keyed receipts for reviewed repair tools, tied to their audit Proposal.
   repairToolReceipts: defineTable({
@@ -958,12 +975,58 @@ export default defineSchema({
     approvedBy: v.optional(v.id("users")),
     changes: v.array(fieldChange),
     comment: v.string(),
-    // Source citation for importer-authored Revisions (ANN attribution).
-    citation: v.optional(v.object({ sourceName: v.string(), url: v.string() })),
+    // Source citation. On an import's Revision it covers every change; on a
+    // person's it covers `citedField` alone.
+    citation: v.optional(citation),
+    // Set when a person stated the source of this editorial field's text
+    // (a citation-only change has no field change at all): `citation`, or
+    // its absence for text with no external source, is that field's credit
+    // from this Revision on (lib/attribution.ts).
+    citedField: v.optional(v.string()),
   })
     .index("by_record", ["ref.type", "ref.id", "seq"])
     // Launch gate ④: verifying a correction produced public Revisions.
     .index("by_proposal", ["proposalId"]),
+
+  // Cover art a data-team member uploaded for a Cover change
+  // (coverUploads.ts): the upload URL names a row and its `token`, and the
+  // HTTP action that receives the file stores it and records the blob on
+  // that row, so only its uploader can put it in a change. The hourly
+  // sweep deletes a blob nothing came to use once `sweepAfter` passes, and
+  // only blobs that have a row here.
+  coverUploads: defineTable({
+    uploaderId: v.id("users"),
+    // The secret in the upload URL (http.ts /cover-upload).
+    token: v.string(),
+    // Absent until the file arrives.
+    storageId: v.optional(v.id("_storage")),
+    sweepAfter: v.number(),
+  })
+    .index("by_storage", ["storageId"])
+    .index("by_uploader", ["uploaderId", "sweepAfter"])
+    .index("by_sweepAfter", ["sweepAfter"]),
+
+  // A stored cover something besides a record still needs: a Revision whose
+  // change names it before or after (kept for good, so History never loses
+  // art), or a Proposal whose draft or version names it (kept while the
+  // Proposal is Draft or In Review). lib/coverRefs.ts writes these, and no
+  // blob with one is deleted by imports.attachCover or the upload sweep.
+  coverRefs: defineTable({
+    storageId: v.id("_storage"),
+    revisionId: v.optional(v.id("revisions")),
+    proposalId: v.optional(v.id("proposals")),
+  }).index("by_storage", ["storageId"]),
+
+  // Singleton: how far coverUploads.pinRevisionCovers has pinned the covers
+  // of Revisions written before `coverRefs` existed. Until `done`, nothing
+  // deletes cover art (lib/coverRefs.ts coverInUse).
+  coverPinBackfill: defineTable({
+    // The `revisions` page cursor the next run starts from.
+    cursor: v.union(v.string(), v.null()),
+    done: v.boolean(),
+    // When a run last moved the cursor: a cron restarts a chain gone quiet.
+    steppedAt: v.number(),
+  }),
 
   // Rejected import conflicts, keyed by record, field, source and offered
   // value; suppression lifts when the source offers a different value, the

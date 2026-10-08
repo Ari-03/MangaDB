@@ -65,3 +65,21 @@ export function releaseAnchor(release: {
 }): string {
   return release.isbn13 ?? release.isbn10 ?? release._id;
 }
+
+/**
+ * How a sentence names one Release of an Edition: "the paperback release,
+ * ISBN 9781632364210" or "the EPUB ebook". Edit links and the cover form
+ * use it, since a Release has no page of its own.
+ */
+export function releaseLabel(release: {
+  format: "physical" | "digital";
+  binding?: string | null;
+  digitalFileFormat?: string | null;
+  isbn13?: string | null;
+}): string {
+  const kind =
+    release.format === "physical"
+      ? `${release.binding ?? "print"} release`
+      : `${release.digitalFileFormat ? `${release.digitalFileFormat.toUpperCase()} ` : ""}ebook`;
+  return `the ${kind}${release.isbn13 ? `, ISBN ${release.isbn13}` : ""}`;
+}

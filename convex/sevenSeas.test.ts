@@ -30,6 +30,7 @@ import {
   bundleMembers,
   drain,
   makeT,
+  pinCoverHistory,
   seedRegistry,
   seedTeam,
   signedIn,
@@ -539,6 +540,7 @@ describe("sevenSeas.sync — covers", () => {
 
   it("keeps a current cover and replaces one whose URL changed, deleting its blob", async () => {
     const t = makeT();
+    await pinCoverHistory(t);
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);

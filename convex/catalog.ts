@@ -14,6 +14,8 @@ import { boundedReads } from "./lib/boundedReads";
 import { todaySortKey } from "./lib/dates";
 import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover, statsCoverIsbns } from "./lib/covers";
+import { fieldAttribution } from "./lib/attribution";
+import { editionCoverage } from "./catalogPages";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { groupEditions } from "./lib/editionGroups";
 import { pathCombination } from "./lib/pathCombination";
@@ -809,6 +811,12 @@ export const seriesPage = query({
     }
     boxSets.sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));
 
+    // The book fronting the Series: its Edition page holds the cover's edit link.
+    const front = editionGroups[0]?.books[0];
+    const frontDoc = front
+      ? [...editionDocs.values()].find((doc) => doc.publicId === front.publicId)
+      : undefined;
+
     return {
       series: {
         publicId: series.publicId,
@@ -816,6 +824,13 @@ export const seriesPage = query({
         altTitles: series.altTitles,
         sourceStatus: series.sourceStatus ?? null,
         synopsis: series.synopsis ?? null,
+        /** The synopsis' source credit (lib/attribution.ts). */
+        synopsisAttribution: await fieldAttribution(
+          ctx,
+          { type: "series", id: series._id },
+          "synopsis",
+          series.synopsis,
+        ),
         /** Bookless Series (CONTEXT.md): volumes known, no English book attached yet. */
         bookless: series.bookless === true,
         /** Mature Series (lib/mature.ts): the page hides its art from viewers who have not opted in. */
@@ -826,7 +841,10 @@ export const seriesPage = query({
       volumes,
       editionGroups,
       boxSets,
-      coverUrl: editionGroups[0]?.books[0]?.coverUrl ?? null,
+      coverUrl: front?.coverUrl ?? null,
+      coverEdition: frontDoc
+        ? { publicId: frontDoc.publicId, title: (await editionCoverage(ctx, frontDoc)).title }
+        : null,
     };
   },
 });

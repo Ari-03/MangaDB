@@ -36,6 +36,18 @@ export function makeT(options: { transactionLimits?: TransactionLimits } = {}) {
 }
 export type TestT = ReturnType<typeof makeT>;
 
+/**
+ * Finish the backfill of older Revisions' cover pins on `t`
+ * (coverUploads.pinRevisionCovers), as on a deployment that has run it:
+ * until then nothing deletes cover art, so a test of the importer's or
+ * the sweep's deletions starts here.
+ */
+export async function pinCoverHistory(t: TestT) {
+  expect(await t.mutation(internal.coverUploads.pinRevisionCovers, {})).toMatchObject({
+    done: true,
+  });
+}
+
 /** `t` or a `t.withIdentity(...)` accessor: anything that runs functions. */
 export type Accessor = TestConvexForDataModel<DataModel>;
 

@@ -551,6 +551,277 @@
   margin-top: 24px;
 }
 
+/* ---------- cover + description ---------------------------------- */
+
+/* The data team's links beside a public page's art, blurb and Release
+   rows (lib/contextEdit.tsx): the .mod-edit-link look, set close by. */
+.context-edit {
+  margin-top: 8px;
+}
+.release-side .context-edit {
+  margin: 0;
+  justify-content: flex-end;
+}
+
+/* The Cover and Description sections of /mod/edit and /mod/propose. They
+   sit inside the form, so they reset its label rule where they need to. */
+.cover-section,
+.description-section {
+  margin-top: 4px;
+}
+.cover-section > h2,
+.description-section > h2 {
+  scroll-margin-top: 80px;
+}
+.cover-section .k,
+.description-section .k {
+  margin: 0 0 8px;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.cover-grid {
+  display: grid;
+  grid-template-columns: repeat(2, var(--cover-w));
+  gap: 22px;
+  align-items: start;
+}
+.cover-col .cover {
+  width: var(--cover-w);
+}
+.cover-col .note,
+.cover-col .facts {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-mute);
+}
+.cover-col .facts {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The drop zone is the file input's label: keyboard users tab to the input
+   inside it, and the zone shows their focus. */
+.mod-edit-form label.dropzone {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--cover-w);
+  aspect-ratio: 2 / 3;
+  padding: 14px;
+  border: 2px dashed var(--line-strong);
+  border-radius: 3px 5px 5px 3px;
+  background: var(--surface-2);
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mod-edit-form label.dropzone:hover,
+.mod-edit-form label.dropzone.is-over {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--text);
+}
+.mod-edit-form label.dropzone:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.dropzone b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+.dropzone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.cover-status {
+  margin-top: 12px;
+}
+.cover-status .form-error .btn {
+  margin-left: 8px;
+}
+
+.reuse {
+  margin-top: 16px;
+}
+.reuse-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.mod-page .reuse-row button {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: 76px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-mute);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: center;
+  cursor: pointer;
+}
+.reuse-row .cover {
+  width: 64px;
+}
+.mod-page .reuse-row button.is-selected {
+  color: var(--accent);
+  font-weight: 700;
+}
+.reuse-row button.is-selected .cover,
+.reuse-row button:focus-visible .cover {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cover-edit-actions {
+  margin-top: 16px;
+}
+.cover-section .cover-source {
+  margin-top: 16px;
+}
+.cover-section .cover-source + .field-help {
+  margin-top: 8px;
+}
+
+.description-editor {
+  display: grid;
+  gap: 14px;
+}
+.label-row {
+  display: flex;
+  align-items: baseline;
+}
+.label-row .count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+.description-preview {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.description-preview .detail-blurb {
+  margin-top: 0;
+  max-width: 62ch;
+}
+
+.source-choice {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 16px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.source-choice legend {
+  padding: 0 6px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.mod-edit-form .source-choice > label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+}
+.source-choice input[type="radio"] {
+  accent-color: var(--accent);
+}
+.source-choice .sub {
+  font-weight: 400;
+  color: var(--text-mute);
+}
+.source-custom {
+  display: grid;
+  gap: 10px;
+  padding-left: 24px;
+}
+
+.source-blurbs h3 {
+  margin: 20px 0 0;
+  font-size: 0.98rem;
+}
+.source-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.source-list li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+.source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  color: var(--text-mute);
+  font-size: 0.82rem;
+}
+.source-meta .who {
+  color: var(--text-dim);
+  font-weight: 700;
+}
+.source-meta time {
+  margin-left: auto;
+}
+.source-text {
+  margin: 6px 0 0;
+  color: var(--text);
+  white-space: pre-line;
+}
+.source-link {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+}
+.source-link a {
+  color: var(--accent);
+}
+.inline-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 0.84rem;
+  color: var(--text-dim);
+}
+
+/* A cover change in History and on a proposal: two small jackets. */
+.revision-changes .cover-diff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.cover-diff .cover-thumb {
+  width: 48px;
+}
+
+@media (max-width: 720px) {
+  .cover-grid {
+    grid-template-columns: var(--cover-w);
+  }
+}
+
 /* ---------- review queue + proposals -------------------------------- */
 
 .queue-row {
