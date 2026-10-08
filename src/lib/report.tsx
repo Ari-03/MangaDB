@@ -1,98 +1,27 @@
 // The per-Series "see something missing/wrong? → report" affordance
-// (spec §7). Renders on every Series page — partially imported
-// Series show publicly as-is, and this is their correction on-ramp into the
-// proposal queue. The closed state is static (SSR renders it identically
-// for everyone); opening it reveals the report form signed in, or a sign-in
-// pointer signed out.
+// (spec §7). Renders on every Series page and sends the reader to the
+// MangaDB Discord, whose channels take bug reports, suggestions and series
+// requests. It is static, so SSR renders it identically for everyone.
 
-import { useMutation, useQuery } from "convex/react";
-import { useState } from "react";
+import { DISCORD_INVITE_URL, DiscordIcon } from "~/lib/community";
 
-import { api } from "../../convex/_generated/api";
-import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
-
-export function SeriesReportAffordance({ seriesPublicId }: { seriesPublicId: number }) {
-  const [open, setOpen] = useState(false);
+export function SeriesReportAffordance() {
   return (
     <section className="series-report">
-      {open ? (
-        <ReportForm seriesPublicId={seriesPublicId} onDone={() => setOpen(false)} />
-      ) : (
-        <>
-          <p className="report-lede">
-            A missing volume, a wrong date, a duplicate series — tell the data team and an editor
-            will pick it up.
-          </p>
-          <button type="button" className="btn btn-sm report-toggle" onClick={() => setOpen(true)}>
-            Report something wrong
-          </button>
-        </>
-      )}
+      <p className="report-lede">
+        A missing volume, a wrong date, a duplicate series, or a series we should add? Tell us in
+        the MangaDB Discord. It has channels for bug reports, suggestions and series requests, and
+        you can attach screenshots or photos of your books.
+      </p>
+      <a
+        className="btn btn-sm report-link"
+        href={DISCORD_INVITE_URL}
+        target="_blank"
+        rel="noreferrer"
+      >
+        <DiscordIcon />
+        Report on Discord
+      </a>
     </section>
-  );
-}
-
-function ReportForm({ seriesPublicId, onDone }: { seriesPublicId: number; onDone: () => void }) {
-  const viewer = useQuery(api.users.viewer, {});
-  const submit = useMutation(api.reports.submit);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
-
-  if (viewer === undefined) return <p className="notice">One moment…</p>;
-  if (viewer === null) {
-    return (
-      <p className="notice">
-        <a href="/sign-in">Sign in</a> to report a missing volume, a wrong date, or anything else
-        off about this series.
-      </p>
-    );
-  }
-  if (viewer.needsUsername) {
-    return (
-      <p className="notice">
-        <a href="/claim-username">Claim a username</a> to send reports.
-      </p>
-    );
-  }
-  if (sent) {
-    return (
-      <p className="notice">
-        Thanks — your report is in the review queue. The data team will take a look.
-      </p>
-    );
-  }
-  return (
-    <form
-      className="report-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        setError(null);
-        submit({ seriesPublicId, message })
-          .then(() => setSent(true))
-          .catch((err: unknown) => setError(mutationErrorMessage(err, TRY_AGAIN, TRY_AGAIN)));
-      }}
-    >
-      <label className="report-field">
-        <span>What's missing or wrong?</span>
-        <textarea
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          rows={3}
-          maxLength={2000}
-          placeholder="A missing volume, a wrong release date, a duplicate series…"
-          required
-        />
-      </label>
-      {error ? <p className="form-error">{error}</p> : null}
-      <div className="report-actions">
-        <button type="submit" className="btn btn-sm btn-primary" disabled={message.trim() === ""}>
-          Send report
-        </button>
-        <button type="button" className="btn btn-sm" onClick={onDone}>
-          Cancel
-        </button>
-      </div>
-    </form>
   );
 }
