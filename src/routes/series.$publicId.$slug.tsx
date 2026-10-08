@@ -400,7 +400,7 @@ function SeriesPage() {
 
       {/* Partially imported Series show as-is; every Series page carries the
           report affordance feeding the proposal queue (spec §7). */}
-      <SeriesReportAffordance seriesPublicId={series.publicId} />
+      <SeriesReportAffordance />
 
       {/* Public revision history + the data-team entry points. */}
       <RecordHistory type="series" publicId={series.publicId} />

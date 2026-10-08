@@ -121,13 +121,13 @@ function AboutTheData() {
 
       <h2 id="corrections">Corrections</h2>
       <p>
-        Spot an error? Use the report button on the series page, or email{" "}
-        <a href={`mailto:${DATA_CONTACT_EMAIL}`}>{DATA_CONTACT_EMAIL}</a>. Every accepted correction
-        becomes a public revision on the record it fixes. You can also ask in{" "}
+        Spot an error? Report it in{" "}
         <a href={DISCORD_INVITE_URL} target="_blank" rel="noreferrer">
           our Discord
         </a>
-        .
+        , which has channels for bug reports, suggestions and series requests, or email{" "}
+        <a href={`mailto:${DATA_CONTACT_EMAIL}`}>{DATA_CONTACT_EMAIL}</a>. Every accepted correction
+        becomes a public revision on the record it fixes.
       </p>
     </main>
   );
