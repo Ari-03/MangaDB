@@ -239,6 +239,7 @@ export const foldEditionEntry = v.object({
 // `null` in a plan means "absent" (JSON has no undefined).
 const seriesChange = v.union(
   v.object({ field: v.literal("title"), before: v.string(), after: v.string() }),
+  v.object({ field: v.literal("synopsis"), before: nullableString, after: nullableString }),
   v.object({
     field: v.literal("altTitles"),
     before: v.array(v.string()),
@@ -257,11 +258,14 @@ const releaseChange = v.union(
     before: v.union(partialDate, v.null()),
     after: v.union(partialDate, v.null()),
   }),
+  // Cleared, or set to art an operator stored (repair:storeCoverFromUrl)
+  // when no source record offers any.
   v.object({
     field: v.literal("coverImage"),
     before: v.union(cover, v.null()),
-    after: v.null(),
+    after: v.union(cover, v.null()),
   }),
+  v.object({ field: v.literal("description"), before: nullableString, after: nullableString }),
   // An ebook recorded as print (or the reverse); going digital drops Binding,
   // going physical drops the digital file format.
   v.object({
@@ -282,6 +286,16 @@ const releaseChange = v.union(
 
 /** Field-level repair with expected before-values (drift = skip). */
 export const updateFieldsEntry = v.union(
+  v.object({
+    kind: v.literal("updateFields"),
+    ...base,
+    table: v.literal("volumes"),
+    id: v.id("volumes"),
+    changes: v.array(
+      v.object({ field: v.literal("synopsis"), before: nullableString, after: nullableString }),
+    ),
+    evidenceObservationId: v.union(v.id("sourceObservations"), v.null()),
+  }),
   v.object({
     kind: v.literal("updateFields"),
     ...base,

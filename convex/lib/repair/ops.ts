@@ -2063,6 +2063,13 @@ function pendingChanges<C extends { field: string; before: unknown; after: unkno
   });
 }
 
+/** Add `field` to the Human Overrides `patch` will leave on `release`. */
+function override(patch: Partial<Doc<"releases">>, release: Doc<"releases">, field: string) {
+  patch.overriddenFields = [
+    ...new Set([...(patch.overriddenFields ?? release.overriddenFields ?? []), field]),
+  ];
+}
+
 async function updateFields(
   ctx: MutationCtx,
   audit: Audit,
@@ -2077,12 +2084,25 @@ async function updateFields(
     const patch: Partial<Doc<"series">> = {};
     for (const change of pending) {
       if (change.field === "title") patch.title = change.after;
+      else if (change.field === "synopsis") patch.synopsis = stored(change.after);
       else patch.altTitles = change.after;
     }
     const title = patch.title ?? series.title;
     patch.searchText = seriesSearchText(title, patch.altTitles ?? series.altTitles);
     await updateRecord(ctx, audit, { type: "series", id: series._id }, series, patch);
     if (patch.title !== undefined) await lockTitleIfContested(ctx, audit, series._id);
+    return applied;
+  }
+
+  if (entry.table === "volumes") {
+    const volume = await ctx.db.get(entry.id);
+    if (!volume || volume.status !== "active") return skip("volume not active");
+    if (volume.locked) return skip("volume locked");
+    const pending = pendingChanges(volume, entry.changes);
+    if (pending.length === 0) return already;
+    await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
+      synopsis: stored(pending[0]!.after),
+    });
     return applied;
   }
 
@@ -2105,7 +2125,15 @@ async function updateFields(
         patch.pubDate = stored(change.after);
         break;
       case "coverImage":
-        patch.coverImage = undefined;
+        if (change.after?.storageId && (await ctx.storage.getUrl(change.after.storageId)) === null)
+          skip("the planned cover's stored file does not exist");
+        patch.coverImage = stored(change.after);
+        // An operator's art is a Human Override: no import replaces it.
+        if (change.after !== null) override(patch, release, "coverImage");
+        break;
+      case "description":
+        patch.description = stored(change.after);
+        if (change.after !== null) override(patch, release, "description");
         break;
       case "format":
         if (change.after === "digital") {

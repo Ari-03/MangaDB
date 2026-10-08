@@ -305,3 +305,64 @@ describe("familiesTogether", () => {
     expect(familiesTogether(ranked).map((h) => h.id)).toEqual(["p1", "p2", "p3", "other"]);
   });
 });
+
+describe("updateFields text and cover", () => {
+  it("sets a Series and Volume synopsis, and a Release's description and stored cover as overrides", async () => {
+    const t = makeT();
+    const { seriesId, volumeId, releaseId } = await seed(t);
+    const storageId = await t.run((ctx) =>
+      ctx.storage.store(new Blob([new Uint8Array(6000)], { type: "image/jpeg" })),
+    );
+    const cover = {
+      storageId,
+      sourceUrl: "https://www.viz.com/jack.jpg",
+      attribution: "VIZ Media",
+    };
+    const outcomes = await run(t, [
+      {
+        kind: "updateFields",
+        key: "text-series",
+        reason: "Publisher blurb.",
+        table: "series",
+        id: seriesId,
+        changes: [{ field: "synopsis", before: null, after: "A prequel." }],
+        evidenceObservationId: null,
+      },
+      {
+        kind: "updateFields",
+        key: "text-volume",
+        reason: "Publisher blurb.",
+        table: "volumes",
+        id: volumeId,
+        changes: [{ field: "synopsis", before: null, after: "Arima in high school." }],
+        evidenceObservationId: null,
+      },
+      {
+        kind: "updateFields",
+        key: "text-release",
+        reason: "Publisher blurb and jacket.",
+        table: "releases",
+        id: releaseId,
+        changes: [
+          { field: "description", before: null, after: "Arima in high school." },
+          { field: "coverImage", before: null, after: cover },
+        ],
+        evidenceObservationId: null,
+      },
+    ]);
+    expect(outcomes.map((o: { status: string }) => o.status)).toEqual([
+      "applied",
+      "applied",
+      "applied",
+    ]);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(seriesId))?.synopsis).toBe("A prequel.");
+      expect((await ctx.db.get(volumeId))?.synopsis).toBe("Arima in high school.");
+      expect(await ctx.db.get(releaseId)).toMatchObject({
+        description: "Arima in high school.",
+        coverImage: cover,
+        overriddenFields: expect.arrayContaining(["coverImage", "description"]),
+      });
+    });
+  });
+});

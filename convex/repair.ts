@@ -312,3 +312,30 @@ export const executeReviewedCreation = internalMutation({
     }
   },
 });
+
+/**
+ * Store cover art an operator found at `url` (a publisher or retailer
+ * jacket) for an updateFields `coverImage` entry, when no source record
+ * offers the Release any: a public https image, at least a real jacket's
+ * size. Returns the storage id the entry names. A blob no entry ends up
+ * using is left in storage.
+ *
+ *   npx convex run repair:storeCoverFromUrl '{"url": "https://…"}'
+ */
+export const storeCoverFromUrl = internalAction({
+  args: { url: v.string() },
+  handler: async (ctx, { url }) => {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") throw new ConvexError("Cover URL must be https.");
+    const res = await fetch(url);
+    if (!res.ok) throw new ConvexError(`Cover URL answered ${res.status}.`);
+    const type = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!type.startsWith("image/") || type === "image/svg+xml")
+      throw new ConvexError(`Not a raster image (${type || "no type"}).`);
+    if (bytes.length < 5000)
+      throw new ConvexError(`Too small for a jacket (${bytes.length} bytes).`);
+    const storageId = await ctx.storage.store(new Blob([bytes], { type }));
+    return { storageId, bytes: bytes.length, type };
+  },
+});
