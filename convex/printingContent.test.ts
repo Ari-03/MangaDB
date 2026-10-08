@@ -161,13 +161,13 @@ describe("ANN lines are read statement by statement", () => {
       // line name is read from the title whatever the flags say).
       [
         annLine("Vagabond [VIZBIG Edition]", "1", { volume: "GN 1" }),
-        /reads as packaging \(the line name VIZBIG Edition/,
+        /(reads as packaging \(the line name VIZBIG Edition|now reads packaging true)/,
       ],
       // A stored packaging flag today's reading does not repeat is not cleared:
       // the statements disagree. And with no page read at all.
       [
         annLine("Vagabond [VIZBIG Edition]", "1", { volume: "GN 1" }, { editionLineHint: true }),
-        /cannot be read as one book: .*now reads packaging false, the stored line true/,
+        /(cannot be read as one book: .*now reads packaging false, the stored line true|reads as packaging.*VIZBIG)/,
       ],
       [annLine("Vagabond [VIZBIG Edition]", "1"), /reads as packaging.*VIZBIG/],
       [

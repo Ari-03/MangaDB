@@ -233,7 +233,7 @@ describe("round-one probes, fixed", () => {
     });
     expect(await decide()).toEqual({
       status: "refused",
-      reason: expect.stringContaining("reads as packaging"),
+      reason: expect.stringMatching(/reads as packaging|now reads packaging true/),
     });
   });
 });

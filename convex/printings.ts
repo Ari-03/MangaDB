@@ -17,7 +17,8 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { type AnnReleaseSnapshot, lineOutOfScope, packagingOf } from "./ann";
+import { type AnnReleaseSnapshot, lineOutOfScope } from "./ann";
+import { packagingOf } from "./lib/ann";
 import { getSourceByKey } from "./importSources";
 import { splitReleaseTitle } from "./lib/ann";
 import { nestedLimits, platformStop } from "./lib/bounded";
@@ -381,7 +382,8 @@ function readAnnLine(
   }
   if (line.coverageGapped) reading.packaging.push("a Volume list no range holds");
   const named = packagingOf(line);
-  if (named !== null) reading.packaging.push(`the line name ${named.name}`);
+  if (named?.line !== null && named?.line !== undefined)
+    reading.packaging.push(`the line name ${named.line.name}`);
   const outOfScope = lineOutOfScope(line);
   if (outOfScope !== null) reading.scope.push(outOfScope);
 
