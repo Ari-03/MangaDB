@@ -27,6 +27,7 @@ import {
   type Row,
 } from "./lib/repair/metrics";
 import { nestedLimits } from "./lib/bounded";
+import { rasterType } from "./lib/covers";
 import { applyEntry } from "./lib/repair/ops";
 import {
   applyReviewedCreation,
@@ -316,7 +317,7 @@ export const executeReviewedCreation = internalMutation({
 /**
  * Store cover art an operator found at `url` (a publisher or retailer
  * jacket) for an updateFields `coverImage` entry, when no source record
- * offers the Release any: a public https image, at least a real jacket's
+ * offers the Release any: a public https JPEG, PNG, GIF or WebP, at least a real jacket's
  * size. Returns the storage id the entry names. A blob no entry ends up
  * using is left in storage.
  *
@@ -329,10 +330,10 @@ export const storeCoverFromUrl = internalAction({
     if (parsed.protocol !== "https:") throw new ConvexError("Cover URL must be https.");
     const res = await fetch(url);
     if (!res.ok) throw new ConvexError(`Cover URL answered ${res.status}.`);
-    const type = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
     const bytes = new Uint8Array(await res.arrayBuffer());
-    if (!type.startsWith("image/") || type === "image/svg+xml")
-      throw new ConvexError(`Not a raster image (${type || "no type"}).`);
+    // Read from the bytes: some CDNs send jackets with no content type.
+    const type = rasterType(bytes);
+    if (type === null) throw new ConvexError("Not a raster image.");
     if (bytes.length < 5000)
       throw new ConvexError(`Too small for a jacket (${bytes.length} bytes).`);
     const storageId = await ctx.storage.store(new Blob([bytes], { type }));

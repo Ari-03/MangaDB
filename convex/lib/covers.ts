@@ -101,7 +101,7 @@ function publicHttps(url: string): boolean {
 }
 
 /** The raster format a jacket comes in, from the file's leading bytes; null for anything else. */
-function rasterType(bytes: Uint8Array): string | null {
+export function rasterType(bytes: Uint8Array): string | null {
   const ascii = (offset: number, text: string) =>
     [...text].every((ch, i) => bytes[offset + i] === ch.charCodeAt(0));
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
