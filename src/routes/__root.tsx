@@ -2,6 +2,7 @@
 import { createRootRoute, HeadContent, Link, Outlet, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
+import { DISCORD_INVITE_URL } from "~/lib/community";
 import { AppProviders, BrandMark, SiteHeader } from "~/providers";
 import stylesUrl from "../styles.css?url";
 
@@ -57,7 +58,8 @@ function RootComponent() {
 }
 
 // Site-wide footer: the source-attribution / "about the data" page (spec §7,
-// §11) must be reachable from everywhere the data is shown.
+// §11) must be reachable from everywhere the data is shown, and so must the
+// ways to reach us (the Discord, the corrections section).
 function SiteFooter() {
   return (
     <footer className="site-footer">
@@ -86,6 +88,15 @@ function SiteFooter() {
           <div className="footer-col">
             <h4>The data</h4>
             <Link to="/about-the-data">About the data</Link>
+          </div>
+          <div className="footer-col">
+            <h4>Community</h4>
+            <a href={DISCORD_INVITE_URL} target="_blank" rel="noreferrer">
+              Discord
+            </a>
+            <Link to="/about-the-data" hash="corrections">
+              Report a problem
+            </Link>
           </div>
         </div>
       </div>

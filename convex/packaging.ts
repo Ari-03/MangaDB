@@ -58,6 +58,8 @@ export const unmappedQueue = query({
         linePosition: edition.linePosition ?? null,
         publisher: publisher?.name ?? null,
         series: { publicId: series.publicId, title: series.title },
+        // A Mature Series' book: the row's jacket is concealed.
+        mature: series.mature === true,
         isbns: releases
           .filter((release) => release.status === "active")
           .map((release) => release.isbn13 ?? release.isbn10 ?? null)

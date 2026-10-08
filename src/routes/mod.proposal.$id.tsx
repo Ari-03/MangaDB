@@ -17,7 +17,7 @@ import {
   renderFieldValue,
   writtenByLabel,
 } from "~/lib/moderation";
-import { Breadcrumbs } from "~/lib/pageScaffold";
+import { ModWorkroom } from "~/lib/modShell";
 import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
 import { slugParams } from "~/lib/slug";
 
@@ -520,31 +520,35 @@ function ProposalDetail({ id }: { id: string }) {
   const coveragePending = detail.placement?.coverage.kind === "pending";
 
   return (
-    <main className="mod-page mod-proposal-page">
-      <Breadcrumbs
-        trail={[
-          <Link key="queue" to="/mod/queue">
-            Review queue
-          </Link>,
-          "Proposal",
-        ]}
-      />
-      <div className="mod-title-row">
-        <h1>Proposal</h1>
-        <ProposalStateChip state={detail.state} />
-        {detail.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
-      </div>
-      <p className="section-hint">
-        By{" "}
-        {detail.author.kind === "user"
-          ? `@${detail.author.username ?? "deleted"}${detail.author.role ? ` (${detail.author.role})` : ""}`
-          : `import source "${detail.author.sourceKey}"`}
-        {detail.claimedBy
-          ? ` · claimed by @${detail.claimedBy} (claims coordinate — any Moderator can still decide)`
-          : null}
-        {detail.decidedBy ? ` · decided by @${detail.decidedBy}` : null}
-      </p>
-
+    <ModWorkroom
+      current="queue"
+      crumbs={[
+        <Link key="queue" to="/mod/queue">
+          Review queue
+        </Link>,
+        "Proposal",
+      ]}
+      title="Proposal"
+      className="mod-proposal-page"
+      titleAside={
+        <>
+          <ProposalStateChip state={detail.state} />
+          {detail.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
+        </>
+      }
+      hint={
+        <>
+          By{" "}
+          {detail.author.kind === "user"
+            ? `@${detail.author.username ?? "deleted"}${detail.author.role ? ` (${detail.author.role})` : ""}`
+            : `import source "${detail.author.sourceKey}"`}
+          {detail.claimedBy
+            ? ` · claimed by @${detail.claimedBy} (claims coordinate — any Moderator can still decide)`
+            : null}
+          {detail.decidedBy ? ` · decided by @${detail.decidedBy}` : null}
+        </>
+      }
+    >
       {detail.stale && detail.state === "inReview" ? (
         <p className="notice">
           A record this proposal touches changed since submission. Approval is blocked until the
@@ -785,6 +789,6 @@ function ProposalDetail({ id }: { id: string }) {
           Add note
         </button>
       </section>
-    </main>
+    </ModWorkroom>
   );
 }

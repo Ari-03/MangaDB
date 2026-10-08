@@ -6,8 +6,8 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import { plural } from "~/lib/format";
-import { ModGate, ModTools } from "~/lib/moderation";
-import { Breadcrumbs } from "~/lib/pageScaffold";
+import { ModGate } from "~/lib/moderation";
+import { ModWorkroom } from "~/lib/modShell";
 import { useIsModerator } from "~/lib/viewer";
 import { writeErrorMessage } from "~/lib/ratings";
 import { slugParams } from "~/lib/slug";
@@ -87,14 +87,14 @@ const ACTIONS: Record<Row["status"], ReadonlyArray<{ action: Action; label: stri
 function CommentsQueuePage() {
   if (!FEATURES.comments) {
     return (
-      <main className="mod-page">
-        <Breadcrumbs trail={["Comments"]} />
-        <h1>Comments</h1>
-        <p className="notice">
-          Comments are switched off. Nobody can post, and pages show none. The switch is{" "}
-          <code>FEATURES.comments</code> in <code>convex/lib/features.ts</code>.
-        </p>
-      </main>
+      <ModGate role="dataTeam" refusal="The Comments queue is for the data team.">
+        <ModWorkroom current="comments" title="Comments">
+          <p className="notice">
+            Comments are switched off. Nobody can post, and pages show none. The switch is{" "}
+            <code>FEATURES.comments</code> in <code>convex/lib/features.ts</code>.
+          </p>
+        </ModWorkroom>
+      </ModGate>
     );
   }
   return (
@@ -115,16 +115,17 @@ function CommentsQueue() {
   const counts = useQuery(api.comments.queueCounts, {});
   const current = TABS.find((entry) => entry.tab === tab)!;
   return (
-    <main className="mod-page">
-      <Breadcrumbs trail={["Comments"]} />
-      <h1>Comments</h1>
-      <p className="section-hint">
-        Comments publish at once unless a hold rule fires (a new account, fewer than three approved
-        comments, or more than two links). Three reports hide one until you decide.
-        {canAct ? null : " Editors can read this queue; Moderators act on it."}
-      </p>
-      <ModTools />
-
+    <ModWorkroom
+      current="comments"
+      title="Comments"
+      hint={
+        <>
+          Comments publish at once unless a hold rule fires (a new account, fewer than three
+          approved comments, or more than two links). Three reports hide one until you decide.
+          {canAct ? null : " Editors can read this queue; Moderators act on it."}
+        </>
+      }
+    >
       <div className="comment-tabs" role="group" aria-label="Queue">
         {TABS.map((entry) => {
           const count = entry.tab === "removed" ? undefined : counts?.[entry.tab];
@@ -158,7 +159,7 @@ function CommentsQueue() {
           {queue.hasMore ? <p className="section-hint">More follow; clear these first.</p> : null}
         </>
       )}
-    </main>
+    </ModWorkroom>
   );
 }
 

@@ -82,6 +82,7 @@ import type * as lib_publicIds from "../lib/publicIds.js";
 import type * as lib_publisherIsbnBlocks from "../lib/publisherIsbnBlocks.js";
 import type * as lib_publishers from "../lib/publishers.js";
 import type * as lib_qa from "../lib/qa.js";
+import type * as lib_queueSummary from "../lib/queueSummary.js";
 import type * as lib_ratingStats from "../lib/ratingStats.js";
 import type * as lib_ratings from "../lib/ratings.js";
 import type * as lib_reconcile from "../lib/reconcile.js";
@@ -114,6 +115,7 @@ import type * as lib_unmatched from "../lib/unmatched.js";
 import type * as lib_usernameLookup from "../lib/usernameLookup.js";
 import type * as lib_usernames from "../lib/usernames.js";
 import type * as lib_values from "../lib/values.js";
+import type * as lib_workroom from "../lib/workroom.js";
 import type * as lib_yenPress from "../lib/yenPress.js";
 import type * as moderation from "../moderation.js";
 import type * as openLibrary from "../openLibrary.js";
@@ -141,6 +143,7 @@ import type * as seriesBrowse from "../seriesBrowse.js";
 import type * as sevenSeas from "../sevenSeas.js";
 import type * as sharing from "../sharing.js";
 import type * as users from "../users.js";
+import type * as workroom from "../workroom.js";
 import type * as yenPress from "../yenPress.js";
 
 import type {
@@ -224,6 +227,7 @@ declare const fullApi: ApiFromModules<{
   "lib/publisherIsbnBlocks": typeof lib_publisherIsbnBlocks;
   "lib/publishers": typeof lib_publishers;
   "lib/qa": typeof lib_qa;
+  "lib/queueSummary": typeof lib_queueSummary;
   "lib/ratingStats": typeof lib_ratingStats;
   "lib/ratings": typeof lib_ratings;
   "lib/reconcile": typeof lib_reconcile;
@@ -256,6 +260,7 @@ declare const fullApi: ApiFromModules<{
   "lib/usernameLookup": typeof lib_usernameLookup;
   "lib/usernames": typeof lib_usernames;
   "lib/values": typeof lib_values;
+  "lib/workroom": typeof lib_workroom;
   "lib/yenPress": typeof lib_yenPress;
   moderation: typeof moderation;
   openLibrary: typeof openLibrary;
@@ -283,6 +288,7 @@ declare const fullApi: ApiFromModules<{
   sevenSeas: typeof sevenSeas;
   sharing: typeof sharing;
   users: typeof users;
+  workroom: typeof workroom;
   yenPress: typeof yenPress;
 }>;
 

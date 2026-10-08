@@ -2,12 +2,14 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
-import { CommentsQueueLink, ModGate, ProposalStateChip } from "~/lib/moderation";
-import { Breadcrumbs } from "~/lib/pageScaffold";
+import { ModGate, ProposalStateChip, timestamp } from "~/lib/moderation";
+import { ChangeSummary, ModWorkroom, WorklistSkeleton, recordLabel } from "~/lib/modShell";
 
 /**
  * The viewer's own proposals: drafts to return to, In-Review
  * submissions to watch, and decisions. Data-Team-only; never indexed.
+ * A row is titled by its change comment (the list reads no records) and
+ * says what changes as the review queue does.
  */
 export const Route = createFileRoute("/mod/proposals")({
   head: () => ({ meta: [{ title: "My proposals — MangaDB" }] }),
@@ -28,41 +30,56 @@ function MyProposalsPage() {
 function MyProposals() {
   const rows = useQuery(api.proposals.myProposals, {});
   return (
-    <main className="mod-page mod-queue-page">
-      <Breadcrumbs trail={["My proposals"]} />
-      <h1>My proposals</h1>
-      <p className="section-hint">
-        Drafts to return to, submissions waiting on a Moderator, and decisions — newest first.
-      </p>
-      <nav className="mod-tools" aria-label="Data team tools">
-        <Link to="/mod/queue">Shared review queue</Link>
-        <CommentsQueueLink />
-      </nav>
+    <ModWorkroom
+      current="proposals"
+      title="My proposals"
+      className="mod-queue-page"
+      hint="Drafts to return to, submissions waiting on a Moderator, and decisions, newest first."
+    >
       {rows === undefined ? (
-        <p className="notice">Loading…</p>
+        <WorklistSkeleton />
       ) : rows.length === 0 ? (
         <p className="notice">
           You have no proposals yet. Find a record and use its "Propose a change" link.
         </p>
       ) : (
-        <ol className="queue-list">
+        <ol className="worklist">
           {rows.map((row) => (
-            <li key={row.proposalId} className={row.stale ? "queue-row mod-flagged" : "queue-row"}>
-              <Link to="/mod/proposal/$id" params={{ id: row.proposalId }}>
-                {row.comment || "(no comment yet)"}
-              </Link>
-              <div className="queue-row-meta">
-                <ProposalStateChip state={row.state} />
-                <span>
-                  {row.opCount} op{row.opCount === 1 ? "" : "s"}
-                </span>
-                <span>{row.recordTypes.join(", ") || "no records yet"}</span>
-                {row.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
+            <li
+              key={row.proposalId}
+              className={
+                row.stale ? "work-row work-row--plain mod-flagged" : "work-row work-row--plain"
+              }
+            >
+              <div className="work-body">
+                <div className="work-head">
+                  <Link
+                    className="work-title"
+                    to="/mod/proposal/$id"
+                    params={{ id: row.proposalId }}
+                  >
+                    {row.comment || "(no comment yet)"}
+                  </Link>
+                </div>
+                <ChangeSummary summary={row.summary} />
+                <div className="work-meta">
+                  <span>{row.recordTypes.map(recordLabel).join(", ") || "no records yet"}</span>
+                  <span>
+                    {row.opCount} change{row.opCount === 1 ? "" : "s"}
+                  </span>
+                  <time dateTime={new Date(row.updatedAt).toISOString()}>
+                    {timestamp(row.updatedAt)}
+                  </time>
+                  <span className="work-chips">
+                    <ProposalStateChip state={row.state} />
+                    {row.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
+                  </span>
+                </div>
               </div>
             </li>
           ))}
         </ol>
       )}
-    </main>
+    </ModWorkroom>
   );
 }

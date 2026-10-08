@@ -30,6 +30,7 @@ import {
   seedTeam,
   type TestT,
   type TestUser,
+  queueRows,
 } from "./test.helpers";
 
 /** A second Moderator, for the claims test. */
@@ -128,10 +129,10 @@ describe("proposals — authorization", () => {
       await expect(call()).rejects.toMatchObject({ data: { code: "forbidden" } });
     }
     // The queue is Data-Team-visible — Editors included, plain users not.
-    await expect(
-      t.withIdentity({ subject: PLAIN }).query(api.proposals.reviewQueue, {}),
-    ).rejects.toMatchObject({ data: { code: "forbidden" } });
-    const queue = await t.withIdentity({ subject: EDITOR }).query(api.proposals.reviewQueue, {});
+    await expect(queueRows(t.withIdentity({ subject: PLAIN }), {})).rejects.toMatchObject({
+      data: { code: "forbidden" },
+    });
+    const queue = await queueRows(t.withIdentity({ subject: EDITOR }), {});
     expect(queue).toHaveLength(1);
   });
 });
@@ -412,7 +413,7 @@ describe("proposals — stale-base detection and explicit rebase", () => {
     expect((await t.run((ctx) => ctx.db.get(seriesId)))?.title).toBe("Alpha");
 
     // The queue shows it stale.
-    const queue = await asMod.query(api.proposals.reviewQueue, { staleOnly: true });
+    const queue = await queueRows(asMod, { staleOnly: true });
     expect(queue.map((row) => row.proposalId)).toEqual([proposalId]);
 
     // Explicit rebase (author only) returns it to Draft on the new base.
@@ -758,7 +759,7 @@ describe("proposals — temp-ID multi-record creation", () => {
     });
 
     const asMod = t.withIdentity({ subject: MOD });
-    const queue = await asMod.query(api.proposals.reviewQueue, {
+    const queue = await queueRows(asMod, {
       authorKind: "imports",
     });
     expect(queue.map((row) => row.proposalId)).toEqual([proposalId]);
@@ -804,32 +805,32 @@ describe("proposals — the review queue", () => {
       acknowledgeWarnings: ["newSeries"],
     });
 
-    const all = await asMod.query(api.proposals.reviewQueue, {});
+    const all = await queueRows(asMod, {});
     expect(all.map((row) => row.proposalId)).toEqual([updateId, createId]);
 
-    const updates = await asMod.query(api.proposals.reviewQueue, {
+    const updates = await queueRows(asMod, {
       operation: "update",
     });
     expect(updates.map((row) => row.proposalId)).toEqual([updateId]);
 
-    const seriesRows = await asMod.query(api.proposals.reviewQueue, {
+    const seriesRows = await queueRows(asMod, {
       recordType: "series",
     });
     expect(seriesRows).toHaveLength(2);
 
-    const byAuthor = await asMod.query(api.proposals.reviewQueue, {
+    const byAuthor = await queueRows(asMod, {
       author: "carol",
     });
     expect(byAuthor).toHaveLength(2);
-    expect(await asMod.query(api.proposals.reviewQueue, { author: "bob" })).toHaveLength(0);
+    expect(await queueRows(asMod, { author: "bob" })).toHaveLength(0);
 
-    const warned = await asMod.query(api.proposals.reviewQueue, {
+    const warned = await queueRows(asMod, {
       warningsOnly: true,
     });
     expect(warned.map((row) => row.proposalId)).toEqual([createId]);
 
-    expect(await asMod.query(api.proposals.reviewQueue, { staleOnly: true })).toHaveLength(0);
-    expect(await asMod.query(api.proposals.reviewQueue, { minAgeHours: 1 })).toHaveLength(0);
+    expect(await queueRows(asMod, { staleOnly: true })).toHaveLength(0);
+    expect(await queueRows(asMod, { minAgeHours: 1, now: Date.now() })).toHaveLength(0);
   });
 
   it("claims coordinate without exclusive authority", async () => {
@@ -841,7 +842,7 @@ describe("proposals — the review queue", () => {
     const asMod2 = t.withIdentity({ subject: beth.subject });
 
     await asMod.mutation(api.proposals.claimProposal, { proposalId });
-    let queue = await asMod.query(api.proposals.reviewQueue, {});
+    let queue = await queueRows(asMod, {});
     expect(queue[0].claimedBy).toBe("bob");
 
     // Another moderator can still decide — the claim is a signal, not a lock.
@@ -849,7 +850,7 @@ describe("proposals — the review queue", () => {
       proposalId,
     });
     expect(result.status).toBe("approved");
-    queue = await asMod.query(api.proposals.reviewQueue, {});
+    queue = await queueRows(asMod, {});
     expect(queue).toHaveLength(0);
   });
 
@@ -1034,7 +1035,7 @@ describe("proposals — clearing a Human Override", () => {
     ]);
     // In review, nothing has changed yet.
     expect((await t.run((ctx) => ctx.db.get(seriesId)))?.overriddenFields).toEqual(["title"]);
-    const queue = await asMod.query(api.proposals.reviewQueue, { operation: "clearOverride" });
+    const queue = await queueRows(asMod, { operation: "clearOverride" });
     expect(queue.map((row) => row.proposalId)).toEqual([proposalId]);
     const detail = await asMod.query(api.proposals.proposalDetail, { proposalId });
     expect(detail?.versions[0]?.ops).toEqual([

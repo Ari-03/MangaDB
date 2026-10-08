@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
-import { isDue, possiblyFuture } from "./imports";
+import { isDue, MAX_SOURCES, possiblyFuture } from "./imports";
 import { isStranded, STRANDED_AFTER_MS } from "./lib/importRuns";
 import { insertObservation, insertSeries, seedCatalog } from "./test.factories";
 import {
@@ -825,18 +825,22 @@ describe("source health alert emails", () => {
 
 // ---------- the Data Team dashboard (#37) ----------
 
-describe("imports.dashboard", () => {
+describe("imports.dashboardPage and the legacy dashboard", () => {
   it("is data-team gated and flags unhealthy sources first with last-run summaries", async () => {
     const t = makeT();
     await setup(t);
     await seedRegistry(t);
     for (let i = 0; i < 3; i++)
       await finishRun(t, "failed", { sourceKey: "kodansha", recordsSeen: 5 });
-    await expect(signedIn(t, dave).query(api.imports.dashboard, {})).rejects.toMatchObject({
+    await expect(signedIn(t, dave).query(api.imports.dashboardPage, {})).rejects.toMatchObject({
       data: { code: "forbidden" },
     });
 
-    const rows = await signedIn(t, alice).query(api.imports.dashboard, {});
+    const { sources: rows, hasMore } = await signedIn(t, alice).query(
+      api.imports.dashboardPage,
+      {},
+    );
+    expect(hasMore).toBe(false);
     expect(rows.map((r) => r.key)[0]).toBe("kodansha"); // unhealthy first
     const kodansha = rows.find((r) => r.key === "kodansha")!;
     expect(kodansha).toMatchObject({
@@ -855,6 +859,51 @@ describe("imports.dashboard", () => {
     expect(ann.healthState).toBe("healthy");
     expect(ann.lastRun).toBeNull();
     await drain(t); // the health alert the transition scheduled
+  });
+
+  it("keeps the legacy dashboard's array of every source for older clients", async () => {
+    const t = makeT();
+    await setup(t);
+    await seedRegistry(t);
+    await finishRun(t, "failed", { sourceKey: "kodansha", recordsSeen: 5 });
+    await expect(signedIn(t, dave).query(api.imports.dashboard, {})).rejects.toMatchObject({
+      data: { code: "forbidden" },
+    });
+    const legacy = await signedIn(t, alice).query(api.imports.dashboard, {});
+    expect(Array.isArray(legacy)).toBe(true);
+    // The same rows, health fields and order the page returns.
+    const page = await signedIn(t, alice).query(api.imports.dashboardPage, {});
+    expect(legacy).toEqual(page.sources);
+    expect(legacy.map((row) => row.key).sort()).toEqual([...SOURCE_KEYS].sort());
+    expect(legacy.find((row) => row.key === "kodansha")).toMatchObject({
+      consecutiveFailures: 1,
+      lastRun: { status: "failed", recordsSeen: 5, errorCount: 1 },
+    });
+    await drain(t);
+  });
+
+  it("caps the page at MAX_SOURCES and says more exist; the legacy array keeps them all", async () => {
+    const t = makeT();
+    await setup(t);
+    await t.run(async (ctx) => {
+      for (let i = 0; i <= MAX_SOURCES; i++) {
+        await ctx.db.insert("approvedSources", {
+          key: `source-${String(i).padStart(3, "0")}`,
+          name: `Source ${i}`,
+          enabled: true,
+          scope: "test",
+          fieldAuthority: {},
+          cadence: "daily",
+          healthState: "healthy",
+          consecutiveFailures: 0,
+        });
+      }
+    });
+    const page = await signedIn(t, alice).query(api.imports.dashboardPage, {});
+    expect(page.sources).toHaveLength(MAX_SOURCES);
+    expect(page.hasMore).toBe(true);
+    const legacy = await signedIn(t, alice).query(api.imports.dashboard, {});
+    expect(legacy).toHaveLength(MAX_SOURCES + 1);
   });
 });
 

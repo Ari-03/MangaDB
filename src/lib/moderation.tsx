@@ -1,9 +1,10 @@
 // Moderation affordances (spec §5). On catalog pages: the public per-record
 // revision history — final diff, author, approver, timestamp, change
 // comment, citation — and the moderator/administrator edit links. On the
-// /mod pages: the access gate and the tool links. All of it fetches
+// /mod pages: the access gate. All of it fetches
 // client-side through the reactive Convex client; role checks here are
 // cosmetic (the moderation functions re-check authorization on every call).
+// The workroom frame and its tool tabs are lib/modShell.tsx.
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
@@ -11,7 +12,6 @@ import type { FunctionReturnType } from "convex/server";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { FEATURES } from "../../convex/lib/features";
 import type { Citation } from "../../convex/lib/moderationFields";
 import { Cover } from "~/lib/cover";
 import type { WrittenBy } from "../../convex/moderation";
@@ -328,55 +328,6 @@ export function ModGate({
     );
   }
   return children;
-}
-
-const MOD_TOOLS = [
-  { to: "/mod/queue", label: "Review queue" },
-  { to: "/mod/imports", label: "Imports" },
-  { to: "/mod/launch", label: "Launch" },
-  { to: "/mod/packaging", label: "Catalog gaps" },
-] as const;
-
-/**
- * The data team's tool links under a dashboard's heading, leaving out the
- * page they sit on, then the Comments queue.
- */
-export function ModTools({ current }: { current?: (typeof MOD_TOOLS)[number]["to"] }) {
-  return (
-    <nav className="mod-tools" aria-label="Data team tools">
-      {MOD_TOOLS.filter((tool) => tool.to !== current).map((tool) => (
-        <Link key={tool.to} to={tool.to}>
-          {tool.label}
-        </Link>
-      ))}
-      <CommentsQueueLink />
-    </nav>
-  );
-}
-
-/**
- * The Comments queue link for the `.mod-tools` navs, with the number of
- * Comments awaiting review as a badge ("100+" past the query's cap).
- * Nothing while Comments are switched off (FEATURES.comments).
- */
-export function CommentsQueueLink() {
-  if (!FEATURES.comments) return null;
-  return <CommentsQueueLinkInner />;
-}
-
-function CommentsQueueLinkInner() {
-  const counts = useQuery(api.comments.queueCounts, {});
-  const pending = counts?.pending ?? 0;
-  return (
-    <Link to="/mod/comments">
-      Comments
-      {pending > 0 ? (
-        <span className="mod-badge" role="img" aria-label={`${pending} awaiting review`}>
-          {pending >= 100 ? "100+" : pending}
-        </span>
-      ) : null}
-    </Link>
-  );
 }
 
 /**

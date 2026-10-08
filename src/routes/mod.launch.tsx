@@ -6,8 +6,8 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
-import { CommentsQueueLink, ModGate, timestamp } from "~/lib/moderation";
-import { Breadcrumbs } from "~/lib/pageScaffold";
+import { ModGate, timestamp } from "~/lib/moderation";
+import { ModWorkroom } from "~/lib/modShell";
 import { useIsModerator } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
@@ -38,26 +38,18 @@ function LaunchPage() {
 function Launch() {
   const canAct = useIsModerator();
   return (
-    <main className="mod-page launch-page">
-      <Breadcrumbs trail={["Launch"]} />
-      <h1>Seeding, quality gates &amp; launch</h1>
-      <p className="section-hint">
-        Spec §7: run the four seed stages in order under Bootstrap Mode, pass the quality gates,
-        switch Bootstrap Mode off permanently, and verify the checklist before opening mangadb.org.
-      </p>
-      <nav className="mod-tools" aria-label="Data team tools">
-        <Link to="/mod/imports">Imports</Link>
-        <Link to="/mod/queue">Review queue</Link>
-        <Link to="/mod/packaging">Catalog gaps</Link>
-        <CommentsQueueLink />
-      </nav>
-
+    <ModWorkroom
+      current="launch"
+      title="Seeding, quality gates & launch"
+      className="launch-page"
+      hint="Spec §7: run the four seed stages in order under Bootstrap Mode, pass the quality gates, switch Bootstrap Mode off permanently, and verify the checklist before opening mangadb.org."
+    >
       <Checklist />
       <SeedStages canAct={canAct} />
       <QaSamples canAct={canAct} />
       <DuplicateSweep canAct={canAct} />
       <CorrectionLoop canAct={canAct} />
-    </main>
+    </ModWorkroom>
   );
 }
 

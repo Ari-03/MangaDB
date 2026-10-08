@@ -1,6 +1,6 @@
 // "Prepare placement" on the pages, driven against convex-test through the
 // fake React in test.react.ts: the Held books list on /mod/imports
-// (routes/mod.imports.tsx Placement) and the placement panel of the
+// (routes/mod.imports.tsx Placement, on its Held books panel) and the placement panel of the
 // Proposal page (routes/mod.proposal.$id.tsx PlacementPanel). useQuery and
 // usePaginatedQuery answer from snapshots the tests take from the backend.
 
@@ -63,11 +63,20 @@ vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: Record<string, unknown>) => ({
     options,
     useParams: () => ({ id: fakes.proposalId }),
+    // /mod/imports opens on its Held books panel.
+    useSearch: () => ({ panel: "held" }),
   }),
+  // The workroom's error boundary renders its page.
+  CatchBoundary: ({ children }: { children: ReactNode }) => children,
   Link: "a",
   useNavigate: () => fakes.navigate,
+  useRouter: () => ({ invalidate: () => undefined, state: { location: { href: "" } } }),
 }));
-vi.mock("~/lib/viewer", () => ({ useIsDataTeam: () => true, useIsModerator: () => false }));
+vi.mock("~/lib/viewer", () => ({
+  useIsDataTeam: () => true,
+  useIsModerator: () => false,
+  useReadyViewer: () => null,
+}));
 
 const imports = (await import("../routes/mod.imports")).Route.options.component as () => ReactNode;
 const proposal = (await import("../routes/mod.proposal.$id")).Route.options
@@ -139,7 +148,7 @@ async function show(t: TestT, user: TestUser) {
   const as = signedIn(t, user);
   harness.backend = as;
   setQuery(api.users.viewer, { username: user.username });
-  setQuery(api.imports.dashboard, []);
+  setQuery(api.imports.dashboardPage, { sources: [], hasMore: false });
   setQuery(api.imports.recentRuns, []);
   setQuery(
     api.imports.heldBooks,
@@ -156,7 +165,7 @@ async function show(t: TestT, user: TestUser) {
 
 /** The held book row titled `title`: its hosts, between its title and the next row's. */
 function row(tree: Host[], title: string): Host[] {
-  const items = tree.filter((host) => host.type === "li" && host.props.className === "import-run");
+  const items = tree.filter((host) => host.type === "li" && host.props.className === "work-row");
   const item = items.find((host) => text(host.props.children).includes(title));
   if (!item) throw new Error(`No held book "${title}"`);
   const start = tree.indexOf(item);
@@ -349,7 +358,10 @@ describe("the placement panel on the Proposal page", () => {
     ).toEqual(["1", "1", false, "", ""]);
 
     // A later Save, say of the comment alone, keeps Volume 1.
-    const comment = after.find((host) => host.type === "textarea");
+    // The placement form's comment, not the header's bug report.
+    const comment = after.find(
+      (host) => host.type === "textarea" && host.props.id !== "bug-report-text",
+    );
     typeInto(comment, "Volume 1, checked against the cover.");
     const form = mount(proposal).find((host) => host.type === "form")!;
     (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });

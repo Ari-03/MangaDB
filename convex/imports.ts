@@ -31,6 +31,7 @@ import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
 import { ofOtherPrinting } from "./lib/releaseIsbns";
 import { requireDataTeam, requireModerator } from "./lib/roles";
+import { observationRatesMature } from "./lib/mature";
 import { LOCK_NOTE } from "./lib/unmatched";
 import { revisionsOf } from "./moderation";
 import { coverInUse } from "./lib/coverRefs";
@@ -287,45 +288,78 @@ export const recentRuns = query({
 });
 
 /**
- * The Data Team dashboard's source table: every registry row with its
- * health flag and last-run summary, unhealthy sources first.
+ * The most registry rows dashboardPage (and the workroom's source count,
+ * workroom.ts) reads. The registry holds one row per Approved Source, seven
+ * today; past this the page says more exist.
+ */
+export const MAX_SOURCES = 50;
+
+/**
+ * The dashboard's source rows for these registry rows: each with its health
+ * flag, enablement and last-run summary, unhealthy sources first.
+ */
+async function sourceRowsOf(ctx: QueryCtx, sources: ReadonlyArray<Doc<"approvedSources">>) {
+  const rows = [];
+  for (const source of sources) {
+    const lastRun = await ctx.db
+      .query("importRuns")
+      .withIndex("by_source", (q) => q.eq("sourceKey", source.key))
+      .order("desc")
+      .first();
+    rows.push({
+      key: source.key,
+      name: source.name,
+      enabled: source.enabled,
+      cadence: source.cadence,
+      healthState: source.healthState,
+      consecutiveFailures: source.consecutiveFailures,
+      lastRun: lastRun
+        ? {
+            status: lastRun.status,
+            startedAt: lastRun._creationTime,
+            finishedAt: lastRun.finishedAt ?? null,
+            recordsSeen: lastRun.recordsSeen,
+            recordsChanged: lastRun.recordsChanged,
+            errorCount: lastRun.errors.length,
+          }
+        : null,
+    });
+  }
+  return rows.sort(
+    (a, b) =>
+      Number(b.healthState === "unhealthy") - Number(a.healthState === "unhealthy") ||
+      a.key.localeCompare(b.key),
+  );
+}
+
+/**
+ * The Data Team dashboard's source table as an array of every registry row
+ * (sourceRowsOf). This is the contract clients built before dashboardPage
+ * still call, kept with its array result so a Worker or open tab older than
+ * the Convex deploy keeps working; it reads the whole registry. The site
+ * calls dashboardPage. Remove this once no deployed client calls it.
  */
 export const dashboard = query({
   args: {},
   handler: async (ctx) => {
     await requireDataTeam(ctx);
-    const sources = await ctx.db.query("approvedSources").collect();
-    const rows = [];
-    for (const source of sources) {
-      const lastRun = await ctx.db
-        .query("importRuns")
-        .withIndex("by_source", (q) => q.eq("sourceKey", source.key))
-        .order("desc")
-        .first();
-      rows.push({
-        key: source.key,
-        name: source.name,
-        enabled: source.enabled,
-        cadence: source.cadence,
-        healthState: source.healthState,
-        consecutiveFailures: source.consecutiveFailures,
-        lastRun: lastRun
-          ? {
-              status: lastRun.status,
-              startedAt: lastRun._creationTime,
-              finishedAt: lastRun.finishedAt ?? null,
-              recordsSeen: lastRun.recordsSeen,
-              recordsChanged: lastRun.recordsChanged,
-              errorCount: lastRun.errors.length,
-            }
-          : null,
-      });
-    }
-    return rows.sort(
-      (a, b) =>
-        Number(b.healthState === "unhealthy") - Number(a.healthState === "unhealthy") ||
-        a.key.localeCompare(b.key),
-    );
+    return await sourceRowsOf(ctx, await ctx.db.query("approvedSources").collect());
+  },
+});
+
+/**
+ * The Data Team dashboard's source table: registry rows (sourceRowsOf), at
+ * most MAX_SOURCES, with `hasMore` past that.
+ */
+export const dashboardPage = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireDataTeam(ctx);
+    const read = await ctx.db.query("approvedSources").take(MAX_SOURCES + 1);
+    return {
+      sources: await sourceRowsOf(ctx, read.slice(0, MAX_SOURCES)),
+      hasMore: read.length > MAX_SOURCES,
+    };
   },
 });
 
@@ -838,6 +872,8 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id
     seriesTitle: text(book?.seriesTitle),
     volumeLabel: text(book?.volumeLabel) ?? text(book?.label),
     series: series ? { publicId: series.publicId, title: series.title } : null,
+    // A Mature Series' book, or one its source rates 18+: the row's jacket is concealed.
+    mature: series?.mature === true || (observation ? observationRatesMature(observation) : false),
     observationId: hold.observationId,
     proposal:
       queued?.state === "draft" || queued?.state === "inReview"

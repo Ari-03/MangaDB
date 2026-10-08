@@ -3,6 +3,7 @@
 // useState, useRef and useMemo keep each component's values in
 // `harness.slots` across renders, useEffect queues its effect for `mount`
 // to run once the render is done (again only when a dependency changed),
+// useContext reads a context's default (the fake tree has no providers),
 // and useSyncExternalStore reads the store's snapshot directly, recording
 // the subscribe function it was handed. `backendHooks` is a convex/react
 // whose useQuery answers from `harness.snapshot` (nothing for "skip", and
@@ -107,6 +108,10 @@ vi.mock("react", async (importOriginal) => {
     if (!(index in state.slots)) state.slots[index] = { current: initial };
     return state.slots[index] as { current: T };
   }
+  // No providers exist in the fake tree: a context reads its default.
+  function useContext<T>(context: { _currentValue: T }) {
+    return context._currentValue;
+  }
   function useSyncExternalStore<T>(
     subscribe: (listener: () => void) => () => void,
     snapshot: () => T,
@@ -114,7 +119,15 @@ vi.mock("react", async (importOriginal) => {
     state.subscribe = subscribe;
     return snapshot();
   }
-  return { ...actual, useState, useEffect, useMemo, useRef, useSyncExternalStore };
+  return {
+    ...actual,
+    useState,
+    useEffect,
+    useMemo,
+    useRef,
+    useContext,
+    useSyncExternalStore,
+  };
 });
 
 /** convex/react wired to the harness: queries from the snapshot, mutations to the backend. */

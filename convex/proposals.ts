@@ -12,6 +12,7 @@
 // limits and bulk caps ride the Convex rate-limiter component.
 
 import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { components } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -23,6 +24,7 @@ import {
   displayInfo,
   getCanonical,
   insertRevision,
+  latestRevisionOf,
   requireOverridden,
   revisionsOf,
   validateChanges,
@@ -35,6 +37,7 @@ import {
 import { citation as citationValidator, evidence, recordRef } from "./schema";
 import { fieldAttribution } from "./lib/attribution";
 import { checkCoverUse, coverBlobsOf, pinCovers } from "./lib/coverRefs";
+import { coverUrl } from "./lib/covers";
 import { checkEvidence } from "./lib/evidence";
 import {
   applyCreatePlan,
@@ -50,10 +53,22 @@ import {
 import { fail } from "./lib/errors";
 import { toIsbn13 } from "./lib/isbn";
 import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
-import { editorialField, fieldDescriptor, type Citation } from "./lib/moderationFields";
+import {
+  editorialField,
+  fieldDescriptor,
+  type Citation,
+  type RecordType,
+} from "./lib/moderationFields";
+import { observationRatesMature } from "./lib/mature";
 import { linkObservation } from "./lib/observations";
 import { captureModeration } from "./lib/posthog";
 import type { ProposalWarning } from "./lib/proposalWarnings";
+import {
+  matchesQueueFilters,
+  queueKind,
+  reportSeriesPublicId,
+  summarizeVersion,
+} from "./lib/queueSummary";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   applyMerge,
@@ -397,7 +412,7 @@ async function staleRecordsOf(
       stale.push({ type: ref.type, id: ref.id as string, reason: "unavailable" });
       continue;
     }
-    const latest = (await revisionsOf(ctx, ref))[0];
+    const latest = await latestRevisionOf(ctx, ref);
     if ((latest?._id ?? null) !== (op.baseRevisionId ?? null)) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "baseChanged" });
     } else if (op.kind === "clearOverride" && !(doc.overriddenFields ?? []).includes(op.field)) {
@@ -1256,23 +1271,232 @@ async function renderEvidence(ctx: QueryCtx | MutationCtx, rows: Evidence[]) {
 
 // ---------- the shared review queue (spec §5) ----------
 
+/** The most Proposals one queue page may read; each costs a version read and staleness checks. */
+export const REVIEW_PAGE_MAX = 50;
+
+/**
+ * One In-Review Proposal's queue facets: its current version, the row both
+ * queue queries return (what it touches, who wrote it, its warnings,
+ * staleness and claim), and the summary (lib/queueSummary.ts), whose `kind`
+ * the filters also read. Null when the Proposal has no submitted version.
+ */
+async function queueRowOf(
+  ctx: QueryCtx,
+  usernameOf: ReturnType<typeof usernameLookup>,
+  proposal: Doc<"proposals">,
+) {
+  const version = await currentVersionOf(ctx, proposal);
+  if (!version) return null;
+  return {
+    version,
+    summary: summarizeVersion(
+      version.ops,
+      proposal.author,
+      version.changeComment,
+      version.evidence,
+    ),
+    row: {
+      proposalId: proposal._id as string,
+      versionNo: proposal.currentVersionNo,
+      comment: version.changeComment,
+      opCount: version.ops.length,
+      opKinds: opKindsOf(version.ops),
+      recordTypes: recordTypesOf(version.ops),
+      author: await authorLabelOf(usernameOf, proposal.author),
+      warnings: version.warningsAcknowledged ?? [],
+      stale: proposal.stale || (await staleRecordsOf(ctx, version.ops)).length > 0,
+      claimedBy: await usernameOf(proposal.claimedBy),
+      submittedAt: proposal.submittedAt ?? proposal._creationTime,
+    },
+  };
+}
+
+/** A series as a queue row's subject. */
+function seriesSubject(series: Doc<"series">, isbn13: string | null = null) {
+  return {
+    recordType: "series" as RecordType,
+    title: series.title,
+    page: { entity: "series" as const, publicId: series.publicId },
+    isbn13,
+    coverUrl: null as string | null,
+    mature: series.mature === true,
+  };
+}
+
+/** Whether any of these Series is a Mature Series. */
+async function anyMature(ctx: QueryCtx, seriesIds: ReadonlyArray<Id<"series">>) {
+  for (const id of seriesIds) {
+    if ((await ctx.db.get(id))?.mature === true) return true;
+  }
+  return false;
+}
+
+/**
+ * The art a row's jacket may show for a record and whether it is a Mature
+ * Series' (the jacket is concealed then): a Release, Variant or Bundle's
+ * stored cover and ISBN. Other records have no art, so nothing is read.
+ */
+async function subjectArt(ctx: QueryCtx, type: RecordType, doc: CatalogDoc) {
+  const none = { isbn13: null as string | null, coverUrl: null as string | null, mature: false };
+  if (type === "release") {
+    const release = doc as Doc<"releases">;
+    return {
+      isbn13: release.isbn13 ?? null,
+      coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
+      mature: await anyMature(ctx, release.seriesIds),
+    };
+  }
+  if (type === "releaseVariant") {
+    const variant = doc as Doc<"releaseVariants">;
+    const release = await ctx.db.get(variant.releaseId);
+    return {
+      isbn13: release?.isbn13 ?? null,
+      coverUrl: await coverUrl(
+        ctx,
+        variant.coverImage?.storageId ?? release?.coverImage?.storageId,
+      ),
+      mature: release ? await anyMature(ctx, release.seriesIds) : false,
+    };
+  }
+  if (type === "releaseBundle") {
+    const bundle = doc as Doc<"releaseBundles">;
+    // A box set collects one Series; its first member says which.
+    const member = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+      .first();
+    const release = member ? await ctx.db.get(member.releaseId) : null;
+    return {
+      isbn13: bundle.isbn13 ?? null,
+      coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
+      mature: release ? await anyMature(ctx, release.seriesIds) : false,
+    };
+  }
+  if (type === "series") return { ...none, mature: (doc as Doc<"series">).mature === true };
+  return none;
+}
+
+/** The most observation evidence rows one queue subject reads for an 18+ rating. */
+const SUBJECT_OBSERVATION_READS = 10;
+
+/**
+ * Whether the version's observation evidence rates its book 18+
+ * (observationRatesMature). A held book's placement cites the observation
+ * that already rates it, while the Series it lands in is not flagged until
+ * approval links it. Reads at most SUBJECT_OBSERVATION_READS observations.
+ */
+async function evidenceRatesMature(ctx: QueryCtx, evidence: ReadonlyArray<Evidence>) {
+  const ids = evidence
+    .flatMap((row) => (row.kind === "observation" ? [row.observationId] : []))
+    .slice(0, SUBJECT_OBSERVATION_READS);
+  for (const id of ids) {
+    const observation = await ctx.db.get(id);
+    if (observation && observationRatesMature(observation)) return true;
+  }
+  return false;
+}
+
+/**
+ * The record a queue row names (recordSubjectOf), concealed as mature when
+ * that record is a Mature Series' or the version's source evidence rates
+ * the book 18+, as the Held Books list does for the same observation.
+ */
+async function queueSubjectOf(ctx: QueryCtx, version: Doc<"proposalVersions">) {
+  const subject = await recordSubjectOf(ctx, version);
+  if (subject && !subject.mature && (await evidenceRatesMature(ctx, version.evidence))) {
+    return { ...subject, mature: true };
+  }
+  return subject;
+}
+
+/**
+ * The record a queue row names: the first record an op refers to (a
+ * merge's survivor), else the Series a creation adds to (with the new
+ * Release's ISBN for its jacket), else the Series a report was filed from.
+ * "(missing record)" when that record is gone; null when nothing names one.
+ */
+async function recordSubjectOf(ctx: QueryCtx, version: Doc<"proposalVersions">) {
+  const { ops } = version;
+  const refOp = ops.find((op) => op.kind === "merge" || "ref" in op);
+  const ref = refOp?.kind === "merge" ? refOp.survivor : refOp && "ref" in refOp ? refOp.ref : null;
+  if (ref) {
+    const doc = await getCanonical(ctx, ref);
+    if (!doc) {
+      return {
+        recordType: ref.type,
+        title: "(missing record)",
+        page: null,
+        isbn13: null,
+        coverUrl: null,
+        mature: false,
+      };
+    }
+    const { title, backLink } = await displayInfo(ctx, ref.type, doc);
+    return {
+      recordType: ref.type,
+      title,
+      page: backLink ? { entity: backLink.entity, publicId: backLink.publicId } : null,
+      ...(await subjectArt(ctx, ref.type, doc)),
+    };
+  }
+  const creates = ops.filter((op): op is CreateOpInput => op.kind === "create");
+  if (creates.length > 0) {
+    const field = (op: CreateOpInput, name: string): unknown =>
+      (op.fields as Record<string, unknown> | undefined)?.[name];
+    const isbn = creates
+      .map((op) => field(op, "isbn13"))
+      .find((value) => typeof value === "string");
+    const isbn13 = typeof isbn === "string" ? isbn : null;
+    for (const op of creates) {
+      const raw = field(op, "seriesId");
+      const id = typeof raw === "string" ? ctx.db.normalizeId("series", raw) : null;
+      const series = id ? await ctx.db.get(id) : null;
+      if (series) return seriesSubject(series, isbn13);
+    }
+    const newSeries = creates.find((op) => op.table === "series");
+    if (newSeries) {
+      return {
+        recordType: "series" as RecordType,
+        title: String(field(newSeries, "title") ?? "New series"),
+        page: null,
+        isbn13,
+        coverUrl: null,
+        mature: false,
+      };
+    }
+    return null;
+  }
+  const publicId = reportSeriesPublicId(version.evidence);
+  if (publicId === null) return null;
+  const series = await ctx.db
+    .query("series")
+    .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
+    .unique();
+  return series ? seriesSubject(series) : null;
+}
+
+/** The filters both queue queries take (lib/queueSummary.ts QueueFilters). */
+const queueFilterArgs = {
+  operation: v.optional(v.string()),
+  recordType: v.optional(v.string()),
+  authorKind: v.optional(v.union(v.literal("imports"), v.literal("humans"))),
+  author: v.optional(v.string()),
+  staleOnly: v.optional(v.boolean()),
+  warningsOnly: v.optional(v.boolean()),
+  minAgeHours: v.optional(v.number()),
+};
+
 /**
  * Every In-Review proposal, oldest first, with the facets the queue filters
- * on: operation, record type, author (imports vs humans, or one name),
- * warnings, staleness, and age. Data-Team-visible only; filters apply in
- * memory after the index scan (the queue holds tens of rows, not millions).
- * Claims are shown so reviewers coordinate without exclusive authority.
+ * on and its age in `ageMs`, filtered with the same rules as
+ * reviewQueuePage. Data-Team-visible only. This is the contract clients
+ * built before the paged queue still call, kept with its arguments and
+ * array result so a Worker or open tab older than the Convex deploy keeps
+ * working; it reads the whole In-Review index. The site calls
+ * reviewQueuePage. Remove this once no deployed client calls it.
  */
 export const reviewQueue = query({
-  args: {
-    operation: v.optional(v.string()),
-    recordType: v.optional(v.string()),
-    authorKind: v.optional(v.union(v.literal("imports"), v.literal("humans"))),
-    author: v.optional(v.string()),
-    staleOnly: v.optional(v.boolean()),
-    warningsOnly: v.optional(v.boolean()),
-    minAgeHours: v.optional(v.number()),
-  },
+  args: queueFilterArgs,
   handler: async (ctx, args) => {
     await requireDataTeam(ctx);
     const proposals = await ctx.db
@@ -1285,45 +1509,66 @@ export const reviewQueue = query({
     const now = Date.now();
     const rows = [];
     for (const proposal of proposals) {
-      const version = await currentVersionOf(ctx, proposal);
-      if (!version) continue;
-      const stale = proposal.stale || (await staleRecordsOf(ctx, version.ops)).length > 0;
-      rows.push({
-        proposalId: proposal._id as string,
-        versionNo: proposal.currentVersionNo,
-        comment: version.changeComment,
-        opCount: version.ops.length,
-        opKinds: opKindsOf(version.ops),
-        recordTypes: recordTypesOf(version.ops),
-        author: await authorLabelOf(usernameOf, proposal.author),
-        warnings: version.warningsAcknowledged ?? [],
-        stale,
-        claimedBy: await usernameOf(proposal.claimedBy),
-        submittedAt: proposal.submittedAt ?? proposal._creationTime,
-        ageMs: now - (proposal.submittedAt ?? proposal._creationTime),
+      const found = await queueRowOf(ctx, usernameOf, proposal);
+      if (!found) continue;
+      if (!matchesQueueFilters({ ...found.row, kind: found.summary.kind }, { ...args, now })) {
+        continue;
+      }
+      rows.push({ ...found.row, ageMs: now - found.row.submittedAt });
+    }
+    return rows;
+  },
+});
+
+/**
+ * The shared review queue, one page at a time: In-Review Proposals, oldest
+ * submission first, Data-Team-visible only. Every Proposal the page reads
+ * is returned: one that passes the filters (lib/queueSummary.ts
+ * matchesQueueFilters) as a full row with its subject and summary, any
+ * other as `{ matches: false }`, so the page can say how many it checked
+ * and nothing is dropped unseen. Pages hold at most REVIEW_PAGE_MAX.
+ * `minAgeHours` measures from the client's `now` (queries never read the
+ * clock). Claims are shown so reviewers coordinate without exclusive
+ * authority.
+ */
+export const reviewQueuePage = query({
+  args: {
+    ...queueFilterArgs,
+    paginationOpts: paginationOptsValidator,
+    kind: v.optional(queueKind),
+    now: v.optional(v.number()),
+  },
+  handler: async (ctx, { paginationOpts, ...filters }) => {
+    await requireDataTeam(ctx);
+    if (paginationOpts.numItems > REVIEW_PAGE_MAX) {
+      fail("pageTooLarge", `Ask for at most ${REVIEW_PAGE_MAX} proposals a page.`);
+    }
+    if (filters.minAgeHours !== undefined && filters.now === undefined) {
+      fail("nowRequired", "Filtering by age needs the current time.");
+    }
+    const result = await ctx.db
+      .query("proposals")
+      .withIndex("by_state", (q) => q.eq("state", "inReview"))
+      .order("asc")
+      .paginate(paginationOpts);
+
+    const usernameOf = usernameLookup(ctx);
+    const page = [];
+    for (const proposal of result.page) {
+      const found = await queueRowOf(ctx, usernameOf, proposal);
+      if (!found || !matchesQueueFilters({ ...found.row, kind: found.summary.kind }, filters)) {
+        page.push({ proposalId: proposal._id as string, matches: false as const });
+        continue;
+      }
+      page.push({
+        ...found.row,
+        kind: found.summary.kind,
+        summary: found.summary,
+        matches: true as const,
+        subject: await queueSubjectOf(ctx, found.version),
       });
     }
-
-    return rows.filter((row) => {
-      if (args.operation && !row.opKinds.includes(args.operation)) return false;
-      if (args.recordType && !row.recordTypes.includes(args.recordType)) {
-        return false;
-      }
-      if (args.authorKind === "imports" && row.author.kind !== "source") {
-        return false;
-      }
-      if (args.authorKind === "humans" && row.author.kind !== "user") return false;
-      if (args.author) {
-        const name = row.author.kind === "user" ? row.author.username : row.author.sourceKey;
-        if (name !== args.author) return false;
-      }
-      if (args.staleOnly && !row.stale) return false;
-      if (args.warningsOnly && row.warnings.length === 0) return false;
-      if (args.minAgeHours !== undefined && row.ageMs < args.minAgeHours * 60 * 60 * 1000) {
-        return false;
-      }
-      return true;
-    });
+    return { ...result, page };
   },
 });
 
@@ -1472,13 +1717,21 @@ export const myProposals = query({
     for (const proposal of proposals) {
       const version = await currentVersionOf(ctx, proposal);
       const ops = version?.ops ?? proposal.draft?.ops ?? [];
+      const comment = version?.changeComment ?? proposal.draft?.comment ?? "";
       rows.push({
         proposalId: proposal._id as string,
         state: proposal.state,
         stale: Boolean(proposal.stale),
-        comment: version?.changeComment ?? proposal.draft?.comment ?? "",
+        comment,
         opCount: ops.length,
         recordTypes: recordTypesOf(ops),
+        // What the queue row says; no reads (lib/queueSummary.ts).
+        summary: summarizeVersion(
+          ops,
+          proposal.author,
+          comment,
+          version?.evidence ?? proposal.draft?.evidence ?? [],
+        ),
         updatedAt: proposal.decidedAt ?? proposal.submittedAt ?? proposal._creationTime,
       });
     }

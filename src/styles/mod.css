@@ -67,28 +67,6 @@
   border-bottom-color: var(--accent);
 }
 
-/* The cross-links between the data team's tools, lifted out of the prose. */
-.mod-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 18px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-  font-size: 0.88rem;
-  font-weight: 700;
-}
-.mod-tools a {
-  color: var(--text-dim);
-  padding: 4px 0;
-  border-bottom: 2px solid transparent;
-}
-.mod-tools a:hover {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-
 /* ---------- panels and rows ----------------------------------------------- */
 
 /* One block of the workroom: a titled surface with hairline-separated rows. */
@@ -1398,5 +1376,708 @@
   .mod-form,
   .mod-edit-form {
     max-width: none;
+  }
+}
+
+/* ---------- workroom (lib/modShell.tsx) ---------------------------------- */
+
+/* The frame every /mod tool page shares: breadcrumb, a ruled strip of tool
+   tabs (the /me tab look), the help group at its right end, then the title
+   and one line of hint. */
+.mod-nav-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.mod-nav {
+  display: flex;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mod-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  transition:
+    color 130ms ease,
+    border-color 130ms ease;
+}
+.mod-tab:hover {
+  color: var(--text);
+}
+.mod-tab[aria-current="page"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.mod-tab-count {
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 0.72rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mute);
+}
+.mod-tab[aria-current="page"] .mod-tab-count {
+  background: transparent;
+  border-color: transparent;
+  color: inherit;
+}
+.mod-tab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mod-bad);
+}
+.mod-help {
+  display: flex;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 9px 0 10px;
+}
+.mod-help-link {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mod-help-link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.mod-workroom > .mod-title-row {
+  margin-top: 26px;
+}
+.mod-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-top: 20px;
+}
+.mod-error p {
+  margin: 0;
+}
+.mod-error-title {
+  margin-top: 26px;
+}
+
+/* A panel switch (the /me shelf pill), buttons rather than links. */
+.mod-subtabs {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 22px;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mod-subtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 130ms ease,
+    color 130ms ease;
+}
+.mod-subtab:hover {
+  color: var(--text);
+}
+.mod-subtab[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.mod-subtab[aria-pressed="true"] .mod-tab-count {
+  border-color: transparent;
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+/* The queue's preset views. */
+.mod-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+.mod-page .mod-views button.btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mod-views + .queue-filters {
+  margin-top: 14px;
+}
+
+.queue-filters .filter-suffix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+  font-size: 0.84rem;
+}
+.mod-page .queue-filters .filter-suffix input {
+  min-width: 0;
+  width: 6rem;
+}
+.queue-filters .filter-clear,
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.queue-filters .filter-clear {
+  align-self: center;
+  margin-left: auto;
+  font-size: 0.84rem;
+}
+
+/* "How this works": the mechanism behind a panel, closed by default. */
+.mod-explainer {
+  margin-top: 16px;
+  font-size: 0.88rem;
+  color: var(--text-mute);
+}
+.mod-explainer > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--text-dim);
+  cursor: pointer;
+  list-style: none;
+}
+.mod-explainer > summary::-webkit-details-marker {
+  display: none;
+}
+.mod-explainer > summary::before {
+  content: "▸";
+  font-size: 0.7em;
+}
+.mod-explainer[open] > summary::before {
+  content: "▾";
+}
+.mod-explainer > summary:hover {
+  color: var(--accent);
+}
+.mod-explainer p {
+  max-width: 78ch;
+  margin: 8px 0 0;
+  line-height: 1.55;
+}
+
+/* ---------- worklists: one row per record --------------------------- */
+
+.worklist,
+.sources {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+.work-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 0 14px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+}
+.work-row:first-child {
+  border-top: 0;
+}
+.work-row:hover {
+  background: var(--surface-2);
+}
+.work-row--plain {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* the row's small book: the shared Cover at jacket size, no title on cloth */
+.work-jacket {
+  display: block;
+  width: 36px;
+  margin-top: 3px;
+}
+.work-jacket .cover {
+  border-radius: 2px 3px 3px 2px;
+  box-shadow: var(--cover-shadow);
+}
+.work-jacket .cover-ph {
+  padding: 3px;
+}
+.work-jacket .cover-ph::before {
+  width: 4px;
+}
+.work-jacket .cover-ph-title,
+.work-jacket .cover-ph-foot,
+.work-jacket .cover-ph-mark {
+  display: none;
+}
+.work-jacket .cover-rating {
+  bottom: 2px;
+  right: 2px;
+  padding: 0 3px;
+  font-size: 0.5rem;
+}
+
+.work-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.work-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.work-title {
+  font-weight: 700;
+  font-size: 0.98rem;
+  border-bottom: 1px solid transparent;
+}
+a.work-title:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.work-head > .chip,
+.work-head > .work-chips,
+.work-head > .work-aside {
+  margin-left: auto;
+}
+.work-aside {
+  color: var(--text-mute);
+  font-size: 0.85rem;
+}
+.work-aside a,
+.work-change a {
+  color: var(--accent);
+}
+.work-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.work-change {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+.work-change > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.work-change .k {
+  color: var(--text-mute);
+}
+.work-change del {
+  color: var(--text-mute);
+  text-decoration-color: color-mix(in srgb, var(--mod-bad) 70%, transparent);
+}
+.work-change ins {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+.work-change del,
+.work-change ins {
+  display: inline-block;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.work-report,
+.work-reason {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.work-reason {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.work-comment {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-mute);
+  font-size: 0.85rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 0;
+  color: var(--text-mute);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+.work-meta > .work-chips {
+  margin-left: auto;
+}
+.work-meta a {
+  color: var(--text-dim);
+}
+.work-warnings {
+  margin: 0;
+  color: var(--mod-warn);
+  font-size: 0.82rem;
+}
+.work-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  margin-top: 2px;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.work-actions a {
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+.work-actions a:hover {
+  border-bottom-color: var(--accent);
+}
+.work-body > .mod-actions {
+  margin-top: 4px;
+}
+.work-body > .mod-actions a {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.worklist-status {
+  margin: 16px 0 0;
+  color: var(--text-mute);
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+.worklist-status + .notice {
+  margin-top: 10px;
+}
+.worklist-more {
+  margin-top: 14px;
+}
+.panel-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-top: 12px;
+  color: var(--text-mute);
+  font-size: 0.84rem;
+}
+.panel-foot .import-holds-more {
+  margin-top: 0;
+}
+
+/* loading rows: the shape of a row, no content */
+.worklist-skeleton .work-jacket {
+  aspect-ratio: 2 / 3;
+  border-radius: 2px 3px 3px 2px;
+  background: var(--surface-3);
+}
+.skeleton-bar {
+  display: block;
+  height: 10px;
+  width: 60%;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+.skeleton-bar--short {
+  width: 40%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .worklist-skeleton .work-jacket,
+  .skeleton-bar {
+    animation: worklist-pulse 1.4s ease-in-out infinite;
+  }
+}
+@keyframes worklist-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ---------- imports: the sources ledger ------------------------------ */
+
+.sources {
+  font-size: 0.88rem;
+}
+.source-row {
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 1.3fr) minmax(130px, 1fr) minmax(100px, 0.8fr)
+    minmax(240px, 2fr);
+  align-items: center;
+  gap: 8px 18px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+}
+.source-row:first-child {
+  border-top: 0;
+}
+.source-row.is-head {
+  padding-block: 8px;
+  background: var(--surface-2);
+  color: var(--text-mute);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.source-row:not(.is-head):hover {
+  background: var(--surface-2);
+}
+.source-row.is-unhealthy {
+  box-shadow: inset 3px 0 0 var(--mod-bad);
+  background: color-mix(in srgb, var(--mod-bad) 7%, transparent);
+}
+.source-name strong {
+  display: block;
+  font-size: 0.96rem;
+}
+.source-name code {
+  font-size: 0.78rem;
+}
+.source-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.source-cell .n {
+  color: var(--text-mute);
+}
+/* each cell's column name: for screen readers beside the header row, and
+   shown on narrow screens where the header row is gone */
+.source-col {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- catalog gaps ---------------------------------------------- */
+
+.gap-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 16px;
+}
+.mod-page .gap-tools input,
+.mod-page .gap-tools select {
+  padding: 7px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.88rem;
+}
+.mod-page .gap-tools input {
+  min-width: 16rem;
+}
+.gap-count {
+  margin-left: auto;
+  color: var(--text-mute);
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+.map-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 0.84rem;
+}
+.map-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.map-form .map-why {
+  flex: 1 1 16rem;
+}
+.mod-page .map-form .map-why input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.map-form .form-error {
+  flex-basis: 100%;
+}
+
+/* ---------- the bug report dialog (lib/community.tsx) ---------------- */
+
+dialog.bug-report {
+  width: calc(100% - 32px);
+  max-width: 560px;
+  padding: 22px 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  color: var(--text);
+}
+dialog.bug-report::backdrop {
+  background: var(--scrim);
+}
+.bug-report h2 {
+  margin: 0 0 6px;
+  font-size: 1.25rem;
+}
+.bug-report p {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font-size: 0.92rem;
+}
+.bug-report-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-mute);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.bug-report textarea {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+.bug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+.bug-status {
+  color: var(--ok);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.bug-actions .bug-close {
+  margin-left: auto;
+}
+
+@media (max-width: 720px) {
+  .mod-help {
+    flex-basis: 100%;
+    padding-top: 2px;
+  }
+  /* every panel stays in view: the pill wraps rather than scrolls */
+  .mod-subtabs {
+    display: flex;
+    flex-wrap: wrap;
+    border-radius: var(--r-lg);
+  }
+  .work-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+    padding-inline: 14px;
+  }
+  .work-row--plain {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .work-jacket {
+    width: 32px;
+  }
+  .work-head > .chip,
+  .work-head > .work-chips,
+  .work-head > .work-aside,
+  .work-meta > .work-chips {
+    margin-left: 0;
+  }
+  .source-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding-inline: 14px;
+  }
+  .source-row.is-head {
+    display: none;
+  }
+  .source-col {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    min-width: 5.5rem;
+    color: var(--text-mute);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .queue-filters .filter-toggle,
+  .queue-filters .filter-clear {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  .mod-page .gap-tools input {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+  .gap-count {
+    margin-left: 0;
   }
 }
