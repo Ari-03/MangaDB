@@ -492,7 +492,7 @@ export default defineSchema({
   seriesFamilies: defineTable({
     ...canonical("seriesFamilies"),
     name: v.string(),
-  }),
+  }).index("by_name", ["name"]),
 
   series: defineTable({
     ...canonical("series"),
@@ -711,6 +711,8 @@ export default defineSchema({
     ),
     createdReleaseId: v.optional(v.id("releases")),
     replayedReleaseId: v.optional(v.id("releases")),
+    // Human Overrides a linkByIsbn added to its Release, lifted again on undo.
+    protectedFields: v.optional(v.array(v.string())),
     createdStructure: v.optional(
       v.object({
         editionId: v.id("editions"),

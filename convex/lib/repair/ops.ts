@@ -3290,8 +3290,13 @@ async function releaseBundle(
       if (!claims?.complete || claims.owners.size > 0)
         return skip(`ISBN ${isbn13} is claimed: convert its box Release instead`);
     }
+    // An ISBN-10 is stored only as the same book's other spelling, so the
+    // ISBN-13's claims above stand for it too.
+    const isbn10 = entry.create.isbn10 ? plannedIsbn("isbn10", entry.create.isbn10) : null;
+    if (isbn10 !== null && toIsbn13(isbn10) !== isbn13)
+      return skip(`plan error: ISBN-10 ${isbn10} is not ISBN ${isbn13}'s`);
     bundle = existing;
-    isbns = { isbn13, ...(entry.create.isbn10 ? { isbn10: entry.create.isbn10 } : {}) };
+    isbns = { isbn13, ...(isbn10 === null ? {} : { isbn10 }) };
   } else skip("plan error: name a bundle, a box set, or a box set to create");
 
   const publisherId = bundle?.publisherId ?? box?.publisherId ?? entry.create!.publisherId;
@@ -3537,8 +3542,12 @@ async function seriesFamily(
       return skip(`series ${series.publicId} title drifted: ${JSON.stringify(series.title)}`);
     rows.push(series);
   }
-  const families = await ctx.db.query("seriesFamilies").collect();
-  let family = families.find((one) => one.status === "active" && one.name === entry.name);
+  let family = (
+    await ctx.db
+      .query("seriesFamilies")
+      .withIndex("by_name", (q) => q.eq("name", entry.name))
+      .collect()
+  ).find((one) => one.status === "active");
   for (const series of rows) {
     if (series.familyId !== undefined && series.familyId !== family?._id)
       return skip(`series ${series.publicId} is already in another family`);
@@ -3554,11 +3563,26 @@ async function seriesFamily(
     );
     family = (await ctx.db.get(id))!;
   }
+  // The plan's Series follow, in its order, the members it does not name, so
+  // an entry adding one Part to an existing Family shelves it after the rest.
+  const familyId = family._id;
+  const planned = new Set(rows.map((series) => series._id));
+  const members = await ctx.db
+    .query("series")
+    .withIndex("by_family", (q) => q.eq("familyId", familyId))
+    .collect();
+  const placed = rows.map((series) => series.familyPosition);
+  const inOrder =
+    rows.every((series) => series.familyId === familyId) &&
+    placed.every((at, i) => at !== undefined && (i === 0 || at > (placed[i - 1] ?? 0)));
+  if (inOrder) return already;
+  const after = members
+    .filter((series) => series.status === "active" && !planned.has(series._id))
+    .reduce((max, series) => Math.max(max, series.familyPosition ?? 0), 0);
   for (const [i, series] of rows.entries()) {
-    if (series.familyId === family._id && series.familyPosition === i + 1) continue;
     await updateRecord(ctx, audit, { type: "series", id: series._id }, series, {
-      familyId: family._id,
-      familyPosition: i + 1,
+      familyId,
+      familyPosition: after + i + 1,
     });
   }
   return audit.wrote ? applied : already;
@@ -3595,8 +3619,23 @@ async function splitEdition(
       `edition ${edition.publicId} releases drifted: now ${kept.map((r) => r.isbn13 ?? r._id).join(", ")}`,
     );
 
-  const moves = newMoves(entry.key);
+  // A re-run finds the planned Releases already moved: only an Edition this
+  // entry created, still holding exactly them, is its own to finish.
   let targetId = [...elsewhere][0];
+  const rerun = targetId ? await ctx.db.get(targetId) : null;
+  if (targetId) {
+    if (!rerun || rerun.status !== "active") return skip("split-off edition not active");
+    if (rerun.locked) return skip(`edition ${rerun.publicId} is locked`);
+    if (!(await createdByEntry(ctx, { type: "edition", id: targetId }, entry.key)))
+      return skip(
+        `the planned Releases sit in edition ${rerun.publicId}, which this entry did not create`,
+      );
+    const holds = (await releasesOf(ctx, targetId)).filter((r) => r.status === "active");
+    if (!sameValue(idSet(holds.map((r) => r._id)), idSet(entry.releaseIds)))
+      return skip(`edition ${rerun.publicId} releases drifted since the split`);
+  }
+
+  const moves = newMoves(entry.key);
   await carryingTracking(
     ctx,
     audit,
@@ -3604,12 +3643,17 @@ async function splitEdition(
     { editionIds: [edition._id, ...(targetId ? [targetId] : [])] },
     async () => {
       if (!targetId) {
-        targetId = await createEdition(ctx, audit, {
-          status: "active",
-          publisherId: edition.publisherId,
-          bootstrapUnreviewed: true,
-          ...(unmapped ? { coverageUnmapped: true } : {}),
-        });
+        targetId = await createEdition(
+          ctx,
+          audit,
+          {
+            status: "active",
+            publisherId: edition.publisherId,
+            bootstrapUnreviewed: true,
+            ...(unmapped ? { coverageUnmapped: true } : {}),
+          },
+          entry.key,
+        );
         for (const release of moving) {
           await updateRecord(ctx, audit, { type: "release", id: release._id }, release, {
             editionId: targetId,
@@ -3623,6 +3667,19 @@ async function splitEdition(
           extent: row.extent,
         });
       }
+      if (rerun) {
+        // The split already wrote its coverage; anything else is a later edit.
+        const now = (await coverageOf(ctx, targetId)).sort((a, b) => a.order - b.order);
+        const planned = rows.map((r) => [r.volumeId, r.extent]);
+        if (
+          now.length > 0 &&
+          !sameValue(
+            now.map((c) => [c.volumeId, c.extent]),
+            planned,
+          )
+        )
+          return skip(`edition ${rerun.publicId} coverage drifted since the split`);
+      }
       await replaceCoverage(ctx, audit, targetId, rows);
       if (entry.line) {
         const target = await ctx.db.get(targetId);
@@ -3634,6 +3691,8 @@ async function splitEdition(
           target.publisherId,
           entry.line.name,
         );
+        if (rerun?.editionLineId !== undefined && rerun.editionLineId !== lineId)
+          return skip(`edition ${rerun.publicId} moved to another line since the split`);
         await updateRecord(ctx, audit, { type: "edition", id: targetId }, target, {
           editionLineId: lineId,
           linePosition: entry.line.position ?? undefined,

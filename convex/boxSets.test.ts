@@ -133,6 +133,11 @@ describe("a box set made a Bundle from its stated facts", () => {
         price: null,
       },
     };
+    // An ISBN-10 that is another book's is refused before anything is written.
+    const wrong10: RepairEntry = { ...entry, create: { ...entry.create!, isbn10: "1421555654" } };
+    expect((await run(t, [wrong10]))[0]).toMatchObject({ status: "skipped" });
+    expect(await t.run((ctx) => ctx.db.query("releaseBundles").collect())).toEqual([]);
+
     expect((await run(t, [entry]))[0]).toMatchObject({ status: "applied" });
     expect((await run(t, [entry]))[0]).toMatchObject({ status: "alreadyApplied" });
 
@@ -211,7 +216,7 @@ describe("heldBooks.linkByIsbnInternal", () => {
     });
     // The hold moved since the caller looked: refused.
     await expect(link(bookRecord)).rejects.toThrow("held as isbn");
-    await link(bookRecord, { expectedKind: "isbn", protectFields: ["binding"] });
+    const pinned = await link(bookRecord, { expectedKind: "isbn", protectFields: ["binding"] });
     await t.run(async (ctx) => {
       expect(await ctx.db.query("placementHolds").collect()).toEqual([]);
       expect((await ctx.db.get(boxRecord))?.recordRef).toEqual({
@@ -225,6 +230,33 @@ describe("heldBooks.linkByIsbnInternal", () => {
       expect(release?.isbn13).toBe(isbns[2]);
       expect(release?.overriddenFields).toEqual(["binding"]);
       expect(release?.binding).toBe("paperback");
+      // The pin is a public Revision under the link's Proposal.
+      const [latest] = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release!._id))
+        .order("desc")
+        .take(1);
+      expect(latest).toMatchObject({
+        proposalId: pinned.proposalId,
+        changes: [{ field: "overriddenFields", before: [], after: ["binding"] }],
+      });
+    });
+
+    // Undoing the link lifts the pin it added.
+    const ledger = await t.run((ctx) => ctx.db.get(pinned.ledgerId));
+    await t.mutation(internal.heldBooks.restoreInternal, {
+      actor: "ari",
+      ledgerId: pinned.ledgerId,
+      expectedAfter: ledger!.after,
+      reason: "Linked in error.",
+    });
+    await t.run(async (ctx) => {
+      const release = await ctx.db
+        .query("releases")
+        .withIndex("by_isbn13", (q) => q.eq("isbn13", isbns[2]))
+        .unique();
+      expect(release?.overriddenFields).toBeUndefined();
+      expect((await ctx.db.get(bookRecord))?.recordRef).toBeUndefined();
     });
   });
 });

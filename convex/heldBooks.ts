@@ -9,7 +9,12 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
-import { insertApprovedProposal, insertFirstVersion } from "./moderation";
+import {
+  insertApprovedProposal,
+  insertFirstVersion,
+  insertRevision,
+  revisionsOf,
+} from "./moderation";
 import { packagingOf, readAnnLineTitle, splitReleaseTitle } from "./lib/ann";
 import { nestedLimits, platformStop } from "./lib/bounded";
 import {
@@ -307,6 +312,37 @@ async function audit(
     changeComment: reason,
   });
   return proposalId;
+}
+
+/**
+ * Set a Release's Human Overrides for a held-book link or its undo, with the
+ * public Revision that records the change under that action's Proposal.
+ */
+async function setOverrides(
+  ctx: MutationCtx,
+  actor: Awaited<ReturnType<typeof resolveActor>>,
+  release: Doc<"releases">,
+  after: string[],
+  proposalId: Id<"proposals">,
+  comment: string,
+) {
+  const ref = { type: "release" as const, id: release._id };
+  const before = release.overriddenFields ?? [];
+  const sorted = [...new Set(after)].sort();
+  if (sameValue([...before].sort(), sorted)) return;
+  await ctx.db.patch(release._id, { overriddenFields: sorted.length > 0 ? sorted : undefined });
+  await insertRevision(
+    ctx,
+    ref,
+    (await revisionsOf(ctx, ref))[0],
+    [{ field: "overriddenFields", before, after: sorted }],
+    {
+      proposalId,
+      author: { kind: "user", userId: actor.userId, roleAtAuthorship: actor.role },
+      approvedBy: actor.userId,
+      comment,
+    },
+  );
 }
 
 /** Nested implementation; any semantic refusal throws so incidental writes also roll back. */
@@ -888,12 +924,20 @@ export const linkByIsbnOneInternal = internalMutation({
       `Linked by its own ISBN ${isbn13}: ${args.reason}`,
       evidenceUrls(args.evidenceUrls),
     );
-    if (owner.kind === "release" && args.protectFields?.length) {
-      const overriddenFields = [
-        ...new Set([...(owner.doc.overriddenFields ?? []), ...args.protectFields]),
-      ];
-      await ctx.db.patch(owner.doc._id, { overriddenFields });
-    }
+    const current = owner.kind === "release" ? (owner.doc.overriddenFields ?? []) : [];
+    const protectedFields =
+      owner.kind === "release"
+        ? [...new Set(args.protectFields ?? [])].filter((field) => !current.includes(field))
+        : [];
+    if (owner.kind === "release" && protectedFields.length > 0)
+      await setOverrides(
+        ctx,
+        actor,
+        owner.doc,
+        [...current, ...protectedFields],
+        proposalId,
+        `Pinned ${protectedFields.join(", ")} while linking held book ${isbn13}: ${args.reason}`,
+      );
     await linkObservation(ctx, observation._id, target);
     await clearHold(ctx, observation._id);
     const after = valueHash({
@@ -909,6 +953,7 @@ export const linkByIsbnOneInternal = internalMutation({
       ...(target.type === "release"
         ? { target: { type: "release" as const, id: target.id } }
         : { target: { type: "bundle" as const, id: target.id } }),
+      ...(protectedFields.length > 0 ? { protectedFields } : {}),
     });
     return { status: "applied", target, proposalId, ledgerId };
   },
@@ -951,9 +996,19 @@ export const restoreOneInternal = internalMutation({
     const observation = await ctx.db.get(ledger.observationId);
     const hold = await holdOf(ctx, ledger.observationId);
     if (ledger.operation === "dismissHold") {
-      // A re-sighting since moves lastSeenAt, so the dismissal itself is the guard.
+      // A re-sighting since moves lastSeenAt, so the dismissal itself is the guard,
+      // with what a later import or Editor may have done to the record since.
       if (observation?.dismissedHold?.proposalId !== ledger.proposalId)
         return refuse("The book is no longer dismissed by this entry.");
+      if (observation.recordRef || observation.withdrawn)
+        return refuse("The record was linked or withdrawn since the dismissal.");
+      if (
+        observation.queuedProposalId &&
+        (await ctx.db.get(observation.queuedProposalId))?.state === "inReview"
+      )
+        return refuse("Current Proposal is in review.");
+      const scope = await isbnScope(ctx, observedIsbn13(observation.snapshot));
+      if (scope) return refuse("Revoke the exact scope disposition before restoring a held book.");
       const before = JSON.parse(ledger.before) as { hold: Doc<"placementHolds"> };
       await ctx.db.patch(observation._id, { dismissedHold: undefined });
       if (!hold) {
@@ -1034,6 +1089,20 @@ export const restoreOneInternal = internalMutation({
       else await ctx.db.insert("placementHolds", fields);
     } else if (hold) await ctx.db.delete(hold._id);
     const proposalId = await audit(ctx, actor, ledger.observationId, args.reason, []);
+    // Lift the overrides the link added; ones an Editor set since stay.
+    if (ledger.target?.type === "release" && ledger.protectedFields?.length) {
+      const release = await ctx.db.get(ledger.target.id);
+      const lifted = ledger.protectedFields;
+      if (release)
+        await setOverrides(
+          ctx,
+          actor,
+          release,
+          (release.overriddenFields ?? []).filter((field) => !lifted.includes(field)),
+          proposalId,
+          `Lifted ${lifted.join(", ")} with the undone held-book link: ${args.reason}`,
+        );
+    }
     return {
       status: "applied" as const,
       proposalId,

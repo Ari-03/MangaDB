@@ -662,6 +662,7 @@ describe("printings.recordDecidedInternal", () => {
   it("undoes a printing decided in error and lists the book as held again", async () => {
     const t = makeT();
     await seedRegistry(t);
+    await seedTeam(t, [alice]);
     const { releaseId, observationId, seriesId } = await t.run(async (ctx) => {
       const { releaseId, seriesId } = await vagabond(ctx);
       return { releaseId, seriesId, observationId: await holdLine(ctx, seriesId, "5001", OLDER) };
@@ -670,7 +671,12 @@ describe("printings.recordDecidedInternal", () => {
 
     const hold = { kind: "isbn" as const, reason: "Volume 1 already has a Release.", seriesId };
     const undo = (reason = "An unlisted ebook ISBN, not a print printing.") =>
-      t.mutation(internal.printings.undoDecidedInternal, { observationId, reason, hold });
+      t.mutation(internal.printings.undoDecidedInternal, {
+        actor: "alice",
+        observationId,
+        reason,
+        hold,
+      });
     expect(await undo()).toMatchObject({ status: "undone", isbn13: OLDER });
     await t.run(async (ctx) => {
       expect(await ctx.db.query("releaseIsbns").collect()).toEqual([]);
@@ -686,6 +692,7 @@ describe("printings.recordDecidedInternal", () => {
         [{ field: "otherPrinting", after: `ISBN ${OLDER}, 2002` }],
         [{ field: "otherPrinting", after: `ISBN ${OLDER} removed` }],
       ]);
+      expect(revisions[1]?.citation?.sourceName).toContain("(undone by alice)");
     });
     // Nothing is left to undo.
     expect(await undo()).toMatchObject({ status: "refused" });

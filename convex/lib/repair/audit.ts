@@ -6,6 +6,7 @@
 // the correction by hand.
 
 import { ConvexError, type Infer } from "convex/values";
+import type { Actor } from "./actor";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { activeVolumes } from "../../catalog";
@@ -41,25 +42,7 @@ export const skip = (reason: string): never => {
   throw new ConvexError({ skip: reason });
 };
 
-/** The operator every repair Revision is attributed to. */
-export type Actor = { userId: Id<"users">; role: Doc<"users">["role"] };
-
-export async function resolveActor(ctx: MutationCtx, username: string): Promise<Actor> {
-  const user = await ctx.db
-    .query("users")
-    .withIndex("by_username", (q) => q.eq("usernameNormalized", username.toLowerCase()))
-    .unique();
-  if (
-    !user ||
-    user.deletingSince !== undefined ||
-    (user.role !== "administrator" && user.role !== "moderator")
-  ) {
-    throw new ConvexError(
-      `Repair actor "${username}" must be an existing Moderator or Administrator.`,
-    );
-  }
-  return { userId: user._id, role: user.role };
-}
+export { type Actor, resolveActor } from "./actor";
 
 /**
  * One entry's audit trail. The Proposal is created lazily on the first
@@ -345,19 +328,23 @@ export async function replaceCoverage(
   return true;
 }
 
-/** Insert a catalog row with a creation Revision listing its initial fields. */
+/**
+ * Insert an Edition with a creation Revision listing its initial fields; with
+ * `repairKey`, that Revision also records the plan entry that created it.
+ */
 export async function createEdition(
   ctx: MutationCtx,
   audit: Audit,
   fields: Omit<Doc<"editions">, "_id" | "_creationTime" | "publicId">,
+  repairKey?: string,
 ): Promise<Id<"editions">> {
   await audit.meta();
   const row = { ...fields, publicId: await allocatePublicId(ctx, "edition") };
   const id = await ctx.db.insert("editions", row);
   audit.op({ kind: "create", table: "editions", tempId: id, fields: row });
-  await audit.revise(
-    { type: "edition", id },
-    Object.entries(row).map(([field, after]) => ({ field, after })),
-  );
+  await audit.revise({ type: "edition", id }, [
+    ...Object.entries(row).map(([field, after]) => ({ field, after })),
+    ...(repairKey === undefined ? [] : [{ field: REPAIR_KEY_FIELD, after: repairKey }]),
+  ]);
   return id;
 }

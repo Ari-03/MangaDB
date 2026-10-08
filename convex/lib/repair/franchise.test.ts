@@ -132,6 +132,24 @@ describe("franchise repairs", () => {
         coverIsbn: ["9781421591711"],
       }),
     ]);
+
+    // An entry naming only a new Part shelves it after the members already there.
+    const PART_7 = "Steel Ball Run";
+    const part7 = await t.run(async (ctx) => insertSeries(ctx, { title: PART_7 }));
+    const added: RepairEntry = {
+      ...family,
+      key: "jojo-family-part-7",
+      series: [{ seriesId: part7, title: PART_7 }],
+    };
+    expect((await run(t, [added]))[0]).toMatchObject({ status: "applied" });
+    expect(await t.run(async (ctx) => (await ctx.db.get(part7))?.familyPosition)).toBe(3);
+    expect((await run(t, [reordered]))[0]).toMatchObject({ status: "alreadyApplied" });
+    const grown = await t.query(api.catalog.seriesPage, { publicId });
+    expect(grown?.family?.members.map((m) => m.title)).toEqual([
+      PART_4,
+      "JoJo's Bizarre Adventure",
+      PART_7,
+    ]);
   });
 
   it("creates an unmapped line member, and moves an Edition off its Volume into one", async () => {
@@ -225,6 +243,71 @@ describe("franchise repairs", () => {
         .collect();
       expect(await ctx.db.get(cover!.volumeId)).toMatchObject({ seriesId: part1, label: "1" });
     });
+  });
+
+  it("never rewrites an Edition the split did not create, or one reshaped since", async () => {
+    const t = makeT();
+    const { publisherId, seriesId, volumeId, editionId, releaseId } = await seed(t);
+    const { part1, ebookId, otherId, otherRelease } = await t.run(async (ctx) => {
+      const part1 = await insertSeries(ctx, {
+        title: "JoJo's Bizarre Adventure: Part 1--Phantom Blood",
+      });
+      const ebookId = await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9781421578873",
+        format: "digital",
+      });
+      // Someone else's Edition, holding another book, that the hardcover moved into.
+      const otherId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId: otherId, volumeId });
+      const otherRelease = await insertRelease(ctx, {
+        editionId: otherId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9781421590653",
+        format: "physical",
+      });
+      return { part1, ebookId, otherId, otherRelease };
+    });
+    const entry: RepairEntry = {
+      kind: "splitEdition",
+      key: "jojo-split-5",
+      reason: "The hardcover is another Part's book.",
+      editionId,
+      releaseIds: [releaseId],
+      keepReleaseIds: [ebookId],
+      coverage: [{ seriesId: part1, label: "1", extent: "complete" }],
+      line: null,
+    };
+    await t.run(async (ctx) => {
+      await ctx.db.patch(releaseId, { editionId: otherId });
+      await ctx.db.delete(otherRelease);
+    });
+    expect((await run(t, [entry]))[0]).toMatchObject({ status: "skipped" });
+    const untouched = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("volumeCoverages")
+          .withIndex("by_edition", (q) => q.eq("editionId", otherId))
+          .collect()
+      ).map((c) => c.volumeId),
+    );
+    expect(untouched).toEqual([volumeId]);
+
+    // Put the book back, split it, then reshape the split-off Edition by hand.
+    await t.run(async (ctx) => ctx.db.patch(releaseId, { editionId }));
+    expect((await run(t, [entry]))[0]).toMatchObject({ status: "applied" });
+    await t.run(async (ctx) => {
+      const target = (await ctx.db.get(releaseId))!.editionId;
+      for (const row of await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", target))
+        .collect())
+        await ctx.db.patch(row._id, { volumeId });
+    });
+    expect((await run(t, [entry]))[0]).toMatchObject({ status: "skipped" });
   });
 
   it("links ANN's line on a sibling Part by ISBN only when the Parts share a Family", async () => {

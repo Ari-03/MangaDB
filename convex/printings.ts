@@ -1,3 +1,4 @@
+import { resolveActor } from "./lib/repair/actor";
 import { projectSourceFormat } from "./lib/sourceFormat";
 // Other Printings decided by a person (CONTEXT.md, docs/operations.md):
 // the only way a held book becomes another printing of a Release, or a
@@ -998,18 +999,20 @@ export const decideInternal = internalMutation({
 });
 
 /**
- * Undo a printing recorded by recordDecidedInternal that proved to be
+ * Undo, as `actor`, a printing recorded by recordDecidedInternal that proved to be
  * another book (an unlisted ebook ISBN, a rebind, another part): remove the
  * `releaseIsbns` row, unlink its record, audit it on the Release, and list
  * the book as held again with `hold` (the kind, reason and Series it was
  * held under before). Refused, with nothing written, unless the record is
  * the row's own and the only record linked to that printing.
  *
- *   npx convex run printings:undoDecidedInternal '{"observationId": "…",
+ *   npx convex run printings:undoDecidedInternal '{"actor": "ari", "observationId": "…",
  *     "reason": "…", "hold": {"kind": "isbn", "reason": "…", "seriesId": "…"}}'
  */
 export const undoDecidedInternal = internalMutation({
   args: {
+    /** The Moderator or Administrator undoing it, named in the removal's audit. */
+    actor: v.string(),
     observationId: v.id("sourceObservations"),
     reason: v.string(),
     hold: v.object({
@@ -1018,9 +1021,10 @@ export const undoDecidedInternal = internalMutation({
       seriesId: v.optional(v.id("series")),
     }),
   },
-  handler: async (ctx, { observationId, reason, hold }) => {
+  handler: async (ctx, { actor, observationId, reason, hold }) => {
     const refuse = (why: string) => ({ status: "refused" as const, reason: why });
     if (reason.trim() === "") return refuse("An undo needs a reason.");
+    const undoneBy = (await ctx.db.get((await resolveActor(ctx, actor)).userId))?.username ?? actor;
     const observation = await ctx.db.get(observationId);
     if (observation === null) return refuse("No such source record.");
     const isbn13 = observation.printingIsbn13;
@@ -1038,12 +1042,13 @@ export const undoDecidedInternal = internalMutation({
     if (row.observationId !== observationId) {
       return refuse("The printing was recorded from another record; undo that one.");
     }
-    const linked = await ctx.db
+    // Every record linked to the Release is read, so none is left pointing at the row.
+    const linked = ctx.db
       .query("sourceObservations")
-      .withIndex("by_record", (q) => q.eq("recordRef.type", "release").eq("recordRef.id", ref.id))
-      .take(200);
-    if (linked.some((one) => one._id !== observationId && one.printingIsbn13 === isbn13)) {
-      return refuse("Another record is linked to this printing; unlink it first.");
+      .withIndex("by_record", (q) => q.eq("recordRef.type", "release").eq("recordRef.id", ref.id));
+    for await (const one of linked) {
+      if (one._id !== observationId && one.printingIsbn13 === isbn13)
+        return refuse("Another record is linked to this printing; unlink it first.");
     }
     const release = await ctx.db.get(ref.id);
     if (release === null) return refuse("No such Release.");
@@ -1059,7 +1064,7 @@ export const undoDecidedInternal = internalMutation({
       sourceKey: observation.sourceKey,
       observationId,
       citation: {
-        sourceName: `${source?.name ?? observation.sourceKey} (undone by review)`,
+        sourceName: `${source?.name ?? observation.sourceKey} (undone by ${undoneBy})`,
         url: citation.url,
       },
       now,

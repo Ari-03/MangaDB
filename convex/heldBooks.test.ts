@@ -1185,6 +1185,26 @@ describe("heldBooks.dismissInternal", () => {
     ]);
     expect((await observationOf(t, "/books/OL1M"))?.dismissedHold).toBeUndefined();
 
+    // A record withdrawn (or linked) since its dismissal is not put back on the list.
+    const again = await dismiss("volumeMissing");
+    const againLedger = await t.run((ctx) => ctx.db.get(again.ledgerId));
+    await t.run((ctx) => ctx.db.patch(observation!._id, { withdrawn: true }));
+    await expect(
+      t.mutation(internal.heldBooks.restoreInternal, {
+        actor: "alice",
+        ledgerId: again.ledgerId,
+        expectedAfter: againLedger!.after,
+        reason: "Dismissed in error.",
+      }),
+    ).rejects.toThrow("linked or withdrawn since the dismissal");
+    await t.run((ctx) => ctx.db.patch(observation!._id, { withdrawn: false }));
+    await t.mutation(internal.heldBooks.restoreInternal, {
+      actor: "alice",
+      ledgerId: again.ledgerId,
+      expectedAfter: againLedger!.after,
+      reason: "Dismissed in error.",
+    });
+
     // Dismissed again, a source that changes the book lists it again.
     await dismiss("volumeMissing");
     stubDump([{ ...alice1, title: "Alice in Borderland, Vol. 1 (Special Edition)" }]);
