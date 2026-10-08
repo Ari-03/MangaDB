@@ -102,9 +102,12 @@ export async function otherPrintingsOf(
   const rows = await ctx.db
     .query("releaseIsbns")
     .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+    .filter((q) => q.eq(q.field("variantId"), undefined))
     .take(read);
   const own = primaryIsbnsOf(release);
-  const others = rows.filter((row) => !own.has(toIsbn13(row.isbn13) ?? row.isbn13));
+  const others = rows.filter(
+    (row) => !row.variantId && !own.has(toIsbn13(row.isbn13) ?? row.isbn13),
+  );
   const printings = others
     .slice(0, SHOWN_PRINTINGS)
     .sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));

@@ -64,6 +64,23 @@ function evidenceFor(entry: RepairEntry) {
       return entry.evidenceObservationId
         ? [{ kind: "observation" as const, observationId: entry.evidenceObservationId }, note]
         : [note];
+    case "otherPrinting":
+    case "releaseVariant":
+      return [
+        { kind: "observation" as const, observationId: entry.observationId },
+        ...entry.sources.map((url) => ({ kind: "url" as const, url })),
+        note,
+      ];
+    case "amendProposalEvidence":
+      return [
+        ...entry.replacements.map((row) => ({
+          kind: "url" as const,
+          url: row.after,
+          note: `Replaces ${row.before} on Proposal ${entry.proposalId}`,
+        })),
+        note,
+      ];
+    case "createPublisher":
     case "createRelease":
       return [...entry.sources.map((url) => ({ kind: "url" as const, url })), note];
     case "createVolume":

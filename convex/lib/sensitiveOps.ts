@@ -1759,6 +1759,9 @@ async function transferReferences(
       for (const entry of await pins.entries.collect()) {
         await repoint(ctx, log, "collectionEntries", entry, { variantId: survivorId });
       }
+      for (const isbn of await pins.isbns.collect()) {
+        await repoint(ctx, log, "releaseIsbns", isbn, { variantId: survivorId });
+      }
       for (const membership of await pins.memberships.collect()) {
         await repoint(ctx, log, "bundleMemberships", membership, {
           variantId: survivorId,
@@ -1822,7 +1825,7 @@ async function transferReferences(
 // ---------- Release Variant merges ----------
 
 /**
- * Pins one Release Variant merge may move, in both tables together. Split
+ * Collection, membership and ISBN pins one Release Variant merge may move. Split
  * puts every pin back in one transaction and reads far more per pin than
  * the merge: of a transaction's 4,096 index ranges, about 5 per Owned entry
  * with a User of its own and 11 per membership of a one-Release Bundle, so
@@ -1834,9 +1837,12 @@ async function transferReferences(
  */
 export const VARIANT_MERGE_PIN_LIMIT = 250;
 
-/** The Collection Entries and Bundle Memberships pinning a Release Variant. */
+/** Collection Entries, Bundle Memberships and secondary ISBNs pinning a Release Variant. */
 function variantPins(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
   return {
+    isbns: ctx.db
+      .query("releaseIsbns")
+      .withIndex("by_variantId", (q) => q.eq("variantId", variantId)),
     entries: ctx.db
       .query("collectionEntries")
       .withIndex("by_variantId", (q) => q.eq("variantId", variantId)),
@@ -1850,6 +1856,7 @@ function variantPins(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
 async function variantPinCounts(ctx: QueryCtx, variantId: Id<"releaseVariants">) {
   const pins = variantPins(ctx, variantId);
   return {
+    isbns: (await pins.isbns.take(VARIANT_MERGE_PIN_LIMIT + 1)).length,
     entries: (await pins.entries.take(VARIANT_MERGE_PIN_LIMIT + 1)).length,
     memberships: (await pins.memberships.take(VARIANT_MERGE_PIN_LIMIT + 1)).length,
   };
@@ -1877,10 +1884,10 @@ export async function variantMergeRefusal(
   if (!survivorRelease || survivorRelease !== (await releaseOf(loserId))) {
     return "These variants belong to different Releases. Merge the Releases first, then merge the variants.";
   }
-  const { entries, memberships } = await variantPinCounts(ctx, loserId);
-  if (entries + memberships > VARIANT_MERGE_PIN_LIMIT) {
+  const { entries, memberships, isbns } = await variantPinCounts(ctx, loserId);
+  if (entries + memberships + isbns > VARIANT_MERGE_PIN_LIMIT) {
     return (
-      `More than ${VARIANT_MERGE_PIN_LIMIT} collection entries and bundle memberships pin the ` +
+      `More than ${VARIANT_MERGE_PIN_LIMIT} collection entries, bundle memberships and ISBNs pin the ` +
       `variant being merged, and a variant merge moves at most ${VARIANT_MERGE_PIN_LIMIT}, since Split ` +
       "puts every pin back in one transaction."
     );
@@ -3167,7 +3174,10 @@ export async function replaySplit(
       if (!sameValue(target[entry.field], entry.after)) continue;
       const returning =
         entry.table === "releaseIsbns" ? printing?.returning.get(entry.docId) : undefined;
-      if (entry.table === "releaseIsbns" && returning === undefined) continue;
+      // Variant-pin replay changes no ISBN owner; Release ownership moves
+      // still require the printing planner's complete claim proof.
+      const variantPin = ref.type === "releaseVariant" && entry.field === "variantId";
+      if (entry.table === "releaseIsbns" && !variantPin && returning === undefined) continue;
       const record =
         entry.table === "sourceObservations" ? printing?.records.get(entry.docId) : undefined;
       if (record?.replay === false) continue;
@@ -3483,6 +3493,7 @@ export async function impactOf(ctx: QueryCtx | MutationCtx, ref: RecordRef): Pro
         count > limit
           ? add(`${label} — more than ${limit}, first ${limit} counted`, limit)
           : add(label, count);
+      pinRow("ISBNs identifying this variant", pins.isbns);
       pinRow("Collection entries pinning this variant", pins.entries);
       pinRow("Bundle memberships pinning this variant", pins.memberships);
       break;

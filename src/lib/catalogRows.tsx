@@ -109,7 +109,12 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
         {printings !== null ? <p className="release-printings">{printings}</p> : null}
         {release.variants.length > 0 ? (
           <p className="release-variants">
-            Cover variants: {release.variants.map((variant) => variant.name).join(", ")}
+            Cover variants:{" "}
+            {release.variants
+              .map((variant) =>
+                variant.isbn13 ? `${variant.name} (ISBN ${variant.isbn13})` : variant.name,
+              )
+              .join(", ")}
           </p>
         ) : null}
         {release.bundles.length > 0 ? (

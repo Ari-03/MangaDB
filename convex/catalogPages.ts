@@ -166,6 +166,10 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     year: row.pubDate?.year ?? null,
   }));
 
+  const variantIsbns = await ctx.db
+    .query("releaseIsbns")
+    .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+    .take(80);
   const variants = (
     await ctx.db
       .query("releaseVariants")
@@ -173,7 +177,10 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
       .collect()
   )
     .filter((doc) => doc.status === "active")
-    .map((doc) => ({ name: doc.name }));
+    .map((doc) => ({
+      name: doc.name,
+      isbn13: variantIsbns.find((row) => row.variantId === doc._id)?.isbn13 ?? null,
+    }));
 
   const memberships = await ctx.db
     .query("bundleMemberships")
