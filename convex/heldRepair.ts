@@ -231,11 +231,20 @@ export const repairBundleContentsOneInternal = internalMutation({
       args.reason,
       urls.map((url) => ({ kind: "url" as const, url })),
     );
+    // The guarded field repair refuses digital beside Other Printings and
+    // clears the other Format's Binding or file format in the same audit.
     for (const correction of args.corrections) {
-      await ctx.db.patch(correction.releaseId, { format: correction.to });
-      const changes = [{ field: "format", before: correction.from, after: correction.to }];
-      audit.op({ kind: "update", ref: { type: "release", id: correction.releaseId }, changes });
-      await audit.revise({ type: "release", id: correction.releaseId }, changes);
+      const result = await applyEntry(ctx, audit, {
+        kind: "updateFields",
+        table: "releases",
+        id: correction.releaseId,
+        key: `held-contents-format:${correction.releaseId}`,
+        reason: args.reason,
+        evidenceObservationId: null,
+        changes: [{ field: "format", before: correction.from, after: correction.to }],
+      });
+      if (result.status !== "applied")
+        throw new ConvexError("Format correction did not apply; rolled back.");
     }
     const before = state.members
       .sort((a, b) => a.order - b.order)

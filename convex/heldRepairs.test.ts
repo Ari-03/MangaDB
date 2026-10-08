@@ -1584,6 +1584,95 @@ describe("real box collision and personal-reference workflow", () => {
       ).refusal,
     ).toMatch(/empty/);
   });
+  /** Preview and apply one contents repair, returning the mutation's result. */
+  async function repairContents(
+    t: TestT,
+    plan: {
+      bundleId: Id<"releaseBundles">;
+      memberIds: Id<"releases">[];
+      corrections: Array<{
+        releaseId: Id<"releases">;
+        from: "physical" | "digital";
+        to: "physical" | "digital";
+      }>;
+    },
+  ) {
+    const preview = await t.query(internal.heldRepair.bundleContentsStateInternal, plan);
+    if (preview.expected === null) return { status: "refused", reason: preview.refusal };
+    return await t.mutation(internal.heldRepair.repairBundleContentsInternal, {
+      ...plan,
+      actor: "ari",
+      expected: preview.expected,
+      reason,
+      evidenceUrls: urls,
+    });
+  }
+  it("clears the other Format's Binding or file format with an audited format correction", async () => {
+    const t = makeT();
+    const s = await titan(t);
+    const memberId = s.memberIds[0]!;
+    await t.run(async (ctx) => {
+      await ctx.db.patch(s.wrongId, { binding: "paperback" });
+      await ctx.db.patch(memberId, { format: "digital", digitalFileFormat: "epub" });
+    });
+    const fix = await repairContents(t, {
+      bundleId: s.bundleId,
+      memberIds: s.memberIds,
+      corrections: [
+        { releaseId: s.wrongId, from: "physical", to: "digital" },
+        { releaseId: memberId, from: "digital", to: "physical" },
+      ],
+    });
+    expect(fix.status).toBe("applied");
+    await t.run(async (ctx) => {
+      const wrong = (await ctx.db.get(s.wrongId))!;
+      expect(wrong.format).toBe("digital");
+      expect(wrong.binding).toBeUndefined();
+      const member = (await ctx.db.get(memberId))!;
+      expect(member.format).toBe("physical");
+      expect(member.digitalFileFormat).toBeUndefined();
+      const changed = async (id: Id<"releases">) =>
+        (
+          await ctx.db
+            .query("revisions")
+            .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", id))
+            .collect()
+        ).flatMap((r) => r.changes.map((c) => [c.field, c.before, c.after]));
+      expect(await changed(s.wrongId)).toEqual([
+        ["format", "physical", "digital"],
+        ["binding", "paperback", undefined],
+      ]);
+      expect(await changed(memberId)).toEqual([
+        ["format", "digital", "physical"],
+        ["digitalFileFormat", "epub", undefined],
+      ]);
+    });
+  });
+  it("refuses a correction to digital while the Release has an Other Printing, writing nothing", async () => {
+    const t = makeT();
+    const s = await titan(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(s.wrongId, { binding: "paperback" });
+      await ctx.db.insert("releaseIsbns", {
+        releaseId: s.wrongId,
+        isbn13: "9781612626215",
+        reason: "Reviewed reprint of the same paperback.",
+        sourceKey: "ann",
+      });
+    });
+    const before = await t.run((ctx) => ctx.db.get(s.wrongId));
+    const fix = await repairContents(t, {
+      bundleId: s.bundleId,
+      memberIds: s.memberIds,
+      corrections: [{ releaseId: s.wrongId, from: "physical", to: "digital" }],
+    });
+    expect(fix.status).toBe("refused");
+    expect(fix.reason).toMatch(/other printings/i);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(s.wrongId)).toEqual(before);
+      expect(await ctx.db.query("proposals").collect()).toEqual([]);
+    });
+  });
 });
 
 // Full stored public snapshots from the R2 provenance; canonical targets stay local.

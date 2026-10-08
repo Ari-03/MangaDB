@@ -965,6 +965,51 @@ describe("bounded personal repair work (Standards 1)", () => {
     expect((await t.run(async (ctx) => await ctx.db.get(s.source)))?.status).toBe("merged");
     expect(await staleUnder(t, s, elseId)).toBe(0);
   });
+
+  it("converts a box Edition's two box sets over several legs, retiring the placeholder after the last", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    const perBox = 150;
+    const made = await t.run(async (ctx) => {
+      const made = await insertNoragamiBox(ctx, s.publisherId);
+      // The same box Edition's second box-set Release, under its own ISBN.
+      const second = await insertRelease(ctx, {
+        editionId: made.box.editionId,
+        publisherId: s.publisherId,
+        seriesIds: [made.series],
+        isbn13: "9781632367013",
+      });
+      for (let i = 0; i < perBox; i++) {
+        const userId = await ctx.db.insert("users", {
+          clerkSubject: `box${i}`,
+          username: `box${i}`,
+          usernameNormalized: `box${i}`,
+          formatPreference: "both",
+          ownershipVisibility: "private",
+          readingVisibility: "private",
+        });
+        for (const releaseId of [made.box.releaseId, second])
+          await ctx.db.insert("collectionEntries", { userId, releaseId, state: "wanted" });
+      }
+      return { ...made, second };
+    });
+    expect(2 * perBox).toBeGreaterThan(SWEEP_BUDGET);
+    expect(perBox).toBeLessThan(SWEEP_BUDGET);
+    const entry = remodelEntry(made.box, made.series, ["1", "2"], { retire: true });
+    // The first leg converts one box set and leaves the other's entries for the next.
+    expect(await runLegs(t, entry, async () => {})).toEqual(["partial", "applied"]);
+    await t.run(async (ctx) => {
+      for (const id of [made.box.releaseId, made.second])
+        expect((await ctx.db.get(id))?.status).toBe("hidden");
+      expect((await ctx.db.get(made.box.editionId))?.status).toBe("hidden");
+      expect((await ctx.db.get(made.box.volumeId))?.status).not.toBe("active");
+      expect(await ctx.db.query("bundleConversions").collect()).toHaveLength(2);
+      const entries = await ctx.db.query("collectionEntries").collect();
+      expect(entries.filter((e) => e.releaseId !== undefined)).toEqual([]);
+      expect(entries).toHaveLength(2 * perBox);
+    });
+    expect(await runLegs(t, entry, async () => {})).toEqual(["alreadyApplied"]);
+  });
 });
 
 describe("other repairs that move tracking between Series", () => {

@@ -52,6 +52,7 @@ import {
   unmappedSiblings,
   volumePositionFor,
 } from "./pipeline";
+import type { DigitalFileFormat } from "./bookFacts";
 import { allocatePublicId } from "./publicIds";
 import { assignedIsbnRefusal } from "./releaseIsbns";
 import { seriesSearchText } from "./searchMatch";
@@ -132,6 +133,7 @@ export type CreatePlan =
       fields: {
         format: "physical" | "digital";
         binding?: string;
+        digitalFileFormat?: DigitalFileFormat;
         language: string;
         isbn13?: string;
         isbn10?: string;
@@ -474,6 +476,14 @@ export async function planCreateOps(
         if (format === "digital" && binding !== undefined) {
           bad("Binding applies only to physical releases.");
         }
+        // Not an editable field: only an import's own-ISBN evidence states it.
+        const fileFormat = fields.digitalFileFormat;
+        if (fileFormat !== undefined && fileFormat !== "pdf" && fileFormat !== "epub") {
+          bad('A file format is "pdf" or "epub".');
+        }
+        if (format === "physical" && fileFormat !== undefined) {
+          bad("A file format applies only to digital releases.");
+        }
         const language = viaRegistry("release", "language", fields.language);
         const isbn13 = viaRegistry("release", "isbn13", fields.isbn13) as string | undefined;
         const isbn10 = viaRegistry("release", "isbn10", fields.isbn10) as string | undefined;
@@ -489,6 +499,7 @@ export async function planCreateOps(
           fields: {
             format,
             binding,
+            ...(fileFormat !== undefined ? { digitalFileFormat: fileFormat } : {}),
             language: language as string,
             isbn13,
             isbn10,

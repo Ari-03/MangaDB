@@ -2213,6 +2213,8 @@ export async function creationOps(ctx: MutationCtx, args: CreationOpsArgs): Prom
         editionId: "edition",
         format: args.release.format,
         binding: args.release.binding,
+        digitalFileFormat:
+          args.release.format === "digital" ? args.release.digitalFileFormat : undefined,
         language: IMPORT_LANGUAGE,
         isbn13: args.release.isbn13,
         isbn10: args.release.isbn10,

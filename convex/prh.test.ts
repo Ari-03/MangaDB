@@ -526,6 +526,35 @@ describe("prh.sync — steady state", () => {
       expect(publishers.map((p) => p.slug)).toEqual(["kodansha"]);
     });
   });
+
+  it("creates an approved EPUB with the file format its own ISBN's record states", async () => {
+    const t = makeT();
+    await seedTeam(t, [alice]);
+    await seedRegistry(t, false);
+    const snapshot = parseTitle({
+      isbn: "9781646094356",
+      title: "Witch Hat Atelier 15",
+      seriesNumber: 15,
+      format: { code: "EL", description: "Ebook" },
+      subformat: { code: "045", description: "EPUB FXL Manga RTL" },
+      imprint: { description: "Kodansha Comics" },
+    })!;
+    expect(snapshot).toMatchObject({ format: "digital", digitalFileFormat: "epub" });
+    await t.mutation(internal.prh.applyTitle, { snapshot });
+    const [proposal] = await t.run((ctx) => ctx.db.query("proposals").collect());
+    expect(proposal).toMatchObject({ state: "inReview" });
+    expect(
+      await signedIn(t, alice).mutation(api.proposals.approveProposal, {
+        proposalId: proposal!._id,
+      }),
+    ).toMatchObject({ status: "approved" });
+    const [release] = await t.run((ctx) => ctx.db.query("releases").collect());
+    expect(release).toMatchObject({
+      format: "digital",
+      digitalFileFormat: "epub",
+      isbn13: "9781646094356",
+    });
+  });
 });
 
 // Real PRH titles that used to become one Series per book (series-titles
