@@ -16,6 +16,8 @@ import { parseEditionJson } from "./lib/openLibrary";
 import type { ReviewedFormat } from "./lib/sourceFormat";
 import { gachaPhysicalGraph } from "./test.sourceFormats";
 import {
+  insertBundle,
+  insertBundleMember,
   insertCoverage,
   insertEdition,
   insertEditionLine,
@@ -567,7 +569,8 @@ describe("field repairs and scope", () => {
       proposalId,
       observationId,
     };
-    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
     expect((await t.run(async (ctx) => ctx.db.get(proposalId)))?.state).toBe("inReview");
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     expect((await t.run(async (ctx) => ctx.db.get(proposalId)))?.state).toBe("withdrawn");
@@ -795,7 +798,8 @@ describe("restore", () => {
       async (ctx) => (await ctx.db.query("proposals").collect()).length,
     );
 
-    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
     expect(await statuses(t, all)).toEqual(["hidden", "hidden", "hidden", "hidden"]);
     expect(await t.run(async (ctx) => (await ctx.db.query("proposals").collect()).length)).toBe(
       proposalsBefore,
@@ -1139,7 +1143,8 @@ describe("lines, researched releases, cross-series books", () => {
       name: "Omnibus",
     };
 
-    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
     expect(await status(t, empty)).toBe("active");
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     expect(await status(t, empty)).toBe("hidden");
@@ -1180,7 +1185,8 @@ describe("lines, researched releases, cross-series books", () => {
     };
     const releasesBefore = await count(t, "releases");
 
-    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
     expect(await count(t, "releases")).toBe(releasesBefore);
 
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
@@ -1376,7 +1382,8 @@ describe("lines, researched releases, cross-series books", () => {
       ],
       retireVolumeIds: [s.omnibusVol],
     };
-    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
     expect(await count(t, "releaseBundles")).toBe(0);
 
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
@@ -1488,7 +1495,8 @@ describe("lines, researched releases, cross-series books", () => {
     const before = await state();
     expect(before.coverage).toEqual([]);
     expect(before.edition?.coverageUnmapped).toBe(true);
-    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
     expect(await state()).toEqual(before);
 
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
@@ -1544,7 +1552,8 @@ describe("lines, researched releases, cross-series books", () => {
       status: "skipped",
       reason: expect.stringContaining("drifted"),
     });
-    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
     expect(await count(t, "editionLines")).toBe(0);
 
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
@@ -1831,5 +1840,136 @@ describe("a held book's missing Volume", () => {
       }),
     ]);
     expect(await catalog(t)).toEqual(before);
+  });
+});
+
+describe("bundleToRelease", () => {
+  /** Noragami vol 1 sold with a DVD, filed as a one-book Bundle a source record links. */
+  async function seedSpecial(t: T) {
+    const s = await seed(t);
+    return await t.run(async (ctx) => {
+      const bundleId = await insertBundle(ctx, {
+        publisherId: s.publisherId,
+        name: "Noragami 1 Special Edition with DVD",
+        format: "physical",
+        isbn13: "9781632362827",
+        isbn10: "1632362821",
+        pubDate: { year: 2015, month: 12, day: 15, sort: 20151215 },
+        price: { amountCents: 1999, currency: "USD" },
+        description: "Volume 1 with an exclusive DVD.",
+      });
+      await insertBundleMember(ctx, { bundleId, releaseId: s.r1.releaseId });
+      const observationId = await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "release-1",
+        recordRef: { type: "releaseBundle", id: bundleId },
+      });
+      return { ...s, bundleId, observationId };
+    });
+  }
+  const entryFor = (s: Awaited<ReturnType<typeof seedSpecial>>): RepairEntry => ({
+    kind: "bundleToRelease",
+    key: "special-1",
+    reason: "A volume sold with a DVD is a special edition, not a box set.",
+    bundleId: s.bundleId,
+    isbn13: "9781632362827",
+    memberReleaseId: s.r1.releaseId,
+    line: { name: "Special Edition", position: "1" },
+    binding: null,
+    sources: ["https://www.animenewsnetwork.com/encyclopedia/releases.php?id=1"],
+  });
+  const state = (t: T, s: Awaited<ReturnType<typeof seedSpecial>>) =>
+    t.run(async (ctx) => ({
+      bundle: await ctx.db.get(s.bundleId),
+      releases: await ctx.db.query("releases").collect(),
+      lines: await ctx.db.query("editionLines").collect(),
+      observation: await ctx.db.get(s.observationId),
+    }));
+
+  it("turns a one-book Bundle into a line Release with its facts and source records", async () => {
+    const t = makeT();
+    const s = await seedSpecial(t);
+    const entry = entryFor(s);
+    const before = await state(t, s);
+    const dry = (await run(t, [entry], true))[0];
+    expect(dry, JSON.stringify(dry)).toMatchObject({ status: "applied" });
+    expect(await state(t, s)).toEqual(before);
+
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    const after = await state(t, s);
+    expect(after.bundle).toMatchObject({ status: "hidden" });
+    expect(after.bundle?.isbn13).toBeUndefined();
+    expect(after.bundle?.isbn10).toBeUndefined();
+    const release = after.releases.find((r) => r.isbn13 === "9781632362827");
+    expect(release).toMatchObject({
+      status: "active",
+      format: "physical",
+      isbn10: "1632362821",
+      pubDate: { sort: 20151215 },
+      price: { amountCents: 1999, currency: "USD" },
+      description: "Volume 1 with an exclusive DVD.",
+      publisherId: s.publisherId,
+      seriesIds: [s.base],
+    });
+    const edition = await t.run(async (ctx) => ctx.db.get(release!.editionId));
+    const line = after.lines.find((l) => l._id === edition?.editionLineId);
+    expect(line).toMatchObject({ name: "Special Edition", seriesId: s.base });
+    expect(edition?.linePosition).toBe("1");
+    const coverage = await t.run(async (ctx) =>
+      ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", edition!._id))
+        .collect(),
+    );
+    expect(coverage.map((c) => [c.volumeId, c.extent])).toEqual([[s.v1, "complete"]]);
+    expect(after.observation?.recordRef).toEqual({ type: "release", id: release!._id });
+    expect(await t.query(api.catalogPages.isbnLookup, { isbn: "9781632362827" })).toMatchObject({
+      kind: "release",
+    });
+
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+    expect(await state(t, s)).toEqual(after);
+  });
+
+  it("refuses a tracked Bundle, a Bundle with another member, and a drifted ISBN", async () => {
+    const t = makeT();
+    const s = await seedSpecial(t);
+    const entry = entryFor(s);
+    const before = await state(t, s);
+    expect((await run(t, [{ ...entry, isbn13: "9781632363220" }]))[0]).toMatchObject({
+      status: "skipped",
+      reason: expect.stringContaining("bundle ISBN is now 9781632362827"),
+    });
+    await t.run(async (ctx) => {
+      const other = await insertBook(ctx, {
+        publisherId: s.publisherId,
+        seriesId: s.base,
+        volumeId: s.v3,
+        release: { isbn13: "9780000000035" },
+      });
+      await insertBundleMember(ctx, { bundleId: s.bundleId, releaseId: other.releaseId });
+    });
+    expect((await run(t, [entry]))[0]).toMatchObject({
+      status: "skipped",
+      reason: "bundle no longer holds exactly the planned Release",
+    });
+    await t.run(async (ctx) => {
+      const extra = await ctx.db
+        .query("bundleMemberships")
+        .withIndex("by_bundle", (q) => q.eq("bundleId", s.bundleId))
+        .collect();
+      await ctx.db.delete(extra[1]!._id);
+      const userId = (await ctx.db.query("users").first())!._id;
+      await ctx.db.insert("collectionEntries", { userId, bundleId: s.bundleId, state: "owned" });
+    });
+    expect((await run(t, [entry]))[0]).toMatchObject({
+      status: "skipped",
+      reason: "bundle is tracked; move its Collection Entries first",
+    });
+    const after = await state(t, s);
+    expect(after.bundle).toEqual(before.bundle);
+    expect(after.lines).toEqual(before.lines);
+    expect(after.observation).toEqual(before.observation);
+    expect(after.releases.some((r) => r.isbn13 === "9781632362827")).toBe(false);
   });
 });

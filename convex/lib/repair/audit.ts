@@ -122,7 +122,7 @@ export function createAudit(
 
 /** Patch a record and write the Revision for exactly the fields that changed. */
 export async function updateRecord<
-  T extends "publishers" | "series" | "volumes" | "editions" | "releases",
+  T extends "publishers" | "series" | "volumes" | "editions" | "releases" | "releaseBundles",
 >(
   ctx: MutationCtx,
   audit: Audit,
