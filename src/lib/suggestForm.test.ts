@@ -68,6 +68,49 @@ const liveForm = {
   attribution: null,
 };
 
+/** A Series form with its synopsis, the field a source blurb fills. */
+const seriesForm = {
+  ...liveForm,
+  fields: [
+    {
+      name: "synopsis",
+      label: "Synopsis",
+      kind: "textarea",
+      editorial: true,
+      required: false,
+      value: "Old text.",
+    },
+  ],
+  ref: { type: "series", id: "s7" },
+  title: "Series",
+  overriddenFields: [],
+  overrides: [],
+  attribution: null,
+};
+
+/** The reader's Draft of a synopsis taken from a source blurb, credited to `citation`. */
+const seriesDraft = (citation: { sourceName: string; url: string }) => ({
+  proposalId: "p9",
+  state: "draft",
+  coverArt: [],
+  draft: {
+    comment: "The publisher's blurb.",
+    opCount: 1,
+    content: {
+      evidence: [{ kind: "observation", observationId: "obs1", sourceKey: "kodansha", url: null }],
+      ops: [
+        {
+          kind: "update",
+          recordType: "series",
+          recordId: "s7",
+          changes: [{ field: "synopsis", before: "Old text.", after: "New text." }],
+          citation,
+        },
+      ],
+    },
+  },
+});
+
 const textInputs = (tree: Host[]) =>
   tree.filter(
     (host) => host.type === "input" && host.props.type !== "checkbox" && host.props.type !== "url",
@@ -221,47 +264,8 @@ describe("the suggest page", () => {
     const kodansha = { sourceName: "Kodansha", url: "https://kodansha.us/series/x" };
     fakes.params = { type: "series", key: "7" };
     fakes.search = { draft: "p9" };
-    fakes.form = {
-      ...liveForm,
-      fields: [
-        {
-          name: "synopsis",
-          label: "Synopsis",
-          kind: "textarea",
-          editorial: true,
-          required: false,
-          value: "Old text.",
-        },
-      ],
-      ref: { type: "series", id: "s7" },
-      title: "Series",
-      overriddenFields: [],
-      overrides: [],
-      attribution: null,
-    };
-    fakes.own = {
-      proposalId: "p9",
-      state: "draft",
-      coverArt: [],
-      draft: {
-        comment: "The publisher's blurb.",
-        opCount: 1,
-        content: {
-          evidence: [
-            { kind: "observation", observationId: "obs1", sourceKey: "kodansha", url: null },
-          ],
-          ops: [
-            {
-              kind: "update",
-              recordType: "series",
-              recordId: "s7",
-              changes: [{ field: "synopsis", before: "Old text.", after: "New text." }],
-              citation: kodansha,
-            },
-          ],
-        },
-      },
-    };
+    fakes.form = seriesForm;
+    fakes.own = seriesDraft(kodansha);
     // The description section looks for its #anchor on mount.
     vi.stubGlobal("window", { location: { hash: "" } });
     try {
@@ -275,6 +279,60 @@ describe("the suggest page", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps a reader's other source choice when they remove the saved source", async () => {
+    const kodansha = { sourceName: "Kodansha", url: "https://kodansha.us/series/x" };
+    fakes.params = { type: "series", key: "7" };
+    fakes.search = { draft: "p9" };
+    fakes.form = seriesForm;
+    fakes.own = seriesDraft(kodansha);
+    vi.stubGlobal("window", { location: { hash: "" } });
+    try {
+      // The reader switches to Original prose, then removes the saved source.
+      const radios = mount(page).filter(
+        (host) => host.type === "input" && host.props.type === "radio",
+      );
+      (radios.at(-1)!.props.onChange as () => void)();
+      press(mount(page), "Remove").click();
+      press(mount(page), "Save draft").click();
+      await vi.waitFor(() => expect(fakes.saveDraft).toHaveBeenCalledTimes(1));
+      const saved = fakes.saveDraft.mock.calls[0]![0];
+      expect(saved.evidence).toEqual([]);
+      expect(saved.ops[0]).toMatchObject({ citation: null });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the form and its edits when the record moves while the reader edits", () => {
+    fakes.search = { draft: "p9" };
+    fakes.own = {
+      proposalId: "p9",
+      state: "draft",
+      stale: false,
+      coverArt: [],
+      draft: {
+        comment: "Fix the site.",
+        opCount: 1,
+        content: {
+          evidence: [],
+          ops: [
+            {
+              kind: "update",
+              recordType: "publisher",
+              recordId: "pub-a",
+              changes: [{ field: "website", before: undefined, after: "https://new.example" }],
+            },
+          ],
+        },
+      },
+    };
+    expect(mount(page).some((host) => host.type === "form")).toBe(true);
+    fakes.own = { ...fakes.own, stale: true };
+    const after = mount(page);
+    expect(after.some((host) => host.type === "form")).toBe(true);
+    expect(shows(after, "The record changed since this draft was saved")).toBe(false);
   });
 
   it("will not resume a Draft it cannot show whole, so saving drops nothing", () => {
