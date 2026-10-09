@@ -85,8 +85,10 @@ export function BrandMark() {
 export function SiteHeader() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // The drawer stays open only on the page it was opened on, so any link in
-  // it (account links included) closes it by navigating.
+  // it (account links included) closes it by navigating. Leaving that page
+  // forgets it, so coming back (the Back button) finds the drawer shut.
   const [openAt, setOpenAt] = useState<string | null>(null);
+  if (openAt !== null && openAt !== pathname) setOpenAt(null);
   const open = openAt === pathname;
   const setOpen = (next: boolean) => setOpenAt(next ? pathname : null);
   const drawer = useRef<HTMLDivElement>(null);
