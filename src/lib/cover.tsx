@@ -165,6 +165,11 @@ type CoverProps = {
   /** `false` for the first covers above the fold. Defaults to lazy. */
   lazy?: boolean;
   className?: string;
+  /**
+   * Told whether art is showing (true) or the cloth placeholder (false),
+   * each time that changes; a page's cover link words itself by it.
+   */
+  onArt?: (shown: boolean) => void;
 };
 
 export function Cover({
@@ -177,6 +182,7 @@ export function Cover({
   followed,
   lazy = true,
   className,
+  onArt,
 }: CoverProps) {
   const seed = numbered ? numbered.series : title;
   const style = { "--cloth": clothColor(seed) } as CSSProperties;
@@ -205,6 +211,8 @@ export function Cover({
     const el = img.current;
     if (art && el && el.complete && el.naturalWidth === 0) fail(art);
   }, [art]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: callers pass a state setter, so `art` alone decides when to report
+  useEffect(() => onArt?.(art !== null), [art]);
   return (
     <span className={className ? `cover ${className}` : "cover"}>
       {art ? (

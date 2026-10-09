@@ -531,14 +531,10 @@
 
 /* ---------- cover + description ---------------------------------- */
 
-/* The data team's links beside a public page's art, blurb and Release
-   rows (lib/contextEdit.tsx): the .mod-edit-link look, set close by. */
+/* The edit links beside a public page's art and blurb
+   (lib/contextEdit.tsx): the .mod-edit-link look, set close by. */
 .context-edit {
   margin-top: 8px;
-}
-.release-side .context-edit {
-  margin: 0;
-  justify-content: flex-end;
 }
 
 /* The Cover and Description sections of /mod/edit and /mod/propose. They

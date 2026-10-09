@@ -150,6 +150,11 @@
   font-size: 1.3rem;
 }
 
+/* the cover link sits under the plank, which hangs below the book */
+.detail-cover > .context-edit {
+  margin-top: 36px;
+}
+
 /* the bundle's collection control sits under its cover, on the ledge */
 .detail-cover .collection-controls {
   margin-top: 40px;

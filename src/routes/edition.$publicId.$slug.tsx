@@ -1,5 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { useState } from "react";
+
 import { api } from "../../convex/_generated/api";
 import { Byline } from "~/lib/byline";
 import { catalogQuery } from "~/lib/catalogData";
@@ -8,7 +10,7 @@ import { Cover } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, ModReleaseEditLinks, RecordHistory } from "~/lib/moderation";
-import { BlurbSource, ContextEditLink, EditLinks } from "~/lib/contextEdit";
+import { BlurbSource, ContextEditLink, coverLinkLabel, EditLinks } from "~/lib/contextEdit";
 import { RatingAggregate } from "~/lib/ratings";
 import { TakePanel } from "~/lib/reviews";
 import {
@@ -219,6 +221,9 @@ function EditionPage() {
     frontRelease,
     rating,
   } = Route.useLoaderData();
+  // Whether the hero shows art (stored, or found by ISBN) or cloth; the
+  // cover link under it says Change or Add by it.
+  const [artShown, setArtShown] = useState(false);
   const primarySeries = series[0];
   const rated = ratedAs(edition.publicId, coverage);
   const ratingTarget = rated?.target ?? null;
@@ -262,6 +267,7 @@ function EditionPage() {
               ]}
               numbered={numbered}
               lazy={false}
+              onArt={setArtShown}
             />
           </div>
           {/* The Release whose stored art this is, or the one a cover would
@@ -269,7 +275,7 @@ function EditionPage() {
           {coverOwner ? (
             <EditLinks id="cover">
               <ContextEditLink owner={coverOwner} anchor="cover">
-                {coverOwner.stored ? "Change cover" : "Add a cover"}
+                {coverLinkLabel(coverOwner.stored || artShown)}
               </ContextEditLink>
             </EditLinks>
           ) : null}

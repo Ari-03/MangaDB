@@ -302,8 +302,9 @@ one whatever role its author holds later (`isSuggestion`): appointed to
 the Data Team, they still save, submit and rebase it under these rules,
 and what they start there is theirs as an Editor.
 
-Catalog pages show a signed-in reader the Data Team's links beside a
-cover, a description and the Release rows, leading to
+Catalog pages show a signed-in reader the Data Team's links under a
+cover, under a description and per Release at an Edition page's foot,
+leading to
 `/suggest/{type}/{key}` instead, and "Suggest an edit" where an Editor
 sees "Propose a change". Signed-out visitors see none of them. `/suggest`
 is the propose form in the site's own page, without override clears;

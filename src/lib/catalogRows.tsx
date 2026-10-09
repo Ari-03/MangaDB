@@ -11,10 +11,8 @@
 
 import { Link } from "@tanstack/react-router";
 
-import { releaseLabel } from "../../convex/lib/titles";
 import type { EditionPageData } from "~/lib/catalogData";
 import { ReleaseCollectionControls } from "~/lib/collection";
-import { ContextEditLink, EditLinks } from "~/lib/contextEdit";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ReleasePassControls } from "~/lib/reading";
 import { slugParams } from "~/lib/slug";
@@ -143,14 +141,6 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
         <ReleaseCollectionControls releaseId={release.id} />
         {/* Release Progress pass controls; render nothing signed out. */}
         <ReleasePassControls releaseId={release.id} />
-        <EditLinks>
-          <ContextEditLink
-            owner={{ type: "release", key: release.id, label: releaseLabel(release) }}
-            anchor="cover"
-          >
-            {release.coverUrl ? "Change cover" : "Add a cover"}
-          </ContextEditLink>
-        </EditLinks>
       </div>
     </li>
   );
