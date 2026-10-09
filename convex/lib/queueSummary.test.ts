@@ -15,7 +15,12 @@ type Version = Doc<"proposalVersions">;
 const releaseRef = { type: "release" as const, id: "r1" as Id<"releases"> };
 const seriesRef = { type: "series" as const, id: "s1" as Id<"series"> };
 const source = { kind: "source" as const, sourceKey: "kodansha" };
-const person = { kind: "user" as const, userId: "u1" as Id<"users"> };
+const person = {
+  kind: "user" as const,
+  userId: "u1" as Id<"users">,
+  roleAtAuthorship: "editor" as const,
+};
+const reader = { kind: "user" as const, userId: "u2" as Id<"users"> };
 
 const reportEvidence: Version["evidence"] = [
   { kind: "url", url: "/series/7", note: "Reported from the Series page: Witch Hat: Atelier" },
@@ -57,7 +62,7 @@ describe("summarizeVersion", () => {
   it("reads a zero-op proposal by a person as a report, without its prefix", () => {
     const summary = summarizeVersion(
       [],
-      person,
+      reader,
       "[Report] Witch Hat: Atelier: Volume 14 is missing.",
       reportEvidence,
     );
@@ -77,6 +82,18 @@ describe("summarizeVersion", () => {
       creates: ["volume", "edition", "release"],
     });
     expect(queueKindOf(ops, source)).toBe("importCreation");
+  });
+
+  it("reads a field change by a person without a data-team role as a suggestion", () => {
+    const ops: Version["ops"] = [
+      { kind: "update", ref: seriesRef, changes: [{ field: "title", after: "B" }] },
+    ];
+    expect(summarizeVersion(ops, reader, "Typo.", [])).toMatchObject({
+      kind: "suggestion",
+      fields: [{ field: "title", label: "Title", after: "B" }],
+    });
+    expect(queueKindOf(ops, person)).toBe("fieldChange");
+    expect(queueKindOf([], reader)).toBe("report");
   });
 
   it("reads a merge as sensitive, whoever wrote it", () => {

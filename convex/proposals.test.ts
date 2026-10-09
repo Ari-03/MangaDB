@@ -18,6 +18,7 @@ import {
   insertVolume,
 } from "./test.factories";
 import {
+  changesOf,
   ADMIN,
   EDITOR,
   MOD,
@@ -103,7 +104,7 @@ async function submitTitleProposal(t: TestT, seriesId: Id<"series">, title = "Be
 }
 
 describe("proposals — authorization", () => {
-  it("drafting needs a data-team role; review needs a moderator", async () => {
+  it("drafting needs a signed-in user; review needs a moderator", async () => {
     const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
@@ -111,8 +112,13 @@ describe("proposals — authorization", () => {
     await expect(t.mutation(api.proposals.saveDraft, draftArgs)).rejects.toMatchObject({
       data: { code: "unauthenticated" },
     });
+    // A reader drafts only Suggestions (suggestions.test.ts): no creations.
     await expect(
-      t.withIdentity({ subject: PLAIN }).mutation(api.proposals.saveDraft, draftArgs),
+      t.withIdentity({ subject: PLAIN }).mutation(api.proposals.saveDraft, {
+        ops: [{ kind: "create", table: "volumes", tempId: "v", fields: { seriesId, label: "2" } }],
+        evidence: [],
+        comment: "Nope.",
+      }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
     const proposalId = await submitTitleProposal(t, seriesId);
@@ -877,7 +883,7 @@ describe("proposals — the review queue", () => {
       viewer: { isAuthor: true, canReview: false },
     });
     expect(detail?.versions).toHaveLength(1);
-    const version = detail!.versions[0];
+    const version = changesOf(detail!.versions[0]);
     expect(version.ops[0]).toMatchObject({
       kind: "update",
       recordType: "series",
@@ -1038,7 +1044,7 @@ describe("proposals — clearing a Human Override", () => {
     const queue = await queueRows(asMod, { operation: "clearOverride" });
     expect(queue.map((row) => row.proposalId)).toEqual([proposalId]);
     const detail = await asMod.query(api.proposals.proposalDetail, { proposalId });
-    expect(detail?.versions[0]?.ops).toEqual([
+    expect(changesOf(detail?.versions[0]).ops).toEqual([
       {
         kind: "clearOverride",
         recordType: "series",
@@ -1328,7 +1334,7 @@ describe("proposals — clearing a Human Override", () => {
       stale: [{ type: "series", id: seriesId, reason: "baseChanged" }],
     });
     const pending = await asMod.query(api.proposals.proposalDetail, { proposalId });
-    expect(pending?.versions[0]?.ops).toMatchObject([
+    expect(changesOf(pending?.versions[0]).ops).toMatchObject([
       { kind: "update", stale: true },
       {
         kind: "clearOverride",
@@ -1347,7 +1353,7 @@ describe("proposals — clearing a Human Override", () => {
     const decided = await asMod.query(api.proposals.proposalDetail, { proposalId });
     expect(decided?.versions).toHaveLength(2);
     for (const version of decided!.versions) {
-      expect(version.ops).toMatchObject([
+      expect(changesOf(version).ops).toMatchObject([
         { kind: "update", stale: false },
         { kind: "clearOverride", stale: false, kept: null },
       ]);

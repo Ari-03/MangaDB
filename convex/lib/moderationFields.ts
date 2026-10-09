@@ -318,6 +318,34 @@ export function normalizeCitation(
   return { ok: true, value: { sourceName, url } };
 }
 
+/** The longest one-line text a person writes into a field, or into one entry of a list. */
+export const MAX_TEXT_LENGTH = 500;
+/** The longest prose a person writes into a field (a description or synopsis). */
+export const MAX_TEXTAREA_LENGTH = 10_000;
+/** The most entries a person writes into a list field. */
+export const MAX_LIST_ENTRIES = 100;
+
+/**
+ * Why a normalized value is too long for a person to write into its field,
+ * or null. Checked on the values a person changes (moderation.ts
+ * validateUpdate), not while normalizing: an import's longer text, and a
+ * value a record already holds, still pass.
+ */
+export function overLength(descriptor: FieldDescriptor, value: unknown): string | null {
+  const max = descriptor.kind === "textarea" ? MAX_TEXTAREA_LENGTH : MAX_TEXT_LENGTH;
+  if (typeof value === "string" && value.length > max) {
+    return `${descriptor.label} is at most ${max} characters.`;
+  }
+  if (!Array.isArray(value)) return null;
+  if (value.length > MAX_LIST_ENTRIES) {
+    return `${descriptor.label} holds at most ${MAX_LIST_ENTRIES} entries.`;
+  }
+  if (value.some((item) => typeof item === "string" && item.length > MAX_TEXT_LENGTH)) {
+    return `Each entry of ${descriptor.label} is at most ${MAX_TEXT_LENGTH} characters.`;
+  }
+  return null;
+}
+
 /**
  * Validate and normalize one submitted field value against its descriptor.
  * `undefined` (or an empty string/list) clears an optional field.

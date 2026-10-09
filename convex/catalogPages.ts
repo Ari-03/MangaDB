@@ -23,6 +23,7 @@ import { representativeDescription } from "./lib/descriptions";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
+import type { RecordGet } from "./lib/publicRecords";
 import { otherPrintingsOf, printingReleases } from "./lib/releaseIsbns";
 import { creditsFor } from "./people";
 
@@ -149,6 +150,50 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
     mature: collectsMature,
     coverageUnmapped: edition.coverageUnmapped === true,
   };
+}
+
+/**
+ * What `editionTitleOf` reads: documents by id and an Edition's coverage
+ * rows. `titleReads` reads them straight from the database;
+ * lib/proposalReads.ts reads them once a response, within its read budget.
+ */
+export type TitleReads = {
+  get: RecordGet;
+  coverage: (editionId: Id<"editions">) => Promise<Array<Doc<"volumeCoverages">>>;
+};
+
+export function titleReads(ctx: QueryCtx): TitleReads {
+  return { get: (id) => ctx.db.get(id), coverage: (id) => coverageOf(ctx, id) };
+}
+
+/**
+ * An Edition's composed title alone, as `editionCoverage` composes it
+ * (same listed Volumes, same Series), without its maturity and merge
+ * reads: the edit form's and Proposals' titles (moderation.ts displayInfo).
+ */
+export async function editionTitleOf(reads: TitleReads, edition: Doc<"editions">) {
+  const storedLine = edition.editionLineId ? await reads.get(edition.editionLineId) : null;
+  const line = storedLine?.status === "active" ? storedLine : null;
+  let seriesTitle: string | null = null;
+  const covered = [];
+  for (const row of await reads.coverage(edition._id)) {
+    const volume = await reads.get(row.volumeId);
+    if (volume?.status !== "active") continue;
+    const series = await reads.get(volume.seriesId);
+    if (series?.status !== "active") continue;
+    seriesTitle ??= series.title;
+    covered.push({ label: volume.label ?? null, position: volume.position });
+  }
+  if (covered.length === 0 && line) {
+    const lineSeries = await reads.get(line.seriesId);
+    if (lineSeries?.status === "active") seriesTitle = lineSeries.title;
+  }
+  return editionTitle({
+    seriesTitle,
+    lineName: line?.name ?? null,
+    linePosition: edition.linePosition ?? null,
+    covered,
+  });
 }
 
 /**

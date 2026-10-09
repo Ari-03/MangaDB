@@ -23,6 +23,7 @@ import {
   insertVolume,
 } from "./test.factories";
 import {
+  changesOf,
   alice,
   bob,
   carol,
@@ -199,11 +200,12 @@ describe("an ordinary single book", () => {
         release: { format: "physical", binding: "paperback", isbn13: "9781974728374" },
       });
       expect(
-        draft!.draft!.ops.filter((op) => op.kind === "create" && op.table === "volumes"),
+        changesOf(draft!.draft).ops.filter((op) => op.kind === "create" && op.table === "volumes"),
       ).toEqual([]);
-      expect(draft!.draft!.evidence).toEqual([
+      expect(changesOf(draft!.draft).evidence).toEqual([
         {
           kind: "observation",
+          observationId: expect.any(String),
           sourceKey: "openlibrary",
           url: "https://openlibrary.org/books/OL1M",
         },
@@ -367,9 +369,9 @@ describe("a book on a line", () => {
       coverage: { kind: "pending" },
       line: { name: "Definitive Edition", position: "4", created: true },
     });
-    expect(draft.draft!.ops.filter((op) => op.kind === "create" && op.table === "volumes")).toEqual(
-      [],
-    );
+    expect(
+      changesOf(draft.draft).ops.filter((op) => op.kind === "create" && op.table === "volumes"),
+    ).toEqual([]);
     await expect(
       signedIn(t, carol).mutation(api.proposals.submitProposal, { proposalId }),
     ).rejects.toMatchObject({

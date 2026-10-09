@@ -1,5 +1,6 @@
 // Shared form plumbing for the record edit surfaces: the Moderator direct
-// edit (/mod/edit) and the Editor update proposal (/mod/propose).
+// edit (/mod/edit), the Editor update proposal (/mod/propose) and the
+// reader's Suggestion (/suggest).
 // Everything edits as strings keyed by field name; the submit handlers shape
 // typed values that the Convex mutations re-validate against the same
 // registry (convex/lib/moderationFields.ts). A cover is the JSON of its
@@ -315,6 +316,51 @@ export function draftCitation(
       };
     }
   }
+}
+
+/**
+ * The form state that resumes a saved Draft's update of a record: the
+ * record's current values with the update's after-values over them, those
+ * inputs touched, and the update's source statement for the record's text
+ * set on the source radios (a blurb used from a source when the Draft's
+ * evidence names its record, `observationId`, else the named page).
+ */
+export function resumedFormState(
+  fields: Array<FieldDescriptor & { value: unknown }>,
+  update: {
+    changes: ReadonlyArray<{ field: string; after?: unknown }>;
+    citation?: Citation | null;
+  },
+  observationId: string | null,
+  attribution: Citation | null,
+): { values: FormState; dirty: Set<string> } {
+  const changed = new Map(update.changes.map((change) => [change.field, change.after]));
+  const values = initialFormState(
+    fields.map((field) =>
+      changed.has(field.name) ? { ...field, value: changed.get(field.name) } : field,
+    ),
+  );
+  const dirty = new Set(fields.filter((field) => changed.has(field.name)).flatMap(stateKeysOf));
+  const text = fields.find((field) => field.kind === "textarea" && field.editorial);
+  const { citation } = update;
+  if (text && citation !== undefined) {
+    const keys = sourceKeys(text.name);
+    dirty.add(keys.mode);
+    if (citation === null) {
+      values[keys.mode] = "none";
+    } else if (
+      citation.sourceName === attribution?.sourceName &&
+      citation.url === attribution.url
+    ) {
+      values[keys.mode] = "keep";
+    } else {
+      values[keys.mode] = observationId ? "observation" : "custom";
+      values[keys.name] = citation.sourceName;
+      values[keys.url] = citation.url;
+      if (observationId) values[keys.observation] = observationId;
+    }
+  }
+  return { values, dirty };
 }
 
 /** Whether a source record's page can be cited: an https URL. */

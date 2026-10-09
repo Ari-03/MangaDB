@@ -15,6 +15,7 @@ import { LibraryReading } from "~/lib/reading";
 import { MatureSettings } from "~/lib/mature";
 import { ScoreFormatSettings } from "~/lib/ratings";
 import { SharingSettings } from "~/lib/sharing";
+import { LibrarySuggestions } from "~/lib/suggestions";
 import { clerkEnabled } from "~/providers";
 
 const TABS = [
@@ -22,6 +23,7 @@ const TABS = [
   { key: "reading", label: "Reading" },
   { key: "upcoming", label: "Upcoming" },
   { key: "favorites", label: "Favorites" },
+  { key: "suggestions", label: "Suggestions" },
   { key: "settings", label: "Settings" },
 ] as const;
 type Tab = (typeof TABS)[number]["key"];
@@ -49,7 +51,8 @@ function viewHref(tab: Tab, shelf: EntryState): string {
 /**
  * /me — the viewer's own library, in tabs: what you have (one shelf per
  * collection state), what you are reading, what is coming, your Favorites,
- * and the account, sharing, and rating settings. The tab and shelf are read from the URL on arrival
+ * the changes you suggested to the catalog, and the account, sharing, and
+ * rating settings. The tab and shelf are read from the URL on arrival
  * (linkable, right before hydration) and then switched in place: a click
  * only changes local state and rewrites the address, never navigates, so
  * the /me auth gate is not re-run for every shelf. Each tab mounts the
@@ -180,6 +183,11 @@ function MePage() {
           {/* Favorited Series and Volumes, newest first; always private. */}
           <LibraryFavorites />
         </section>
+      ) : tab === "suggestions" ? (
+        <section className="lib-panel lib-view" aria-label="Suggestions">
+          {/* The viewer's own Suggestions: Drafts, those in review, decisions. */}
+          <LibrarySuggestions />
+        </section>
       ) : (
         <section className="lib-panel lib-settings lib-view" aria-label="Settings">
           <div className="acct-panel">
@@ -233,6 +241,7 @@ function TabCountInner({ tab, todaySort }: { tab: Tab; todaySort: number }) {
   const reading = useQuery(api.reading.myReading, tab === "reading" ? {} : "skip");
   const upcoming = useQuery(api.follows.myUpcoming, tab === "upcoming" ? { todaySort } : "skip");
   const favorites = useQuery(api.favorites.mine, tab === "favorites" ? {} : "skip");
+  const suggestions = useQuery(api.suggestions.mine, tab === "suggestions" ? {} : "skip");
   const count =
     tab === "collection" && library
       ? Object.values(countLibrary(library)).reduce((sum, n) => sum + n, 0)
@@ -242,7 +251,9 @@ function TabCountInner({ tab, todaySort }: { tab: Tab; todaySort: number }) {
           ? upcoming.items.length
           : tab === "favorites" && favorites
             ? favorites.items.length
-            : null;
+            : tab === "suggestions" && suggestions
+              ? suggestions.length
+              : null;
   if (count === null) return null;
   return <span className="lib-tab-count">{count}</span>;
 }

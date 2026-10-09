@@ -13,6 +13,8 @@ import {
   fieldValue,
   freshDraft,
   isRecordType,
+  resumedFormState,
+  sourceKeys,
   type FormState,
 } from "./editForm";
 
@@ -83,5 +85,45 @@ describe("edit drafts pin their base Revision (audit B05)", () => {
     expect(draft.dirty.size).toBe(0);
     expect(draftIsStale(draft, null)).toBe(false);
     expect(draftChanges(fields, draft)).toEqual({ ok: true, changes: [] });
+  });
+});
+
+describe("resumedFormState", () => {
+  const fields = ["pubDate", "description"].map((name) => ({ ...descriptor(name), value: null }));
+  const kodansha = { sourceName: "Kodansha USA", url: "https://kodansha.us/a-1" };
+  const keys = sourceKeys("description");
+
+  it("lays a Draft's after-values over the record and marks those inputs touched", () => {
+    const { values, dirty } = resumedFormState(
+      fields,
+      { changes: [{ field: "pubDate", after: { year: 2024, month: 4 } }] },
+      null,
+      null,
+    );
+    expect(values).toMatchObject({ "pubDate.year": "2024", "pubDate.month": "4", description: "" });
+    expect([...dirty].sort()).toEqual(["pubDate.day", "pubDate.month", "pubDate.year"]);
+  });
+
+  it("restores the text's source as the radios hold it", () => {
+    const resume = (citation: typeof kodansha | null, observationId: string | null = null) =>
+      resumedFormState(
+        fields,
+        { changes: [{ field: "description", after: "A blurb." }], citation },
+        observationId,
+        { sourceName: "Kodansha USA", url: "https://kodansha.us/a-1" },
+      );
+    expect(resume(null).values[keys.mode]).toBe("none");
+    expect(resume(kodansha).values[keys.mode]).toBe("keep");
+    const other = { sourceName: "Yen Press", url: "https://yenpress.com/a-1" };
+    expect(resume(other).values).toMatchObject({
+      [keys.mode]: "custom",
+      [keys.name]: "Yen Press",
+      [keys.url]: "https://yenpress.com/a-1",
+    });
+    expect(resume(other, "obs1").values).toMatchObject({
+      [keys.mode]: "observation",
+      [keys.observation]: "obs1",
+    });
+    expect(resume(other).dirty.has(keys.mode)).toBe(true);
   });
 });

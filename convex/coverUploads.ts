@@ -1,5 +1,5 @@
-// Cover art uploads for the Cover section of the edit and propose forms.
-// The form asks for an upload URL (`uploadUrl`) and posts the file to it.
+// Cover art uploads for the Cover section of the edit, propose and suggest
+// forms. The form asks for an upload URL (`uploadUrl`) and posts the file to it.
 // The URL is this deployment's HTTP action (http.ts /cover-upload), not a
 // bare storage URL: it stores the file itself and records the blob on the
 // upload row (`stored`), so a row only ever names a blob its own upload
@@ -12,8 +12,9 @@
 // uploaded; one a Draft or In-Review Proposal names waits another day,
 // however long the Proposal takes.
 
+import { DAY, RateLimiter } from "@convex-dev/rate-limiter";
 import { ConvexError, v } from "convex/values";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import { env, internalMutation, mutation } from "./_generated/server";
 import {
   checkCoverBlob,
@@ -23,12 +24,23 @@ import {
   pinned,
   shown,
 } from "./lib/coverRefs";
+import { requireUser } from "./lib/auth";
 import { fail } from "./lib/errors";
-import { requireDataTeam } from "./lib/roles";
+import { onDataTeam } from "./lib/roles";
 
-const DAY = 24 * 60 * 60 * 1000;
-/** Uploads one person may start in a day: a form needs one or two. */
-const UPLOADS_PER_DAY = 50;
+/** Uploads a Data Team member may start in a day: a form needs one or two. */
+export const UPLOADS_PER_DAY = 50;
+/** Uploads a reader may start in a day, for the covers their Suggestions change. */
+export const READER_UPLOADS_PER_DAY = 5;
+
+// Upload starts per user (Convex rate-limiter component), counted when the
+// URL is handed out, so neither the sweep renewing a pending upload's day
+// nor a refused file deleting its row gives an upload back.
+const rateLimiter = new RateLimiter(components.rateLimiter, {
+  coverUpload: { kind: "token bucket", rate: UPLOADS_PER_DAY, period: DAY },
+  readerCoverUpload: { kind: "token bucket", rate: READER_UPLOADS_PER_DAY, period: DAY },
+});
+
 /** Rows one sweep run handles before it schedules the next. */
 const SWEEP_BATCH = 100;
 /** Revisions one backfill run reads. */
@@ -39,25 +51,24 @@ const BACKFILL_STALL = 10 * 60 * 1000;
 /**
  * Start an upload: the URL to POST the file to, which carries the upload
  * row's id and secret token, and the row the finished blob is reported
- * against. Data Team only.
+ * against. Any signed-in User: the Data Team for edits and Proposals, a
+ * reader for a Suggestion, each under their daily bucket.
  */
 export const uploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
-    const user = await requireDataTeam(ctx);
-    const now = Date.now();
-    const recent = await ctx.db
-      .query("coverUploads")
-      .withIndex("by_uploader", (q) => q.eq("uploaderId", user._id).gt("sweepAfter", now))
-      .take(UPLOADS_PER_DAY);
-    if (recent.length >= UPLOADS_PER_DAY) {
-      fail("rateLimited", "Too many cover uploads today. Try again tomorrow.");
-    }
+    const user = await requireUser(ctx);
+    const { ok } = await rateLimiter.limit(
+      ctx,
+      onDataTeam(user) ? "coverUpload" : "readerCoverUpload",
+      { key: user._id },
+    );
+    if (!ok) fail("rateLimited", "Too many cover uploads today. Try again tomorrow.");
     const token = crypto.randomUUID();
     const uploadId = await ctx.db.insert("coverUploads", {
       uploaderId: user._id,
       token,
-      sweepAfter: now + DAY,
+      sweepAfter: Date.now() + DAY,
     });
     const url = new URL("/cover-upload", env.CONVEX_SITE_URL);
     url.searchParams.set("upload", uploadId);
@@ -94,7 +105,7 @@ export const stored = internalMutation({
 export const uploaded = mutation({
   args: { uploadId: v.id("coverUploads"), storageId: v.id("_storage") },
   handler: async (ctx, { uploadId, storageId }) => {
-    const user = await requireDataTeam(ctx);
+    const user = await requireUser(ctx);
     const row = await ctx.db.get(uploadId);
     if (!row || row.uploaderId !== user._id) fail("forbidden", "No such upload of yours.");
     if (row.storageId !== storageId) {

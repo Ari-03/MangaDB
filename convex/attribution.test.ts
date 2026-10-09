@@ -21,7 +21,18 @@ import {
   insertSourceRevision,
   insertVolume,
 } from "./test.factories";
-import { alice, bob, carol, dave, EDITOR, MOD, makeT, seedTeam, type TestT } from "./test.helpers";
+import {
+  alice,
+  bob,
+  carol,
+  changesOf,
+  dave,
+  EDITOR,
+  MOD,
+  makeT,
+  seedTeam,
+  type TestT,
+} from "./test.helpers";
 
 const KODANSHA_TEXT = "A girl finds a sword.";
 const KODANSHA = { sourceName: "Kodansha USA", url: "https://kodansha.us/alpha-1" };
@@ -257,9 +268,17 @@ describe("citations through Editor proposals", () => {
     const detail = await t
       .withIdentity({ subject: MOD })
       .query(api.proposals.proposalDetail, { proposalId });
-    expect(detail?.versions[0]?.ops[0]).toMatchObject({ kind: "update", citation: KODANSHA });
-    expect(detail?.versions[0]?.evidence).toEqual([
-      { kind: "observation", sourceKey: "kodansha", url: KODANSHA.url },
+    expect(changesOf(detail?.versions[0]).ops[0]).toMatchObject({
+      kind: "update",
+      citation: KODANSHA,
+    });
+    expect(changesOf(detail?.versions[0]).evidence).toEqual([
+      {
+        kind: "observation",
+        observationId: expect.any(String),
+        sourceKey: "kodansha",
+        url: KODANSHA.url,
+      },
     ]);
 
     await t.withIdentity({ subject: MOD }).mutation(api.proposals.approveProposal, { proposalId });
