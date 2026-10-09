@@ -79,6 +79,7 @@ import type * as lib_printings from "../lib/printings.js";
 import type * as lib_proposalCreates from "../lib/proposalCreates.js";
 import type * as lib_proposalWarnings from "../lib/proposalWarnings.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
+import type * as lib_publicRecords from "../lib/publicRecords.js";
 import type * as lib_publisherIsbnBlocks from "../lib/publisherIsbnBlocks.js";
 import type * as lib_publishers from "../lib/publishers.js";
 import type * as lib_qa from "../lib/qa.js";
@@ -225,6 +226,7 @@ declare const fullApi: ApiFromModules<{
   "lib/proposalCreates": typeof lib_proposalCreates;
   "lib/proposalWarnings": typeof lib_proposalWarnings;
   "lib/publicIds": typeof lib_publicIds;
+  "lib/publicRecords": typeof lib_publicRecords;
   "lib/publisherIsbnBlocks": typeof lib_publisherIsbnBlocks;
   "lib/publishers": typeof lib_publishers;
   "lib/qa": typeof lib_qa;

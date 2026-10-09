@@ -1,6 +1,7 @@
 // Stored cover art that people change through the moderation write path
 // (the registry's `coverImage`, lib/moderationFields.ts): which blobs are
-// still needed, and whether a blob may go into a change.
+// still needed, whether a blob may go into a change, and which a reader
+// may see (`publicArt`).
 //
 // A blob is needed while any Release, Bundle or Release Variant shows it,
 // any Revision names it (History keeps every cover it ever showed), or a
@@ -15,9 +16,12 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { CatalogDoc } from "../moderation";
 import { MIN_COVER_BYTES } from "./covers";
 import { fail } from "./errors";
-import { COVER_TYPES, MAX_COVER_UPLOAD_BYTES } from "./moderationFields";
+import { COVER_TYPES, MAX_COVER_UPLOAD_BYTES, type RecordType } from "./moderationFields";
+import { publiclyVisible, publicRecord } from "./publicRecords";
+import { onDataTeam } from "./roles";
 
 type Change = { field: string; before?: unknown; after?: unknown };
 
@@ -109,6 +113,56 @@ export async function shown(
   return variant !== null;
 }
 
+/**
+ * Whether a record the public catalog shows (lib/publicRecords.ts) holds
+ * `storageId`: a Release, Bundle or Variant showing it now, or a Revision
+ * naming it, which that record's public History shows. The art a reader
+ * may reuse or see beside their Suggestion, besides their own uploads.
+ * Reads at most PIN_SCAN holders of each kind.
+ */
+export async function publicArt(ctx: QueryCtx, storageId: Id<"_storage">): Promise<boolean> {
+  const holders: Array<[RecordType, CatalogDoc]> = [];
+  for (const release of await ctx.db
+    .query("releases")
+    .withIndex("by_cover", (q) => q.eq("coverImage.storageId", storageId))
+    .take(PIN_SCAN)) {
+    holders.push(["release", release]);
+  }
+  for (const bundle of await ctx.db
+    .query("releaseBundles")
+    .withIndex("by_cover", (q) => q.eq("coverImage.storageId", storageId))
+    .take(PIN_SCAN)) {
+    holders.push(["releaseBundle", bundle]);
+  }
+  for (const variant of await ctx.db
+    .query("releaseVariants")
+    .withIndex("by_cover", (q) => q.eq("coverImage.storageId", storageId))
+    .take(PIN_SCAN)) {
+    holders.push(["releaseVariant", variant]);
+  }
+  for (const [type, doc] of holders) {
+    if (await publiclyVisible(ctx, type, doc)) return true;
+  }
+  const pins = await ctx.db
+    .query("coverRefs")
+    .withIndex("by_storage", (q) => q.eq("storageId", storageId))
+    .take(PIN_SCAN);
+  for (const pin of pins) {
+    const revision = pin.revisionId ? await ctx.db.get(pin.revisionId) : null;
+    if (revision && (await publicRecord(ctx, revision.ref))) return true;
+  }
+  return false;
+}
+
+/** Whether `userId` uploaded `storageId` (coverUploads.ts), while its upload row lasts. */
+export async function ownUpload(ctx: QueryCtx, storageId: Id<"_storage">, userId: Id<"users">) {
+  const upload = await ctx.db
+    .query("coverUploads")
+    .withIndex("by_storage", (q) => q.eq("storageId", storageId))
+    .first();
+  return upload?.uploaderId === userId;
+}
+
 /** Whether every Revision written before `coverRefs` existed has its covers pinned. */
 export async function historyPinned(ctx: QueryCtx): Promise<boolean> {
   return (await ctx.db.query("coverPinBackfill").first())?.done === true;
@@ -171,18 +225,20 @@ export async function checkCoverStored(ctx: QueryCtx, value: unknown) {
 
 /**
  * Whether `author` may put the cover in `change` on `doc`: removing art,
- * keeping the record's own blob, reusing art the catalog already shows or
- * History names, or a blob `author` uploaded (coverUploads.ts). Anything
- * else is a blob they have no claim to. Checked when a direct edit is
- * saved and when a Proposal is drafted or submitted; approval checks only
- * that the blob is still there (`checkCoverBlob`), since the Proposal has
- * pinned it.
+ * keeping the record's own blob, a blob `author` uploaded (coverUploads.ts),
+ * or art the catalog already holds. For the Data Team that is any art a
+ * record shows or History names; for a reader only art a record the public
+ * catalog shows holds (`publicArt`), so a Suggestion cannot reach art only
+ * a hidden record has. Anything else is a blob they have no claim to.
+ * Checked when a direct edit is saved and when a Proposal is drafted or
+ * submitted; approval checks only that the blob is still there
+ * (`checkCoverBlob`), since the Proposal has pinned it.
  */
 export async function checkCoverUse(
   ctx: QueryCtx,
   doc: Pick<Doc<"releases">, "coverImage">,
   change: Change,
-  author: Id<"users">,
+  author: Doc<"users">,
 ) {
   const raw = coverStorageId(change.after);
   if (raw === null) return;
@@ -193,11 +249,16 @@ export async function checkCoverUse(
     .withIndex("by_storage", (q) => q.eq("storageId", storageId))
     .first();
   if (upload !== null) {
-    if (upload.uploaderId !== author) fail("forbidden", "That cover was uploaded by someone else.");
+    if (upload.uploaderId !== author._id) {
+      fail("forbidden", "That cover was uploaded by someone else.");
+    }
     await checkCoverBlob(ctx, storageId, true);
     return;
   }
-  if (!(await shown(ctx, storageId)) && !(await pinned(ctx, storageId, true))) {
+  const catalogArt = onDataTeam(author)
+    ? (await shown(ctx, storageId)) || (await pinned(ctx, storageId, true))
+    : await publicArt(ctx, storageId);
+  if (!catalogArt) {
     fail("invalidField", "That file is not an upload of yours or art on the catalog.");
   }
   await checkCoverBlob(ctx, storageId, false);

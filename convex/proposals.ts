@@ -25,7 +25,6 @@ import {
   getCanonical,
   insertRevision,
   latestRevisionOf,
-  publiclyVisible,
   requireOverridden,
   revisionsOf,
   validateChanges,
@@ -39,7 +38,7 @@ import { citation as citationValidator, evidence, recordRef } from "./schema";
 import { fieldAttribution } from "./lib/attribution";
 import { checkCoverUse, coverBlobsOf, pinCovers } from "./lib/coverRefs";
 import { coverUrl } from "./lib/covers";
-import { checkEvidence } from "./lib/evidence";
+import { checkComment, checkEvidence } from "./lib/evidence";
 import {
   applyCreatePlan,
   carriesPlacement,
@@ -53,6 +52,7 @@ import {
 } from "./lib/proposalCreates";
 import { fail } from "./lib/errors";
 import { toIsbn13 } from "./lib/isbn";
+import { observationPublic, publiclyVisible } from "./lib/publicRecords";
 import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
 import {
   editorialField,
@@ -130,7 +130,7 @@ function checkSuggestionOps(ops: ReadonlyArray<{ kind: string }>) {
 
 /**
  * A reader suggests changes only to records the public catalog shows
- * (moderation.ts publiclyVisible): a Volume of a hidden Series reads as
+ * (lib/publicRecords.ts publiclyVisible): a Volume of a hidden Series reads as
  * not found, as its page does. Saving and submitting check it; one hidden
  * while the Suggestion is In Review is left to the Moderator deciding it.
  */
@@ -141,6 +141,25 @@ async function checkSuggestionTargets(ctx: QueryCtx, ops: ReadonlyArray<OpInput 
     if (!doc || !(await publiclyVisible(ctx, op.ref.type, doc))) {
       fail("notFound", "That record is not in the public catalog.");
     }
+  }
+}
+
+/**
+ * The most a Suggestion stores, in bytes of its ops (before- and
+ * after-values), evidence and comment. One record's change fits many times
+ * over; the bound keeps any reader's rows small enough that the review
+ * queue and their Suggestions list (suggestions.ts mine), which read many
+ * at once, stay far inside a query's read limit.
+ */
+export const MAX_SUGGESTION_BYTES = 64 * 1024;
+
+/** Refuse a reader's Draft larger than MAX_SUGGESTION_BYTES. */
+function checkSuggestionSize(draft: Draft) {
+  if (new TextEncoder().encode(JSON.stringify(draft)).length > MAX_SUGGESTION_BYTES) {
+    fail(
+      "tooLarge",
+      "This suggestion is too large. Split it into smaller ones, or shorten its text.",
+    );
   }
 }
 
@@ -227,7 +246,7 @@ type OpInput =
 async function buildDraftOps(
   ctx: MutationCtx,
   submitted: OpInput[],
-  author: Id<"users">,
+  author: Doc<"users">,
 ): Promise<StoredOp[]> {
   if (submitted.length === 0) {
     fail("noOps", "A proposal needs at least one operation.");
@@ -503,9 +522,11 @@ export async function staleRecordsOf(
 /**
  * Create or update a Draft proposal — the mutable working copy. Validation
  * runs now so problems surface while drafting, and again at submission and
- * approval. Any data-team member may author proposals; any other signed-in
- * User a Suggestion (checkSuggestionOps), under their own rate limit and
- * MAX_OPEN_SUGGESTIONS. A Draft that places a held book is refused
+ * approval; its evidence and comment are held to lib/evidence.ts's bounds.
+ * Any data-team member may author proposals; any other signed-in User a
+ * Suggestion (checkSuggestionOps), under their own rate limit,
+ * MAX_OPEN_SUGGESTIONS and MAX_SUGGESTION_BYTES, citing only observations
+ * the public catalog shows. A Draft that places a held book is refused
  * (`placementDraft`): its author states it through placement.setPlacement,
  * which rebuilds its ops from the observation.
  */
@@ -527,13 +548,13 @@ export const saveDraft = mutation({
       key: user._id,
       throws: true,
     });
-    const ops = await buildDraftOps(ctx, args.ops as OpInput[], user._id);
-    await checkEvidence(ctx, args.evidence);
+    const ops = await buildDraftOps(ctx, args.ops as OpInput[], user);
     const draft: Draft = {
       ops,
-      evidence: args.evidence,
-      comment: args.comment.trim(),
+      evidence: await checkEvidence(ctx, args.evidence, !team),
+      comment: checkComment(args.comment),
     };
+    if (!team) checkSuggestionSize(draft);
 
     if (args.proposalId) {
       const proposal = await ctx.db.get(args.proposalId);
@@ -597,6 +618,9 @@ export const submitProposal = mutation({
     if (!team) {
       checkSuggestionOps(draft.ops);
       await checkSuggestionTargets(ctx, draft.ops);
+      // A Draft written on the Data Team, or a source hidden since it was saved.
+      await checkEvidence(ctx, draft.evidence, true);
+      checkSuggestionSize(draft);
     }
     if (draft.comment === "") {
       fail("commentRequired", "Every submission needs a change comment.");
@@ -621,7 +645,7 @@ export const submitProposal = mutation({
       // A cover must still be the author's upload or catalog art, and stored.
       for (const change of changes) {
         if (change.field === "coverImage") {
-          await checkCoverUse(ctx, doc as Doc<"releases">, change, user._id);
+          await checkCoverUse(ctx, doc as Doc<"releases">, change, user);
         }
       }
     }
@@ -1247,7 +1271,7 @@ export const NOT_PUBLIC = "A record that is no longer public";
  * however many versions name it (`recordFacts`): the record, its newest
  * Revision, its title, and whether its live state may be shown. With
  * `publicOnly` (a reader's own Proposals, suggestions.ts) a record the
- * public catalog does not show (moderation.ts publiclyVisible) is titled
+ * public catalog does not show (lib/publicRecords.ts publiclyVisible) is titled
  * NOT_PUBLIC and `shown` is false, so nothing of it now is told.
  */
 export function recordFacts(ctx: QueryCtx | MutationCtx, publicOnly = false) {
@@ -1385,18 +1409,53 @@ async function refLabel(facts: RecordFacts, ref: RecordRef): Promise<string> {
   return `${ref.type} "${(await facts(ref)).title}"`;
 }
 
-/** Evidence rows with observation references resolved for display. */
-export async function renderEvidence(ctx: QueryCtx | MutationCtx, rows: Evidence[]) {
+/**
+ * What evidence rendering reads of each observation a row names, read once
+ * per call however many versions name it: its source and the page its
+ * snapshot came from. With `publicOnly` (a reader's own Proposals,
+ * suggestions.ts) an observation the public catalog does not show
+ * (lib/publicRecords.ts observationPublic) is named "(not public)" with no
+ * page; the stored row is left as it is for the Data Team.
+ */
+export function observationFacts(ctx: QueryCtx | MutationCtx, publicOnly = false) {
+  const read = async (id: Id<"sourceObservations">) => {
+    const observation = await ctx.db.get(id);
+    if (!observation) return { sourceKey: "(missing)", url: null };
+    if (publicOnly && !(await observationPublic(ctx, observation))) {
+      return { sourceKey: "(not public)", url: null };
+    }
+    const snapshot = observation.snapshot as { url?: unknown } | undefined;
+    return {
+      sourceKey: observation.sourceKey,
+      url: typeof snapshot?.url === "string" ? snapshot.url : null,
+    };
+  };
+  const cache = new Map<Id<"sourceObservations">, Awaited<ReturnType<typeof read>>>();
+  return async (id: Id<"sourceObservations">) => {
+    const known = cache.get(id);
+    if (known) return known;
+    const facts = await read(id);
+    cache.set(id, facts);
+    return facts;
+  };
+}
+
+/**
+ * Evidence rows with observation references resolved for display; `facts`
+ * is shared across one page's calls.
+ */
+export async function renderEvidence(
+  ctx: QueryCtx | MutationCtx,
+  rows: Evidence[],
+  facts = observationFacts(ctx),
+) {
   const rendered = [];
   for (const row of rows) {
     if (row.kind === "observation") {
-      const observation = await ctx.db.get(row.observationId);
-      const snapshot = observation?.snapshot as { url?: unknown } | undefined;
       rendered.push({
         kind: "observation" as const,
         observationId: row.observationId,
-        sourceKey: observation?.sourceKey ?? "(missing)",
-        url: typeof snapshot?.url === "string" ? snapshot.url : null,
+        ...(await facts(row.observationId)),
       });
     } else if (row.kind === "url") {
       rendered.push({ kind: "url" as const, url: row.url, note: row.note ?? null });
@@ -1558,7 +1617,7 @@ function bareSubject(recordType: RecordType, title: string) {
  * Release's ISBN for its jacket), else the Series a report was filed from.
  * "(missing record)" when that record is gone; null when nothing names one.
  * With `publicOnly` (a reader's own Proposals, suggestions.ts) a record the
- * public catalog does not show (moderation.ts publiclyVisible) is named
+ * public catalog does not show (lib/publicRecords.ts publiclyVisible) is named
  * NOT_PUBLIC, with no page, ISBN or art.
  */
 export async function recordSubjectOf(
@@ -1739,6 +1798,8 @@ export const proposalDetail = query({
     versions.sort((a, b) => a.versionNo - b.versionNo);
 
     const undecided = proposal.state === "draft" || proposal.state === "inReview";
+    // One read of each observation however many versions cite it.
+    const sources = observationFacts(ctx);
     const renderedVersions = [];
     for (const version of versions) {
       const current = version.versionNo === proposal.currentVersionNo;
@@ -1748,7 +1809,7 @@ export const proposalDetail = query({
         changeComment: version.changeComment,
         warnings: version.warningsAcknowledged ?? [],
         ops: await renderOps(ctx, version.ops, undecided && current),
-        evidence: await renderEvidence(ctx, version.evidence),
+        evidence: await renderEvidence(ctx, version.evidence, sources),
         submittedAt: version._creationTime,
       });
     }
@@ -1791,7 +1852,7 @@ export const proposalDetail = query({
       draft: proposal.draft
         ? {
             ops: await renderOps(ctx, proposal.draft.ops, undecided),
-            evidence: await renderEvidence(ctx, proposal.draft.evidence),
+            evidence: await renderEvidence(ctx, proposal.draft.evidence, sources),
             comment: proposal.draft.comment,
             warnings: computeWarnings(proposal.draft.ops),
           }

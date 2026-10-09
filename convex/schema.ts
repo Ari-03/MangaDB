@@ -991,7 +991,7 @@ export default defineSchema({
     // Launch gate ④: verifying a correction produced public Revisions.
     .index("by_proposal", ["proposalId"]),
 
-  // Cover art a data-team member uploaded for a Cover change
+  // Cover art a person uploaded for a Cover change or a Suggestion
   // (coverUploads.ts): the upload URL names a row and its `token`, and the
   // HTTP action that receives the file stores it and records the blob on
   // that row, so only its uploader can put it in a change. The hourly
@@ -1006,7 +1006,6 @@ export default defineSchema({
     sweepAfter: v.number(),
   })
     .index("by_storage", ["storageId"])
-    .index("by_uploader", ["uploaderId", "sweepAfter"])
     .index("by_sweepAfter", ["sweepAfter"]),
 
   // A stored cover something besides a record still needs: a Revision whose

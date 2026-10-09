@@ -25,9 +25,10 @@ import { checkCoverStored, checkCoverUse, coverBlobsOf, pinCovers } from "./lib/
 import { coverUrl } from "./lib/covers";
 import { releasesOf } from "./lib/editionRows";
 import { fail } from "./lib/errors";
-import { checkEvidence } from "./lib/evidence";
+import { checkComment, checkEvidence } from "./lib/evidence";
 import { ratedByDataTeam, syncMatureProjection } from "./lib/mature";
 import { anchoredOn, currentOps } from "./lib/observations";
+import { publiclyVisible } from "./lib/publicRecords";
 import { onDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
@@ -35,6 +36,7 @@ import {
   fieldDescriptor,
   normalizeCitation,
   normalizeFieldValue,
+  overLength,
   type Citation,
   type RecordType,
 } from "./lib/moderationFields";
@@ -164,8 +166,9 @@ export function validateChanges(
  * from the text's current credit (lib/attribution.ts), so restating the
  * same source is a no-op and naming another is a change of its own, which
  * comes back with `citedText`, the text it names a source for. Empty text
- * has no source. `author` is checked for a claim to any cover blob the op
- * sets (lib/coverRefs.ts checkCoverUse).
+ * has no source. A changed value is held to the length a person may write
+ * (lib/moderationFields.ts overLength), and `author` is checked for a claim
+ * to any cover blob the op sets (lib/coverRefs.ts checkCoverUse).
  */
 export async function validateUpdate(
   ctx: QueryCtx,
@@ -174,7 +177,7 @@ export async function validateUpdate(
     doc: CatalogDoc;
     changes: Array<{ field: string; value: unknown }>;
     citation: Citation | null | undefined;
-    author: Id<"users">;
+    author: Doc<"users">;
   },
 ): Promise<{
   changes: FieldChange[];
@@ -207,6 +210,8 @@ export async function validateUpdate(
     fail("noChanges", "Nothing changed — edit at least one field or its source.");
   }
   for (const change of changes) {
+    const tooLong = overLength(fieldDescriptor(ref.type, change.field)!, change.after);
+    if (tooLong !== null) fail("invalidField", tooLong);
     if (change.field === "coverImage") {
       await checkCoverUse(ctx, doc as Doc<"releases">, change, args.author);
     }
@@ -526,7 +531,7 @@ export const submitDirectEdit = mutation({
     const user = await requireModerator(ctx);
     const ref = args.ref;
 
-    const comment = args.comment.trim();
+    const comment = checkComment(args.comment);
     if (comment === "") fail("commentRequired", "Every change needs a change comment.");
 
     const doc = await getCanonical(ctx, ref);
@@ -541,10 +546,9 @@ export const submitDirectEdit = mutation({
       doc,
       changes: args.changes,
       citation: args.citation,
-      author: user._id,
+      author: user,
     });
-    const evidenceRows = args.evidence ?? [];
-    await checkEvidence(ctx, evidenceRows);
+    const evidenceRows = await checkEvidence(ctx, args.evidence ?? []);
     const author = {
       kind: "user" as const,
       userId: user._id,
@@ -636,38 +640,6 @@ export function editKeyOf(doc: CatalogDoc): string {
   if ("publicId" in doc) return String(doc.publicId);
   if ("slug" in doc) return doc.slug;
   return doc._id;
-}
-
-/**
- * Whether the public catalog shows `doc` as itself: it is active, and so is
- * what its page or row hangs from, as the page queries judge it
- * (catalogPages.ts): a Volume's Series (volumePage), a Release's Edition
- * (editionPage rows), a Variant's Release. A merged record's page redirects
- * to its survivor, so it is not shown as itself. An Edition stays shown
- * when the Series it covers are hidden, as editionPage keeps it. What a
- * reader may draft on and read back is held to this (editForm,
- * sourceBlurbs, suggestions.ts).
- */
-export async function publiclyVisible(
-  ctx: QueryCtx,
-  type: RecordType,
-  doc: CatalogDoc,
-): Promise<boolean> {
-  if (doc.status !== "active") return false;
-  const shown = async (parentType: RecordType, id: Id<CatalogTable>) => {
-    const parent = await ctx.db.get(id);
-    return parent !== null && (await publiclyVisible(ctx, parentType, parent));
-  };
-  switch (type) {
-    case "volume":
-      return await shown("series", (doc as Doc<"volumes">).seriesId);
-    case "release":
-      return await shown("edition", (doc as Doc<"releases">).editionId);
-    case "releaseVariant":
-      return await shown("release", (doc as Doc<"releaseVariants">).releaseId);
-    default:
-      return true;
-  }
 }
 
 /** Where the edit form links back to, as `/{entity}/{publicId}/{slug}` input. */

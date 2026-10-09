@@ -12,8 +12,9 @@
 // uploaded; one a Draft or In-Review Proposal names waits another day,
 // however long the Proposal takes.
 
+import { DAY, RateLimiter } from "@convex-dev/rate-limiter";
 import { ConvexError, v } from "convex/values";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import { env, internalMutation, mutation } from "./_generated/server";
 import {
   checkCoverBlob,
@@ -27,11 +28,19 @@ import { requireUser } from "./lib/auth";
 import { fail } from "./lib/errors";
 import { onDataTeam } from "./lib/roles";
 
-const DAY = 24 * 60 * 60 * 1000;
 /** Uploads a Data Team member may start in a day: a form needs one or two. */
 export const UPLOADS_PER_DAY = 50;
 /** Uploads a reader may start in a day, for the covers their Suggestions change. */
 export const READER_UPLOADS_PER_DAY = 5;
+
+// Upload starts per user (Convex rate-limiter component), counted when the
+// URL is handed out, so neither the sweep renewing a pending upload's day
+// nor a refused file deleting its row gives an upload back.
+const rateLimiter = new RateLimiter(components.rateLimiter, {
+  coverUpload: { kind: "token bucket", rate: UPLOADS_PER_DAY, period: DAY },
+  readerCoverUpload: { kind: "token bucket", rate: READER_UPLOADS_PER_DAY, period: DAY },
+});
+
 /** Rows one sweep run handles before it schedules the next. */
 const SWEEP_BATCH = 100;
 /** Revisions one backfill run reads. */
@@ -43,26 +52,23 @@ const BACKFILL_STALL = 10 * 60 * 1000;
  * Start an upload: the URL to POST the file to, which carries the upload
  * row's id and secret token, and the row the finished blob is reported
  * against. Any signed-in User: the Data Team for edits and Proposals, a
- * reader for a Suggestion, under a smaller daily allowance.
+ * reader for a Suggestion, each under their daily bucket.
  */
 export const uploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    const allowance = onDataTeam(user) ? UPLOADS_PER_DAY : READER_UPLOADS_PER_DAY;
-    const now = Date.now();
-    const recent = await ctx.db
-      .query("coverUploads")
-      .withIndex("by_uploader", (q) => q.eq("uploaderId", user._id).gt("sweepAfter", now))
-      .take(allowance);
-    if (recent.length >= allowance) {
-      fail("rateLimited", "Too many cover uploads today. Try again tomorrow.");
-    }
+    const { ok } = await rateLimiter.limit(
+      ctx,
+      onDataTeam(user) ? "coverUpload" : "readerCoverUpload",
+      { key: user._id },
+    );
+    if (!ok) fail("rateLimited", "Too many cover uploads today. Try again tomorrow.");
     const token = crypto.randomUUID();
     const uploadId = await ctx.db.insert("coverUploads", {
       uploaderId: user._id,
       token,
-      sweepAfter: now + DAY,
+      sweepAfter: Date.now() + DAY,
     });
     const url = new URL("/cover-upload", env.CONVEX_SITE_URL);
     url.searchParams.set("upload", uploadId);

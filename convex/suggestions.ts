@@ -11,17 +11,22 @@
 // internal discussion, who claimed or decided it, or anyone else's
 // Proposal: the review queue and its pending work stay the Data Team's.
 // A record the public catalog no longer shows (hidden, merged, or under a
-// hidden parent: moderation.ts publiclyVisible) is named NOT_PUBLIC, and
-// only what the author wrote of it is shown.
+// hidden parent: lib/publicRecords.ts publiclyVisible) is named NOT_PUBLIC, and
+// only what the author wrote of it is shown; so is a cited observation of
+// such a record, and cover art only such records hold is not drawn.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { viewerOrNull } from "./lib/auth";
 import { summarizeVersion } from "./lib/queueSummary";
-import { coverArtOf, editKeyOf, getCanonical, publiclyVisible } from "./moderation";
+import { editKeyOf, getCanonical } from "./moderation";
+import { publiclyVisible } from "./lib/publicRecords";
+import { coverBlobsOf, ownUpload, publicArt } from "./lib/coverRefs";
+import { coverUrl } from "./lib/covers";
 import {
   currentVersionOf,
+  observationFacts,
   recordFacts,
   recordSubjectOf,
   renderEvidence,
@@ -103,6 +108,21 @@ async function contentOf(ctx: QueryCtx, proposal: Doc<"proposals">) {
 }
 
 /**
+ * Whether an open Proposal's working ops (`contentOf`) can no longer be
+ * applied as written: a record they change has moved on or left ordinary
+ * editing (proposals.ts staleRecordsOf), as each rendered op reports. The
+ * author rebases it then; a decided one is never stale.
+ */
+async function openStale(
+  ctx: QueryCtx,
+  proposal: Doc<"proposals">,
+  ops: Doc<"proposalVersions">["ops"],
+) {
+  if (proposal.state !== "draft" && proposal.state !== "inReview") return false;
+  return (await staleRecordsOf(ctx, ops)).length > 0;
+}
+
+/**
  * Whether the record a Proposal's first update changes is one the public
  * catalog no longer shows, so its before-values are not shown either.
  */
@@ -150,7 +170,7 @@ export const mine = query({
       rows.push({
         proposalId: proposal._id,
         state: proposal.state,
-        stale: Boolean(proposal.stale),
+        stale: await openStale(ctx, proposal, content.ops),
         comment: content.comment,
         subject: await recordSubjectOf(ctx, content, true),
         withheld,
@@ -192,8 +212,9 @@ export const detail = query({
         .take(VERSIONS_READ)
     ).reverse();
     const undecided = proposal.state === "draft" || proposal.state === "inReview";
-    // One read of each record however many versions name it.
+    // One read of each record and source however many versions name it.
     const facts = recordFacts(ctx, true);
+    const sources = observationFacts(ctx, true);
     const renderedVersions = [];
     for (const version of versions) {
       const current = version.versionNo === proposal.currentVersionNo;
@@ -202,28 +223,24 @@ export const detail = query({
         current,
         changeComment: version.changeComment,
         ops: await renderOps(ctx, version.ops, undecided && current, facts),
-        evidence: await renderEvidence(ctx, version.evidence),
+        evidence: await renderEvidence(ctx, version.evidence, sources),
         submittedAt: version._creationTime,
       });
     }
     const draft = proposal.draft
       ? {
           ops: await renderOps(ctx, proposal.draft.ops, undecided, facts),
-          evidence: await renderEvidence(ctx, proposal.draft.evidence),
+          evidence: await renderEvidence(ctx, proposal.draft.evidence, sources),
           comment: proposal.draft.comment,
         }
       : null;
 
-    const current = await currentVersionOf(ctx, proposal);
     const content = await contentOf(ctx, proposal);
     const decisions = await decisionsOf(ctx, proposalId);
     return {
       proposalId: proposal._id,
       state: proposal.state,
-      stale:
-        proposal.state === "inReview" && current
-          ? (await staleRecordsOf(ctx, current.ops)).length > 0
-          : Boolean(proposal.stale),
+      stale: await openStale(ctx, proposal, content.ops),
       submittedAt: proposal.submittedAt ?? null,
       decidedAt: proposal.decidedAt ?? null,
       subject: await recordSubjectOf(ctx, content, true),
@@ -233,9 +250,10 @@ export const detail = query({
       decisions,
       decision: standingDecision(proposal, decisions),
       // From the rendered changes, which keep no before-value of a record
-      // no longer public.
-      coverArt: await coverArtOf(
+      // no longer public, and only art the reader may see.
+      coverArt: await readerArt(
         ctx,
+        user._id,
         [...renderedVersions.flatMap((version) => version.ops), ...(draft?.ops ?? [])].flatMap(
           (op) => (op.kind === "update" ? op.changes : []),
         ),
@@ -243,6 +261,25 @@ export const detail = query({
     };
   },
 });
+
+/**
+ * The art behind the covers `changes` name, as moderation.ts coverArtOf
+ * draws it, with `url` null unless the reader uploaded it or a record the
+ * public catalog shows holds it (lib/coverRefs.ts publicArt): art only a
+ * hidden record holds is not shown, though the change still names it.
+ */
+async function readerArt(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  changes: ReadonlyArray<{ field: string; before?: unknown; after?: unknown }>,
+) {
+  const art = [];
+  for (const storageId of coverBlobsOf(changes)) {
+    const open = (await ownUpload(ctx, storageId, userId)) || (await publicArt(ctx, storageId));
+    art.push({ storageId, url: open ? await coverUrl(ctx, storageId) : null });
+  }
+  return art;
+}
 
 /**
  * The record a Draft revises, as the suggest form's route names it, when

@@ -125,11 +125,15 @@ removes the stored art. The file uploads first: `coverUploads.uploadUrl`
 issues a URL on this deployment's `/cover-upload` HTTP action
 (`convex/http.ts`) carrying the upload's id and token, the action stores
 the file and records the blob on that upload, and `coverUploads.uploaded`
-checks it. A Data Team member may start 50 uploads a day, a reader 5. An upload can only name a blob it stored, so no one can claim,
+checks it. A Data Team member may start 50 uploads a day, a reader 5, as
+token buckets of the rate limiter counted when the URL is issued, so
+neither the sweep keeping a pending upload nor a refused file gives one
+back. An upload can only name a blob it stored, so no one can claim,
 or have deleted, art they did not upload. The cover is then one more
 field of the same Save or Proposal:
 `coverImage`. Only the uploader, or art the catalog already shows or
-History names, can go into a change.
+History names, can go into a change; for a reader, only art a record the
+public catalog shows holds ([Suggestions](#suggestions)).
 
 A person's cover change, removal included, is always a Human Override on
 `coverImage`, since importers attach art without a Revision.
@@ -168,6 +172,15 @@ need source evidence, a URL or a Source Observation; editorial prose such
 as synopses does not. Warnings (a new Series, more than 10 ops, partial
 coverage) must be acknowledged. Submitting freezes the draft into an
 immutable Proposal Version.
+
+What a person writes is bounded, for everyone (`convex/lib/evidence.ts`,
+`overLength` in `convex/lib/moderationFields.ts`): at most 10 evidence
+rows, an evidence URL or note at most 2,000 characters each, a change
+comment at most 2,000, and a value they change at most 500 characters in
+a one-line field or a list entry, 10,000 in a description or synopsis, and
+100 entries in a list. A repeated evidence row is stored once. Text a
+record already holds, and what imports write, is never refused for its
+length. The direct edit holds to the same bounds.
 
 A Moderator then approves (applies every op in one transaction), rejects
 with a reason, or requests changes with a reason, which returns it to
@@ -249,9 +262,20 @@ these limits (`checkSuggestionOps` and the reader buckets in
   not found.
 - At most 10 ops; 10 submissions an hour (burst 3) and 60 draft saves an
   hour (burst 10); at most 20 open (Draft or In Review) at once.
-- Five cover uploads a day.
+- At most 64 KiB stored (`MAX_SUGGESTION_BYTES`: ops with their before-
+  and after-values, evidence and comment), so `mine` and the review queue,
+  which read many rows at once, stay well inside a query's read limit.
+- Five cover uploads a day (see [Covers](#covers)).
 - Evidence as for anyone: a factual change needs a source URL, a
-  description or a cover does not.
+  description or a cover does not. A Source Observation must be linked to
+  a record the public catalog shows (`observationPublic` in
+  `convex/lib/publicRecords.ts`), as the blurbs "Use this description"
+  cites are; saving and submitting check it.
+- A cover is the reader's own upload, the record's own art, or art a
+  record the public catalog shows holds: a Release, Bundle or Variant
+  showing it, or one whose History names it (`publicArt` in
+  `convex/lib/coverRefs.ts`). The Data Team may reuse any art a record
+  shows or History names.
 
 Saving, submitting and rebasing check the author's role now, so a Draft
 someone wrote while on the Data Team goes no further once they are off it
@@ -265,7 +289,7 @@ is the propose form in the site's own page, without override clears;
 signed out, it asks for a sign-in that returns there. For a reader,
 `moderation.editForm` and `moderation.sourceBlurbs` answer only for a
 record the public catalog shows (`publiclyVisible` in
-`convex/moderation.ts`, the rule the page queries in
+`convex/lib/publicRecords.ts`, the rule the page queries in
 `convex/catalogPages.ts` follow): it is active, and so is a Volume's
 Series, a Release's Edition and a Variant's Release. A Hidden or Merged
 Record, or a Volume of a hidden Series, stays the Data Team's. An Edition
@@ -289,7 +313,17 @@ The internal discussion, the claim and who decided stay on
 there, not here. Another person's Proposal reads as not found. A record
 the public catalog no longer shows is named "A record that is no longer
 public", with no link, ISBN, art, current or before values: only what the
-reader wrote of it (the new values, citation, evidence and comment).
+reader wrote of it (the new values, citation, evidence and comment). A
+Source Observation cited as evidence whose record is no longer public
+reads "(not public)", without its page, and a cover only a non-public
+record holds is named without its art; the Data Team's page shows both.
+
+An open Suggestion is stale when a record it changes has a newer Revision
+or has left ordinary editing, judged from its working ops: the Draft's
+when it has one, else the submitted version. Its page then offers
+Rebase, which a Draft of several records needs too, having no form to
+reopen in; the rebased Draft can be edited where the form shows it, and
+submitted.
 
 A Draft, including one sent back for changes, opens in
 `/suggest/{type}/{key}?draft={id}` with its values and saves back into

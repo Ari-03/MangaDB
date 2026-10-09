@@ -6,15 +6,29 @@
 // discussion. Approval stays the Moderator's.
 
 import type { FunctionArgs } from "convex/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { READER_UPLOADS_PER_DAY } from "./coverUploads";
-import { MAX_OPEN_SUGGESTIONS, MAX_SUGGESTION_OPS, NOT_PUBLIC } from "./proposals";
+import {
+  MAX_CHANGE_COMMENT,
+  MAX_EVIDENCE_NOTE,
+  MAX_EVIDENCE_ROWS,
+  MAX_EVIDENCE_URL,
+} from "./lib/evidence";
+import { MAX_LIST_ENTRIES, MAX_TEXTAREA_LENGTH, MAX_TEXT_LENGTH } from "./lib/moderationFields";
+import {
+  MAX_OPEN_SUGGESTIONS,
+  MAX_SUGGESTION_BYTES,
+  MAX_SUGGESTION_OPS,
+  NOT_PUBLIC,
+} from "./proposals";
+import { MINE_MAX } from "./suggestions";
 import {
   insertCoverage,
   insertEdition,
+  insertObservation,
   insertPublisher,
   insertRelease,
   insertSeries,
@@ -41,6 +55,10 @@ import {
 // convex-test serves HTTP actions at this origin (t.fetch).
 vi.stubEnv("CONVEX_SITE_URL", "https://some.convex.site");
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 const URL_EVIDENCE = [{ kind: "url" as const, url: "https://publisher.example/alpha-1" }];
 
 /** The cast (dave and reader hold no role), and Alpha's one-volume book whose date an import wrote. */
@@ -65,7 +83,7 @@ async function setup(t: TestT) {
       sourceKey: "kodansha",
       changes: [{ field: "pubDate", after: { year: 2024, month: 3, sort: 20240300 } }],
     });
-    return { seriesId, volumeId, editionId, releaseId };
+    return { publisherId, seriesId, volumeId, editionId, releaseId };
   });
 }
 
@@ -775,5 +793,474 @@ describe("suggestions — long histories", () => {
     const detail = await asReader.query(api.suggestions.detail, { proposalId });
     expect(detail?.versions).toHaveLength(50);
     expect(detail?.stale).toBe(true);
+  });
+});
+
+/** Another, hidden Release of Alpha in an Edition of its own. */
+async function insertHiddenRelease(t: TestT, ids: Awaited<ReturnType<typeof setup>>) {
+  return await t.run(async (ctx) => {
+    const editionId = await insertEdition(ctx, { publisherId: ids.publisherId });
+    return await insertRelease(ctx, {
+      editionId,
+      publisherId: ids.publisherId,
+      seriesIds: [ids.seriesId],
+      status: "hidden",
+    });
+  });
+}
+
+/** Cover art as an import stores it: a blob no upload row claims. */
+async function catalogArt(t: TestT) {
+  const storageId = await upload(t, EDITOR);
+  await t.run(async (ctx) => {
+    const rows = await ctx.db
+      .query("coverUploads")
+      .withIndex("by_storage", (q) => q.eq("storageId", storageId))
+      .collect();
+    for (const row of rows) await ctx.db.delete(row._id);
+  });
+  return storageId;
+}
+
+const note = (text: string) => ({ kind: "note" as const, text });
+
+describe("suggestions — what one change may carry", () => {
+  it("bounds evidence, comments and values for everyone, and a reader's whole suggestion", async () => {
+    const t = makeT();
+    const { seriesId } = await setup(t);
+    type DraftArgs = FunctionArgs<typeof api.proposals.saveDraft>;
+    const save = (subject: string, args: Partial<DraftArgs>) =>
+      t.withIdentity({ subject }).mutation(api.proposals.saveDraft, {
+        ops: [titleOp(seriesId, "Beta")],
+        evidence: URL_EVIDENCE,
+        comment: "The publisher's spelling.",
+        ...args,
+      });
+    const refused = (code: string) => ({ data: { code } });
+    for (const subject of [PLAIN, EDITOR]) {
+      // The ~900 KB note that once filled the review queue.
+      await expect(save(subject, { evidence: [note("x".repeat(900_000))] })).rejects.toMatchObject(
+        refused("invalidEvidence"),
+      );
+      await expect(
+        save(subject, { evidence: [note("x".repeat(MAX_EVIDENCE_NOTE + 1))] }),
+      ).rejects.toMatchObject(refused("invalidEvidence"));
+      await expect(
+        save(subject, {
+          evidence: Array.from({ length: MAX_EVIDENCE_ROWS + 1 }, (_, i) => note(`Source ${i}.`)),
+        }),
+      ).rejects.toMatchObject(refused("invalidEvidence"));
+      await expect(
+        save(subject, {
+          evidence: [{ kind: "url", url: `https://a.example/${"x".repeat(MAX_EVIDENCE_URL)}` }],
+        }),
+      ).rejects.toMatchObject(refused("invalidEvidence"));
+      await expect(
+        save(subject, { comment: "x".repeat(MAX_CHANGE_COMMENT + 1) }),
+      ).rejects.toMatchObject(refused("commentTooLong"));
+      await expect(
+        save(subject, { ops: [titleOp(seriesId, "x".repeat(MAX_TEXT_LENGTH + 1))] }),
+      ).rejects.toMatchObject(refused("invalidField"));
+      await expect(
+        save(subject, {
+          ops: [
+            {
+              kind: "update",
+              ref: series(seriesId),
+              changes: [{ field: "synopsis", value: "x".repeat(MAX_TEXTAREA_LENGTH + 1) }],
+            },
+          ],
+        }),
+      ).rejects.toMatchObject(refused("invalidField"));
+      await expect(
+        save(subject, {
+          ops: [
+            {
+              kind: "update",
+              ref: series(seriesId),
+              changes: [
+                {
+                  field: "altTitles",
+                  value: Array.from({ length: MAX_LIST_ENTRIES + 1 }, (_, i) => `Alt ${i}`),
+                },
+              ],
+            },
+          ],
+        }),
+      ).rejects.toMatchObject(refused("invalidField"));
+    }
+
+    // Repeated rows are stored once.
+    const { proposalId } = await save(PLAIN, {
+      evidence: [...URL_EVIDENCE, ...URL_EVIDENCE, note("Cover."), note("Cover.")],
+    });
+    expect((await t.run((ctx) => ctx.db.get(proposalId)))?.draft?.evidence).toEqual([
+      ...URL_EVIDENCE,
+      note("Cover."),
+    ]);
+
+    // Text a record already holds is never refused for its length.
+    await t.run((ctx) => ctx.db.patch(seriesId, { synopsis: "s".repeat(MAX_TEXTAREA_LENGTH * 2) }));
+    await save(EDITOR, {
+      ops: [
+        {
+          kind: "update",
+          ref: series(seriesId),
+          changes: [
+            { field: "title", value: "Beta" },
+            { field: "synopsis", value: "s".repeat(MAX_TEXTAREA_LENGTH * 2) },
+          ],
+        },
+      ],
+    });
+
+    // Each piece within bounds, a reader's whole suggestion over its size.
+    const large: Partial<DraftArgs> = {
+      ops: [
+        {
+          kind: "update",
+          ref: series(seriesId),
+          changes: [
+            { field: "synopsis", value: "y".repeat(MAX_TEXTAREA_LENGTH) },
+            {
+              field: "altTitles",
+              value: Array.from({ length: MAX_LIST_ENTRIES }, (_, i) =>
+                `Alt ${i}`.padEnd(MAX_TEXT_LENGTH, "a"),
+              ),
+            },
+          ],
+        },
+      ],
+      evidence: Array.from({ length: MAX_EVIDENCE_ROWS }, (_, i) =>
+        note(`Note ${i}`.padEnd(MAX_EVIDENCE_NOTE, "n")),
+      ),
+    };
+    await expect(save(PLAIN, large)).rejects.toMatchObject(refused("tooLarge"));
+    await save(EDITOR, large);
+  });
+
+  it("keeps the queue and a reader's Suggestions list readable at a Suggestion's largest", async () => {
+    const t = makeT({ transactionLimits: true });
+    const { seriesId } = await setup(t);
+    const readerId = await userIdOf(t, PLAIN);
+    // As many of the reader's rows as `mine` and a queue page read, each
+    // as large as a Suggestion may be.
+    const content = {
+      ops: [
+        {
+          kind: "update" as const,
+          ref: series(seriesId),
+          changes: [{ field: "synopsis", after: "p".repeat(MAX_SUGGESTION_BYTES - 1_000) }],
+        },
+      ],
+      evidence: [],
+      comment: "Large.",
+    };
+    const states = [
+      ["draft", 10],
+      ["inReview", 25],
+      ["withdrawn", MINE_MAX],
+      ["rejected", MINE_MAX],
+      ["approved", MINE_MAX],
+    ] as const;
+    for (const [state, count] of states) {
+      await t.run(async (ctx) => {
+        for (let i = 0; i < count; i++) {
+          const submitted = state !== "draft" && state !== "withdrawn";
+          const proposalId = await ctx.db.insert("proposals", {
+            author: { kind: "user", userId: readerId },
+            state,
+            currentVersionNo: submitted ? 1 : 0,
+            ...(submitted ? { submittedAt: i } : { draft: content }),
+          });
+          if (submitted) {
+            await ctx.db.insert("proposalVersions", {
+              proposalId,
+              versionNo: 1,
+              ops: content.ops,
+              evidence: [],
+              changeComment: content.comment,
+            });
+          }
+        }
+      });
+    }
+    expect(await t.withIdentity({ subject: PLAIN }).query(api.suggestions.mine, {})).toHaveLength(
+      MINE_MAX,
+    );
+    const page = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueuePage, {
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+    expect(page.page).toHaveLength(25);
+  });
+
+  it("reads each cited observation once, however many versions repeat it", async () => {
+    const t = makeT({ transactionLimits: true });
+    const { seriesId, releaseId } = await setup(t);
+    const observationId = await t.run((ctx) =>
+      insertObservation(ctx, {
+        sourceKey: "kodansha",
+        sourceRecordId: "alpha-1",
+        recordRef: release(releaseId),
+        snapshot: { url: "https://kodansha.example/alpha-1" },
+      }),
+    );
+    const proposalId = await suggestTitle(t, PLAIN, seriesId);
+    // Two versions, each citing it 2,100 times, as rows stored before saving deduplicated them.
+    await t.run(async (ctx) => {
+      const evidence = Array.from({ length: 2_100 }, () => ({
+        kind: "observation" as const,
+        observationId,
+      }));
+      const first = await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique();
+      await ctx.db.patch(first!._id, { evidence });
+      await ctx.db.insert("proposalVersions", {
+        proposalId,
+        versionNo: 2,
+        ops: first!.ops,
+        evidence,
+        changeComment: "Again.",
+      });
+      await ctx.db.patch(proposalId, { currentVersionNo: 2 });
+    });
+    const detail = await t
+      .withIdentity({ subject: PLAIN })
+      .query(api.suggestions.detail, { proposalId });
+    expect(detail?.versions[1]?.evidence[0]).toMatchObject({
+      sourceKey: "kodansha",
+      url: "https://kodansha.example/alpha-1",
+    });
+    const team = await t
+      .withIdentity({ subject: MOD })
+      .query(api.proposals.proposalDetail, { proposalId });
+    expect(team?.versions).toHaveLength(2);
+  });
+});
+
+describe("suggestions — sources and art only hidden records hold", () => {
+  it("lets a reader cite only a source of a record the public catalog shows", async () => {
+    const t = makeT();
+    const ids = await setup(t);
+    const hiddenId = await insertHiddenRelease(t, ids);
+    const [publicSource, hiddenSource, heldSource] = await t.run(async (ctx) => [
+      await insertObservation(ctx, {
+        sourceKey: "kodansha",
+        sourceRecordId: "alpha-1",
+        recordRef: release(ids.releaseId),
+        snapshot: { url: "https://kodansha.example/alpha-1" },
+      }),
+      await insertObservation(ctx, {
+        sourceKey: "kodansha",
+        sourceRecordId: "secret",
+        recordRef: release(hiddenId),
+        snapshot: { url: "https://kodansha.example/secret" },
+      }),
+      await insertObservation(ctx, {
+        sourceKey: "kodansha",
+        sourceRecordId: "held",
+        snapshot: { url: "https://kodansha.example/held" },
+      }),
+    ]);
+    const cite = (subject: string, observationId: Id<"sourceObservations">) =>
+      t.withIdentity({ subject }).mutation(api.proposals.saveDraft, {
+        ops: [titleOp(ids.seriesId, "Beta")],
+        evidence: [{ kind: "observation", observationId }],
+        comment: "As the source has it.",
+      });
+    for (const observationId of [hiddenSource, heldSource]) {
+      await expect(cite(PLAIN, observationId)).rejects.toMatchObject({
+        data: { code: "invalidEvidence" },
+      });
+      // The Data Team cites any source.
+      await cite(EDITOR, observationId);
+    }
+
+    // Cited while public, then hidden: the reader no longer reads where it
+    // came from, nor submits it; the Data Team still sees it.
+    const { proposalId } = await cite(PLAIN, publicSource);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    expect((await asReader.query(api.suggestions.detail, { proposalId }))?.draft?.evidence).toEqual(
+      [
+        {
+          kind: "observation",
+          observationId: publicSource,
+          sourceKey: "kodansha",
+          url: "https://kodansha.example/alpha-1",
+        },
+      ],
+    );
+    await t.run((ctx) => ctx.db.patch(ids.releaseId, { status: "hidden" }));
+    const detail = await asReader.query(api.suggestions.detail, { proposalId });
+    expect(detail?.draft?.evidence).toEqual([
+      { kind: "observation", observationId: publicSource, sourceKey: "(not public)", url: null },
+    ]);
+    expect(JSON.stringify(detail)).not.toContain("kodansha.example");
+    await expect(
+      asReader.mutation(api.proposals.submitProposal, { proposalId }),
+    ).rejects.toMatchObject({ data: { code: "invalidEvidence" } });
+    const team = await t
+      .withIdentity({ subject: MOD })
+      .query(api.proposals.proposalDetail, { proposalId });
+    expect(team?.draft?.evidence[0]).toMatchObject({
+      sourceKey: "kodansha",
+      url: "https://kodansha.example/alpha-1",
+    });
+  });
+
+  it("lets a reader reuse only art a record the public catalog shows holds, and shows them no other", async () => {
+    const t = makeT();
+    const ids = await setup(t);
+    const hiddenId = await insertHiddenRelease(t, ids);
+    const [hiddenArt, publicArt, historyArt] = [
+      await catalogArt(t),
+      await catalogArt(t),
+      await catalogArt(t),
+    ];
+    // A public sibling shows `publicArt`; only the hidden Release shows
+    // `hiddenArt`, and only its History names `historyArt`.
+    const siblingId = await t.run(async (ctx) => {
+      await ctx.db.patch(hiddenId, { coverImage: { storageId: hiddenArt } });
+      const { revisionId } = await insertSourceRevision(ctx, {
+        ref: release(hiddenId),
+        sourceKey: "kodansha",
+        changes: [{ field: "coverImage", after: { storageId: historyArt } }],
+      });
+      await ctx.db.insert("coverRefs", { storageId: historyArt, revisionId });
+      return await insertRelease(ctx, {
+        editionId: ids.editionId,
+        publisherId: ids.publisherId,
+        seriesIds: [ids.seriesId],
+        format: "digital",
+        coverImage: { storageId: publicArt },
+      });
+    });
+    const coverOp = (storageId: Id<"_storage">) => ({
+      kind: "update" as const,
+      ref: release(ids.releaseId),
+      changes: [{ field: "coverImage", value: { storageId } }],
+    });
+    const suggest = (subject: string, storageId: Id<"_storage">) =>
+      t.withIdentity({ subject }).mutation(api.proposals.saveDraft, {
+        ops: [coverOp(storageId)],
+        evidence: [],
+        comment: "The jacket.",
+      });
+    for (const storageId of [hiddenArt, historyArt]) {
+      await expect(suggest(PLAIN, storageId)).rejects.toMatchObject({
+        data: { code: "invalidField" },
+      });
+      await suggest(EDITOR, storageId);
+    }
+
+    // Reused while its sibling showed it, then the sibling is hidden: the
+    // reader's page names the art but no longer draws it.
+    const own = await upload(t, PLAIN);
+    const { proposalId } = await suggest(PLAIN, publicArt);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    expect((await asReader.query(api.suggestions.detail, { proposalId }))?.coverArt).toEqual([
+      { storageId: publicArt, url: expect.any(String) },
+    ]);
+    await t.run((ctx) => ctx.db.patch(siblingId, { status: "hidden" }));
+    expect((await asReader.query(api.suggestions.detail, { proposalId }))?.coverArt).toEqual([
+      { storageId: publicArt, url: null },
+    ]);
+    // Their own upload they always see.
+    const { proposalId: ownDraft } = await suggest(PLAIN, own);
+    expect(
+      (await asReader.query(api.suggestions.detail, { proposalId: ownDraft }))?.coverArt,
+    ).toEqual([{ storageId: own, url: expect.any(String) }]);
+  });
+});
+
+describe("suggestions — outdated Drafts", () => {
+  it("marks a Draft stale when a record it changes moves, and rebases it", async () => {
+    const t = makeT();
+    const { seriesId, releaseId } = await setup(t);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    // Two records: more than the suggest form edits, so its page is the only way back.
+    const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [
+        titleOp(seriesId, "Beta"),
+        {
+          kind: "update",
+          ref: release(releaseId),
+          changes: [{ field: "pubDate", value: { year: 2024, month: 4 } }],
+        },
+      ],
+      evidence: URL_EVIDENCE,
+      comment: "Two fixes.",
+    });
+    expect(await asReader.query(api.suggestions.detail, { proposalId })).toMatchObject({
+      stale: false,
+      target: null,
+    });
+    await t.run((ctx) =>
+      insertSourceRevision(ctx, {
+        ref: release(releaseId),
+        sourceKey: "kodansha",
+        changes: [{ field: "isbn10", after: "1632364212" }],
+      }),
+    );
+    const outdated = await asReader.query(api.suggestions.detail, { proposalId });
+    expect(outdated).toMatchObject({
+      state: "draft",
+      stale: true,
+      draft: { ops: [{ stale: false }, { stale: true }] },
+    });
+    expect(await asReader.query(api.suggestions.mine, {})).toMatchObject([{ stale: true }]);
+
+    await asReader.mutation(api.proposals.rebaseProposal, { proposalId });
+    expect(await asReader.query(api.suggestions.detail, { proposalId })).toMatchObject({
+      stale: false,
+    });
+    await asReader.mutation(api.proposals.submitProposal, { proposalId });
+  });
+});
+
+describe("suggestions — cover upload allowance", () => {
+  it("counts each upload started, whatever becomes of its file", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t = makeT();
+    const { releaseId } = await setup(t);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    // Files refused as uploads delete their rows, but not the allowance they used.
+    for (let i = 0; i < READER_UPLOADS_PER_DAY; i++) {
+      const { uploadId } = await asReader.mutation(api.coverUploads.uploadUrl, {});
+      const storageId = await t.run((ctx) => ctx.storage.store(new Blob([new Uint8Array(10)])));
+      await t.run((ctx) => ctx.db.patch(uploadId, { storageId }));
+      expect(
+        await asReader.mutation(api.coverUploads.uploaded, { uploadId, storageId }),
+      ).toMatchObject({ ok: false });
+    }
+    await expect(asReader.mutation(api.coverUploads.uploadUrl, {})).rejects.toMatchObject({
+      data: { code: "rateLimited" },
+    });
+
+    // A day on, it is back, while uploads that pending Drafts name wait
+    // their turn with the sweep.
+    vi.setSystemTime(Date.now() + 26 * 60 * 60 * 1000);
+    for (let i = 0; i < READER_UPLOADS_PER_DAY; i++) {
+      const cover = await upload(t, PLAIN);
+      await asReader.mutation(api.proposals.saveDraft, {
+        ops: [
+          {
+            kind: "update",
+            ref: release(releaseId),
+            changes: [{ field: "coverImage", value: { storageId: cover } }],
+          },
+        ],
+        evidence: [],
+        comment: `Jacket ${i}.`,
+      });
+    }
+    vi.setSystemTime(Date.now() + 26 * 60 * 60 * 1000);
+    await t.mutation(internal.coverUploads.sweep, {});
+    expect(await t.run((ctx) => ctx.db.query("coverUploads").collect())).toHaveLength(
+      READER_UPLOADS_PER_DAY,
+    );
+    await asReader.mutation(api.coverUploads.uploadUrl, {});
   });
 });

@@ -560,6 +560,17 @@ is fixed.
   Proposals and keeps the ones written as a reader, so someone who wrote
   Suggestions and then more than 50 Proposals in one state on the Data
   Team sees fewer than the newest 50 Suggestions there.
+- **Proposals saved before the payload bounds keep their size.** The
+  evidence, comment and value bounds and a Suggestion's 64 KiB
+  (`convex/lib/evidence.ts`, `MAX_SUGGESTION_BYTES`) hold from when they
+  shipped; rows stored earlier are read as they are. An operator finds
+  oversized ones by reading `proposals` drafts and `proposalVersions`. A
+  Data Team create op's `fields` have no size bound beyond the op cap.
+- **A reader's page can lose the before-art of a replaced cover.**
+  `suggestions.detail` draws only art the reader uploaded or a public
+  record shows or names in History (`publicArt`). When an import replaces
+  a record's art while a Suggestion on it is open, the old art is held
+  only by that Suggestion's pin, so its before thumbnail is drawn blank.
 - **A deleted account's Drafts stay Drafts.** Account deletion keeps
   Proposals. A Draft has no author left to submit or withdraw it, and the
   cover a Draft names stays pinned (`coverRefs`). In-Review ones can still
