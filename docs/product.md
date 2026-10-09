@@ -351,10 +351,12 @@ Split moves them back, and account deletion deletes them.
 
 A signed-in reader can suggest a change to a Series, Volume, Edition,
 Release or Bundle: a date, an ISBN, a title, a description, a cover. The
-links sit where the Data Team's edit links do (beside a cover, under a
-description, "Suggest an edit" at the foot of a record page, and a link
-per Release row) and open `/suggest/{type}/{key}`, the propose form in the
-site's own page. Signed out, the links are not shown, and `/suggest` asks
+links sit where the Data Team's edit links do (under a cover, under a
+description, "Suggest an edit" at the foot of a record page, and one per
+Release at an Edition page's foot) and open `/suggest/{type}/{key}`, the
+propose form in the site's own page. The cover link reads "Change cover"
+while the page shows art, stored or found by ISBN, and "Add a cover" over
+the cloth placeholder. Signed out, the links are not shown, and `/suggest` asks
 for a sign-in that comes back to it. On a touch screen the cover drop zone
 reads "Choose a photo". A Moderator reviews each Suggestion before it
 changes the page.

@@ -88,11 +88,25 @@ export function EditLinks({
 }
 
 /**
- * A Volume or Series page's cover link: the art there is one Edition's,
- * so it leads to that Edition's page, where the cover link names the
- * Release that holds it (`#cover`).
+ * The words of a cover link: "Change cover" while the page shows art, from
+ * the catalog or found by ISBN, and "Add a cover" over the cloth placeholder.
  */
-export function EditionCoverLink({ edition }: { edition: { publicId: number; title: string } }) {
+export function coverLinkLabel(artShown: boolean): string {
+  return artShown ? "Change cover" : "Add a cover";
+}
+
+/**
+ * A Volume or Series page's cover link, under the art: the art there is
+ * one Edition's, so it leads to that Edition's page, where the cover link
+ * names the Release that holds it (`#cover`).
+ */
+export function EditionCoverLink({
+  edition,
+  artShown,
+}: {
+  edition: { publicId: number; title: string };
+  artShown: boolean;
+}) {
   return (
     <EditLinks>
       <Link
@@ -101,7 +115,7 @@ export function EditionCoverLink({ edition }: { edition: { publicId: number; tit
         hash="cover"
         title={`Edit on the ${edition.title} page`}
       >
-        Change cover
+        {coverLinkLabel(artShown)}
       </Link>
     </EditLinks>
   );
