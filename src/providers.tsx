@@ -83,7 +83,12 @@ export function BrandMark() {
  * search box focused.
  */
 export function SiteHeader() {
-  const [open, setOpen] = useState(false);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // The drawer stays open only on the page it was opened on, so any link in
+  // it (account links included) closes it by navigating.
+  const [openAt, setOpenAt] = useState<string | null>(null);
+  const open = openAt === pathname;
+  const setOpen = (next: boolean) => setOpenAt(next ? pathname : null);
   const drawer = useRef<HTMLDivElement>(null);
   // Render the drawer open before focusing, inside the tap's own handler, so
   // a phone raises its keyboard for the box.
@@ -91,7 +96,6 @@ export function SiteHeader() {
     flushSync(() => setOpen(true));
     drawer.current?.querySelector("input")?.focus();
   };
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const releasesCurrent = pathname.startsWith("/releases");
   const publishersCurrent = pathname.startsWith("/publisher");
   const seriesCurrent = pathname.startsWith("/series");
@@ -166,7 +170,7 @@ export function SiteHeader() {
             aria-label={open ? "Close menu" : "Open menu"}
             aria-expanded={open}
             aria-controls="mobile-nav"
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => setOpen(!open)}
           >
             <svg
               viewBox="0 0 20 20"
