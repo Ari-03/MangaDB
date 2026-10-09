@@ -2,7 +2,8 @@ import { ClerkProvider, UserButton, useAuth } from "@clerk/tanstack-react-start"
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 
 import { AnalyticsProvider } from "~/lib/analytics";
 import { DISCORD_INVITE_URL, DiscordIcon } from "~/lib/community";
@@ -77,10 +78,18 @@ export function BrandMark() {
 /**
  * The sticky site header of the Bookshelf look (styles/shell.css): brand,
  * primary nav, search, theme toggle, and the account controls. Under 960px
- * the nav and search fold into a drawer behind the menu button.
+ * the nav, search and Discord link fold into a drawer behind the menu button,
+ * and a search button opens that drawer with its search box focused.
  */
 export function SiteHeader() {
   const [open, setOpen] = useState(false);
+  const drawer = useRef<HTMLDivElement>(null);
+  // Render the drawer open before focusing, inside the tap's own handler, so
+  // a phone raises its keyboard for the box.
+  const openSearch = () => {
+    flushSync(() => setOpen(true));
+    drawer.current?.querySelector("input")?.focus();
+  };
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const releasesCurrent = pathname.startsWith("/releases");
   const publishersCurrent = pathname.startsWith("/publisher");
@@ -91,7 +100,7 @@ export function SiteHeader() {
       <div className="container header-inner">
         <Link to="/" className="brand">
           <BrandMark />
-          MangaDB
+          <span className="brand-name">MangaDB</span>
         </Link>
         <nav className="nav" aria-label="Main">
           {/* The Series library; a Series page counts as being in it. */}
@@ -129,6 +138,25 @@ export function SiteHeader() {
         </nav>
         <SearchCombobox />
         <div className="header-actions">
+          <button
+            className="icon-btn search-toggle"
+            type="button"
+            aria-label="Search"
+            aria-controls="mobile-nav"
+            onClick={openSearch}
+          >
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <circle cx="7.2" cy="7.2" r="4.4" />
+              <path d="m10.6 10.6 3 3" />
+            </svg>
+          </button>
           <DiscordLink />
           <ThemeToggle />
           <button
@@ -153,7 +181,7 @@ export function SiteHeader() {
           {clerkEnabled ? <AuthNav /> : null}
         </div>
       </div>
-      <div className={open ? "mobile-nav is-open" : "mobile-nav"} id="mobile-nav">
+      <div className={open ? "mobile-nav is-open" : "mobile-nav"} id="mobile-nav" ref={drawer}>
         <div className="container mobile-nav-inner">
           <SearchCombobox mobile onNavigate={() => setOpen(false)} />
           <Link to="/" className="nav-link" onClick={() => setOpen(false)}>
@@ -172,6 +200,9 @@ export function SiteHeader() {
             Publishers
           </Link>
           {clerkEnabled ? <AuthNav mobile /> : null}
+          <a className="nav-link" href={DISCORD_INVITE_URL} target="_blank" rel="noreferrer">
+            MangaDB Discord
+          </a>
         </div>
       </div>
     </header>

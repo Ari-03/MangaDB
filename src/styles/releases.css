@@ -183,6 +183,12 @@
   margin: 30px 0 10px;
 }
 
+/* the phone agenda's row of day links (AgendaView); wide screens have the
+   sticky day rail beside the list instead */
+.day-jump {
+  display: none;
+}
+
 .day {
   display: grid;
   grid-template-columns: 124px minmax(0, 1fr);
@@ -626,16 +632,47 @@
   }
 
   .day {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     padding-block-start: 20px;
   }
+  .day-jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .day-jump a {
+    padding: 8px 14px;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+  .day-jump b {
+    color: var(--text);
+  }
+  .day-jump a:hover {
+    border-color: var(--accent);
+  }
+  /* the day stays pinned under the header while its releases scroll by,
+     as a strip of the header's own glass across the page's full width */
+  .day {
+    scroll-margin-top: var(--header-h);
+  }
   .day-marker {
-    position: static;
+    position: sticky;
+    top: var(--header-h);
+    z-index: 2;
     display: flex;
     align-items: baseline;
     gap: 10px;
-    padding-bottom: 2px;
+    margin: -8px -20px;
+    padding: 8px 20px;
+    background: var(--header-bg);
+    backdrop-filter: blur(16px) saturate(1.5);
+    -webkit-backdrop-filter: blur(16px) saturate(1.5);
   }
   .day-date {
     display: flex;
@@ -661,7 +698,7 @@
   }
 
   .week-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 14px;
     padding: 16px 14px 14px;
   }

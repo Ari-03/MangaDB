@@ -38,7 +38,10 @@ response cached before that header shipped cannot be recalled.
 cover, Series, volume label, format, binding and publisher. An omnibus
 reads "Vol. 1-3" and partial coverage reads "(partial)". `/releases/{yyyy-mm}`
 shows any month as a grid, and `?view=agenda` shows that month as the list.
-Months are the pagination; there is no `?page=N`.
+Months are the pagination; there is no `?page=N`. On a phone the list
+opens with a row of the month's publication days to jump to, and each
+day's heading stays pinned under the site header while its releases
+scroll past.
 
 Filters live in the URL and work in both views: `?format=physical|digital`,
 `?publisher={slug}` (old slugs still resolve) and, signed in,
@@ -162,7 +165,9 @@ Volume or Bundle text search. Search pages are noindex.
   and merged publishers' old names.
 - The header box is a typeahead (`src/lib/searchSuggest.tsx`) showing up to
   six Series, up to three publishers and a "See all results" row. Before
-  hydration it is a plain GET form.
+  hydration it is a plain GET form. Under 960px it moves into the menu
+  drawer, and a search button in the header opens the drawer with the box
+  focused.
 - When no Series contains every typed word and the query names no
   publisher, both the typeahead and the page offer "Did you mean" titles
   ("berzerk" finds Berserk). A typo in the first three letters of a

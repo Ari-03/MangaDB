@@ -13,7 +13,7 @@
 .shelf-item {
   display: flex;
   flex-direction: column;
-  padding: 0 13px;
+  padding: 0 var(--shelf-pad);
   min-width: 0;
 }
 
@@ -425,7 +425,7 @@
   content: "";
   position: absolute;
   top: -14px;
-  left: -13px;
+  left: calc(-1 * var(--shelf-pad));
   right: -100vw;
   height: 16px;
   background-image: var(--ledge), var(--ledge-shade);
@@ -438,7 +438,7 @@
 }
 /* a horizontally scrolling shelf must not extend its planks past the viewport */
 .rail .caption::before {
-  right: -13px;
+  right: calc(-1 * var(--shelf-pad));
 }
 .caption-title {
   font-size: 0.9rem;
@@ -569,11 +569,38 @@
   :root {
     --cover-w: 128px;
   }
-}
-@media (max-width: 420px) {
-  :root {
-    --cover-w: 132px;
+  /* a narrow caption wraps its facts onto a second line, a whole fact at a
+     time, rather than cutting "Digital + Print" short */
+  .caption-meta {
+    flex-wrap: wrap;
+    row-gap: 1px;
   }
+  .caption-meta > span {
+    white-space: nowrap;
+  }
+}
+/* Phones: three books a row, as on a large phone, so a long run is not a
+   two-column scroll. A shelf whose covers carry the quick actions keeps two,
+   since its buttons need the width. */
+@media (max-width: 480px) {
+  :root {
+    --shelf-pad: 8px;
+  }
+  .shelf {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .shelf .caption-title {
+    font-size: 0.84rem;
+  }
+  .shelf .caption-meta {
+    font-size: 0.74rem;
+  }
+  .shelf:has(.cover-actions) {
+    --shelf-pad: 13px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 359px) {
   .shelf {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
