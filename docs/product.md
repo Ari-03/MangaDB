@@ -190,8 +190,9 @@ read on hover (`src/lib/quickActions.tsx`). Above every reading path sit
 Want all, Order all, Own all and Read all, capped at 200 books per click.
 Nothing removes entries in bulk.
 
-`/me` is the library, with tabs Collection, Reading, Upcoming, Favorites
-and Settings. The open tab's label shows its count; Settings has none.
+`/me` is the library, with tabs Collection, Reading, Upcoming, Favorites,
+Suggestions and Settings. The open tab's label shows its count; Settings
+has none.
 Collection shelves entries by Series and reading path, one shelf per state
 (`?shelf=owned|ordered|wanted`). "Add the other N" opens the rest of a run
 with unmarked books faded.
@@ -341,6 +342,25 @@ from the panel under the cover. `/me` Favorites lists the newest 200.
 Nobody else sees favorites, and profiles never show them. Merges move them,
 Split moves them back, and account deletion deletes them.
 
+## Suggestions
+
+A signed-in reader can suggest a change to a Series, Volume, Edition,
+Release or Bundle: a date, an ISBN, a title, a description, a cover. The
+links sit where the Data Team's edit links do (beside a cover, under a
+description, "Suggest an edit" at the foot of a record page, and a link
+per Release row) and open `/suggest/{type}/{key}`, the propose form in the
+site's own page. Signed out, the links are not shown, and `/suggest` asks
+for a sign-in that comes back to it. On a touch screen the cover drop zone
+reads "Choose a photo". A Moderator reviews each Suggestion before it
+changes the page.
+
+`/me` Suggestions lists your newest 50, with their state, record, change,
+date and, when one stands, the reason it was rejected or sent back.
+`/me/suggestions/{id}` shows one in full. A Draft, including one sent back
+for changes, can be edited, submitted or withdrawn, and one In Review
+withdrawn. The rules and limits are in
+[moderation](moderation.md#suggestions).
+
 ## Comments
 
 Comments on Series and Volume pages are built and switched off
@@ -414,8 +434,8 @@ on unfiltered month pages. No ratings markup.
 
 Indexable: catalog pages, `/releases`, month views and `/authors`. Filtered
 calendar views are `noindex, follow` with a canonical to the unfiltered
-URL. Never indexed: `/search`, `/me`, `/mod`, auth pages, `/claim-username`
-and `/u/{username}`.
+URL. Never indexed: `/search`, `/me`, `/mod`, `/suggest`, auth pages,
+`/claim-username` and `/u/{username}`.
 
 The Worker serves `/sitemap.xml`, an index of
 `/sitemaps/{series,volumes,editions,publishers,bundles,months}.xml`, and

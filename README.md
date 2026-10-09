@@ -24,7 +24,8 @@ What a visitor finds:
 Signed-in readers get **My library** (`/me`): a collection of
 owned, ordered and wanted books; reading status and read counts per
 volume; followed series with their upcoming releases; private ratings,
-reviews and favorites; and an optional public profile at `/u/{username}`.
+reviews and favorites; an optional public profile at `/u/{username}`; and
+suggestions of corrections to the catalog, which the Data Team reviews.
 
 Behind the site, the catalog is imported from publisher and reference
 sources and curated by a Data Team of Editors, Moderators and

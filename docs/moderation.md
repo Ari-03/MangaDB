@@ -1,8 +1,9 @@
 # Moderation
 
 How the Data Team (Editors, Moderators, Administrators) changes the
-catalog. Every human and automated change goes through a Proposal, and
-every approved change leaves a public Revision. Terms are defined in
+catalog, and how a signed-in reader suggests a change for them to review.
+Every human and automated change goes through a Proposal, and every
+approved change leaves a public Revision. Terms are defined in
 [CONTEXT.md](../CONTEXT.md).
 
 ## The workroom
@@ -31,7 +32,10 @@ it too.
 
 Administrators appoint Moderators. Moderators appoint Editors. Editors
 propose changes; Moderators and Administrators approve them
-(`convex/roles.ts`, `convex/lib/roles.ts`). Every appointment, revocation,
+(`convex/roles.ts`, `convex/lib/roles.ts`). Any other signed-in User with
+a username, not suspended and not deleting their account, is a reader: a
+reader holds no data-team privilege but may write
+[Suggestions](#suggestions). Every appointment, revocation,
 suspension and reinstatement writes a permanent `roleAudit` row that
 survives account deletion. Revoking or suspending someone removes their
 privileges but never rewrites what they authored. A suspended user also
@@ -121,7 +125,7 @@ removes the stored art. The file uploads first: `coverUploads.uploadUrl`
 issues a URL on this deployment's `/cover-upload` HTTP action
 (`convex/http.ts`) carrying the upload's id and token, the action stores
 the file and records the blob on that upload, and `coverUploads.uploaded`
-checks it. An upload can only name a blob it stored, so no one can claim,
+checks it. A Data Team member may start 50 uploads a day, a reader 5. An upload can only name a blob it stored, so no one can claim,
 or have deleted, art they did not upload. The cover is then one more
 field of the same Save or Proposal:
 `coverImage`. Only the uploader, or art the catalog already shows or
@@ -158,7 +162,8 @@ only when exactly one source's linked record offers exactly that text.
 ## Proposals and the review queue
 
 Any Data Team member drafts a Proposal (`proposals.saveDraft`) and submits
-it (`submitProposal`). Submission needs a change comment. Factual changes
+it (`submitProposal`); a reader does the same with a narrower
+[Suggestion](#suggestions). Submission needs a change comment. Factual changes
 need source evidence, a URL or a Source Observation; editorial prose such
 as synopses does not. Warnings (a new Series, more than 10 ops, partial
 coverage) must be acknowledged. Submitting freezes the draft into an
@@ -167,7 +172,8 @@ immutable Proposal Version.
 A Moderator then approves (applies every op in one transaction), rejects
 with a reason, or requests changes with a reason, which returns it to
 Draft. Resubmitting creates the next version. Authors can withdraw from
-Draft or In Review. Reviewers never edit a version.
+Draft or In Review, whatever their role now. Reviewers never edit a
+version.
 
 A Proposal an import wrote cannot be sent back for changes: no one can
 revise an import's Draft, and no list shows one, so the book would be in
@@ -196,9 +202,11 @@ Pages:
   change comment sits under that line. An importer's standing sentence
   does not; the proposal page still shows the full comment. Filters cover
   change kind (operation), record type, kind (import offer, import
-  creation, field change, new records, merge/hide/lock, report), author
-  kind, author or source name, waiting time, warnings and staleness. Five
-  views (All, Import offers, People, Reports, Stale) set those filters.
+  creation, field change, new records, merge/hide/lock, report,
+  suggestion), author kind, author or source name, waiting time, warnings
+  and staleness. A reader's name reads "(reader)" where a member's reads
+  their role. Six views (All, Import offers, People, Suggestions, Reports,
+  Stale) set those filters.
   Filters and views live in the URL, so a view can be shared as a link.
   The list loads 25 proposals at a time (`proposals.reviewQueuePage` is
   paginated, at most 50 a page) and says how many it has checked and how
@@ -212,15 +220,66 @@ Pages:
 - `/mod/proposals`: your own proposals, titled by their change comment,
   with the same change line as the queue.
 - `/mod/propose/{type}/{key}`: the Editor form, linked as "Propose a
-  change" on record pages.
+  change" on record pages. It is `src/lib/proposeForm.tsx`, which
+  `/suggest` shares.
 
 Limits, per user, through `@convex-dev/rate-limiter`: 30 submissions an
 hour (burst 5) and 120 draft saves an hour (burst 20). A proposal holds at
-most 25 ops.
+most 25 ops. Readers have their own, smaller limits
+([Suggestions](#suggestions)).
 
-Signed-in readers can report a problem from a Series page. The report
-becomes a zero-op In-Review Proposal in the same queue (10 an hour, burst
-3; `convex/reports.ts`).
+`reports.submit` files a signed-in reader's report on a Series as a
+zero-op In-Review Proposal in the same queue (10 an hour, burst 3;
+`convex/reports.ts`). The Series page itself now sends readers to the
+Discord. A report has nothing to revise, so `requestChanges` refuses it
+and the proposal page does not offer the button: approve it or reject it.
+
+## Suggestions
+
+A Suggestion is a reader's Proposal: one whose author held no data-team
+role when they wrote it. It goes through the same `saveDraft`,
+`submitProposal`, `rebaseProposal` and `withdrawProposal` as anyone's, with
+these limits (`checkSuggestionOps` and the reader buckets in
+`convex/proposals.ts`):
+
+- Only `update` ops on existing records, over the fields of
+  `convex/lib/moderationFields.ts`, covers included. No creations, no
+  override clears, no placements, nothing from the manage page.
+- At most 10 ops; 10 submissions an hour (burst 3) and 60 draft saves an
+  hour (burst 10); at most 20 open (Draft or In Review) at once.
+- Five cover uploads a day.
+- Evidence as for anyone: a factual change needs a source URL, a
+  description or a cover does not.
+
+Saving, submitting and rebasing check the author's role now, so a Draft
+someone wrote while on the Data Team goes no further once they are off it
+unless it is a Suggestion. They can still withdraw it.
+
+Catalog pages show a signed-in reader the Data Team's links beside a
+cover, a description and the Release rows, leading to
+`/suggest/{type}/{key}` instead, and "Suggest an edit" where an Editor
+sees "Propose a change". Signed-out visitors see none of them. `/suggest`
+is the propose form in the site's own page, without override clears;
+signed out, it asks for a sign-in that returns there. For a reader,
+`moderation.editForm` and `moderation.sourceBlurbs` answer for active
+records only (a Hidden or Merged Record stays the Data Team's), and
+`editForm` says nothing about import Proposals waiting on the record.
+
+A reader reads only their own Proposals (`convex/suggestions.ts`): `mine`
+lists the newest 50 on the Suggestions tab of `/me`, and `detail` backs
+`/me/suggestions/{id}`. They show the ops with before and after, the
+evidence, the change comment, when it was submitted and closed, and the
+reason for each rejection or request for changes. The internal discussion,
+the claim and who decided stay on `/mod/proposal`. Another person's
+Proposal reads as not found. A Draft, including one sent back for
+changes, opens in `/suggest/{type}/{key}?draft={id}` with its values and
+saves back into the same Proposal.
+
+Review is unchanged. In the queue a Suggestion's kind is "Suggestion". A
+Moderator approves, rejects or requests changes, and approval applies it
+through `applyUpdate` like any person's change: the reader is the
+Revision's author, and a field an import wrote, or a cover, becomes a
+Human Override.
 
 ## Hide, restore, merge, split and locks
 

@@ -545,13 +545,16 @@ is fixed.
 
 ## Review queue
 
-- **Request Changes on a reader's report makes a Draft the reader cannot
-  open.** A report (`reports.submit`) is an In-Review Proposal authored by
-  any signed-in user. `proposals.requestChanges` turns it back into a Draft
-  for its author, but `proposalDetail`, `myProposals` ("My Proposals"),
-  `saveDraft`, `submitProposal` and `withdrawProposal` all need Data Team
-  membership, so a reader who is not on the team cannot open, resubmit or
-  withdraw it, and no Moderator can decide a Draft.
+- **A report sent back before the refusal stays a Draft.**
+  `requestChanges` now refuses a report (a zero-op Proposal), but one it
+  returned to Draft before has no ops to submit. Its author sees it on
+  `/me` Suggestions and can withdraw it; nobody can submit it. An operator
+  finds them as `proposals` in state `draft` whose `draft.ops` is empty.
+- **A deleted account's Drafts stay Drafts.** Account deletion keeps
+  Proposals. A Draft has no author left to submit or withdraw it, and the
+  cover a Draft names stays pinned (`coverRefs`). In-Review ones can still
+  be decided. This held for Editors before; Suggestions make it more
+  common.
 - **Import Proposals put back to Draft before the refusal stay there.**
   `requestChanges` now refuses an import's Proposal, but ones it returned
   to Draft before that check existed have no author who can resubmit or
