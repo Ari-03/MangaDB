@@ -31,6 +31,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { editorialField, type RecordType } from "../../convex/lib/moderationFields";
 import { CoverField } from "~/lib/coverField";
 import { DescriptionField } from "~/lib/descriptionField";
+import { useIsDataTeam } from "~/lib/viewer";
 import {
   draftCitation,
   FieldInput,
@@ -218,7 +219,12 @@ function ProposeFormBody({
   // A resumed Draft starts pinned to the record as it loaded.
   const [resumed] = useState(() => (resume ? resumeOn(form, resume) : null));
   const suggest = mode === "suggest";
-  const draft = useProposalDraft({ resume: resumed?.proposalId, suggest });
+  const isDataTeam = useIsDataTeam();
+  // Where a saved Draft lives follows what it becomes: a Data Team member's
+  // new Draft from /suggest is an ordinary Proposal, while a resumed Draft is
+  // always the viewer's own Suggestion.
+  const ownSuggestion = suggest && (resumed !== null || !isDataTeam);
+  const draft = useProposalDraft({ resume: resumed?.proposalId, suggest: ownSuggestion });
   const [state, setState] = useState<FormState | null>(resumed?.values ?? null);
   const [dirty, setDirty] = useState<ReadonlySet<string>>(resumed?.dirty ?? new Set());
   const [clears, setClears] = useState<ReadonlySet<string>>(new Set());
@@ -504,7 +510,7 @@ function ProposeFormBody({
           {draft.savedDraft && draft.draftId ? (
             <p className="notice">
               Draft saved.{" "}
-              {suggest ? (
+              {ownSuggestion ? (
                 <Link to="/me/suggestions/$id" params={{ id: draft.draftId }}>
                   View it
                 </Link>
