@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
+import { editionCoverage, editionTitleOf, titleReads } from "./catalogPages";
 import { MIN_COVER_BYTES } from "./lib/covers";
 import { pubDate } from "./test.catalog";
 import {
@@ -717,5 +718,57 @@ describe("catalogPages.isbnLookup", () => {
     const t = makeT();
     await seed(t);
     expect(await t.query(api.catalogPages.isbnLookup, { isbn: "9780000000000" })).toBeNull();
+  });
+});
+
+describe("editionTitleOf", () => {
+  it("composes the title editionCoverage composes, hidden parts and lines included", async () => {
+    const t = makeT();
+    const titles = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "P" });
+      const seriesId = await insertSeries(ctx, { title: "S" });
+      const hiddenSeriesId = await insertSeries(ctx, { title: "Hidden", status: "hidden" });
+      const lineId = await insertEditionLine(ctx, { seriesId, publisherId, name: "Deluxe" });
+      const hiddenLineId = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Gone",
+        status: "hidden",
+      });
+      const volume = (position: number, fields = {}) =>
+        insertVolume(ctx, { seriesId, position, ...fields });
+      const editions = [
+        // Vols 1–3 with Vol 2 hidden, then a Volume of a hidden Series first.
+        { cover: [await volume(1), await volume(2, { status: "hidden" }), await volume(3)] },
+        { cover: [await insertVolume(ctx, { seriesId: hiddenSeriesId }), await volume(4)] },
+        // A line member, Unmapped Packaging of a line, and of a hidden line.
+        { cover: [await volume(5)], line: { editionLineId: lineId, linePosition: "2" } },
+        { cover: [], line: { editionLineId: lineId, coverageUnmapped: true as const } },
+        { cover: [], line: { editionLineId: hiddenLineId, coverageUnmapped: true as const } },
+        { cover: [await volume(6, { label: undefined })] },
+      ];
+      const pairs = [];
+      for (const { cover, line } of editions) {
+        const editionId = await insertEdition(ctx, { publisherId, ...line });
+        for (const [i, volumeId] of cover.entries()) {
+          await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
+        }
+        const edition = (await ctx.db.get(editionId))!;
+        pairs.push([
+          (await editionCoverage(ctx, edition)).title,
+          await editionTitleOf(titleReads(ctx), edition),
+        ]);
+      }
+      return pairs;
+    });
+    for (const [expected, title] of titles) expect(title).toBe(expected);
+    expect(titles.map(([title]) => title)).toEqual([
+      "S Vol 1–3",
+      "S Vol 4",
+      "S Deluxe 2",
+      "S Deluxe",
+      "Edition",
+      "S",
+    ]);
   });
 });

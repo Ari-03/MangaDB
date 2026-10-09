@@ -13,7 +13,7 @@ import { isbnScope } from "./lib/scope";
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { editionCoverage } from "./catalogPages";
+import { editionCoverage, editionTitleOf, titleReads, type TitleReads } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { getSourceByKey } from "./importSources";
 import { internal } from "./_generated/api";
@@ -651,10 +651,16 @@ export type BackLink = {
   title: string;
 } | null;
 
+/**
+ * A record's title and the page the edit form links back to. `reads`
+ * (catalogPages.ts TitleReads) reads the parents a title names: a
+ * Volume's Series, a Release's Edition and an Edition's covered Volumes.
+ */
 export async function displayInfo(
   ctx: QueryCtx,
   type: RecordType,
   doc: CatalogDoc,
+  reads: TitleReads = titleReads(ctx),
 ): Promise<{ title: string; backLink: BackLink }> {
   switch (type) {
     case "series": {
@@ -670,7 +676,7 @@ export async function displayInfo(
     }
     case "volume": {
       const volume = doc as Doc<"volumes">;
-      const series = await ctx.db.get(volume.seriesId);
+      const series = await reads.get(volume.seriesId);
       const title = volumeTitle(series?.title ?? "Unknown series", volume.label ?? null);
       return {
         title,
@@ -679,7 +685,7 @@ export async function displayInfo(
     }
     case "edition": {
       const edition = doc as Doc<"editions">;
-      const { title } = await editionCoverage(ctx, edition);
+      const title = await editionTitleOf(reads, edition);
       return {
         title,
         backLink: { entity: "edition", publicId: edition.publicId, title },
@@ -687,9 +693,9 @@ export async function displayInfo(
     }
     case "release": {
       const release = doc as Doc<"releases">;
-      const edition = await ctx.db.get(release.editionId);
+      const edition = await reads.get(release.editionId);
       if (!edition) return { title: "Release", backLink: null };
-      const { title } = await editionCoverage(ctx, edition);
+      const title = await editionTitleOf(reads, edition);
       return {
         title: `${title} — ${release.format}${release.binding ? ` (${release.binding})` : ""} release`,
         backLink: { entity: "edition", publicId: edition.publicId, title },

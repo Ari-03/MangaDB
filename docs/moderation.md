@@ -231,7 +231,10 @@ Pages:
   from your browser's clock. Claiming signals who is looking and never
   locks. The older `proposals.reviewQueue` (no paging, an array with
   `ageMs`) stays for clients built before the paged one and filters by the
-  same rules.
+  same rules, within the same read budget: past it, each remaining
+  proposal comes back unfiltered in the old row shape with `notLoaded:
+  true`, no ops and a comment saying it was not loaded, so an old client
+  lists it and links to its page.
 - `/mod/proposal/{id}`: the Draft and the newest 50 versions, and internal
   discussion notes. The Draft and the newest 6 versions show before and
   after per record, bases and evidence; older ones their number, comment,
@@ -275,8 +278,10 @@ these limits (`checkSuggestionOps` and the reader buckets in
 - At most 64 KiB stored (`MAX_SUGGESTION_BYTES`: ops with their before-
   and after-values, evidence and comment), so `mine` and the review queue,
   which read many rows at once, stay well inside a query's read limit.
-  The records they name are read once a page, within a read budget
-  (`convex/lib/proposalReads.ts`): past it, rows say they were not loaded.
+  The records they name, with the parents their titles name (an
+  Edition's covered Volumes and their Series), are read once a page,
+  within a read budget (`convex/lib/proposalReads.ts`): past it, rows say
+  they were not loaded.
 - Five cover uploads a day (see [Covers](#covers)).
 - Evidence as for anyone: a factual change needs a source URL, a
   description or a cover does not. A Source Observation must be linked to

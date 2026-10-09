@@ -305,3 +305,121 @@ describe("proposal pages at the largest records", () => {
     }
   });
 });
+
+/**
+ * An Edition of `volumes` Volumes of one of the largest Series
+ * (insertLargestSeries), with `releases` Releases; their ids.
+ */
+async function insertLongEdition(t: TestT, volumes: number, releases: number) {
+  const { id: seriesId } = await insertLargestSeries(t);
+  return await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: "Long" });
+    const editionId = await insertEdition(ctx, { publisherId });
+    for (let position = 1; position <= volumes; position++) {
+      const volumeId = await insertVolume(ctx, { seriesId, position });
+      await insertCoverage(ctx, { editionId, volumeId, order: position });
+    }
+    const ids = [];
+    for (let i = 0; i < releases; i++) {
+      ids.push(await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] }));
+    }
+    return ids;
+  });
+}
+
+const rebind = (id: Id<"releases">): Op => ({
+  kind: "update",
+  ref: { type: "release", id },
+  changes: [{ field: "binding", after: "hardcover" }],
+});
+
+describe("titles within read limits", () => {
+  it("titles Releases of a thirty-volume Edition of the largest Series on both proposal pages", async () => {
+    const t = makeT({ transactionLimits: true });
+    const userId = await readerId(t);
+    const releaseIds = await insertLongEdition(t, 30, 2);
+    const proposalId = await insertSuggestion(t, userId, [releaseIds.map(rebind)]);
+    const team = await t
+      .withIdentity({ subject: MOD })
+      .query(api.proposals.proposalDetail, { proposalId });
+    const own = await t
+      .withIdentity({ subject: PLAIN })
+      .query(api.suggestions.detail, { proposalId });
+    for (const detail of [team, own]) {
+      const content = detail!.versions[0]!.content;
+      if (typeof content === "string") throw new Error(`version ${content}`);
+      expect(content.ops).toHaveLength(2);
+      for (const op of content.ops) {
+        expect(op).toMatchObject({ kind: "update" });
+        expect("recordTitle" in op && op.recordTitle).toMatch(/Vol 1–30 — physical release$/);
+      }
+    }
+  });
+
+  it("answers a queue page whose Release row follows a row of ten of the largest Series", async () => {
+    const t = makeT({ transactionLimits: true });
+    const userId = await readerId(t);
+    const ops = [];
+    for (let i = 0; i < MAX_SUGGESTION_OPS; i++) {
+      const { id, latest } = await insertLargestSeries(t);
+      ops.push(retitle(id, latest));
+    }
+    await insertSuggestion(t, userId, [ops]);
+    const [releaseId] = await insertLongEdition(t, 30, 1);
+    await insertSuggestion(t, userId, [[rebind(releaseId!)]]);
+    const page = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueuePage, {
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+    expect(page.page).toHaveLength(2);
+    // The Edition's Series is read once for its title, not once a Volume.
+    const [first, release] = page.page;
+    expect(first).toMatchObject({ matches: true });
+    expect(release?.matches && release.subject?.title).toMatch(/Vol 1–30 — physical release$/);
+  });
+
+  it("marks a version not loaded when its Release's title alone outgrows the budget", async () => {
+    const t = makeT({ transactionLimits: true });
+    const userId = await readerId(t);
+    // An Edition of sixty Volumes, each of a different one of the largest Series:
+    // about 20 MB of Series to read for its title.
+    const seriesIds: Array<Id<"series">> = [];
+    for (let i = 0; i < 60; i++) seriesIds.push((await insertLargestSeries(t)).id);
+    const releaseId = await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx, { name: "Wide" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      for (const [i, seriesId] of seriesIds.entries()) {
+        const volumeId = await insertVolume(ctx, { seriesId, position: 1 });
+        await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
+      }
+      return await insertRelease(ctx, { editionId, publisherId, seriesIds });
+    });
+    const proposalId = await insertSuggestion(t, userId, [[rebind(releaseId)]]);
+    const team = await t
+      .withIdentity({ subject: MOD })
+      .query(api.proposals.proposalDetail, { proposalId });
+    const own = await t
+      .withIdentity({ subject: PLAIN })
+      .query(api.suggestions.detail, { proposalId });
+    for (const detail of [team, own]) {
+      expect(detail!.versions.map(shownOf)).toEqual(["notLoaded"]);
+    }
+  });
+
+  it("answers the legacy queue whose rows each name ten of the largest Series", async () => {
+    const t = makeT({ transactionLimits: true });
+    const userId = await readerId(t);
+    for (let row = 0; row < 3; row++) {
+      const ops = [];
+      for (let i = 0; i < MAX_SUGGESTION_OPS; i++) {
+        const { id, latest } = await insertLargestSeries(t);
+        ops.push(retitle(id, latest));
+      }
+      await insertSuggestion(t, userId, [ops]);
+    }
+    const rows = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueue, {});
+    expect(rows).toHaveLength(3);
+    // The first rows are read whole; the rest are marked and left for their pages.
+    expect(rows[0]).toMatchObject({ notLoaded: false, opCount: MAX_SUGGESTION_OPS });
+    expect(rows.at(-1)).toMatchObject({ notLoaded: true });
+  });
+});

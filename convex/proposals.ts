@@ -50,7 +50,7 @@ import {
 } from "./lib/proposalCreates";
 import { fail } from "./lib/errors";
 import { toIsbn13 } from "./lib/isbn";
-import { publiclyVisible } from "./lib/publicRecords";
+import { publiclyVisible, type RecordGet } from "./lib/publicRecords";
 import { loaded, proposalReads, type ProposalReads } from "./lib/proposalReads";
 import { primaryNamespaceRefusal } from "./lib/releaseIsbns";
 import {
@@ -1234,6 +1234,7 @@ async function describeCreate(
   ctx: QueryCtx | MutationCtx,
   op: Extract<StoredOp, { kind: "create" }>,
   tempLabels: Map<string, string>,
+  get: RecordGet,
 ): Promise<string> {
   const fields = (op.fields ?? {}) as Record<string, unknown>;
   const refLabel = async (
@@ -1245,7 +1246,7 @@ async function describeCreate(
     if (tempLabels.has(raw)) return tempLabels.get(raw)!;
     const id = ctx.db.normalizeId(table, raw);
     if (!id) return `"${raw}"`;
-    const doc = await ctx.db.get(id);
+    const doc = await get(id);
     return doc ? nameOf(doc as never) : "(missing)";
   };
   switch (op.table) {
@@ -1340,7 +1341,7 @@ export async function renderOps(
   const rendered = [];
   const tempLabels = new Map<string, string>();
   const baseOf = async (op: { baseRevisionId?: Id<"revisions"> }, shown: boolean) => {
-    const base = op.baseRevisionId ? await reads.revision(op.baseRevisionId) : null;
+    const base = op.baseRevisionId ? await reads.get(op.baseRevisionId) : null;
     return base
       ? { seq: base.seq, comment: shown ? base.comment : null }
       : { seq: 0, comment: null };
@@ -1352,7 +1353,7 @@ export async function renderOps(
         table: op.table,
         tempId: op.tempId,
         fields: op.fields as Record<string, unknown>,
-        summary: await describeCreate(ctx, op, tempLabels),
+        summary: await describeCreate(ctx, op, tempLabels, reads.get),
       });
     } else if (op.kind === "update") {
       const ref = op.ref;
@@ -1515,9 +1516,9 @@ function seriesSubject(series: Doc<"series">, isbn13: string | null = null) {
 }
 
 /** Whether any of these Series is a Mature Series. */
-async function anyMature(ctx: QueryCtx, seriesIds: ReadonlyArray<Id<"series">>) {
+async function anyMature(reads: ProposalReads, seriesIds: ReadonlyArray<Id<"series">>) {
   for (const id of seriesIds) {
-    if ((await ctx.db.get(id))?.mature === true) return true;
+    if ((await reads.get(id))?.mature === true) return true;
   }
   return false;
 }
@@ -1526,27 +1527,29 @@ async function anyMature(ctx: QueryCtx, seriesIds: ReadonlyArray<Id<"series">>) 
  * The art a row's jacket may show for a record and whether it is a Mature
  * Series' (the jacket is concealed then): a Release, Variant or Bundle's
  * stored cover and ISBN. Other records have no art, so nothing is read.
+ * Records are read through `reads`; a box set's first member and the
+ * blob's metadata are the only reads outside it.
  */
-async function subjectArt(ctx: QueryCtx, type: RecordType, doc: CatalogDoc) {
+async function subjectArt(ctx: QueryCtx, reads: ProposalReads, type: RecordType, doc: CatalogDoc) {
   const none = { isbn13: null as string | null, coverUrl: null as string | null, mature: false };
   if (type === "release") {
     const release = doc as Doc<"releases">;
     return {
       isbn13: release.isbn13 ?? null,
       coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
-      mature: await anyMature(ctx, release.seriesIds),
+      mature: await anyMature(reads, release.seriesIds),
     };
   }
   if (type === "releaseVariant") {
     const variant = doc as Doc<"releaseVariants">;
-    const release = await ctx.db.get(variant.releaseId);
+    const release = await reads.get(variant.releaseId);
     return {
       isbn13: release?.isbn13 ?? null,
       coverUrl: await coverUrl(
         ctx,
         variant.coverImage?.storageId ?? release?.coverImage?.storageId,
       ),
-      mature: release ? await anyMature(ctx, release.seriesIds) : false,
+      mature: release ? await anyMature(reads, release.seriesIds) : false,
     };
   }
   if (type === "releaseBundle") {
@@ -1556,11 +1559,11 @@ async function subjectArt(ctx: QueryCtx, type: RecordType, doc: CatalogDoc) {
       .query("bundleMemberships")
       .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
       .first();
-    const release = member ? await ctx.db.get(member.releaseId) : null;
+    const release = member ? await reads.get(member.releaseId) : null;
     return {
       isbn13: bundle.isbn13 ?? null,
       coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
-      mature: release ? await anyMature(ctx, release.seriesIds) : false,
+      mature: release ? await anyMature(reads, release.seriesIds) : false,
     };
   }
   if (type === "series") return { ...none, mature: (doc as Doc<"series">).mature === true };
@@ -1581,7 +1584,7 @@ async function evidenceRatesMature(reads: ProposalReads, evidence: ReadonlyArray
     .flatMap((row) => (row.kind === "observation" ? [row.observationId] : []))
     .slice(0, SUBJECT_OBSERVATION_READS);
   for (const id of ids) {
-    const observation = await reads.observation(id);
+    const observation = await reads.get(id);
     if (observation && observationRatesMature(observation)) return true;
   }
   return false;
@@ -1632,13 +1635,13 @@ export async function recordSubjectOf(
     if (!doc) return bareSubject(ref.type, "(missing record)");
     if (!(await reads.shown(ref))) return bareSubject(ref.type, NOT_PUBLIC);
     const { title, backLink } = await reads.display(ref);
-    // The art's reads (its Series, a box set's member, the blob) are one more read.
+    // A box set's member and the blob's metadata, read outside `reads`, are one more read.
     await reads.room();
     return {
       recordType: ref.type,
       title,
       page: backLink ? { entity: backLink.entity, publicId: backLink.publicId } : null,
-      ...(await subjectArt(ctx, ref.type, doc)),
+      ...(await subjectArt(ctx, reads, ref.type, doc)),
     };
   }
   const creates = ops.filter((op): op is CreateOpInput => op.kind === "create");
@@ -1652,7 +1655,7 @@ export async function recordSubjectOf(
     for (const op of creates) {
       const raw = field(op, "seriesId");
       const id = typeof raw === "string" ? ctx.db.normalizeId("series", raw) : null;
-      const series = id ? await ctx.db.get(id) : null;
+      const series = id ? await reads.get(id) : null;
       if (!id || !series) continue;
       if (!(await reads.shown({ type: "series", id }))) return bareSubject("series", NOT_PUBLIC);
       return seriesSubject(series, isbn13);
@@ -1694,6 +1697,10 @@ const queueFilterArgs = {
   minAgeHours: v.optional(v.number()),
 };
 
+/** The comment a legacy queue row past the read budget carries in place of its own. */
+export const NOT_LOADED_COMMENT =
+  "Not loaded: too much to read with the rest of the queue. Open it to review it.";
+
 /**
  * Every In-Review proposal, oldest first, with the facets the queue filters
  * on and its age in `ageMs`, filtered with the same rules as
@@ -1702,6 +1709,12 @@ const queueFilterArgs = {
  * array result so a Worker or open tab older than the Convex deploy keeps
  * working; it reads the whole In-Review index. The site calls
  * reviewQueuePage. Remove this once no deployed client calls it.
+ * Rows share one read of each record within the read budget
+ * (lib/proposalReads.ts), as reviewQueuePage's do. Past it, every
+ * remaining Proposal is listed unfiltered in the same row shape, with
+ * `notLoaded: true`, NOT_LOADED_COMMENT for its comment and no ops, so
+ * an old client shows it and links to its page instead of the query
+ * failing.
  */
 export const reviewQueue = query({
   args: queueFilterArgs,
@@ -1714,16 +1727,38 @@ export const reviewQueue = query({
       .collect();
 
     const usernameOf = usernameLookup(ctx);
-    const reads = proposalReads(ctx);
+    const reads = proposalReads(ctx, { budgeted: true });
     const now = Date.now();
     const rows = [];
     for (const proposal of proposals) {
-      const found = await queueRowOf(ctx, usernameOf, proposal, reads);
+      const found = await loaded(async () => {
+        await reads.room();
+        return await queueRowOf(ctx, usernameOf, proposal, reads);
+      }, "notLoaded" as const);
+      if (found === "notLoaded") {
+        const submittedAt = proposal.submittedAt ?? proposal._creationTime;
+        rows.push({
+          proposalId: proposal._id as string,
+          versionNo: proposal.currentVersionNo,
+          comment: NOT_LOADED_COMMENT,
+          opCount: 0,
+          opKinds: [],
+          recordTypes: [],
+          author: await authorLabelOf(usernameOf, proposal.author),
+          warnings: [],
+          stale: Boolean(proposal.stale),
+          claimedBy: await usernameOf(proposal.claimedBy),
+          submittedAt,
+          ageMs: now - submittedAt,
+          notLoaded: true,
+        });
+        continue;
+      }
       if (!found) continue;
       if (!matchesQueueFilters({ ...found.row, kind: found.summary.kind }, { ...args, now })) {
         continue;
       }
-      rows.push({ ...found.row, ageMs: now - found.row.submittedAt });
+      rows.push({ ...found.row, ageMs: now - found.row.submittedAt, notLoaded: false });
     }
     return rows;
   },

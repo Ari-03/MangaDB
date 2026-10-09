@@ -579,15 +579,24 @@ is fixed.
   before the newest 50 are in `proposalVersions` but not on any page. Its
   internal discussion is still read whole, which only the Data Team can
   lengthen.
-- **Pages of very large records say "not loaded".** The review queue,
-  `/me` Suggestions and both proposal pages stop reading once a response
-  is within `READ_RESERVE` of a query's read limits
-  (`convex/lib/proposalReads.ts`). The queue then links the rest of its
-  page to open one by one, without knowing whether they match its
-  filters; `/me` shows only their state and date; a proposal page says a
+- **Pages of very large records say "not loaded".** The review queue
+  (and the legacy `proposals.reviewQueue`), `/me` Suggestions and both
+  proposal pages stop reading once a response is within `READ_RESERVE` of
+  a query's read limits (`convex/lib/proposalReads.ts`). Titles count
+  too: a Release of an Edition covering Volumes of dozens of distinct
+  Series at the field limits is not loaded. The queue then links the rest
+  of its page to open one by one, without knowing whether they match its
+  filters; the legacy queue returns them unfiltered with `notLoaded:
+  true`; `/me` shows only their state and date; a proposal page says a
   Draft's or version's changes were not loaded. Records of ordinary size
   never come near it; a page of ten-op Suggestions over Series at the
   field limits loads about one queue row.
+- **Some proposal reads are outside the read budget.** None of them is
+  a reader's to grow. The legacy `proposals.reviewQueue` reads every
+  In-Review Proposal document (each reader holds at most 20 open);
+  `proposalDetail` reads the newest 50 versions whole (a Suggestion's are
+  at most 64 KiB each, a Data Team proposal's are not bounded); and an
+  override clear's "kept value" reads its record's whole History.
 - **A deleted account's Drafts stay Drafts.** Account deletion keeps
   Proposals. A Draft has no author left to submit or withdraw it, and the
   cover a Draft names stays pinned (`coverRefs`). In-Review ones can still

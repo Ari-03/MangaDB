@@ -335,7 +335,7 @@ async function readerArt(
   for (const storageId of coverBlobsOf(changes)) {
     const open = await loaded(async () => {
       await reads.room();
-      return (await ownUpload(ctx, storageId, userId)) || (await publicArt(ctx, storageId));
+      return (await ownUpload(ctx, storageId, userId)) || (await publicArt(ctx, storageId, reads));
     }, false);
     art.push({ storageId, url: open ? await coverUrl(ctx, storageId) : null });
   }

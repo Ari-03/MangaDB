@@ -1,18 +1,21 @@
 // What one response reads to render Proposals: the review queue
 // (proposals.ts reviewQueuePage), a reader's Suggestions list
 // (suggestions.ts mine) and both proposal pages (proposalDetail,
-// suggestions.detail). Any signed-in reader writes Suggestions, so what
-// these read must stay inside a query's limits however a reader fills
-// them. `proposalReads` reads each record, Revision and observation at
-// most once per response, shared by every row and version, and, when
-// budgeted, stops before a read once the response is within READ_RESERVE
-// of a limit: the row or version being read, and every later one, is then
-// "not loaded" (`loaded`) instead of the whole query failing.
+// suggestions.detail), and the legacy unpaged queue (proposals.ts
+// reviewQueue). Any signed-in reader writes Suggestions, so what these
+// read must stay inside a query's limits however a reader fills them.
+// `proposalReads` reads each document (a record, its parents, a Revision,
+// an observation) and each Edition's coverage at most once per response,
+// shared by every row and version, and, when budgeted, stops before a
+// read once the response is within READ_RESERVE of a limit: the row or
+// version being read, and every later one, is then "not loaded"
+// (`loaded`) instead of the whole query failing.
 
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
-import { displayInfo, getCanonical, latestRevisionOf, type RecordRef } from "../moderation";
-import { publiclyVisible } from "./publicRecords";
+import { displayInfo, latestRevisionOf, type RecordRef } from "../moderation";
+import { coverageOf } from "./editionRows";
+import { publiclyVisible, type RecordGet } from "./publicRecords";
 
 const MiB = 1024 * 1024;
 
@@ -30,7 +33,8 @@ const MiB = 1024 * 1024;
  * 370 KB. Staleness reads a record and its latest Revision (703 KB);
  * rendering an op adds its base Revision (370 KB) and its title (for a
  * Release: its Edition, line and line's Series, and each covered Volume,
- * at most 32 KB, with its Series). So, read once each:
+ * at most 32 KB, with its Series, read once however many Volumes share
+ * it). So, read once each:
  *
  * - a queue page: 25 rows × 10 ops = 250 records × 703 KB ≈ 172 MB;
  * - `mine`: 50 subjects and 20 open rows × 10 ops, up to 250 records too;
@@ -40,17 +44,20 @@ const MiB = 1024 * 1024;
  *
  * 16 MiB holds about 23 such records, two queue rows, so no row or
  * version count is both useful and safe. Instead every read through
- * `proposalReads` (a record, a Revision, a title, a visibility check, an
- * observation) and every row (`room`: its version, its subject's art, a
- * cover's holders) first checks that this much is left. A response then
- * reads at most its limit less READ_RESERVE before its last read starts,
- * plus that one read: one document, at most 1 MiB (Convex's limit, so
- * import-written text past the field limits too), or one title, about
- * 340 KB plus 365 KB a covered Volume at the largest sizes, so up to ten
- * Volumes of the largest Series fit in 4 MiB. Index ranges and documents
- * a read takes are far below their reserves (a title takes 5 + 2 per
- * Volume). Records of ordinary size never come near it: the queue reads
- * whole pages and a proposal page all its shown versions.
+ * `proposalReads` first checks that this much is left: each document
+ * (`get`, which titles, visibility checks and a reader's cover holders
+ * read their parents through too), each record's newest Revision, each
+ * Edition's coverage rows, and each row's own reads (`room`: its version,
+ * a box set's first member, a blob's metadata, a holder scan of at most 50
+ * Releases, Bundles or Variants). A response then reads at most its limit
+ * less READ_RESERVE before its last read starts, plus that one read: one
+ * document, at most 1 MiB (Convex's limit, so import-written text past
+ * the field limits too), or one index range, at most 50 holders of about
+ * 35 KB. Index ranges and documents a read takes are far below their
+ * reserves. A title too large to finish leaves its row or version "not
+ * loaded" like any other read. Records of ordinary size never come near
+ * it: the queue reads whole pages and a proposal page all its shown
+ * versions.
  */
 export const READ_RESERVE = {
   bytesRead: 4 * MiB,
@@ -113,34 +120,42 @@ export function proposalReads(
   };
   const byRef = (ref: RecordRef) => ref.id;
 
-  const doc = once(byRef, (ref: RecordRef) => getCanonical(ctx, ref));
-  const revision = once(String, (id: Id<"revisions">) => ctx.db.get(id));
+  const anyDoc = once(String, (id: Id<TableNames>) => ctx.db.get(id));
+  /**
+   * Any document by id, read once: records, their parents, Revisions and
+   * observations alike. Titles (catalogPages.ts TitleReads), visibility and
+   * cover holders read through it too, so each of their reads is budgeted.
+   */
+  const get: RecordGet = async <T extends TableNames>(id: Id<T>) =>
+    (await anyDoc(id)) as Doc<T> | null;
+  const doc = (ref: RecordRef) => get(ref.id);
+  /** An Edition's coverage rows, read once. */
+  const coverage = once(String, (id: Id<"editions">) => coverageOf(ctx, id));
   /** A record's newest Revision, which is also its ops' usual base. */
   const latest = once(byRef, async (ref: RecordRef) => {
     const newest = await latestRevisionOf(ctx, ref);
-    if (newest) revision.cache.set(newest._id, { value: newest });
+    if (newest) anyDoc.cache.set(newest._id, { value: newest });
     return newest;
   });
   /** Whether the record may be shown as it is now (see `publicOnly`). */
   const shown = once(byRef, async (ref: RecordRef) => {
     const record = await doc(ref);
-    return record !== null && (!publicOnly || (await publiclyVisible(ctx, ref.type, record)));
+    return record !== null && (!publicOnly || (await publiclyVisible(ctx, ref.type, record, get)));
   });
   /** The record's title and page (moderation.ts displayInfo), "(missing record)" once it is gone. */
   const display = once(byRef, async (ref: RecordRef) => {
     const record = await doc(ref);
     return record
-      ? await displayInfo(ctx, ref.type, record)
+      ? await displayInfo(ctx, ref.type, record, { get, coverage })
       : { title: "(missing record)", backLink: null };
   });
-  const observation = once(String, (id: Id<"sourceObservations">) => ctx.db.get(id));
   /**
    * An observation as evidence names it: its source and the page its
    * snapshot came from; "(not public)" with no page when `shown` refuses
    * the record it is linked to (publicRecords.ts observationPublic).
    */
   const cited = once(String, async (id: Id<"sourceObservations">) => {
-    const found = await observation(id);
+    const found = await get(id);
     if (!found) return { sourceKey: "(missing)", url: null };
     if (publicOnly && !(found.recordRef && (await shown(found.recordRef)))) {
       return { sourceKey: "(not public)", url: null };
@@ -151,7 +166,7 @@ export function proposalReads(
       url: typeof snapshot?.url === "string" ? snapshot.url : null,
     };
   });
-  return { room, doc, revision, latest, shown, display, observation, cited };
+  return { room, get, doc, latest, shown, display, cited };
 }
 
 export type ProposalReads = ReturnType<typeof proposalReads>;

@@ -20,7 +20,7 @@ import type { CatalogDoc } from "../moderation";
 import { MIN_COVER_BYTES } from "./covers";
 import { fail } from "./errors";
 import { COVER_TYPES, MAX_COVER_UPLOAD_BYTES, type RecordType } from "./moderationFields";
-import { publiclyVisible, publicRecord } from "./publicRecords";
+import { publiclyVisible, publicRecord, type RecordGet } from "./publicRecords";
 import { onDataTeam } from "./roles";
 
 type Change = { field: string; before?: unknown; after?: unknown };
@@ -118,22 +118,36 @@ export async function shown(
  * `storageId`: a Release, Bundle or Variant showing it now, or a Revision
  * naming it, which that record's public History shows. The art a reader
  * may reuse or see beside their Suggestion, besides their own uploads.
- * Reads at most PIN_SCAN holders of each kind.
+ * Reads at most PIN_SCAN holders of each kind. `reads` defaults to the
+ * database; a reader's Suggestion page passes its own (lib/proposalReads.ts),
+ * whose `get` reads Revisions and parents once each within the read budget
+ * and whose `room` it checks before each holder scan.
  */
-export async function publicArt(ctx: QueryCtx, storageId: Id<"_storage">): Promise<boolean> {
+export async function publicArt(
+  ctx: QueryCtx,
+  storageId: Id<"_storage">,
+  reads: { get: RecordGet; room: () => Promise<void> } = {
+    get: (id) => ctx.db.get(id),
+    room: async () => {},
+  },
+): Promise<boolean> {
+  const { get, room } = reads;
   const holders: Array<[RecordType, CatalogDoc]> = [];
+  await room();
   for (const release of await ctx.db
     .query("releases")
     .withIndex("by_cover", (q) => q.eq("coverImage.storageId", storageId))
     .take(PIN_SCAN)) {
     holders.push(["release", release]);
   }
+  await room();
   for (const bundle of await ctx.db
     .query("releaseBundles")
     .withIndex("by_cover", (q) => q.eq("coverImage.storageId", storageId))
     .take(PIN_SCAN)) {
     holders.push(["releaseBundle", bundle]);
   }
+  await room();
   for (const variant of await ctx.db
     .query("releaseVariants")
     .withIndex("by_cover", (q) => q.eq("coverImage.storageId", storageId))
@@ -141,15 +155,16 @@ export async function publicArt(ctx: QueryCtx, storageId: Id<"_storage">): Promi
     holders.push(["releaseVariant", variant]);
   }
   for (const [type, doc] of holders) {
-    if (await publiclyVisible(ctx, type, doc)) return true;
+    if (await publiclyVisible(ctx, type, doc, get)) return true;
   }
+  await room();
   const pins = await ctx.db
     .query("coverRefs")
     .withIndex("by_storage", (q) => q.eq("storageId", storageId))
     .take(PIN_SCAN);
   for (const pin of pins) {
-    const revision = pin.revisionId ? await ctx.db.get(pin.revisionId) : null;
-    if (revision && (await publicRecord(ctx, revision.ref))) return true;
+    const revision = pin.revisionId ? await get(pin.revisionId) : null;
+    if (revision && (await publicRecord(ctx, revision.ref, get))) return true;
   }
   return false;
 }

@@ -4,10 +4,17 @@
 // (proposals.ts, suggestions.ts), the observations they cite as evidence
 // (lib/evidence.ts) and the cover art they reuse (lib/coverRefs.ts).
 
-import type { Doc, Id } from "../_generated/dataModel";
+import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import type { CatalogDoc, CatalogTable, RecordRef } from "../moderation";
 import type { RecordType } from "./moderationFields";
+
+/**
+ * How a check reads a document by id: straight from the database by
+ * default, or through a response's shared cache and read budget
+ * (lib/proposalReads.ts `get`).
+ */
+export type RecordGet = <T extends TableNames>(id: Id<T>) => Promise<Doc<T> | null>;
 
 /**
  * Whether the public catalog shows `doc` as itself: it is active, and so is
@@ -21,11 +28,12 @@ export async function publiclyVisible(
   ctx: QueryCtx,
   type: RecordType,
   doc: CatalogDoc,
+  get: RecordGet = (id) => ctx.db.get(id),
 ): Promise<boolean> {
   if (doc.status !== "active") return false;
   const shown = async (parentType: RecordType, id: Id<CatalogTable>) => {
-    const parent = await ctx.db.get(id);
-    return parent !== null && (await publiclyVisible(ctx, parentType, parent));
+    const parent = await get(id);
+    return parent !== null && (await publiclyVisible(ctx, parentType, parent, get));
   };
   switch (type) {
     case "volume":
@@ -40,10 +48,14 @@ export async function publiclyVisible(
 }
 
 /** Whether `ref` names a record the public catalog shows. */
-export async function publicRecord(ctx: QueryCtx, ref: RecordRef | undefined): Promise<boolean> {
+export async function publicRecord(
+  ctx: QueryCtx,
+  ref: RecordRef | undefined,
+  get: RecordGet = (id) => ctx.db.get(id),
+): Promise<boolean> {
   if (!ref) return false;
-  const doc = await ctx.db.get(ref.id);
-  return doc !== null && (await publiclyVisible(ctx, ref.type, doc));
+  const doc = await get(ref.id);
+  return doc !== null && (await publiclyVisible(ctx, ref.type, doc, get));
 }
 
 /**
