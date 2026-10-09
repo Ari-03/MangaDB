@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { READER_UPLOADS_PER_DAY } from "./coverUploads";
-import { MAX_OPEN_SUGGESTIONS, MAX_SUGGESTION_OPS } from "./proposals";
+import { MAX_OPEN_SUGGESTIONS, MAX_SUGGESTION_OPS, NOT_PUBLIC } from "./proposals";
 import {
   insertCoverage,
   insertEdition,
@@ -65,7 +65,18 @@ async function setup(t: TestT) {
       sourceKey: "kodansha",
       changes: [{ field: "pubDate", after: { year: 2024, month: 3, sort: 20240300 } }],
     });
-    return { seriesId, releaseId };
+    return { seriesId, volumeId, editionId, releaseId };
+  });
+}
+
+/** The id of the User signed in as `subject`. */
+async function userIdOf(t: TestT, subject: string) {
+  return await t.run(async (ctx) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkSubject", (q) => q.eq("clerkSubject", subject))
+      .unique();
+    return user!._id;
   });
 }
 
@@ -451,5 +462,318 @@ describe("suggestions — reading and revising your own", () => {
       { proposalId, state: "inReview", summary: { kind: "report" } },
     ]);
     await asReader.mutation(api.proposals.withdrawProposal, { proposalId });
+  });
+});
+
+describe("suggestions — records the public catalog does not show", () => {
+  it("names a record hidden after the suggestion without its live title, ISBN, art or before-values", async () => {
+    const t = makeT();
+    const { releaseId } = await setup(t);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const oldCover = await upload(t, EDITOR);
+    await t.run((ctx) => ctx.db.patch(releaseId, { coverImage: { storageId: oldCover } }));
+    const newCover = await upload(t, PLAIN);
+    const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [
+        {
+          kind: "update",
+          ref: release(releaseId),
+          changes: [
+            { field: "pubDate", value: { year: 2024, month: 4, day: 9 } },
+            { field: "coverImage", value: { storageId: newCover, attribution: "my copy" } },
+          ],
+        },
+      ],
+      evidence: URL_EVIDENCE,
+      comment: "As my copy prints it.",
+    });
+    await asReader.mutation(api.proposals.submitProposal, { proposalId });
+    // While it is public, the reader reads it as the catalog shows it.
+    expect((await asReader.query(api.suggestions.detail, { proposalId }))?.subject).toMatchObject({
+      title: expect.stringContaining("Alpha"),
+      isbn13: "9781632364210",
+    });
+
+    await t.run((ctx) => ctx.db.patch(releaseId, { status: "hidden" }));
+    const detail = await asReader.query(api.suggestions.detail, { proposalId });
+    expect(detail?.subject).toEqual({
+      recordType: "release",
+      title: NOT_PUBLIC,
+      page: null,
+      isbn13: null,
+      coverUrl: null,
+      mature: false,
+    });
+    expect(detail?.versions[0]?.ops[0]).toMatchObject({
+      recordTitle: NOT_PUBLIC,
+      withheld: true,
+      changes: [
+        { field: "pubDate", after: { year: 2024, month: 4, day: 9 } },
+        { field: "coverImage", after: { storageId: newCover, attribution: "my copy" } },
+      ],
+      base: { comment: null },
+    });
+    // What the reader wrote stays theirs to read; nothing of the record now.
+    const text = JSON.stringify(detail);
+    for (const live of ["Alpha", "9781632364210", oldCover, '"before"', "Imported from"]) {
+      expect(text).not.toContain(live);
+    }
+    expect(text).toContain(newCover);
+    expect(text).toContain("As my copy prints it.");
+    expect(text).toContain(URL_EVIDENCE[0]!.url);
+
+    const [row] = (await asReader.query(api.suggestions.mine, {})) ?? [];
+    expect(row).toMatchObject({ subject: { title: NOT_PUBLIC }, withheld: true });
+    for (const live of ["Alpha", "9781632364210", '"before"']) {
+      expect(JSON.stringify(row)).not.toContain(live);
+    }
+
+    // A merged record is not public as itself either.
+    await t.run((ctx) => ctx.db.patch(releaseId, { status: "merged" }));
+    expect((await asReader.query(api.suggestions.detail, { proposalId }))?.subject).toMatchObject({
+      title: NOT_PUBLIC,
+    });
+    // The Data Team's proposal page still shows the record.
+    const team = await t
+      .withIdentity({ subject: MOD })
+      .query(api.proposals.proposalDetail, { proposalId });
+    expect(team?.versions[0]?.ops[0]).toMatchObject({
+      recordTitle: expect.stringContaining("Alpha"),
+      withheld: false,
+    });
+  });
+
+  it("holds the forms and the reader's suggestions to what the public pages show", async () => {
+    const t = makeT();
+    const { seriesId, volumeId, editionId, releaseId } = await setup(t);
+    const volumeKey = String((await t.run((ctx) => ctx.db.get(volumeId)))!.publicId);
+    const editionKey = String((await t.run((ctx) => ctx.db.get(editionId)))!.publicId);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const asEditor = t.withIdentity({ subject: EDITOR });
+    const synopsisOp = {
+      kind: "update" as const,
+      ref: { type: "volume" as const, id: volumeId },
+      changes: [{ field: "synopsis", value: "A reader's synopsis." }],
+    };
+    const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [synopsisOp],
+      evidence: [],
+      comment: "A better blurb.",
+    });
+
+    // Hiding the Series hides its Volume from the public site, which still
+    // shows the Edition (its page drops the hidden coverage).
+    await t.run((ctx) => ctx.db.patch(seriesId, { status: "hidden" }));
+    expect(await t.query(api.catalogPages.volumePage, { publicId: Number(volumeKey) })).toBeNull();
+    expect(
+      await t.query(api.catalogPages.editionPage, { publicId: Number(editionKey) }),
+    ).not.toBeNull();
+    const volumeRef = { type: "volume" as const, id: volumeId as string };
+    expect(await asReader.query(api.moderation.editForm, { type: "volume", key: volumeKey })).toBe(
+      null,
+    );
+    expect(await asReader.query(api.moderation.sourceBlurbs, { ref: volumeRef })).toBeNull();
+    expect(
+      await asReader.query(api.moderation.editForm, { type: "edition", key: editionKey }),
+    ).not.toBeNull();
+    // The Data Team still edits it.
+    expect(
+      await asEditor.query(api.moderation.editForm, { type: "volume", key: volumeKey }),
+    ).not.toBeNull();
+    expect(await asEditor.query(api.moderation.sourceBlurbs, { ref: volumeRef })).not.toBeNull();
+
+    // The reader's Draft on it names it no more, and goes no further.
+    const detail = await asReader.query(api.suggestions.detail, { proposalId });
+    expect(detail).toMatchObject({ subject: { title: NOT_PUBLIC, page: null }, target: null });
+    expect(JSON.stringify(detail)).not.toContain("Alpha");
+    expect(JSON.stringify(detail)).toContain("A reader's synopsis.");
+    await expect(
+      asReader.mutation(api.proposals.submitProposal, { proposalId }),
+    ).rejects.toMatchObject({ data: { code: "notFound" } });
+    await expect(
+      asReader.mutation(api.proposals.saveDraft, {
+        ops: [synopsisOp],
+        evidence: [],
+        comment: "Again.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "notFound" } });
+
+    // A Release under a hidden Edition is gone from its page, and from the forms.
+    await t.run((ctx) => ctx.db.patch(editionId, { status: "hidden" }));
+    expect(await asReader.query(api.moderation.editForm, { type: "release", key: releaseId })).toBe(
+      null,
+    );
+    expect(
+      await asReader.query(api.moderation.sourceBlurbs, {
+        ref: { type: "release", id: releaseId },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("suggestions — only what the reader wrote as a reader", () => {
+  it("leaves out what the viewer wrote on the Data Team, and offers the form only a whole Draft", async () => {
+    const t = makeT();
+    const { seriesId, releaseId } = await setup(t);
+    const asEditor = t.withIdentity({ subject: EDITOR });
+    const { proposalId: teamDraft } = await asEditor.mutation(api.proposals.saveDraft, {
+      ops: [titleOp(seriesId, "Beta")],
+      evidence: URL_EVIDENCE,
+      comment: "An Editor's change.",
+    });
+    // A Suggestion they wrote before joining the Data Team stays theirs to read.
+    const editorId = await userIdOf(t, EDITOR);
+    const readerDraft = await t.run((ctx) =>
+      ctx.db.insert("proposals", {
+        author: { kind: "user", userId: editorId },
+        state: "withdrawn",
+        currentVersionNo: 0,
+      }),
+    );
+    expect((await asEditor.query(api.suggestions.mine, {}))?.map((row) => row.proposalId)).toEqual([
+      readerDraft,
+    ]);
+    expect(await asEditor.query(api.suggestions.detail, { proposalId: teamDraft })).toBeNull();
+    expect(
+      await asEditor.query(api.suggestions.detail, { proposalId: readerDraft }),
+    ).not.toBeNull();
+
+    // A reader's Draft of two changes is more than the suggest form shows.
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [
+        titleOp(seriesId, "Beta"),
+        {
+          kind: "update",
+          ref: release(releaseId),
+          changes: [{ field: "pubDate", value: { year: 2024, month: 4 } }],
+        },
+      ],
+      evidence: URL_EVIDENCE,
+      comment: "Two fixes.",
+    });
+    expect(await asReader.query(api.suggestions.detail, { proposalId })).toMatchObject({
+      state: "draft",
+      target: null,
+    });
+  });
+});
+
+describe("suggestions — long histories", () => {
+  it("reads the current version and the standing decision however long the history", async () => {
+    const t = makeT();
+    const { seriesId } = await setup(t);
+    const proposalId = await suggestTitle(t, PLAIN, seriesId);
+    const modId = await userIdOf(t, MOD);
+    // Fifty more rounds of review, and a long internal discussion.
+    await t.run(async (ctx) => {
+      const first = await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique();
+      for (let versionNo = 2; versionNo <= 51; versionNo++) {
+        await ctx.db.insert("proposalVersions", {
+          proposalId,
+          versionNo,
+          ops: first!.ops,
+          evidence: first!.evidence,
+          changeComment: `Round ${versionNo}.`,
+        });
+      }
+      await ctx.db.patch(proposalId, { currentVersionNo: 51 });
+      for (let i = 0; i < 120; i++) {
+        await ctx.db.insert("proposalNotes", {
+          proposalId,
+          versionNo: 51,
+          authorId: modId,
+          kind: "comment",
+          text: `Internal ${i}.`,
+        });
+      }
+    });
+    // The Series moves under version 51.
+    await t.run((ctx) =>
+      insertSourceRevision(ctx, {
+        ref: series(seriesId),
+        sourceKey: "kodansha",
+        changes: [{ field: "title", after: "Alpha" }],
+      }),
+    );
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const inReview = await asReader.query(api.suggestions.detail, { proposalId });
+    // The newest 50 (VERSIONS_READ), so the current version among them.
+    expect(inReview?.versions).toHaveLength(50);
+    expect(inReview?.versions[0]?.versionNo).toBe(2);
+    expect(inReview?.versions.at(-1)).toMatchObject({
+      versionNo: 51,
+      current: true,
+      changeComment: "Round 51.",
+      ops: [{ stale: true }],
+    });
+    expect(inReview?.stale).toBe(true);
+
+    const asMod = t.withIdentity({ subject: MOD });
+    await asMod.mutation(api.proposals.claimProposal, { proposalId });
+    await asMod.mutation(api.proposals.rejectProposal, { proposalId, note: "ANN disagrees." });
+    const decision = { kind: "reject", text: "ANN disagrees.", versionNo: 51 };
+    expect(await asReader.query(api.suggestions.detail, { proposalId })).toMatchObject({
+      decision,
+      decisions: [decision],
+    });
+    expect(await asReader.query(api.suggestions.mine, {})).toMatchObject([{ decision }]);
+  });
+
+  it("reads a record's history once, not once per version", async () => {
+    const t = makeT({ transactionLimits: { documentsRead: 2_000 } });
+    const { releaseId } = await setup(t);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [
+        {
+          kind: "update",
+          ref: release(releaseId),
+          changes: [{ field: "pubDate", value: { year: 2024, month: 4 } }],
+        },
+      ],
+      evidence: URL_EVIDENCE,
+      comment: "From the colophon.",
+    });
+    await asReader.mutation(api.proposals.submitProposal, { proposalId });
+    // Forty-nine more versions, and a Release with 200 Revisions.
+    await t.run(async (ctx) => {
+      const first = await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique();
+      for (let versionNo = 2; versionNo <= 50; versionNo++) {
+        await ctx.db.insert("proposalVersions", {
+          proposalId,
+          versionNo,
+          ops: first!.ops,
+          evidence: first!.evidence,
+          changeComment: `Round ${versionNo}.`,
+        });
+      }
+      await ctx.db.patch(proposalId, { currentVersionNo: 50 });
+      const author = { kind: "source" as const, sourceKey: "kodansha" };
+      const sourceProposal = await ctx.db.insert("proposals", {
+        author,
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      for (let seq = 2; seq <= 201; seq++) {
+        await ctx.db.insert("revisions", {
+          ref: release(releaseId),
+          seq,
+          proposalId: sourceProposal,
+          author,
+          changes: [{ field: "pubDate", after: { year: 2024, month: 3, sort: 20240300 } }],
+          comment: `Imported from kodansha (${seq}).`,
+        });
+      }
+    });
+    const detail = await asReader.query(api.suggestions.detail, { proposalId });
+    expect(detail?.versions).toHaveLength(50);
+    expect(detail?.stale).toBe(true);
   });
 });

@@ -5,7 +5,7 @@ import { api } from "../../convex/_generated/api";
 import type { RecordType } from "../../convex/lib/moderationFields";
 import { isRecordType } from "~/lib/editForm";
 import { ProposeForm } from "~/lib/proposeForm";
-import { useViewerQuery } from "~/lib/viewer";
+import { useIsDataTeam, useViewerQuery } from "~/lib/viewer";
 
 /**
  * A reader's Suggestion form: lib/proposeForm.tsx in its "suggest" mode,
@@ -13,8 +13,10 @@ import { useViewerQuery } from "~/lib/viewer";
  * suggests field changes, covers included, to one record; a Moderator
  * reviews each before it changes the page (convex/proposals.ts). Signed
  * out, it asks for a sign-in that comes back here. `?draft=` resumes one
- * of the viewer's own Drafts, such as one sent back for changes. Data Team
- * members may use it too; their usual form is /mod/propose. Never indexed.
+ * of the viewer's own Suggestions while it is a Draft, such as one sent
+ * back for changes. Data Team members may use it too; their usual form is
+ * /mod/propose, and a Draft they wrote on the Data Team is revised from
+ * its proposal page, not here. Never indexed.
  */
 export const Route = createFileRoute("/suggest/$type/$key")({
   validateSearch: (search: Record<string, unknown>): { draft?: string } =>
@@ -96,6 +98,7 @@ function ResumeDraft({
   draftId: string;
 }) {
   const own = useQuery(api.suggestions.detail, { proposalId: draftId });
+  const team = useIsDataTeam();
   if (own === undefined) {
     return (
       <main className="mod-page suggest-page">
@@ -109,8 +112,17 @@ function ResumeDraft({
         <h1>Suggest a change</h1>
         <p className="notice">
           {own === null
-            ? "That draft is not one of yours."
+            ? "That draft is not one of your suggestions."
             : "That suggestion is no longer a draft, so it cannot be revised."}{" "}
+          {own === null && team ? (
+            <>
+              A draft you wrote on the Data Team opens on{" "}
+              <Link to="/mod/proposal/$id" params={{ id: draftId }}>
+                its proposal page
+              </Link>
+              .{" "}
+            </>
+          ) : null}
           <Link to="/suggest/$type/$key" params={{ type, key: editKey }}>
             Start a new suggestion
           </Link>

@@ -638,6 +638,38 @@ export function editKeyOf(doc: CatalogDoc): string {
   return doc._id;
 }
 
+/**
+ * Whether the public catalog shows `doc` as itself: it is active, and so is
+ * what its page or row hangs from, as the page queries judge it
+ * (catalogPages.ts): a Volume's Series (volumePage), a Release's Edition
+ * (editionPage rows), a Variant's Release. A merged record's page redirects
+ * to its survivor, so it is not shown as itself. An Edition stays shown
+ * when the Series it covers are hidden, as editionPage keeps it. What a
+ * reader may draft on and read back is held to this (editForm,
+ * sourceBlurbs, suggestions.ts).
+ */
+export async function publiclyVisible(
+  ctx: QueryCtx,
+  type: RecordType,
+  doc: CatalogDoc,
+): Promise<boolean> {
+  if (doc.status !== "active") return false;
+  const shown = async (parentType: RecordType, id: Id<CatalogTable>) => {
+    const parent = await ctx.db.get(id);
+    return parent !== null && (await publiclyVisible(ctx, parentType, parent));
+  };
+  switch (type) {
+    case "volume":
+      return await shown("series", (doc as Doc<"volumes">).seriesId);
+    case "release":
+      return await shown("edition", (doc as Doc<"releases">).editionId);
+    case "releaseVariant":
+      return await shown("release", (doc as Doc<"releaseVariants">).releaseId);
+    default:
+      return true;
+  }
+}
+
 /** Where the edit form links back to, as `/{entity}/{publicId}/{slug}` input. */
 export type BackLink = {
   entity: "series" | "volume" | "edition" | "bundle";
@@ -721,8 +753,9 @@ export async function displayInfo(
  * clear, moving the base, would leave stale).
  * Editors use it to draft update and clearOverride Proposals; Moderators for
  * direct edits and clears — the mutations re-check the stronger role. Any
- * other signed-in User drafts Suggestions from it: they get an active
- * record only (a Hidden or Merged Record stays the Data Team's), and
+ * other signed-in User drafts Suggestions from it: they get only a record
+ * the public catalog shows (publiclyVisible: a Hidden or Merged Record,
+ * or a Volume of a hidden Series, stays the Data Team's), and
  * `importReviewPending` as null, since pending Proposals are not theirs to
  * see.
  */
@@ -731,7 +764,7 @@ export const editForm = query({
   handler: async (ctx, { type, key }) => {
     const team = onDataTeam(await requireUser(ctx));
     const doc = await resolveEditTarget(ctx, type, key);
-    if (!doc || (!team && doc.status !== "active")) return null;
+    if (!doc || (!team && !(await publiclyVisible(ctx, type, doc)))) return null;
     const ref = { type, id: doc._id } as RecordRef;
     const history = await revisionsOf(ctx, ref);
     const { title, backLink } = await displayInfo(ctx, type, doc);
@@ -880,7 +913,8 @@ function blurbText(raw: unknown): string | null {
  * field, as reconciliation resolves the incumbent). Volumes and Bundles
  * take no source text, so theirs list nothing. The blurbs are the sources'
  * own public text, so any signed-in User drafting a change may read them;
- * outside the Data Team, of an active record only.
+ * outside the Data Team, of a record the public catalog shows only
+ * (publiclyVisible).
  */
 export const sourceBlurbs = query({
   args: {
@@ -898,7 +932,7 @@ export const sourceBlurbs = query({
     const team = onDataTeam(await requireUser(ctx));
     const id = ctx.db.normalizeId(TABLE_FOR_TYPE[ref.type], ref.id);
     const doc = id ? await ctx.db.get(id) : null;
-    if (!id || !doc || (!team && doc.status !== "active")) return null;
+    if (!id || !doc || (!team && !(await publiclyVisible(ctx, ref.type, doc)))) return null;
     const field =
       ref.type === "release" || ref.type === "releaseBundle" ? "description" : "synopsis";
     const canonicalText = blurbText((doc as Record<string, unknown>)[field]);

@@ -242,9 +242,11 @@ role when they wrote it. It goes through the same `saveDraft`,
 these limits (`checkSuggestionOps` and the reader buckets in
 `convex/proposals.ts`):
 
-- Only `update` ops on existing records, over the fields of
-  `convex/lib/moderationFields.ts`, covers included. No creations, no
-  override clears, no placements, nothing from the manage page.
+- Only `update` ops on existing records the public catalog shows, over the
+  fields of `convex/lib/moderationFields.ts`, covers included. No
+  creations, no override clears, no placements, nothing from the manage
+  page. Saving and submitting refuse a record the public does not see as
+  not found.
 - At most 10 ops; 10 submissions an hour (burst 3) and 60 draft saves an
   hour (burst 10); at most 20 open (Draft or In Review) at once.
 - Five cover uploads a day.
@@ -261,19 +263,42 @@ cover, a description and the Release rows, leading to
 sees "Propose a change". Signed-out visitors see none of them. `/suggest`
 is the propose form in the site's own page, without override clears;
 signed out, it asks for a sign-in that returns there. For a reader,
-`moderation.editForm` and `moderation.sourceBlurbs` answer for active
-records only (a Hidden or Merged Record stays the Data Team's), and
-`editForm` says nothing about import Proposals waiting on the record.
+`moderation.editForm` and `moderation.sourceBlurbs` answer only for a
+record the public catalog shows (`publiclyVisible` in
+`convex/moderation.ts`, the rule the page queries in
+`convex/catalogPages.ts` follow): it is active, and so is a Volume's
+Series, a Release's Edition and a Variant's Release. A Hidden or Merged
+Record, or a Volume of a hidden Series, stays the Data Team's. An Edition
+whose Series is hidden stays public, as its page does. `editForm` says
+nothing about import Proposals waiting on the record. Like the public
+pages, these queries send a Mature Series' art and titles to anyone; the
+public pages conceal the art in the browser for viewers who have not
+opted in, and the cover section of the form does not yet.
 
-A reader reads only their own Proposals (`convex/suggestions.ts`): `mine`
-lists the newest 50 on the Suggestions tab of `/me`, and `detail` backs
-`/me/suggestions/{id}`. They show the ops with before and after, the
-evidence, the change comment, when it was submitted and closed, and the
-reason for each rejection or request for changes. The internal discussion,
-the claim and who decided stay on `/mod/proposal`. Another person's
-Proposal reads as not found. A Draft, including one sent back for
-changes, opens in `/suggest/{type}/{key}?draft={id}` with its values and
-saves back into the same Proposal.
+A reader reads only their own Suggestions (`convex/suggestions.ts`):
+Proposals they wrote holding no data-team role, the queue's `suggestion`
+kind, and reports they filed as a reader. `mine` lists the newest 50 on
+the Suggestions tab of `/me`, read from each state's newest 50, and
+`detail` backs `/me/suggestions/{id}`. They show the ops with before and
+after, the evidence, the change comment, when it was submitted and
+closed, and the reason for each rejection or request for changes. A
+Proposal page shows the newest 50 versions and the newest 100 decisions;
+the current version and the standing decision are always among them.
+The internal discussion, the claim and who decided stay on
+`/mod/proposal`, and a Proposal someone wrote on the Data Team is read
+there, not here. Another person's Proposal reads as not found. A record
+the public catalog no longer shows is named "A record that is no longer
+public", with no link, ISBN, art, current or before values: only what the
+reader wrote of it (the new values, citation, evidence and comment).
+
+A Draft, including one sent back for changes, opens in
+`/suggest/{type}/{key}?draft={id}` with its values and saves back into
+the same Proposal, when the form can show all of it: one update of that
+record. A Draft with more (several records, or changes made through the
+API) is not opened there, since saving would drop the rest; its page
+still submits or withdraws it. The resumed form keeps the Draft's
+evidence as saved, apart from the source controls, until the reader
+removes a row, so a fact backed by a source record does not lose it.
 
 Review is unchanged. In the queue a Suggestion's kind is "Suggestion". A
 Moderator approves, rejects or requests changes, and approval applies it

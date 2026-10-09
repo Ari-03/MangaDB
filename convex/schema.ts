@@ -963,7 +963,10 @@ export default defineSchema({
     authorId: v.id("users"),
     kind: v.union(v.literal("comment"), v.literal("requestChanges"), v.literal("reject")),
     text: v.string(),
-  }).index("by_proposal", ["proposalId"]),
+  })
+    .index("by_proposal", ["proposalId"])
+    // A Proposal's decision notes without its discussion (suggestions.ts).
+    .index("by_proposal_and_kind", ["proposalId", "kind"]),
 
   // One immutable public Revision per affected record per approval.
   revisions: defineTable({

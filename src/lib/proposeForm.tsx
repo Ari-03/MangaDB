@@ -15,7 +15,10 @@
 // for clearing, which adds a clearOverride op to the same Proposal. A
 // reader's Suggestion changes fields only (convex/proposals.ts
 // checkSuggestionOps), so /suggest offers no clears, and it can resume one
-// of the reader's own Drafts (`resume`), such as one sent back for changes.
+// of the reader's own Drafts (`resume`), such as one sent back for changes,
+// when it can show the whole Draft: one update of this form's record. It
+// keeps the Draft's evidence as saved, apart from the source controls,
+// until the reader removes a row.
 
 import { Link } from "@tanstack/react-router";
 import { ConvexError } from "convex/values";
@@ -40,6 +43,7 @@ import {
 import { CLEAR_OVERRIDE_HINT, writtenByLabel } from "~/lib/moderation";
 import { Breadcrumbs, RecordPageLink } from "~/lib/pageScaffold";
 import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
+import { EvidenceList } from "~/lib/proposalView";
 
 /** Which page the form is on: the Editor's proposal, or a reader's Suggestion. */
 export type FormMode = "propose" | "suggest";
@@ -49,48 +53,88 @@ export type OwnProposal = NonNullable<FunctionReturnType<typeof api.suggestions.
 
 type EditForm = NonNullable<FunctionReturnType<typeof api.moderation.editForm>>;
 
-/** A Draft being revised: its id, and the form state it resumes. */
+/** A Draft's evidence rows as its page shows them. */
+type SavedEvidence = NonNullable<OwnProposal["draft"]>["evidence"];
+
+/** A Draft being revised: its id, the form state it resumes, and its evidence. */
 type Resumed = {
   proposalId: Id<"proposals">;
   values: FormState;
   dirty: Set<string>;
   comment: string;
-  evidenceUrl: string;
-  evidenceNote: string;
+  evidence: SavedEvidence;
 };
 
 /**
- * The form state `draft`, one of the viewer's own Drafts, resumes on
- * `form`'s record: its update of that record over the live values, its
- * comment, its first evidence link and note. A blurb used from a source
- * comes back as that choice.
+ * The working copy of `draft`, one of the viewer's own Drafts, when this
+ * form can show all of it on `form`'s record: at most one op, an update of
+ * that record. Saving from the form rewrites the whole Draft, so anything
+ * more would be dropped. Null otherwise.
+ */
+function wholeDraftOn(form: EditForm, draft: OwnProposal) {
+  const working = draft.draft;
+  if (draft.state !== "draft" || !working || working.ops.length > 1) return null;
+  const [update] = working.ops;
+  if (
+    update &&
+    (update.kind !== "update" ||
+      update.recordId !== form.ref.id ||
+      update.recordType !== form.ref.type)
+  ) {
+    return null;
+  }
+  return { ...working, update };
+}
+
+/**
+ * The form state `draft` resumes on `form`'s record (wholeDraftOn): its
+ * update over the live values, its comment, and its evidence, kept as
+ * saved. A blurb used from a source comes back as that choice.
  */
 function resumeOn(form: EditForm, draft: OwnProposal): Resumed | null {
-  const working = draft.draft;
-  if (draft.state !== "draft" || !working) return null;
-  const update = working.ops.find(
-    (op) => op.kind === "update" && op.recordId === form.ref.id && op.recordType === form.ref.type,
-  );
+  const working = wholeDraftOn(form, draft);
+  if (!working) return null;
+  const { update } = working;
   const observation = working.evidence.find((row) => row.kind === "observation");
-  const url = working.evidence.find((row) => row.kind === "url");
-  const note = working.evidence.find((row) => row.kind === "note");
-  const { values, dirty } =
-    update?.kind === "update"
-      ? resumedFormState(
-          form.fields,
-          update,
-          observation?.kind === "observation" ? observation.observationId : null,
-          form.attribution,
-        )
-      : { values: initialFormState(form.fields), dirty: new Set<string>() };
+  const { values, dirty } = update
+    ? resumedFormState(
+        form.fields,
+        update,
+        observation?.kind === "observation" ? observation.observationId : null,
+        form.attribution,
+      )
+    : { values: initialFormState(form.fields), dirty: new Set<string>() };
   return {
     proposalId: draft.proposalId,
     values,
     dirty,
     comment: working.comment,
-    evidenceUrl: url?.kind === "url" ? url.url : "",
-    evidenceNote: note?.kind === "note" ? note.text : "",
+    evidence: working.evidence,
   };
+}
+
+type Evidence = DraftContent["evidence"][number];
+
+/** Evidence as saveDraft takes it, from a Draft's rows as its page shows them. */
+function storedEvidence(rows: SavedEvidence): Evidence[] {
+  return rows.map((row) => {
+    if (row.kind === "observation") return { kind: row.kind, observationId: row.observationId };
+    if (row.kind === "note") return { kind: row.kind, text: row.text };
+    return row.note
+      ? { kind: row.kind, url: row.url, note: row.note }
+      : { kind: row.kind, url: row.url };
+  });
+}
+
+/** `rows` with each repeat after the first left out. */
+function distinct(rows: Evidence[]): Evidence[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = JSON.stringify(row);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 const COPY = {
@@ -137,6 +181,20 @@ export function ProposeForm({
       </main>
     );
   }
+  if (resume && !wholeDraftOn(form, resume)) {
+    return (
+      <main className="mod-page suggest-page">
+        <h1>{COPY[mode].title}</h1>
+        <p className="notice">
+          That draft changes more than this form can show, and saving here would drop the rest.{" "}
+          <Link to="/me/suggestions/$id" params={{ id: resume.proposalId }}>
+            Open the draft
+          </Link>{" "}
+          to submit or withdraw it.
+        </p>
+      </main>
+    );
+  }
   return <ProposeFormBody type={type} form={form} mode={mode} resume={resume} />;
 }
 
@@ -164,8 +222,10 @@ function ProposeFormBody({
     resumed ? { id: form.baseRevisionId } : null,
   );
   const [comment, setComment] = useState(resumed?.comment ?? "");
-  const [evidenceUrl, setEvidenceUrl] = useState(resumed?.evidenceUrl ?? "");
-  const [evidenceNote, setEvidenceNote] = useState(resumed?.evidenceNote ?? "");
+  // A resumed Draft's evidence, saved again as it is until a row is removed.
+  const [keptEvidence, setKeptEvidence] = useState(resumed?.evidence ?? []);
+  const [evidenceUrl, setEvidenceUrl] = useState("");
+  const [evidenceNote, setEvidenceNote] = useState("");
   const [uploading, setUploading] = useState(false);
 
   const values = state ?? initialFormState(form.fields);
@@ -201,7 +261,10 @@ function ProposeFormBody({
   // once someone else clears it, its checkbox is gone and so is the op.
   // A Suggestion clears nothing.
   const activeClears = suggest ? [] : form.overrides.filter(({ field }) => clears.has(field));
-  const changed = dirty.size > 0 || activeClears.length > 0;
+  const changed =
+    dirty.size > 0 ||
+    activeClears.length > 0 ||
+    keptEvidence.length !== (resumed?.evidence.length ?? 0);
 
   const buildArgs = (): DraftContent => {
     const changes: Array<{ field: string; value: unknown }> = [];
@@ -213,7 +276,7 @@ function ProposeFormBody({
     }
     const cited = draftCitation(textField ?? null, values, dirty, form.attribution);
     if (!cited.ok) throw new ConvexError({ message: cited.message });
-    const evidence: DraftContent["evidence"] = [...cited.evidence];
+    const evidence = [...storedEvidence(keptEvidence), ...cited.evidence];
     if (evidenceUrl.trim() !== "") {
       evidence.push({ kind: "url", url: evidenceUrl.trim() });
     }
@@ -238,7 +301,7 @@ function ProposeFormBody({
           field,
         })),
       ],
-      evidence,
+      evidence: distinct(evidence),
       comment,
     };
   };
@@ -374,8 +437,20 @@ function ProposeFormBody({
               required
             />
           </label>
+          {keptEvidence.length > 0 ? (
+            <div className="kept-evidence">
+              <p className="k">Evidence saved with this draft</p>
+              <EvidenceList
+                evidence={keptEvidence}
+                onRemove={(index) => {
+                  setKeptEvidence(keptEvidence.filter((_, i) => i !== index));
+                  draft.clearSaved();
+                }}
+              />
+            </div>
+          ) : null}
           <label>
-            Source evidence URL
+            {keptEvidence.length > 0 ? "Another source evidence URL" : "Source evidence URL"}
             <input
               type="url"
               value={evidenceUrl}

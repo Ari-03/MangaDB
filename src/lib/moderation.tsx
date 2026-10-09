@@ -72,14 +72,18 @@ function CoverThumb({ value, art, label }: { value: unknown; art: CoverArt; labe
 /**
  * One field's change in History or on a proposal: a cover as before and
  * after jackets with its source under the new one, a Human Override list
- * as what was set or cleared, anything else as text.
+ * as what was set or cleared, anything else as text. `afterOnly` shows
+ * the new value alone, for a record whose current state is not shown
+ * (a reader's Suggestion on a record no longer public).
  */
 export function FieldChangeItem({
   change,
   art,
+  afterOnly = false,
 }: {
   change: { field: string; before?: unknown; after?: unknown };
   art: CoverArt;
+  afterOnly?: boolean;
 }) {
   if (change.field === "overriddenFields") {
     return <li>{overrideChangeText(change.before, change.after)}</li>;
@@ -89,7 +93,11 @@ export function FieldChangeItem({
     return (
       <li className="cover-diff">
         <code>coverImage</code>:
-        <CoverThumb value={change.before} art={art} label="Cover before" />→
+        {afterOnly ? null : (
+          <>
+            <CoverThumb value={change.before} art={art} label="Cover before" />→
+          </>
+        )}
         <CoverThumb value={change.after} art={art} label="Cover after" />
         {typeof source === "string" ? <span>Source: {source}</span> : null}
       </li>
@@ -97,7 +105,12 @@ export function FieldChangeItem({
   }
   return (
     <li>
-      <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
+      <code>{change.field}</code>:{" "}
+      {afterOnly ? null : (
+        <>
+          <del>{renderFieldValue(change.before)}</del> →{" "}
+        </>
+      )}
       <ins>{renderFieldValue(change.after)}</ins>
     </li>
   );

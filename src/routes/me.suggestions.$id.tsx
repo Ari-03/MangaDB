@@ -13,8 +13,8 @@ import { day, decisionText } from "~/lib/suggestions";
 /**
  * One of the viewer's own Suggestions (convex/suggestions.ts detail): its
  * state, the record it changes, the reviewer's reason when one stands,
- * the Draft and every submitted version with before and after, and the
- * author's actions. A Draft, including one sent back for changes, can be
+ * the Draft and its newest submitted versions with before and after (only
+ * the new values of a record no longer public), and the author's actions. A Draft, including one sent back for changes, can be
  * edited on /suggest, submitted, or withdrawn; one In Review withdrawn, or
  * rebased when a record it changes has moved. Under the /me gate; another
  * person's Proposal reads as not found. Never indexed (the /me layout).

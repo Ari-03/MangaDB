@@ -25,6 +25,7 @@ import {
   getCanonical,
   insertRevision,
   latestRevisionOf,
+  publiclyVisible,
   requireOverridden,
   revisionsOf,
   validateChanges,
@@ -124,6 +125,22 @@ function checkSuggestionOps(ops: ReadonlyArray<{ kind: string }>) {
       "forbidden",
       "A suggestion changes fields of existing records. Creating records or clearing an override needs the Data Team.",
     );
+  }
+}
+
+/**
+ * A reader suggests changes only to records the public catalog shows
+ * (moderation.ts publiclyVisible): a Volume of a hidden Series reads as
+ * not found, as its page does. Saving and submitting check it; one hidden
+ * while the Suggestion is In Review is left to the Moderator deciding it.
+ */
+async function checkSuggestionTargets(ctx: QueryCtx, ops: ReadonlyArray<OpInput | StoredOp>) {
+  for (const op of ops) {
+    if (op.kind !== "update") continue;
+    const doc = await getCanonical(ctx, op.ref);
+    if (!doc || !(await publiclyVisible(ctx, op.ref.type, doc))) {
+      fail("notFound", "That record is not in the public catalog.");
+    }
   }
 }
 
@@ -502,7 +519,10 @@ export const saveDraft = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     const team = onDataTeam(user);
-    if (!team) checkSuggestionOps(args.ops);
+    if (!team) {
+      checkSuggestionOps(args.ops);
+      await checkSuggestionTargets(ctx, args.ops);
+    }
     await rateLimiter.limit(ctx, team ? "proposalDraftSave" : "suggestionDraftSave", {
       key: user._id,
       throws: true,
@@ -574,7 +594,10 @@ export const submitProposal = mutation({
     if (!draft || draft.ops.length === 0) {
       fail("noOps", "This draft has no operations to submit.");
     }
-    if (!team) checkSuggestionOps(draft.ops);
+    if (!team) {
+      checkSuggestionOps(draft.ops);
+      await checkSuggestionTargets(ctx, draft.ops);
+    }
     if (draft.comment === "") {
       fail("commentRequired", "Every submission needs a change comment.");
     }
@@ -1216,6 +1239,40 @@ async function describeCreate(
   }
 }
 
+/** How a reader's own Proposal names a record the public catalog no longer shows. */
+export const NOT_PUBLIC = "A record that is no longer public";
+
+/**
+ * What op rendering reads of each record an op names, read once per call
+ * however many versions name it (`recordFacts`): the record, its newest
+ * Revision, its title, and whether its live state may be shown. With
+ * `publicOnly` (a reader's own Proposals, suggestions.ts) a record the
+ * public catalog does not show (moderation.ts publiclyVisible) is titled
+ * NOT_PUBLIC and `shown` is false, so nothing of it now is told.
+ */
+export function recordFacts(ctx: QueryCtx | MutationCtx, publicOnly = false) {
+  const read = async (ref: RecordRef) => {
+    const doc = await getCanonical(ctx, ref);
+    const shown = doc !== null && (!publicOnly || (await publiclyVisible(ctx, ref.type, doc)));
+    const title = !doc
+      ? "(missing record)"
+      : shown
+        ? (await displayInfo(ctx, ref.type, doc)).title
+        : NOT_PUBLIC;
+    return { doc, shown, title, latest: await latestRevisionOf(ctx, ref) };
+  };
+  const cache = new Map<string, Awaited<ReturnType<typeof read>>>();
+  return async (ref: RecordRef) => {
+    const known = cache.get(ref.id);
+    if (known) return known;
+    const facts = await read(ref);
+    cache.set(ref.id, facts);
+    return facts;
+  };
+}
+
+type RecordFacts = ReturnType<typeof recordFacts>;
+
 /**
  * Render an op set for review: grouped before/after per record, the base
  * Revision each update anchors on, per-record staleness, and structural
@@ -1223,11 +1280,25 @@ async function describeCreate(
  * clear's kept value compare against the live record, so they are reported
  * only for `live` ops (the working copy or current version of a Proposal
  * still in Draft or review); a decided Proposal's approval itself moved the
- * base, and the live value is not what it reviewed.
+ * base, and the live value is not what it reviewed. `facts` is shared
+ * across one page's calls; from `recordFacts(ctx, true)`, a record it does
+ * not show keeps only what the author wrote: its changes' after-values and
+ * citation, with no title, before-values or base comment (`withheld`).
  */
-export async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boolean) {
+export async function renderOps(
+  ctx: QueryCtx | MutationCtx,
+  ops: StoredOp[],
+  live: boolean,
+  facts: RecordFacts = recordFacts(ctx),
+) {
   const rendered = [];
   const tempLabels = new Map<string, string>();
+  const baseOf = async (op: { baseRevisionId?: Id<"revisions"> }, shown: boolean) => {
+    const base = op.baseRevisionId ? await ctx.db.get(op.baseRevisionId) : null;
+    return base
+      ? { seq: base.seq, comment: shown ? base.comment : null }
+      : { seq: 0, comment: null };
+  };
   for (const op of ops) {
     if (op.kind === "create") {
       rendered.push({
@@ -1239,19 +1310,18 @@ export async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], li
       });
     } else if (op.kind === "update") {
       const ref = op.ref;
-      const doc = await getCanonical(ctx, ref);
-      const title = doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)";
-      const latest = (await revisionsOf(ctx, ref))[0];
-      const base = op.baseRevisionId ? await ctx.db.get(op.baseRevisionId) : null;
+      const { doc, shown, title, latest } = await facts(ref);
+      const withheld = doc !== null && !shown;
       rendered.push({
         kind: "update" as const,
         recordType: ref.type,
         recordId: ref.id as string,
         recordTitle: title,
-        changes: op.changes,
+        withheld,
+        changes: withheld ? op.changes.map(({ field, after }) => ({ field, after })) : op.changes,
         // The source the op states for the record's text; undefined says nothing.
         citation: op.citation,
-        base: base ? { seq: base.seq, comment: base.comment } : { seq: 0, comment: null },
+        base: await baseOf(op, !withheld),
         stale:
           live &&
           (!doc ||
@@ -1261,40 +1331,40 @@ export async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], li
       });
     } else if (op.kind === "clearOverride") {
       const ref = op.ref;
-      const doc = await getCanonical(ctx, ref);
-      const history = await revisionsOf(ctx, ref);
-      const base = op.baseRevisionId ? await ctx.db.get(op.baseRevisionId) : null;
+      const { doc, shown, title, latest } = await facts(ref);
+      // Who wrote the kept value is read from the whole history, only while it is shown.
+      const keptShown = live && (doc === null || shown);
       rendered.push({
         kind: "clearOverride" as const,
         recordType: ref.type,
         recordId: ref.id as string,
-        recordTitle: doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)",
+        recordTitle: title,
         field: op.field,
         fieldLabel: fieldDescriptor(ref.type, op.field)?.label ?? op.field,
-        kept: live
+        kept: keptShown
           ? {
               value: doc ? (doc as Record<string, unknown>)[op.field] : undefined,
-              writtenBy: writtenBy(history, op.field),
+              writtenBy: writtenBy(await revisionsOf(ctx, ref), op.field),
             }
           : null,
-        base: base ? { seq: base.seq, comment: base.comment } : { seq: 0, comment: null },
+        base: await baseOf(op, doc === null || shown),
         stale:
           live &&
           (!doc ||
             doc.status !== "active" ||
             Boolean(doc.locked) ||
             !(doc.overriddenFields ?? []).includes(op.field) ||
-            (history[0]?._id ?? null) !== (op.baseRevisionId ?? null)),
+            (latest?._id ?? null) !== (op.baseRevisionId ?? null)),
       });
     } else if (op.kind === "merge") {
       rendered.push({
         kind: "merge" as const,
-        summary: `Merge ${await refLabel(ctx, op.merged)} into ${await refLabel(ctx, op.survivor)}`,
+        summary: `Merge ${await refLabel(facts, op.merged)} into ${await refLabel(facts, op.survivor)}`,
       });
     } else {
       rendered.push({
         kind: op.kind,
-        summary: `${OP_VERBS[op.kind]} ${await refLabel(ctx, op.ref)}`,
+        summary: `${OP_VERBS[op.kind]} ${await refLabel(facts, op.ref)}`,
       });
     }
   }
@@ -1311,10 +1381,8 @@ const OP_VERBS: Record<SingleRecordOp, string> = {
 };
 
 /** `type "title"` label for a sensitive-op summary line. */
-async function refLabel(ctx: QueryCtx | MutationCtx, ref: RecordRef): Promise<string> {
-  const doc = await getCanonical(ctx, ref);
-  const title = doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)";
-  return `${ref.type} "${title}"`;
+async function refLabel(facts: RecordFacts, ref: RecordRef): Promise<string> {
+  return `${ref.type} "${(await facts(ref)).title}"`;
 }
 
 /** Evidence rows with observation references resolved for display. */
@@ -1479,31 +1547,34 @@ async function queueSubjectOf(ctx: QueryCtx, version: Doc<"proposalVersions">) {
   return subject;
 }
 
+/** A subject named by its type and a label alone: nothing of the record is shown. */
+function bareSubject(recordType: RecordType, title: string) {
+  return { recordType, title, page: null, isbn13: null, coverUrl: null, mature: false };
+}
+
 /**
  * The record a queue row names: the first record an op refers to (a
  * merge's survivor), else the Series a creation adds to (with the new
  * Release's ISBN for its jacket), else the Series a report was filed from.
  * "(missing record)" when that record is gone; null when nothing names one.
+ * With `publicOnly` (a reader's own Proposals, suggestions.ts) a record the
+ * public catalog does not show (moderation.ts publiclyVisible) is named
+ * NOT_PUBLIC, with no page, ISBN or art.
  */
 export async function recordSubjectOf(
   ctx: QueryCtx,
   version: Pick<Doc<"proposalVersions">, "ops" | "evidence">,
+  publicOnly = false,
 ) {
+  const hidden = async (type: RecordType, doc: CatalogDoc) =>
+    publicOnly && !(await publiclyVisible(ctx, type, doc));
   const { ops } = version;
   const refOp = ops.find((op) => op.kind === "merge" || "ref" in op);
   const ref = refOp?.kind === "merge" ? refOp.survivor : refOp && "ref" in refOp ? refOp.ref : null;
   if (ref) {
     const doc = await getCanonical(ctx, ref);
-    if (!doc) {
-      return {
-        recordType: ref.type,
-        title: "(missing record)",
-        page: null,
-        isbn13: null,
-        coverUrl: null,
-        mature: false,
-      };
-    }
+    if (!doc) return bareSubject(ref.type, "(missing record)");
+    if (await hidden(ref.type, doc)) return bareSubject(ref.type, NOT_PUBLIC);
     const { title, backLink } = await displayInfo(ctx, ref.type, doc);
     return {
       recordType: ref.type,
@@ -1524,6 +1595,7 @@ export async function recordSubjectOf(
       const raw = field(op, "seriesId");
       const id = typeof raw === "string" ? ctx.db.normalizeId("series", raw) : null;
       const series = id ? await ctx.db.get(id) : null;
+      if (series && (await hidden("series", series))) return bareSubject("series", NOT_PUBLIC);
       if (series) return seriesSubject(series, isbn13);
     }
     const newSeries = creates.find((op) => op.table === "series");
@@ -1545,6 +1617,7 @@ export async function recordSubjectOf(
     .query("series")
     .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
     .unique();
+  if (series && (await hidden("series", series))) return bareSubject("series", NOT_PUBLIC);
   return series ? seriesSubject(series) : null;
 }
 

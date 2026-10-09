@@ -56,7 +56,12 @@ export function OpsList({ ops, art }: { ops: RenderedOps; art: CoverArt }) {
               </p>
               <ul className="revision-changes">
                 {op.changes.map((change) => (
-                  <FieldChangeItem key={change.field} change={change} art={art} />
+                  <FieldChangeItem
+                    key={change.field}
+                    change={change}
+                    art={art}
+                    afterOnly={op.withheld}
+                  />
                 ))}
               </ul>
               {op.citation !== undefined ? (
@@ -102,8 +107,18 @@ export function OpsList({ ops, art }: { ops: RenderedOps; art: CoverArt }) {
   );
 }
 
-/** The evidence rows beside a version's ops: links, source records and notes. */
-export function EvidenceList({ evidence }: { evidence: RenderedEvidence }) {
+/**
+ * The evidence rows beside a version's ops: links, source records and
+ * notes. With `onRemove`, each row has a Remove button that passes its
+ * index (the suggest form's evidence kept from a Draft).
+ */
+export function EvidenceList({
+  evidence,
+  onRemove,
+}: {
+  evidence: RenderedEvidence;
+  onRemove?: (index: number) => void;
+}) {
   if (evidence.length === 0) {
     return <p className="section-hint">No evidence attached.</p>;
   }
@@ -138,6 +153,14 @@ export function EvidenceList({ evidence }: { evidence: RenderedEvidence }) {
           ) : (
             <>Note: {row.text}</>
           )}
+          {onRemove ? (
+            <>
+              {" "}
+              <button type="button" className="btn btn-sm" onClick={() => onRemove(i)}>
+                Remove
+              </button>
+            </>
+          ) : null}
         </li>
       ))}
     </ul>

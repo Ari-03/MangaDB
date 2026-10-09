@@ -2,7 +2,8 @@
 // lib/proposeForm.tsx in "suggest" mode) driven as plain functions through
 // the fake React in test.react.ts: a signed-out visitor is asked to sign in
 // and come back, a reader is offered no override clears, and a Draft sent
-// back for changes resumes with its values and saves into the same Proposal.
+// back for changes resumes with its values and evidence and saves into the
+// same Proposal, while a Draft the form cannot show whole is not resumed.
 
 import { getFunctionName } from "convex/server";
 import type { ReactNode } from "react";
@@ -15,6 +16,7 @@ const fakes = vi.hoisted(() => ({
   form: null as Record<string, unknown> | null,
   own: null as Record<string, unknown> | null,
   search: {} as { draft?: string },
+  team: false,
   saveDraft: vi.fn(),
 }));
 
@@ -35,7 +37,7 @@ vi.mock("convex/react", () => ({
 }));
 vi.mock("~/lib/viewer", () => ({
   useViewerQuery: () => fakes.viewer,
-  useIsDataTeam: () => false,
+  useIsDataTeam: () => fakes.team,
   useIsModerator: () => false,
 }));
 
@@ -74,6 +76,7 @@ beforeEach(() => {
   fakes.form = liveForm;
   fakes.own = null;
   fakes.search = {};
+  fakes.team = false;
   fakes.saveDraft.mockReset().mockResolvedValue({ proposalId: "p1" });
 });
 
@@ -134,9 +137,11 @@ describe("the suggest page", () => {
     };
     const tree = mount(page);
     expect(textInputs(tree)[1]!.props.value).toBe("https://old.example");
+    // The Draft's evidence is listed as kept; the link input adds another.
+    expect(shows(tree, "https://publisher.example/about")).toBe(true);
     expect(
       tree.find((host) => host.type === "input" && host.props.type === "url")!.props.value,
-    ).toBe("https://publisher.example/about");
+    ).toBe("");
     expect(shows(tree, "You are revising a saved draft.")).toBe(true);
 
     (textInputs(tree)[1]!.props.onChange as (event: unknown) => void)({
@@ -152,6 +157,90 @@ describe("the suggest page", () => {
         { kind: "update", changes: [{ field: "website", value: "https://publisher.example" }] },
       ],
     });
+  });
+
+  it("keeps a Draft's source evidence when it saves, until the reader removes it", async () => {
+    fakes.search = { draft: "p9" };
+    // Evidence a source blurb left, which no input of the form holds.
+    fakes.own = {
+      proposalId: "p9",
+      state: "draft",
+      coverArt: [],
+      draft: {
+        comment: "From the publisher's page.",
+        evidence: [
+          { kind: "observation", observationId: "obs1", sourceKey: "kodansha", url: null },
+          { kind: "note", text: "Seen on the shelf." },
+        ],
+        ops: [
+          {
+            kind: "update",
+            recordType: "publisher",
+            recordId: "pub-a",
+            changes: [{ field: "website", before: undefined, after: "https://new.example" }],
+          },
+        ],
+      },
+    };
+    const tree = mount(page);
+    expect(shows(tree, "Source observation: kodansha")).toBe(true);
+    press(tree, "Save draft").click();
+    await vi.waitFor(() => expect(fakes.saveDraft).toHaveBeenCalledTimes(1));
+    expect(fakes.saveDraft.mock.calls[0]![0]).toMatchObject({
+      proposalId: "p9",
+      evidence: [
+        { kind: "observation", observationId: "obs1" },
+        { kind: "note", text: "Seen on the shelf." },
+      ],
+    });
+
+    // Removing a row is the reader's choice, and saves without it.
+    press(mount(page), "Remove").click();
+    const after = mount(page);
+    expect(shows(after, "Source observation: kodansha")).toBe(false);
+    press(after, "Save draft").click();
+    await vi.waitFor(() => expect(fakes.saveDraft).toHaveBeenCalledTimes(2));
+    expect(fakes.saveDraft.mock.calls[1]![0].evidence).toEqual([
+      { kind: "note", text: "Seen on the shelf." },
+    ]);
+  });
+
+  it("will not resume a Draft it cannot show whole, so saving drops nothing", () => {
+    fakes.search = { draft: "p9" };
+    const update = (recordId: string) => ({
+      kind: "update",
+      recordType: "publisher",
+      recordId,
+      changes: [{ field: "website", before: undefined, after: "https://new.example" }],
+    });
+    const own = (ops: unknown[]) => ({
+      proposalId: "p9",
+      state: "draft",
+      coverArt: [],
+      draft: { comment: "Two fixes.", evidence: [], ops },
+    });
+    for (const ops of [[update("pub-a"), update("pub-b")], [update("pub-b")]]) {
+      fakes.own = own(ops);
+      resetHarness();
+      const tree = mount(page);
+      expect(shows(tree, "That draft changes more than this form can show")).toBe(true);
+      expect(tree.some((host) => host.type === "form")).toBe(false);
+      expect(
+        tree.find((host) => host.type === "a" && text(host.props.children) === "Open the draft")
+          ?.props.params,
+      ).toEqual({ id: "p9" });
+    }
+  });
+
+  it("sends a Data Team member's own Draft to its proposal page", () => {
+    fakes.search = { draft: "p9" };
+    fakes.team = true;
+    const tree = mount(page);
+    expect(shows(tree, "not one of your suggestions")).toBe(true);
+    const link = tree.find(
+      (host) => host.type === "a" && text(host.props.children) === "its proposal page",
+    );
+    expect(link?.props).toMatchObject({ to: "/mod/proposal/$id", params: { id: "p9" } });
   });
 
   it("will not resume a suggestion that is no longer a Draft", () => {

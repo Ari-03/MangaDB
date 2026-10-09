@@ -43,7 +43,7 @@ export function LibrarySuggestions() {
               </Link>
               <ProposalStateChip state={row.state} />
             </div>
-            <ChangeSummary summary={row.summary} />
+            <ChangeSummary summary={row.summary} afterOnly={row.withheld} />
             {row.decision ? <p className="work-reason">{decisionText(row.decision)}</p> : null}
             <p className="work-meta">
               {row.subject ? <span>{recordLabel(row.subject.recordType)}</span> : null}
