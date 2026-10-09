@@ -257,7 +257,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
               onUploading={setUploading}
               overridden={form.overriddenFields.includes(coverField.name)}
               disabled={busy}
-              proposing={false}
+              formRoute="/mod/edit/$type/$key"
             />
           ) : null}
           {plainFields.map((field) => (

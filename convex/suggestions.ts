@@ -120,13 +120,15 @@ export const mine = query({
  * (before and after per record) and evidence, the Draft working copy, the
  * reviewers' decisions, and, while it is a Draft, the record the suggest
  * form revises it on (`target`). Null when it is not the viewer's, so
- * another person's Proposal reads the same as one that does not exist.
+ * another person's Proposal reads the same as one that does not exist, and
+ * for an id that names no Proposal (the id comes from a page's address).
  */
 export const detail = query({
-  args: { proposalId: v.id("proposals") },
-  handler: async (ctx, { proposalId }) => {
+  args: { proposalId: v.string() },
+  handler: async (ctx, args) => {
     const user = await viewerOrNull(ctx);
-    if (!user) return null;
+    const proposalId = ctx.db.normalizeId("proposals", args.proposalId);
+    if (!user || !proposalId) return null;
     const proposal = await ctx.db.get(proposalId);
     if (!proposal || proposal.author.kind !== "user" || proposal.author.userId !== user._id) {
       return null;

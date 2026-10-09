@@ -204,6 +204,7 @@ describe("an ordinary single book", () => {
       expect(draft!.draft!.evidence).toEqual([
         {
           kind: "observation",
+          observationId: expect.any(String),
           sourceKey: "openlibrary",
           url: "https://openlibrary.org/books/OL1M",
         },

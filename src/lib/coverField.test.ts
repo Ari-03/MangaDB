@@ -48,7 +48,7 @@ function form() {
     },
     overridden: false,
     disabled: false,
-    proposing: false,
+    formRoute: "/mod/edit/$type/$key",
   };
   const render = () => mount(() => CoverField({ ...props, value: state.value }));
   return { state, render };

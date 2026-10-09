@@ -259,7 +259,12 @@ describe("citations through Editor proposals", () => {
       .query(api.proposals.proposalDetail, { proposalId });
     expect(detail?.versions[0]?.ops[0]).toMatchObject({ kind: "update", citation: KODANSHA });
     expect(detail?.versions[0]?.evidence).toEqual([
-      { kind: "observation", sourceKey: "kodansha", url: KODANSHA.url },
+      {
+        kind: "observation",
+        observationId: expect.any(String),
+        sourceKey: "kodansha",
+        url: KODANSHA.url,
+      },
     ]);
 
     await t.withIdentity({ subject: MOD }).mutation(api.proposals.approveProposal, { proposalId });

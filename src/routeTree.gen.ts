@@ -40,10 +40,12 @@ import { Route as BundlePublicIdIndexRouteImport } from './routes/bundle.$public
 import { Route as BundlePublicIdSlugRouteImport } from './routes/bundle.$publicId.$slug'
 import { Route as EditionPublicIdIndexRouteImport } from './routes/edition.$publicId.index'
 import { Route as EditionPublicIdSlugRouteImport } from './routes/edition.$publicId.$slug'
+import { Route as MeSuggestionsIdRouteImport } from './routes/me.suggestions.$id'
 import { Route as ModProposalIdRouteImport } from './routes/mod.proposal.$id'
 import { Route as ModProposeNewSeriesPublicIdRouteImport } from './routes/mod.propose-new.$seriesPublicId'
 import { Route as SeriesPublicIdIndexRouteImport } from './routes/series.$publicId.index'
 import { Route as SeriesPublicIdSlugRouteImport } from './routes/series.$publicId.$slug'
+import { Route as SuggestTypeKeyRouteImport } from './routes/suggest.$type.$key'
 import { Route as VolumePublicIdIndexRouteImport } from './routes/volume.$publicId.index'
 import { Route as VolumePublicIdSlugRouteImport } from './routes/volume.$publicId.$slug'
 import { Route as ModEditTypeKeyRouteImport } from './routes/mod.edit.$type.$key'
@@ -205,6 +207,11 @@ const EditionPublicIdSlugRoute = EditionPublicIdSlugRouteImport.update({
   path: '/edition/$publicId/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MeSuggestionsIdRoute = MeSuggestionsIdRouteImport.update({
+  id: '/suggestions/$id',
+  path: '/suggestions/$id',
+  getParentRoute: () => MeRoute,
+} as any)
 const ModProposalIdRoute = ModProposalIdRouteImport.update({
   id: '/proposal/$id',
   path: '/proposal/$id',
@@ -224,6 +231,11 @@ const SeriesPublicIdIndexRoute = SeriesPublicIdIndexRouteImport.update({
 const SeriesPublicIdSlugRoute = SeriesPublicIdSlugRouteImport.update({
   id: '/series/$publicId/$slug',
   path: '/series/$publicId/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SuggestTypeKeyRoute = SuggestTypeKeyRouteImport.update({
+  id: '/suggest/$type/$key',
+  path: '/suggest/$type/$key',
   getParentRoute: () => rootRouteImport,
 } as any)
 const VolumePublicIdIndexRoute = VolumePublicIdIndexRouteImport.update({
@@ -281,9 +293,11 @@ export interface FileRoutesByFullPath {
   '/author/$publicId/$slug': typeof AuthorPublicIdSlugRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
+  '/me/suggestions/$id': typeof MeSuggestionsIdRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
   '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/suggest/$type/$key': typeof SuggestTypeKeyRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
   '/author/$publicId/': typeof AuthorPublicIdIndexRoute
   '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
@@ -322,9 +336,11 @@ export interface FileRoutesByTo {
   '/author/$publicId/$slug': typeof AuthorPublicIdSlugRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
+  '/me/suggestions/$id': typeof MeSuggestionsIdRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
   '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/suggest/$type/$key': typeof SuggestTypeKeyRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
   '/author/$publicId': typeof AuthorPublicIdIndexRoute
   '/bundle/$publicId': typeof BundlePublicIdIndexRoute
@@ -365,9 +381,11 @@ export interface FileRoutesById {
   '/author/$publicId/$slug': typeof AuthorPublicIdSlugRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
+  '/me/suggestions/$id': typeof MeSuggestionsIdRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
   '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/suggest/$type/$key': typeof SuggestTypeKeyRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
   '/author/$publicId/': typeof AuthorPublicIdIndexRoute
   '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
@@ -409,9 +427,11 @@ export interface FileRouteTypes {
     | '/author/$publicId/$slug'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
+    | '/me/suggestions/$id'
     | '/mod/proposal/$id'
     | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
+    | '/suggest/$type/$key'
     | '/volume/$publicId/$slug'
     | '/author/$publicId/'
     | '/bundle/$publicId/'
@@ -450,9 +470,11 @@ export interface FileRouteTypes {
     | '/author/$publicId/$slug'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
+    | '/me/suggestions/$id'
     | '/mod/proposal/$id'
     | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
+    | '/suggest/$type/$key'
     | '/volume/$publicId/$slug'
     | '/author/$publicId'
     | '/bundle/$publicId'
@@ -492,9 +514,11 @@ export interface FileRouteTypes {
     | '/author/$publicId/$slug'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
+    | '/me/suggestions/$id'
     | '/mod/proposal/$id'
     | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
+    | '/suggest/$type/$key'
     | '/volume/$publicId/$slug'
     | '/author/$publicId/'
     | '/bundle/$publicId/'
@@ -528,6 +552,7 @@ export interface RootRouteChildren {
   BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
   EditionPublicIdSlugRoute: typeof EditionPublicIdSlugRoute
   SeriesPublicIdSlugRoute: typeof SeriesPublicIdSlugRoute
+  SuggestTypeKeyRoute: typeof SuggestTypeKeyRoute
   VolumePublicIdSlugRoute: typeof VolumePublicIdSlugRoute
   AuthorPublicIdIndexRoute: typeof AuthorPublicIdIndexRoute
   BundlePublicIdIndexRoute: typeof BundlePublicIdIndexRoute
@@ -755,6 +780,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EditionPublicIdSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/me/suggestions/$id': {
+      id: '/me/suggestions/$id'
+      path: '/suggestions/$id'
+      fullPath: '/me/suggestions/$id'
+      preLoaderRoute: typeof MeSuggestionsIdRouteImport
+      parentRoute: typeof MeRoute
+    }
     '/mod/proposal/$id': {
       id: '/mod/proposal/$id'
       path: '/proposal/$id'
@@ -781,6 +813,13 @@ declare module '@tanstack/react-router' {
       path: '/series/$publicId/$slug'
       fullPath: '/series/$publicId/$slug'
       preLoaderRoute: typeof SeriesPublicIdSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/suggest/$type/$key': {
+      id: '/suggest/$type/$key'
+      path: '/suggest/$type/$key'
+      fullPath: '/suggest/$type/$key'
+      preLoaderRoute: typeof SuggestTypeKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/volume/$publicId/': {
@@ -823,10 +862,12 @@ declare module '@tanstack/react-router' {
 
 interface MeRouteChildren {
   MeIndexRoute: typeof MeIndexRoute
+  MeSuggestionsIdRoute: typeof MeSuggestionsIdRoute
 }
 
 const MeRouteChildren: MeRouteChildren = {
   MeIndexRoute: MeIndexRoute,
+  MeSuggestionsIdRoute: MeSuggestionsIdRoute,
 }
 
 const MeRouteWithChildren = MeRoute._addFileChildren(MeRouteChildren)
@@ -885,6 +926,7 @@ const rootRouteChildren: RootRouteChildren = {
   BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,
   EditionPublicIdSlugRoute: EditionPublicIdSlugRoute,
   SeriesPublicIdSlugRoute: SeriesPublicIdSlugRoute,
+  SuggestTypeKeyRoute: SuggestTypeKeyRoute,
   VolumePublicIdSlugRoute: VolumePublicIdSlugRoute,
   AuthorPublicIdIndexRoute: AuthorPublicIdIndexRoute,
   BundlePublicIdIndexRoute: BundlePublicIdIndexRoute,
