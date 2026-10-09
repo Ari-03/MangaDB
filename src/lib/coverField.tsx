@@ -27,6 +27,7 @@ import {
 import { clothColor } from "~/lib/cover";
 import { decodeCover, encodeCover } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
+import { useArtConcealed } from "~/lib/mature";
 
 type EditForm = NonNullable<FunctionReturnType<typeof api.moderation.editForm>>;
 export type CoverContext = NonNullable<EditForm["cover"]>;
@@ -116,20 +117,37 @@ type Upload = {
   | { status: "done"; storageId: string }
 );
 
-/** Art in the shelf's 2:3 frame, or the cloth placeholder with a line of words. */
-function ArtFrame({ url, alt, empty }: { url: string | null; alt: string; empty: string }) {
+/**
+ * Art in the shelf's 2:3 frame, or the cloth placeholder with a line of
+ * words. Inside a ConcealArt boundary (lib/mature.tsx) for a viewer who has
+ * not opted in to 18+ art, catalog art shows as cloth too; `own` art, the
+ * viewer's own upload, always shows.
+ */
+function ArtFrame({
+  url,
+  alt,
+  empty,
+  own = false,
+}: {
+  url: string | null;
+  alt: string;
+  empty: string;
+  own?: boolean;
+}) {
+  const concealed = useArtConcealed() && !own;
+  const words = url && concealed ? "18+ art hidden" : empty;
   return (
     <span className="cover">
-      {url ? (
+      {url && !concealed ? (
         <img src={url} alt={alt} width={400} height={600} />
       ) : (
         <span
           className="cover-ph"
           style={{ "--cloth": clothColor(alt) } as CSSProperties}
           role="img"
-          aria-label={empty}
+          aria-label={words}
         >
-          <span className="cover-ph-title">{empty}</span>
+          <span className="cover-ph-title">{words}</span>
         </span>
       )}
     </span>
@@ -355,6 +373,7 @@ export function CoverField({
               url={upload.preview}
               alt={`Replacement cover, ${upload.facts.width} by ${upload.facts.height} pixels`}
               empty="Replacement"
+              own
             />
           ) : reused ? (
             <ArtFrame url={reused.url} alt={`Cover from ${reused.label}`} empty="Replacement" />
