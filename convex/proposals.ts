@@ -796,7 +796,8 @@ export const rebaseProposal = mutation({
     } else {
       return fail("badState", "Only Draft or In-Review proposals can be rebased.");
     }
-    if (readerGated(user, proposal)) checkSuggestionOps(source.ops);
+    const reader = readerGated(user, proposal);
+    if (reader) checkSuggestionOps(source.ops);
 
     const ops: StoredOp[] = [];
     const dropped: string[] = [];
@@ -851,11 +852,15 @@ export const rebaseProposal = mutation({
         "Nothing survives the rebase: every proposed change already happened, its record is gone, or the text a source was chosen for has changed.",
       );
     }
+    const draft = { ops, evidence: source.evidence, comment: source.comment };
+    // Rebasing copies the record's current values into `before`, which can
+    // grow a Suggestion past its cap when those values grew meanwhile.
+    if (reader) checkSuggestionSize(draft);
     await ctx.db.patch(args.proposalId, {
       state: "draft",
       stale: false,
       claimedBy: undefined,
-      draft: { ops, evidence: source.evidence, comment: source.comment },
+      draft,
     });
     return { dropped };
   },

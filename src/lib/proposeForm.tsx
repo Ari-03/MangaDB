@@ -38,6 +38,7 @@ import {
   fieldValue,
   initialFormState,
   resumedFormState,
+  sourceKeys,
   stateKeysOf,
   type FormState,
 } from "~/lib/editForm";
@@ -184,6 +185,22 @@ export function ProposeForm({
         <h1>Record not found</h1>
         <p className="notice">
           No {type} matches this address. <Link to="/">Go home</Link>.
+        </p>
+      </main>
+    );
+  }
+  // Reopening pins the Draft to the record as it is now, so an out-of-date
+  // one would skip the Rebase that shows what changed since.
+  if (resume?.stale) {
+    return (
+      <main className="mod-page suggest-page">
+        <h1>{COPY[mode].title}</h1>
+        <p className="notice">
+          The record changed since this draft was saved.{" "}
+          <Link to="/me/suggestions/$id" params={{ id: resume.proposalId }}>
+            Open the draft
+          </Link>{" "}
+          to rebase it, then edit it here.
         </p>
       </main>
     );
@@ -455,8 +472,19 @@ function ProposeFormBody({
               <EvidenceList
                 evidence={keptEvidence}
                 onRemove={(index) => {
+                  const row = keptEvidence[index];
                   setKeptEvidence(keptEvidence.filter((_, i) => i !== index));
                   draft.clearSaved();
+                  // A blurb used from this source would add it back on save;
+                  // keep its name and page as a cited page instead.
+                  const keys = textField ? sourceKeys(textField.name) : null;
+                  if (
+                    keys &&
+                    row?.kind === "observation" &&
+                    values[keys.observation] === row.observationId
+                  ) {
+                    setValues({ [keys.mode]: "custom", [keys.observation]: "" });
+                  }
                 }}
               />
             </div>
