@@ -319,8 +319,9 @@ Record, or a Volume of a hidden Series, stays the Data Team's. An Edition
 whose Series is hidden stays public, as its page does. `editForm` says
 nothing about import Proposals waiting on the record. Like the public
 pages, these queries send a Mature Series' art and titles to anyone; the
-public pages conceal the art in the browser for viewers who have not
-opted in, and the cover section of the form does not yet.
+public pages and the cover section of `/suggest` conceal the art in the
+browser for a reader who has not opted in, showing a reader's own upload
+all the same. The Data Team's forms show the art.
 
 A reader reads only their own Suggestions (`convex/suggestions.ts`):
 Proposals they wrote holding no data-team role, the queue's `suggestion`
