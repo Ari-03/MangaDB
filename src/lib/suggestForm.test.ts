@@ -16,6 +16,7 @@ const fakes = vi.hoisted(() => ({
   form: null as Record<string, unknown> | null,
   own: null as Record<string, unknown> | null,
   search: {} as { draft?: string },
+  params: { type: "publisher", key: "pub-a" },
   team: false,
   saveDraft: vi.fn(),
 }));
@@ -23,7 +24,7 @@ const fakes = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: Record<string, unknown>) => ({
     options,
-    useParams: () => ({ type: "publisher", key: "pub-a" }),
+    useParams: () => fakes.params,
     useSearch: () => fakes.search,
   }),
   Link: "a",
@@ -31,8 +32,12 @@ vi.mock("@tanstack/react-router", () => ({
   useLocation: () => ({ href: "/suggest/publisher/pub-a#cover" }),
 }));
 vi.mock("convex/react", () => ({
-  useQuery: (ref: Parameters<typeof getFunctionName>[0]) =>
-    getFunctionName(ref) === "suggestions:detail" ? fakes.own : fakes.form,
+  useQuery: (ref: Parameters<typeof getFunctionName>[0]) => {
+    const name = getFunctionName(ref);
+    // The description section's source blurbs stay loading.
+    if (name === "moderation:sourceBlurbs") return undefined;
+    return name === "suggestions:detail" ? fakes.own : fakes.form;
+  },
   useMutation: () => fakes.saveDraft,
 }));
 vi.mock("~/lib/viewer", () => ({
@@ -76,6 +81,7 @@ beforeEach(() => {
   fakes.form = liveForm;
   fakes.own = null;
   fakes.search = {};
+  fakes.params = { type: "publisher", key: "pub-a" };
   fakes.team = false;
   fakes.saveDraft.mockReset().mockResolvedValue({ proposalId: "p1" });
 });
@@ -211,6 +217,66 @@ describe("the suggest page", () => {
     ]);
   });
 
+  it("drops a removed source's blurb choice too, keeping its page as the citation", async () => {
+    const kodansha = { sourceName: "Kodansha", url: "https://kodansha.us/series/x" };
+    fakes.params = { type: "series", key: "7" };
+    fakes.search = { draft: "p9" };
+    fakes.form = {
+      ...liveForm,
+      fields: [
+        {
+          name: "synopsis",
+          label: "Synopsis",
+          kind: "textarea",
+          editorial: true,
+          required: false,
+          value: "Old text.",
+        },
+      ],
+      ref: { type: "series", id: "s7" },
+      title: "Series",
+      overriddenFields: [],
+      overrides: [],
+      attribution: null,
+    };
+    fakes.own = {
+      proposalId: "p9",
+      state: "draft",
+      coverArt: [],
+      draft: {
+        comment: "The publisher's blurb.",
+        opCount: 1,
+        content: {
+          evidence: [
+            { kind: "observation", observationId: "obs1", sourceKey: "kodansha", url: null },
+          ],
+          ops: [
+            {
+              kind: "update",
+              recordType: "series",
+              recordId: "s7",
+              changes: [{ field: "synopsis", before: "Old text.", after: "New text." }],
+              citation: kodansha,
+            },
+          ],
+        },
+      },
+    };
+    // The description section looks for its #anchor on mount.
+    vi.stubGlobal("window", { location: { hash: "" } });
+    try {
+      press(mount(page), "Remove").click();
+      const after = mount(page);
+      press(after, "Save draft").click();
+      await vi.waitFor(() => expect(fakes.saveDraft).toHaveBeenCalledTimes(1));
+      const saved = fakes.saveDraft.mock.calls[0]![0];
+      expect(saved.evidence).toEqual([]);
+      expect(saved.ops[0]).toMatchObject({ citation: kodansha });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("will not resume a Draft it cannot show whole, so saving drops nothing", () => {
     fakes.search = { draft: "p9" };
     const update = (recordId: string) => ({
@@ -236,6 +302,34 @@ describe("the suggest page", () => {
           ?.props.params,
       ).toEqual({ id: "p9" });
     }
+  });
+
+  it("will not resume an out-of-date Draft until it is rebased", () => {
+    fakes.search = { draft: "p9" };
+    fakes.own = {
+      proposalId: "p9",
+      state: "draft",
+      stale: true,
+      coverArt: [],
+      draft: {
+        comment: "Fix the site.",
+        opCount: 1,
+        content: {
+          evidence: [],
+          ops: [
+            {
+              kind: "update",
+              recordType: "publisher",
+              recordId: "pub-a",
+              changes: [{ field: "website", before: undefined, after: "https://new.example" }],
+            },
+          ],
+        },
+      },
+    };
+    const tree = mount(page);
+    expect(shows(tree, "The record changed since this draft was saved")).toBe(true);
+    expect(tree.some((host) => host.type === "form")).toBe(false);
   });
 
   it("sends a Data Team member's own Draft to its proposal page", () => {

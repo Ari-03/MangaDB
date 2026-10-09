@@ -277,7 +277,8 @@ these limits (`checkSuggestionOps` and the reader buckets in
 - At most 10 ops; 10 submissions an hour (burst 3) and 60 draft saves an
   hour (burst 10); at most 20 open (Draft or In Review) at once.
 - At most 64 KiB stored (`MAX_SUGGESTION_BYTES`: ops with their before-
-  and after-values, evidence and comment), so `mine` and the review queue,
+  and after-values, evidence and comment), checked on save, submit and
+  rebase (which copies the record's current values in), so `mine` and the review queue,
   which read many rows at once, stay well inside a query's read limit.
   The records they name, with the parents their titles name (an
   Edition's covered Volumes and their Series), are read once a page,

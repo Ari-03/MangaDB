@@ -1222,6 +1222,39 @@ describe("suggestions — outdated Drafts", () => {
     });
     await asReader.mutation(api.proposals.submitProposal, { proposalId });
   });
+
+  it("refuses a rebase that would grow a Suggestion past its cap", async () => {
+    const t = makeT();
+    const { seriesId } = await setup(t);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [
+        {
+          kind: "update",
+          ref: series(seriesId),
+          changes: [{ field: "altTitles", value: ["Short"] }],
+        },
+      ],
+      evidence: URL_EVIDENCE,
+      comment: "One more name.",
+    });
+    // The list grows meanwhile; a rebase copies it into `before`.
+    const long = Array.from({ length: 100 }, (_, i) => `${i}${"名".repeat(400)}`);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seriesId, { altTitles: long });
+      await insertSourceRevision(ctx, {
+        ref: series(seriesId),
+        sourceKey: "kodansha",
+        changes: [{ field: "altTitles", after: long }],
+      });
+    });
+    await expect(asReader.mutation(api.proposals.rebaseProposal, { proposalId })).rejects.toThrow(
+      /too large/,
+    );
+    expect(await asReader.query(api.suggestions.detail, { proposalId })).toMatchObject({
+      stale: true,
+    });
+  });
 });
 
 describe("suggestions — cover upload allowance", () => {

@@ -360,7 +360,9 @@ changes the page.
 date and, when one stands, the reason it was rejected or sent back.
 `/me/suggestions/{id}` shows one in full. A Draft, including one sent back
 for changes, can be edited, submitted or withdrawn, and one In Review
-withdrawn; either offers Rebase once the record has changed since. A record hidden or merged since reads as "A record that is no
+withdrawn; either offers Rebase once the record has changed since, and
+an out-of-date Draft opens in the form only after it is rebased. A record
+hidden or merged since reads as "A record that is no
 longer public", showing only what you suggested. The rules and limits are in
 [moderation](moderation.md#suggestions).
 
