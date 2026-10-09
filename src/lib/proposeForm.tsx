@@ -190,22 +190,6 @@ export function ProposeForm({
       </main>
     );
   }
-  // Reopening pins the Draft to the record as it is now, so an out-of-date
-  // one would skip the Rebase that shows what changed since.
-  if (resume?.stale) {
-    return (
-      <main className="mod-page suggest-page">
-        <h1>{COPY[mode].title}</h1>
-        <p className="notice">
-          The record changed since this draft was saved.{" "}
-          <Link to="/me/suggestions/$id" params={{ id: resume.proposalId }}>
-            Open the draft
-          </Link>{" "}
-          to rebase it, then edit it here.
-        </p>
-      </main>
-    );
-  }
   if (resume && !wholeDraftOn(form, resume)) {
     return (
       <main className="mod-page suggest-page">
@@ -220,7 +204,34 @@ export function ProposeForm({
       </main>
     );
   }
-  return <ProposeFormBody type={type} form={form} mode={mode} resume={resume} />;
+  return <StaleGate type={type} form={form} mode={mode} resume={resume} />;
+}
+
+/**
+ * Reopening pins a Draft to the record as it is now, so one already out of
+ * date when the form opens would skip the Rebase that shows what changed
+ * since: it is sent to its page instead. Decided once, at opening: a
+ * record that moves while the reader edits leaves the form and their
+ * unsaved work in place, and the form's own stale check holds Save.
+ */
+function StaleGate(props: Parameters<typeof ProposeFormBody>[0]) {
+  const { resume, mode } = props;
+  const [staleAtOpen] = useState(() => Boolean(resume?.stale));
+  if (resume && staleAtOpen) {
+    return (
+      <main className="mod-page suggest-page">
+        <h1>{COPY[mode].title}</h1>
+        <p className="notice">
+          The record changed since this draft was saved.{" "}
+          <Link to="/me/suggestions/$id" params={{ id: resume.proposalId }}>
+            Open the draft
+          </Link>{" "}
+          to rebase it, then edit it here.
+        </p>
+      </main>
+    );
+  }
+  return <ProposeFormBody {...props} />;
 }
 
 function ProposeFormBody({
@@ -486,6 +497,7 @@ function ProposeFormBody({
                   if (
                     keys &&
                     row?.kind === "observation" &&
+                    values[keys.mode] === "observation" &&
                     values[keys.observation] === row.observationId
                   ) {
                     setValues({ [keys.mode]: "custom", [keys.observation]: "" });
