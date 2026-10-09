@@ -53,8 +53,11 @@ export type OwnProposal = NonNullable<FunctionReturnType<typeof api.suggestions.
 
 type EditForm = NonNullable<FunctionReturnType<typeof api.moderation.editForm>>;
 
+/** A Draft's ops and evidence as its page shows them (when it loaded them). */
+type SavedContent = Exclude<NonNullable<OwnProposal["draft"]>["content"], "notLoaded">;
+
 /** A Draft's evidence rows as its page shows them. */
-type SavedEvidence = NonNullable<OwnProposal["draft"]>["evidence"];
+type SavedEvidence = SavedContent["evidence"];
 
 /** A Draft being revised: its id, the form state it resumes, and its evidence. */
 type Resumed = {
@@ -69,12 +72,15 @@ type Resumed = {
  * The working copy of `draft`, one of the viewer's own Drafts, when this
  * form can show all of it on `form`'s record: at most one op, an update of
  * that record. Saving from the form rewrites the whole Draft, so anything
- * more would be dropped. Null otherwise.
+ * more would be dropped. Null otherwise, and when its page could not load
+ * the Draft's changes.
  */
 function wholeDraftOn(form: EditForm, draft: OwnProposal) {
   const working = draft.draft;
-  if (draft.state !== "draft" || !working || working.ops.length > 1) return null;
-  const [update] = working.ops;
+  if (draft.state !== "draft" || !working || typeof working.content === "string") return null;
+  const { ops, evidence } = working.content;
+  if (ops.length > 1) return null;
+  const [update] = ops;
   if (
     update &&
     (update.kind !== "update" ||
@@ -83,7 +89,7 @@ function wholeDraftOn(form: EditForm, draft: OwnProposal) {
   ) {
     return null;
   }
-  return { ...working, update };
+  return { comment: working.comment, evidence, update };
 }
 
 /**

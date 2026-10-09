@@ -1,7 +1,8 @@
 // The Suggestions tab of /me: the viewer's own Proposals, newest first
 // (convex/suggestions.ts mine), each with its state, the record it
 // changes, what it changes, and the reviewer's reason when one stands. A
-// row opens the Suggestion on /me/suggestions/{id}.
+// row opens the Suggestion on /me/suggestions/{id}. A row the list could
+// not load within its read limits shows only its state and date.
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
@@ -34,25 +35,50 @@ export function LibrarySuggestions() {
   }
   return (
     <ul className="worklist suggestion-list">
-      {rows.map((row) => (
-        <li key={row.proposalId} className="work-row work-row--plain">
-          <div className="work-body">
-            <div className="work-head">
-              <Link className="work-title" to="/me/suggestions/$id" params={{ id: row.proposalId }}>
-                {row.subject?.title ?? (row.comment || "Suggestion")}
-              </Link>
-              <ProposalStateChip state={row.state} />
+      {rows.map((row) =>
+        row.notLoaded ? (
+          <li key={row.proposalId} className="work-row work-row--plain">
+            <div className="work-body">
+              <div className="work-head">
+                <Link
+                  className="work-title"
+                  to="/me/suggestions/$id"
+                  params={{ id: row.proposalId }}
+                >
+                  Suggestion
+                </Link>
+                <ProposalStateChip state={row.state} />
+              </div>
+              <p className="work-meta">
+                <span>{day(row.updatedAt)}</span>
+                <span>Too much to read with the rest of this list; open it to see it.</span>
+              </p>
             </div>
-            <ChangeSummary summary={row.summary} afterOnly={row.withheld} />
-            {row.decision ? <p className="work-reason">{decisionText(row.decision)}</p> : null}
-            <p className="work-meta">
-              {row.subject ? <span>{recordLabel(row.subject.recordType)}</span> : null}
-              <span>{day(row.updatedAt)}</span>
-              {row.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
-            </p>
-          </div>
-        </li>
-      ))}
+          </li>
+        ) : (
+          <li key={row.proposalId} className="work-row work-row--plain">
+            <div className="work-body">
+              <div className="work-head">
+                <Link
+                  className="work-title"
+                  to="/me/suggestions/$id"
+                  params={{ id: row.proposalId }}
+                >
+                  {row.subject?.title ?? (row.comment || "Suggestion")}
+                </Link>
+                <ProposalStateChip state={row.state} />
+              </div>
+              <ChangeSummary summary={row.summary} afterOnly={row.withheld} />
+              {row.decision ? <p className="work-reason">{decisionText(row.decision)}</p> : null}
+              <p className="work-meta">
+                {row.subject ? <span>{recordLabel(row.subject.recordType)}</span> : null}
+                <span>{day(row.updatedAt)}</span>
+                {row.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
+              </p>
+            </div>
+          </li>
+        ),
+      )}
     </ul>
   );
 }

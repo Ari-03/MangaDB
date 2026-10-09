@@ -11,6 +11,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { insertEdition, insertPublisher, insertSeries, insertVolume } from "./test.factories";
 import {
+  changesOf,
   EDITOR,
   PLAIN,
   alice,
@@ -633,7 +634,7 @@ describe("sensitiveOps — the review-queue path", () => {
 
     // The queue renders the op as a readable summary.
     const detail = await asMod(t).query(api.proposals.proposalDetail, { proposalId });
-    const op = detail?.versions[0]?.ops[0];
+    const op = changesOf(detail?.versions[0]).ops[0];
     expect(op).toMatchObject({ kind: "merge" });
     expect((op as { summary?: string }).summary).toContain("Merge series");
 

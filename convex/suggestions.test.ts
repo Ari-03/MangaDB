@@ -37,6 +37,7 @@ import {
   insertVolume,
 } from "./test.factories";
 import {
+  changesOf,
   EDITOR,
   MOD,
   PLAIN,
@@ -523,7 +524,7 @@ describe("suggestions — records the public catalog does not show", () => {
       coverUrl: null,
       mature: false,
     });
-    expect(detail?.versions[0]?.ops[0]).toMatchObject({
+    expect(changesOf(detail?.versions[0]).ops[0]).toMatchObject({
       recordTitle: NOT_PUBLIC,
       withheld: true,
       changes: [
@@ -556,7 +557,7 @@ describe("suggestions — records the public catalog does not show", () => {
     const team = await t
       .withIdentity({ subject: MOD })
       .query(api.proposals.proposalDetail, { proposalId });
-    expect(team?.versions[0]?.ops[0]).toMatchObject({
+    expect(changesOf(team?.versions[0]).ops[0]).toMatchObject({
       recordTitle: expect.stringContaining("Alpha"),
       withheld: false,
     });
@@ -727,7 +728,7 @@ describe("suggestions — long histories", () => {
       versionNo: 51,
       current: true,
       changeComment: "Round 51.",
-      ops: [{ stale: true }],
+      content: { ops: [{ stale: true }] },
     });
     expect(inReview?.stale).toBe(true);
 
@@ -743,7 +744,7 @@ describe("suggestions — long histories", () => {
   });
 
   it("reads a record's history once, not once per version", async () => {
-    const t = makeT({ transactionLimits: { documentsRead: 2_000 } });
+    const t = makeT({ transactionLimits: { documentsRead: 4_000 } });
     const { releaseId } = await setup(t);
     const asReader = t.withIdentity({ subject: PLAIN });
     const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
@@ -986,13 +987,15 @@ describe("suggestions — what one change may carry", () => {
         }
       });
     }
-    expect(await t.withIdentity({ subject: PLAIN }).query(api.suggestions.mine, {})).toHaveLength(
-      MINE_MAX,
-    );
+    // Every row is read whole, none cut short by the read budget.
+    const mine = await t.withIdentity({ subject: PLAIN }).query(api.suggestions.mine, {});
+    expect(mine).toHaveLength(MINE_MAX);
+    expect(mine?.every((row) => !row.notLoaded)).toBe(true);
     const page = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueuePage, {
       paginationOpts: { numItems: 25, cursor: null },
     });
     expect(page.page).toHaveLength(25);
+    expect(page.page.every((row) => row.matches)).toBe(true);
   });
 
   it("reads each cited observation once, however many versions repeat it", async () => {
@@ -1030,7 +1033,7 @@ describe("suggestions — what one change may carry", () => {
     const detail = await t
       .withIdentity({ subject: PLAIN })
       .query(api.suggestions.detail, { proposalId });
-    expect(detail?.versions[1]?.evidence[0]).toMatchObject({
+    expect(changesOf(detail?.versions[1]).evidence[0]).toMatchObject({
       sourceKey: "kodansha",
       url: "https://kodansha.example/alpha-1",
     });
@@ -1083,19 +1086,19 @@ describe("suggestions — sources and art only hidden records hold", () => {
     // came from, nor submits it; the Data Team still sees it.
     const { proposalId } = await cite(PLAIN, publicSource);
     const asReader = t.withIdentity({ subject: PLAIN });
-    expect((await asReader.query(api.suggestions.detail, { proposalId }))?.draft?.evidence).toEqual(
-      [
-        {
-          kind: "observation",
-          observationId: publicSource,
-          sourceKey: "kodansha",
-          url: "https://kodansha.example/alpha-1",
-        },
-      ],
-    );
+    expect(
+      changesOf((await asReader.query(api.suggestions.detail, { proposalId }))?.draft).evidence,
+    ).toEqual([
+      {
+        kind: "observation",
+        observationId: publicSource,
+        sourceKey: "kodansha",
+        url: "https://kodansha.example/alpha-1",
+      },
+    ]);
     await t.run((ctx) => ctx.db.patch(ids.releaseId, { status: "hidden" }));
     const detail = await asReader.query(api.suggestions.detail, { proposalId });
-    expect(detail?.draft?.evidence).toEqual([
+    expect(changesOf(detail?.draft).evidence).toEqual([
       { kind: "observation", observationId: publicSource, sourceKey: "(not public)", url: null },
     ]);
     expect(JSON.stringify(detail)).not.toContain("kodansha.example");
@@ -1105,7 +1108,7 @@ describe("suggestions — sources and art only hidden records hold", () => {
     const team = await t
       .withIdentity({ subject: MOD })
       .query(api.proposals.proposalDetail, { proposalId });
-    expect(team?.draft?.evidence[0]).toMatchObject({
+    expect(changesOf(team?.draft).evidence[0]).toMatchObject({
       sourceKey: "kodansha",
       url: "https://kodansha.example/alpha-1",
     });
@@ -1209,7 +1212,7 @@ describe("suggestions — outdated Drafts", () => {
     expect(outdated).toMatchObject({
       state: "draft",
       stale: true,
-      draft: { ops: [{ stale: false }, { stale: true }] },
+      draft: { content: { ops: [{ stale: false }, { stale: true }] } },
     });
     expect(await asReader.query(api.suggestions.mine, {})).toMatchObject([{ stale: true }]);
 
@@ -1315,7 +1318,9 @@ describe("suggestions — many resubmissions", () => {
     expect(detail?.versions.at(-1)).toMatchObject({
       versionNo: versions,
       current: true,
-      ops: Array.from({ length: MAX_SUGGESTION_OPS }, () => ({ kind: "update", stale: false })),
+      content: {
+        ops: Array.from({ length: MAX_SUGGESTION_OPS }, () => ({ kind: "update", stale: false })),
+      },
     });
     expect(detail).toMatchObject({ currentVersionNo: versions, stale: false });
     const asReader = t.withIdentity({ subject: PLAIN });
@@ -1410,7 +1415,7 @@ describe("suggestions — a Suggestion stays one", () => {
     // Once the role is gone, its page and row tell nothing of the Series it names.
     await t.run((ctx) => ctx.db.patch(userId, { role: undefined }));
     const detail = await asReader.query(api.suggestions.detail, { proposalId });
-    expect(detail?.draft?.ops).toEqual([{ kind: "withheld", summary: WITHHELD_OP }]);
+    expect(changesOf(detail?.draft).ops).toEqual([{ kind: "withheld", summary: WITHHELD_OP }]);
     expect(JSON.stringify(detail)).not.toContain("Secret Gamma");
     const mine = await asReader.query(api.suggestions.mine, {});
     expect(mine?.map((row) => row.proposalId)).toEqual([proposalId]);
@@ -1423,7 +1428,7 @@ describe("suggestions — a Suggestion stays one", () => {
     });
     expect(await asReader.query(api.suggestions.detail, { proposalId: reportId })).toMatchObject({
       state: "inReview",
-      versions: [{ ops: [] }],
+      versions: [{ content: { ops: [] } }],
     });
   });
 });

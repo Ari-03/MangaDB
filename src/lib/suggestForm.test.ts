@@ -124,15 +124,18 @@ describe("the suggest page", () => {
       coverArt: [],
       draft: {
         comment: "From the colophon.",
-        evidence: [{ kind: "url", url: "https://publisher.example/about", note: null }],
-        ops: [
-          {
-            kind: "update",
-            recordType: "publisher",
-            recordId: "pub-a",
-            changes: [{ field: "website", before: undefined, after: "https://old.example" }],
-          },
-        ],
+        opCount: 1,
+        content: {
+          evidence: [{ kind: "url", url: "https://publisher.example/about", note: null }],
+          ops: [
+            {
+              kind: "update",
+              recordType: "publisher",
+              recordId: "pub-a",
+              changes: [{ field: "website", before: undefined, after: "https://old.example" }],
+            },
+          ],
+        },
       },
     };
     const tree = mount(page);
@@ -168,18 +171,21 @@ describe("the suggest page", () => {
       coverArt: [],
       draft: {
         comment: "From the publisher's page.",
-        evidence: [
-          { kind: "observation", observationId: "obs1", sourceKey: "kodansha", url: null },
-          { kind: "note", text: "Seen on the shelf." },
-        ],
-        ops: [
-          {
-            kind: "update",
-            recordType: "publisher",
-            recordId: "pub-a",
-            changes: [{ field: "website", before: undefined, after: "https://new.example" }],
-          },
-        ],
+        opCount: 1,
+        content: {
+          evidence: [
+            { kind: "observation", observationId: "obs1", sourceKey: "kodansha", url: null },
+            { kind: "note", text: "Seen on the shelf." },
+          ],
+          ops: [
+            {
+              kind: "update",
+              recordType: "publisher",
+              recordId: "pub-a",
+              changes: [{ field: "website", before: undefined, after: "https://new.example" }],
+            },
+          ],
+        },
       },
     };
     const tree = mount(page);
@@ -217,7 +223,7 @@ describe("the suggest page", () => {
       proposalId: "p9",
       state: "draft",
       coverArt: [],
-      draft: { comment: "Two fixes.", evidence: [], ops },
+      draft: { comment: "Two fixes.", opCount: ops.length, content: { evidence: [], ops } },
     });
     for (const ops of [[update("pub-a"), update("pub-b")], [update("pub-b")]]) {
       fakes.own = own(ops);

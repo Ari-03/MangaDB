@@ -7,14 +7,15 @@ import { mutationErrorMessage } from "~/lib/errors";
 import { ProposalStateChip } from "~/lib/moderation";
 import { Breadcrumbs, RecordPageLink } from "~/lib/pageScaffold";
 import { ProposalWarnings, unacknowledgedWarnings } from "~/lib/proposalDraft";
-import { EvidenceList, OpsList } from "~/lib/proposalView";
+import { VersionChanges } from "~/lib/proposalView";
 import { day, decisionText } from "~/lib/suggestions";
 
 /**
  * One of the viewer's own Suggestions (convex/suggestions.ts detail): its
  * state, the record it changes, the reviewer's reason when one stands,
  * the Draft and its newest submitted versions with before and after (only
- * the new values of a record no longer public), and the author's actions.
+ * the new values of a record no longer public; older versions without
+ * their changes), and the author's actions.
  * A Draft, including one sent back for changes, can be edited on
  * /suggest, submitted, or withdrawn; one In Review withdrawn. Either is
  * rebased when a record it changes has moved (`stale`, from its working
@@ -219,9 +220,11 @@ function SuggestionPage() {
         <section className="proposal-version">
           <h2>Draft</h2>
           <p className="revision-comment">{detail.draft.comment || "(no comment yet)"}</p>
-          <OpsList ops={detail.draft.ops} art={detail.coverArt} />
-          <h3>Evidence</h3>
-          <EvidenceList evidence={detail.draft.evidence} />
+          <VersionChanges
+            content={detail.draft.content}
+            opCount={detail.draft.opCount}
+            art={detail.coverArt}
+          />
         </section>
       ) : null}
 
@@ -233,9 +236,11 @@ function SuggestionPage() {
           </h2>
           <p className="section-hint">Submitted {day(version.submittedAt)}.</p>
           <p className="revision-comment">{version.changeComment}</p>
-          <OpsList ops={version.ops} art={detail.coverArt} />
-          <h3>Evidence</h3>
-          <EvidenceList evidence={version.evidence} />
+          <VersionChanges
+            content={version.content}
+            opCount={version.opCount}
+            art={detail.coverArt}
+          />
           {detail.decisions
             .filter((decision) => decision.versionNo === version.versionNo)
             .map((decision) => (

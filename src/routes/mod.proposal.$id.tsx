@@ -9,7 +9,7 @@ import { mutationErrorMessage } from "~/lib/errors";
 import { ModGate, ProposalStateChip } from "~/lib/moderation";
 import { ModWorkroom } from "~/lib/modShell";
 import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
-import { EvidenceList, OpsList } from "~/lib/proposalView";
+import { VersionChanges } from "~/lib/proposalView";
 import { slugParams } from "~/lib/slug";
 
 /**
@@ -381,7 +381,7 @@ function ProposalDetail({ id }: { id: string }) {
 
   const currentVersion = detail.versions.find((version) => version.current);
   // Whether a reviewer may send it back: a person's, with ops to revise.
-  const revisable = detail.author.kind === "user" && (currentVersion?.ops.length ?? 0) > 0;
+  const revisable = detail.author.kind === "user" && (currentVersion?.opCount ?? 0) > 0;
   // A placement whose coverage is unstated is refused at submission; say so first.
   const coveragePending = detail.placement?.coverage.kind === "pending";
 
@@ -578,9 +578,11 @@ function ProposalDetail({ id }: { id: string }) {
               Will warn on submit: {detail.draft.warnings.map(warningLabel).join("; ")}
             </p>
           ) : null}
-          <OpsList ops={detail.draft.ops} art={detail.coverArt} />
-          <h3>Evidence</h3>
-          <EvidenceList evidence={detail.draft.evidence} />
+          <VersionChanges
+            content={detail.draft.content}
+            opCount={detail.draft.opCount}
+            art={detail.coverArt}
+          />
         </section>
       ) : null}
 
@@ -603,9 +605,11 @@ function ProposalDetail({ id }: { id: string }) {
               Acknowledged warnings: {version.warnings.map(warningLabel).join("; ")}
             </p>
           ) : null}
-          <OpsList ops={version.ops} art={detail.coverArt} />
-          <h3>Evidence</h3>
-          <EvidenceList evidence={version.evidence} />
+          <VersionChanges
+            content={version.content}
+            opCount={version.opCount}
+            art={detail.coverArt}
+          />
         </section>
       ))}
       {currentVersion === undefined && !detail.draft ? (

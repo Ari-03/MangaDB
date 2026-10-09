@@ -15,27 +15,29 @@
 // only what the author wrote of it is shown; so is a cited observation of
 // such a record, and cover art only such records hold is not drawn. An op
 // other than an update, which a Suggestion cannot carry, names nothing
-// (readerOps).
+// (readerOps). Each page reads every record, Revision and observation
+// once, within a read budget (lib/proposalReads.ts): a row, Draft or
+// version past it says it was not loaded.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { viewerOrNull } from "./lib/auth";
 import { summarizeVersion } from "./lib/queueSummary";
-import { editKeyOf, getCanonical } from "./moderation";
-import { publiclyVisible } from "./lib/publicRecords";
+import { editKeyOf } from "./moderation";
 import { coverBlobsOf, ownUpload, publicArt } from "./lib/coverRefs";
 import { coverUrl } from "./lib/covers";
+import { loaded, proposalReads, type ProposalReads } from "./lib/proposalReads";
 import {
   currentVersionOf,
   isSuggestion,
-  observationFacts,
-  recordFacts,
+  newestVersions,
   recordSubjectOf,
   renderEvidence,
   renderOps,
+  shownChanges,
   staleRecordsOf,
-  VERSIONS_SHOWN,
+  versionViews,
 } from "./proposals";
 
 /** The most rows the Suggestions list shows, newest first. */
@@ -64,7 +66,8 @@ function readerAuthored(proposal: Doc<"proposals">, user: Doc<"users">) {
 
 /**
  * A Suggestion's ops as its author reads them: each update rendered
- * (proposals.ts renderOps, with `facts` from `recordFacts(ctx, true)`),
+ * (proposals.ts renderOps, with `reads` from `proposalReads(ctx, {
+ * publicOnly: true })`),
  * and any other op as WITHHELD_OP, naming no record. The reader gate keeps
  * other ops out of a Suggestion; a row written before it held may still
  * carry one, and a creation's summary names the records it hangs from.
@@ -73,11 +76,11 @@ export async function readerOps(
   ctx: QueryCtx,
   ops: Doc<"proposalVersions">["ops"],
   live: boolean,
-  facts: ReturnType<typeof recordFacts>,
+  reads: ProposalReads,
 ) {
   const rendered = [];
   for (const op of ops) {
-    if (op.kind === "update") rendered.push(...(await renderOps(ctx, [op], live, facts)));
+    if (op.kind === "update") rendered.push(...(await renderOps(ctx, [op], live, reads)));
     else rendered.push({ kind: "withheld" as const, summary: WITHHELD_OP });
   }
   return rendered;
@@ -121,11 +124,15 @@ function standingDecision(proposal: Doc<"proposals">, decisions: Decision[]): De
 
 /**
  * What a Proposal holds now: its Draft working copy while it has one, else
- * its submitted version.
+ * its submitted `version` (read here when not given).
  */
-async function contentOf(ctx: QueryCtx, proposal: Doc<"proposals">) {
+async function contentOf(
+  ctx: QueryCtx,
+  proposal: Doc<"proposals">,
+  version?: Doc<"proposalVersions"> | null,
+) {
   if (proposal.draft) return proposal.draft;
-  const version = await currentVersionOf(ctx, proposal);
+  version ??= await currentVersionOf(ctx, proposal);
   return version
     ? { ops: version.ops, evidence: version.evidence, comment: version.changeComment }
     : { ops: [], evidence: [], comment: "" };
@@ -141,27 +148,29 @@ async function openStale(
   ctx: QueryCtx,
   proposal: Doc<"proposals">,
   ops: Doc<"proposalVersions">["ops"],
+  reads: ProposalReads,
 ) {
   if (proposal.state !== "draft" && proposal.state !== "inReview") return false;
-  return (await staleRecordsOf(ctx, ops)).length > 0;
+  return (await staleRecordsOf(ctx, ops, reads)).length > 0;
 }
 
 /**
  * Whether the record a Proposal's first update changes is one the public
- * catalog no longer shows, so its before-values are not shown either.
+ * catalog no longer shows (`reads` is publicOnly), so its before-values
+ * are not shown either.
  */
-async function firstRecordWithheld(ctx: QueryCtx, ops: Doc<"proposalVersions">["ops"]) {
+async function firstRecordWithheld(reads: ProposalReads, ops: Doc<"proposalVersions">["ops"]) {
   const update = ops.find((op) => op.kind === "update");
-  if (!update) return false;
-  const doc = await getCanonical(ctx, update.ref);
-  return !doc || !(await publiclyVisible(ctx, update.ref.type, doc));
+  return update !== undefined && !(await reads.shown(update.ref));
 }
 
 /**
  * The viewer's own Suggestions, newest first, at most MINE_MAX; null
  * without a viewer. Read from each state's newest MINE_MAX of the viewer's
  * Proposals, so a long run of newer ones written on the Data Team can
- * crowd older Suggestions out.
+ * crowd older Suggestions out. Rows share one read of each record; past
+ * the read budget (lib/proposalReads.ts) a row and the rest are
+ * `notLoaded`, with only their state and date.
  */
 export const mine = query({
   args: {},
@@ -180,30 +189,42 @@ export const mine = query({
     }
     proposals.sort((a, b) => b._creationTime - a._creationTime);
 
+    const reads = proposalReads(ctx, { publicOnly: true, budgeted: true });
     const rows = [];
     for (const proposal of proposals.slice(0, MINE_MAX)) {
-      const content = await contentOf(ctx, proposal);
-      const summary = summarizeVersion(
-        content.ops,
-        proposal.author,
-        content.comment,
-        content.evidence,
-      );
-      // The summary's fields are the first update's, of the subject's record.
-      const withheld = await firstRecordWithheld(ctx, content.ops);
-      rows.push({
+      const facts = {
         proposalId: proposal._id,
         state: proposal.state,
-        stale: await openStale(ctx, proposal, content.ops),
-        comment: content.comment,
-        subject: await recordSubjectOf(ctx, content, true),
-        withheld,
-        summary: withheld
-          ? { ...summary, fields: summary.fields.map((field) => ({ ...field, before: undefined })) }
-          : summary,
-        decision: standingDecision(proposal, await decisionsOf(ctx, proposal._id, 1)),
         updatedAt: proposal.decidedAt ?? proposal.submittedAt ?? proposal._creationTime,
-      });
+      };
+      const row = async () => {
+        await reads.room();
+        const content = await contentOf(ctx, proposal);
+        const summary = summarizeVersion(
+          content.ops,
+          proposal.author,
+          content.comment,
+          content.evidence,
+        );
+        // The summary's fields are the first update's, of the subject's record.
+        const withheld = await firstRecordWithheld(reads, content.ops);
+        return {
+          ...facts,
+          notLoaded: false as const,
+          stale: await openStale(ctx, proposal, content.ops, reads),
+          comment: content.comment,
+          subject: await recordSubjectOf(ctx, content, reads),
+          withheld,
+          summary: withheld
+            ? {
+                ...summary,
+                fields: summary.fields.map((field) => ({ ...field, before: undefined })),
+              }
+            : summary,
+          decision: standingDecision(proposal, await decisionsOf(ctx, proposal._id, 1)),
+        };
+      };
+      rows.push(await loaded(row, { ...facts, notLoaded: true as const }));
     }
     return rows;
   },
@@ -211,13 +232,16 @@ export const mine = query({
 
 /**
  * One of the viewer's own Suggestions: its newest VERSIONS_SHOWN submitted
- * versions with their ops (before and after per record) and evidence, the
- * Draft working copy, the reviewers' newest decisions, and, while it is a
- * Draft the suggest form can show whole, the record it revises it on
- * (`target`). Null when it is not one of the viewer's Suggestions, so
- * another person's Proposal, or one the viewer wrote on the Data Team,
- * reads the same as one that does not exist, and for an id that names no
- * Proposal (the id comes from a page's address).
+ * versions, the newest CHANGES_SHOWN with their ops (before and after per
+ * record) and evidence (proposals.ts versionViews), the Draft working
+ * copy, the reviewers' newest decisions, and, while it is a Draft the
+ * suggest form can show whole, the record it revises it on (`target`).
+ * Each record and source is read once for the page; past the read budget
+ * (lib/proposalReads.ts) the Draft or a version is "notLoaded". Null when
+ * it is not one of the viewer's Suggestions, so another person's
+ * Proposal, or one the viewer wrote on the Data Team, reads the same as
+ * one that does not exist, and for an id that names no Proposal (the id
+ * comes from a page's address).
  */
 export const detail = query({
   args: { proposalId: v.string() },
@@ -228,47 +252,56 @@ export const detail = query({
     const proposal = await ctx.db.get(proposalId);
     if (!proposal || !readerAuthored(proposal, user)) return null;
 
-    const versions = (
-      await ctx.db
-        .query("proposalVersions")
-        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
-        .order("desc")
-        .take(VERSIONS_SHOWN)
-    ).reverse();
+    const reads = proposalReads(ctx, { publicOnly: true, budgeted: true });
+    const versions = await newestVersions(ctx, proposalId);
+    const content = await contentOf(
+      ctx,
+      proposal,
+      versions.find((version) => version.versionNo === proposal.currentVersionNo) ?? null,
+    );
+    const decisions = await decisionsOf(ctx, proposalId);
+    // What the page leads with, read before the changes the budget may cut short.
+    const stale = await loaded(() => openStale(ctx, proposal, content.ops, reads), false);
+    const subject = await loaded(() => recordSubjectOf(ctx, content, reads), null);
+    const target =
+      proposal.state === "draft" ? await loaded(() => targetOf(reads, content.ops), null) : null;
+
     const undecided = proposal.state === "draft" || proposal.state === "inReview";
-    // One read of each record and source however many versions name it.
-    const facts = recordFacts(ctx, true);
-    const sources = observationFacts(ctx, true);
-    const renderedVersions = [];
-    for (const version of versions) {
-      const current = version.versionNo === proposal.currentVersionNo;
-      renderedVersions.push({
-        versionNo: version.versionNo,
-        current,
-        changeComment: version.changeComment,
-        ops: await readerOps(ctx, version.ops, undecided && current, facts),
-        evidence: await renderEvidence(ctx, version.evidence, sources),
-        submittedAt: version._creationTime,
-      });
-    }
-    const draft = proposal.draft
+    const render = async (
+      ops: Doc<"proposalVersions">["ops"],
+      evidence: Doc<"proposalVersions">["evidence"],
+      live: boolean,
+    ) => ({
+      ops: await readerOps(ctx, ops, live, reads),
+      evidence: await renderEvidence(evidence, reads),
+    });
+    const working = proposal.draft;
+    const draft = working
       ? {
-          ops: await readerOps(ctx, proposal.draft.ops, undecided, facts),
-          evidence: await renderEvidence(ctx, proposal.draft.evidence, sources),
-          comment: proposal.draft.comment,
+          comment: working.comment,
+          opCount: working.ops.length,
+          content: await loaded(
+            () => render(working.ops, working.evidence, undecided),
+            "notLoaded" as const,
+          ),
         }
       : null;
+    const renderedVersions = await versionViews(versions, proposal.currentVersionNo, (version) =>
+      render(
+        version.ops,
+        version.evidence,
+        undecided && version.versionNo === proposal.currentVersionNo,
+      ),
+    );
 
-    const content = await contentOf(ctx, proposal);
-    const decisions = await decisionsOf(ctx, proposalId);
     return {
       proposalId: proposal._id,
       state: proposal.state,
-      stale: await openStale(ctx, proposal, content.ops),
+      stale,
       submittedAt: proposal.submittedAt ?? null,
       decidedAt: proposal.decidedAt ?? null,
-      subject: await recordSubjectOf(ctx, content, true),
-      target: proposal.state === "draft" ? await targetOf(ctx, content.ops) : null,
+      subject,
+      target,
       versions: renderedVersions,
       draft,
       decisions,
@@ -277,10 +310,9 @@ export const detail = query({
       // no longer public, and only art the reader may see.
       coverArt: await readerArt(
         ctx,
+        reads,
         user._id,
-        [...renderedVersions.flatMap((version) => version.ops), ...(draft?.ops ?? [])].flatMap(
-          (op) => (op.kind === "update" ? op.changes : []),
-        ),
+        shownChanges([...renderedVersions, ...(draft ? [draft] : [])]),
       ),
     };
   },
@@ -290,16 +322,21 @@ export const detail = query({
  * The art behind the covers `changes` name, as moderation.ts coverArtOf
  * draws it, with `url` null unless the reader uploaded it or a record the
  * public catalog shows holds it (lib/coverRefs.ts publicArt): art only a
- * hidden record holds is not shown, though the change still names it.
+ * hidden record holds is not shown, though the change still names it. So
+ * is art past the read budget, whose holders are not read.
  */
 async function readerArt(
   ctx: QueryCtx,
+  reads: ProposalReads,
   userId: Id<"users">,
   changes: ReadonlyArray<{ field: string; before?: unknown; after?: unknown }>,
 ) {
   const art = [];
   for (const storageId of coverBlobsOf(changes)) {
-    const open = (await ownUpload(ctx, storageId, userId)) || (await publicArt(ctx, storageId));
+    const open = await loaded(async () => {
+      await reads.room();
+      return (await ownUpload(ctx, storageId, userId)) || (await publicArt(ctx, storageId));
+    }, false);
     art.push({ storageId, url: open ? await coverUrl(ctx, storageId) : null });
   }
   return art;
@@ -311,10 +348,10 @@ async function readerArt(
  * public catalog shows. Null otherwise; the Draft can still be submitted
  * or withdrawn from its page.
  */
-async function targetOf(ctx: QueryCtx, ops: Doc<"proposalVersions">["ops"]) {
+async function targetOf(reads: ProposalReads, ops: Doc<"proposalVersions">["ops"]) {
   const [update, ...rest] = ops;
   if (update?.kind !== "update" || rest.length > 0) return null;
-  const doc = await getCanonical(ctx, update.ref);
-  if (!doc || !(await publiclyVisible(ctx, update.ref.type, doc))) return null;
+  const doc = await reads.doc(update.ref);
+  if (!doc || !(await reads.shown(update.ref))) return null;
   return { type: update.ref.type, key: editKeyOf(doc) };
 }

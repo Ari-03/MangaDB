@@ -168,3 +168,37 @@ export function EvidenceList({
     </ul>
   );
 }
+
+/**
+ * A Draft's or version's changes as its page has them (convex/proposals.ts
+ * versionViews): its ops and evidence, or a line saying why they are not
+ * shown, an older version's or ones the page could not read within its
+ * read limits.
+ */
+export function VersionChanges({
+  content,
+  opCount,
+  art,
+}: {
+  content: { ops: RenderedOps; evidence: RenderedEvidence } | "older" | "notLoaded";
+  opCount: number;
+  art: CoverArt;
+}) {
+  if (typeof content === "string") {
+    const changes = `${opCount} change${opCount === 1 ? "" : "s"}`;
+    return (
+      <p className="section-hint">
+        {content === "older"
+          ? `${changes}, not shown: this page shows the changes of the newest versions.`
+          : `${changes}, not loaded: there was too much to read at once.`}
+      </p>
+    );
+  }
+  return (
+    <>
+      <OpsList ops={content.ops} art={art} />
+      <h3>Evidence</h3>
+      <EvidenceList evidence={content.evidence} />
+    </>
+  );
+}

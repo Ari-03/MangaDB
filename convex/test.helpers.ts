@@ -60,6 +60,19 @@ export type QueueFilterArgs = Omit<
 >;
 
 /**
+ * The ops and evidence a proposal page shows for a Draft or version
+ * (proposals.ts versionViews); throws when the page did not show them.
+ */
+export function changesOf<Content extends object>(
+  view: { content: Content | "notLoaded" | "older" } | null | undefined,
+): Content {
+  if (!view || typeof view.content === "string") {
+    throw new Error(`The page shows no changes here: ${view?.content ?? "no such version"}.`);
+  }
+  return view.content;
+}
+
+/**
  * Every In-Review Proposal the queue shows for `filters`, oldest first:
  * pages through proposals.reviewQueuePage `pageSize` at a time and keeps the
  * matching rows.

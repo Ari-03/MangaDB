@@ -571,19 +571,23 @@ is fixed.
   record shows or names in History (`publicArt`). When an import replaces
   a record's art while a Suggestion on it is open, the old art is held
   only by that Suggestion's pin, so its before thumbnail is drawn blank.
-- **The proposal page shows only the newest 50 versions.**
-  `proposals.proposalDetail` renders the newest 50 (`VERSIONS_SHOWN`), and
-  so does a reader's `suggestions.detail`; older ones are in
-  `proposalVersions` but not on any page. Its internal discussion is still
-  read whole, which only the Data Team can lengthen.
-- **Suggestions changed on the Data Team before the rule keep what they
-  hold.** A Suggestion now stays under the reader rules whatever its
-  author's role. One its author filled with creations or override clears
-  while on the Data Team, before that held, can no longer be submitted or
-  rebased by them; In Review, a Moderator still decides it. Its reader page
-  names those ops "A change a suggestion cannot make". An operator finds
-  them as `proposals` with no `author.roleAtAuthorship` whose ops are not
-  all updates.
+- **The proposal page shows only the newest versions' changes.**
+  `proposals.proposalDetail` lists the newest 50 versions
+  (`VERSIONS_SHOWN`) and shows the changes of the newest 6
+  (`CHANGES_SHOWN`), and so does a reader's `suggestions.detail`; older
+  ones show their number, comment, date and change count, and versions
+  before the newest 50 are in `proposalVersions` but not on any page. Its
+  internal discussion is still read whole, which only the Data Team can
+  lengthen.
+- **Pages of very large records say "not loaded".** The review queue,
+  `/me` Suggestions and both proposal pages stop reading once a response
+  is within `READ_RESERVE` of a query's read limits
+  (`convex/lib/proposalReads.ts`). The queue then links the rest of its
+  page to open one by one, without knowing whether they match its
+  filters; `/me` shows only their state and date; a proposal page says a
+  Draft's or version's changes were not loaded. Records of ordinary size
+  never come near it; a page of ten-op Suggestions over Series at the
+  field limits loads about one queue row.
 - **A deleted account's Drafts stay Drafts.** Account deletion keeps
   Proposals. A Draft has no author left to submit or withdraw it, and the
   cover a Draft names stays pinned (`coverRefs`). In-Review ones can still

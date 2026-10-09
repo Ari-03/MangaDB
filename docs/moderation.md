@@ -223,16 +223,23 @@ Pages:
   Filters and views live in the URL, so a view can be shared as a link.
   The list loads 25 proposals at a time (`proposals.reviewQueuePage` is
   paginated, at most 50 a page) and says how many it has checked and how
-  many match; "Check the next 25" reads further. The age filter measures
+  many match; "Check the next 25" reads further. A page that would read
+  past a query's read limits (records at the largest the field limits
+  allow) stops early and links the proposals it could not read, to open
+  one by one (`READ_RESERVE` in `convex/lib/proposalReads.ts`, which has
+  the arithmetic). The age filter measures
   from your browser's clock. Claiming signals who is looking and never
   locks. The older `proposals.reviewQueue` (no paging, an array with
   `ageMs`) stays for clients built before the paged one and filters by the
   same rules.
-- `/mod/proposal/{id}`: the newest 50 versions with before and after per
-  record, bases, evidence, and internal discussion notes. A reader can
-  resubmit without a Moderator, so older versions are not shown; the page
-  says "Showing the newest 50 of N versions" then. The current version is
-  always among them.
+- `/mod/proposal/{id}`: the Draft and the newest 50 versions, and internal
+  discussion notes. The Draft and the newest 6 versions show before and
+  after per record, bases and evidence; older ones their number, comment,
+  date and change count. A reader can resubmit without a Moderator, so
+  versions before the newest 50 are not shown; the page says "Showing the
+  newest 50 of N versions" then. The current version is always among
+  them. Each record is read once for the page; changes that would take it
+  past its read limits say they were not loaded.
 - `/mod/proposals`: your own proposals, titled by their change comment,
   with the same change line as the queue.
 - `/mod/propose/{type}/{key}`: the Editor form, linked as "Propose a
@@ -268,6 +275,8 @@ these limits (`checkSuggestionOps` and the reader buckets in
 - At most 64 KiB stored (`MAX_SUGGESTION_BYTES`: ops with their before-
   and after-values, evidence and comment), so `mine` and the review queue,
   which read many rows at once, stay well inside a query's read limit.
+  The records they name are read once a page, within a read budget
+  (`convex/lib/proposalReads.ts`): past it, rows say they were not loaded.
 - Five cover uploads a day (see [Covers](#covers)).
 - Evidence as for anyone: a factual change needs a source URL, a
   description or a cover does not. A Source Observation must be linked to
@@ -312,8 +321,9 @@ the Suggestions tab of `/me`, read from each state's newest 50, and
 `detail` backs `/me/suggestions/{id}`. They show the ops with before and
 after, the evidence, the change comment, when it was submitted and
 closed, and the reason for each rejection or request for changes. A
-Proposal page shows the newest 50 versions and the newest 100 decisions;
-the current version and the standing decision are always among them.
+Proposal page lists the newest 50 versions, the changes of the Draft and
+the newest 6, and the newest 100 decisions; the current version and the
+standing decision are always among them.
 The internal discussion, the claim and who decided stay on
 `/mod/proposal`, and a Proposal someone wrote on the Data Team is read
 there, not here. Another person's Proposal reads as not found. A record
