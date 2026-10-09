@@ -246,35 +246,51 @@ describe("the review queue's pages", () => {
       comment: "Official title.",
     });
     await asEditor.mutation(api.proposals.submitProposal, { proposalId });
-    return { offers, edit: proposalId };
+    return { offers, edit: proposalId, seriesId };
   }
 
-  it("returns every Proposal it reads, oldest first, marking the ones the filters leave out", async () => {
+  it("reads only the author group a view can match, oldest first, so older imports don't bury people's proposals", async () => {
     const t = makeT();
     await setup(t);
-    const { offers, edit } = await seedFive(t);
+    const { offers, edit, seriesId } = await seedFive(t);
+    // A reader's Suggestion, submitted after everything else.
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const { proposalId: suggestion } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [
+        {
+          kind: "update",
+          ref: { type: "series", id: seriesId },
+          changes: [{ field: "title", value: "Gamma" }],
+        },
+      ],
+      evidence: [{ kind: "url", url: "https://publisher.example/b" }],
+      comment: "The cover says Gamma.",
+    });
+    await asReader.mutation(api.proposals.submitProposal, { proposalId: suggestion });
     const asMod = t.withIdentity({ subject: MOD });
-    const first = await asMod.query(api.proposals.reviewQueuePage, {
-      authorKind: "humans",
+    const page = async (filters: { kind?: "suggestion" | "importOffer"; authorKind?: "humans" }) =>
+      (
+        await asMod.query(api.proposals.reviewQueuePage, {
+          ...filters,
+          paginationOpts: { numItems: 4, cursor: null },
+        })
+      ).page.map((row) => [row.proposalId, row.matches]);
+
+    // The Suggestions view's first page holds the Suggestion, not the offers ahead of it.
+    expect(await page({ kind: "suggestion" })).toEqual([[suggestion, true]]);
+    // People reads people's proposals only: the Editor's, then the reader's.
+    expect(await page({ authorKind: "humans" })).toEqual([
+      [edit, true],
+      [suggestion, true],
+    ]);
+    // An import view reads the sources' rows only.
+    expect(await page({ kind: "importOffer" })).toEqual(offers.slice(0, 4).map((id) => [id, true]));
+    // Unfiltered, the whole queue still pages oldest first.
+    const all = await asMod.query(api.proposals.reviewQueuePage, {
       paginationOpts: { numItems: 4, cursor: null },
     });
-    expect(first.page.map((row) => [row.proposalId, row.matches])).toEqual(
-      offers.slice(0, 4).map((id) => [id, false]),
-    );
-    expect(first.isDone).toBe(false);
-    const second = await asMod.query(api.proposals.reviewQueuePage, {
-      authorKind: "humans",
-      paginationOpts: { numItems: 4, cursor: first.continueCursor },
-    });
-    expect(second.page.map((row) => [row.proposalId, row.matches])).toEqual([
-      [offers[4], false],
-      [edit, true],
-    ]);
-    expect(second.isDone).toBe(true);
-    // Paging the whole queue finds the same rows as the filter.
-    expect(
-      (await queueRows(asMod, { authorKind: "humans" }, 2)).map((row) => row.proposalId),
-    ).toEqual([edit]);
+    expect(all.page.map((row) => row.proposalId)).toEqual(offers.slice(0, 4));
+    expect(all.isDone).toBe(false);
     expect(await queueRows(asMod, { kind: "importOffer" }, 3)).toHaveLength(5);
   });
 

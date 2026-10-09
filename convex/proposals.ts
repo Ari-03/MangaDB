@@ -68,6 +68,7 @@ import {
   queueKind,
   reportSeriesPublicId,
   summarizeVersion,
+  type QueueKind,
 } from "./lib/queueSummary";
 import { requireUser } from "./lib/auth";
 import { onDataTeam, requireDataTeam, requireModerator } from "./lib/roles";
@@ -1801,11 +1802,7 @@ export const reviewQueuePage = query({
     if (filters.minAgeHours !== undefined && filters.now === undefined) {
       fail("nowRequired", "Filtering by age needs the current time.");
     }
-    const result = await ctx.db
-      .query("proposals")
-      .withIndex("by_state", (q) => q.eq("state", "inReview"))
-      .order("asc")
-      .paginate(paginationOpts);
+    const result = await queueScan(ctx, filters).order("asc").paginate(paginationOpts);
 
     const usernameOf = usernameLookup(ctx);
     const reads = proposalReads(ctx, { budgeted: true });
@@ -1833,6 +1830,40 @@ export const reviewQueuePage = query({
     return { ...result, page };
   },
 });
+
+/**
+ * The In-Review proposals a queue view can match, by the narrowest index
+ * its filters allow: a reader's Suggestions, a person's proposals (reports,
+ * field changes, new records, the People view) or a source's. So a view of
+ * a few rows is not paged out behind every older import offer; the row
+ * filters still decide what matches.
+ */
+function queueScan(
+  ctx: QueryCtx,
+  filters: { kind?: QueueKind; authorKind?: "imports" | "humans" },
+) {
+  const proposals = ctx.db.query("proposals");
+  if (filters.kind === "suggestion") {
+    return proposals.withIndex("by_state_and_author_role", (q) =>
+      q.eq("state", "inReview").eq("author.kind", "user").eq("author.roleAtAuthorship", undefined),
+    );
+  }
+  const source =
+    filters.kind === "importOffer" ||
+    filters.kind === "importCreation" ||
+    filters.authorKind === "imports";
+  const person =
+    filters.kind === "report" ||
+    filters.kind === "fieldChange" ||
+    filters.kind === "newRecords" ||
+    filters.authorKind === "humans";
+  if (source !== person) {
+    return proposals.withIndex("by_state_and_author_kind", (q) =>
+      q.eq("state", "inReview").eq("author.kind", source ? "source" : "user"),
+    );
+  }
+  return proposals.withIndex("by_state", (q) => q.eq("state", "inReview"));
+}
 
 /** A Proposal's newest VERSIONS_SHOWN versions, newest first. */
 export async function newestVersions(ctx: QueryCtx, proposalId: Id<"proposals">) {

@@ -42,11 +42,11 @@ const TOOLS = [
   { id: "packaging", to: "/mod/packaging", label: "Catalog gaps" },
   { id: "proposals", to: "/mod/proposals", label: "My proposals" },
   { id: "comments", to: "/mod/comments", label: "Comments" },
-  { id: "launch", to: "/mod/launch", label: "Launch" },
   { id: "roles", to: "/mod/roles", label: "Roles" },
 ] as const;
 
-export type ModTool = (typeof TOOLS)[number]["id"];
+/** A workroom page. Launch (/mod/launch) sits in the frame but has no tab. */
+export type ModTool = (typeof TOOLS)[number]["id"] | "launch";
 
 /** The badge beside a tab: a count, a dot, or nothing. */
 function TabBadge({ count, label }: { count: number | undefined; label: string }) {
