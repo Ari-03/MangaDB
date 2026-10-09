@@ -188,6 +188,10 @@ An approved field-level correction to a Canonical Record. Imports may report a c
 **Proposal**:
 A coherent, atomic data-maintenance intent submitted for review. A Proposal may affect multiple Canonical Records when all of its changes must succeed or fail together; unrelated changes belong in separate Proposals.
 
+**Suggestion**:
+A Proposal written by a signed-in User who holds no Data Team role. It may only change fields of existing Canonical Records, covers included, and is reviewed like any Proposal. Only its author reads it, with the reviewers' reasons for rejecting it or sending it back, but never their internal discussion.
+_Avoid_: edit request, contribution, submission
+
 **Proposal Version**:
 An immutable snapshot of a Proposal submitted for review. Requested changes return the Proposal to Draft, and its next submission creates another Proposal Version.
 

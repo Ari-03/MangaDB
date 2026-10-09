@@ -1,7 +1,8 @@
 // Moderation affordances (spec §5). On catalog pages: the public per-record
 // revision history — final diff, author, approver, timestamp, change
-// comment, citation — and the moderator/administrator edit links. On the
-// /mod pages: the access gate. All of it fetches
+// comment, citation — and the edit links: the Data Team's edit and propose
+// forms, a signed-in reader's suggest form. On the /mod pages: the access
+// gate. All of it fetches
 // client-side through the reactive Convex client; role checks here are
 // cosmetic (the moderation functions re-check authorization on every call).
 // The workroom frame and its tool tabs are lib/modShell.tsx.
@@ -16,7 +17,7 @@ import type { Citation } from "../../convex/lib/moderationFields";
 import { Cover } from "~/lib/cover";
 import type { WrittenBy } from "../../convex/moderation";
 import { formatPartialDate, formatPrice } from "~/lib/format";
-import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
+import { useIsDataTeam, useIsModerator, useReadyViewer } from "~/lib/viewer";
 
 export type HistoryTargetType = "series" | "volume" | "edition" | "releaseBundle";
 
@@ -71,14 +72,18 @@ function CoverThumb({ value, art, label }: { value: unknown; art: CoverArt; labe
 /**
  * One field's change in History or on a proposal: a cover as before and
  * after jackets with its source under the new one, a Human Override list
- * as what was set or cleared, anything else as text.
+ * as what was set or cleared, anything else as text. `afterOnly` shows
+ * the new value alone, for a record whose current state is not shown
+ * (a reader's Suggestion on a record no longer public).
  */
 export function FieldChangeItem({
   change,
   art,
+  afterOnly = false,
 }: {
   change: { field: string; before?: unknown; after?: unknown };
   art: CoverArt;
+  afterOnly?: boolean;
 }) {
   if (change.field === "overriddenFields") {
     return <li>{overrideChangeText(change.before, change.after)}</li>;
@@ -88,7 +93,11 @@ export function FieldChangeItem({
     return (
       <li className="cover-diff">
         <code>coverImage</code>:
-        <CoverThumb value={change.before} art={art} label="Cover before" />→
+        {afterOnly ? null : (
+          <>
+            <CoverThumb value={change.before} art={art} label="Cover before" />→
+          </>
+        )}
         <CoverThumb value={change.after} art={art} label="Cover after" />
         {typeof source === "string" ? <span>Source: {source}</span> : null}
       </li>
@@ -96,7 +105,12 @@ export function FieldChangeItem({
   }
   return (
     <li>
-      <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
+      <code>{change.field}</code>:{" "}
+      {afterOnly ? null : (
+        <>
+          <del>{renderFieldValue(change.before)}</del> →{" "}
+        </>
+      )}
       <ins>{renderFieldValue(change.after)}</ins>
     </li>
   );
@@ -333,11 +347,14 @@ export function ModGate({
 /**
  * The maintenance entry point on a record page: Moderators and
  * Administrators get the direct edit (`/mod/edit`); Editors get the update
- * proposal (`/mod/propose`) whose submission lands In Review.
+ * proposal (`/mod/propose`) whose submission lands In Review; any other
+ * signed-in reader gets the suggest form (`/suggest`), which lands In
+ * Review too. Nothing signed out.
  */
 export function ModEditLink({ type, editKey }: { type: string; editKey: string }) {
   const isModerator = useIsModerator();
   const isDataTeam = useIsDataTeam();
+  const viewer = useReadyViewer();
   if (isModerator) {
     return (
       <p className="mod-edit-link">
@@ -366,6 +383,15 @@ export function ModEditLink({ type, editKey }: { type: string; editKey: string }
       </p>
     );
   }
+  if (viewer) {
+    return (
+      <p className="mod-edit-link">
+        <Link to="/suggest/$type/$key" params={{ type, key: editKey }}>
+          Suggest an edit
+        </Link>
+      </p>
+    );
+  }
   return null;
 }
 
@@ -390,9 +416,10 @@ export function ProposeNewRecordsLink({ seriesPublicId }: { seriesPublicId: numb
 }
 
 /**
- * Moderator edit links for an Edition's Release rows. Releases have no page
- * of their own (spec §11), so their edit entry point lives on the Edition
- * page, one link per row keyed by the row's anchor.
+ * Edit links for an Edition's Release rows, by the viewer's role as
+ * ModEditLink chooses. Releases have no page of their own (spec §11), so
+ * their edit entry point lives on the Edition page, one link per row keyed
+ * by the row's anchor.
  */
 export function ModReleaseEditLinks({
   releases,
@@ -401,14 +428,27 @@ export function ModReleaseEditLinks({
 }) {
   const isModerator = useIsModerator();
   const isDataTeam = useIsDataTeam();
-  if (!isDataTeam || releases.length === 0) return null;
+  const viewer = useReadyViewer();
+  if (!viewer || releases.length === 0) return null;
   return (
     <p className="mod-edit-link">
-      <span>{isModerator ? "Edit a release:" : "Propose a change to a release:"}</span>
+      <span>
+        {isModerator
+          ? "Edit a release:"
+          : isDataTeam
+            ? "Propose a change to a release:"
+            : "Suggest an edit to a release:"}
+      </span>
       {releases.map((release) => (
         <Link
           key={release.id}
-          to={isModerator ? "/mod/edit/$type/$key" : "/mod/propose/$type/$key"}
+          to={
+            isModerator
+              ? "/mod/edit/$type/$key"
+              : isDataTeam
+                ? "/mod/propose/$type/$key"
+                : "/suggest/$type/$key"
+          }
           params={{ type: "release", key: release.id }}
         >
           {release.anchor}

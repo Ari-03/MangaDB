@@ -13,28 +13,30 @@ import { isbnScope } from "./lib/scope";
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { editionCoverage } from "./catalogPages";
+import { editionCoverage, editionTitleOf, titleReads, type TitleReads } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { getSourceByKey } from "./importSources";
 import { internal } from "./_generated/api";
 import { citation as citationValidator, evidence, recordRef, recordType } from "./schema";
 import { fieldAttribution } from "./lib/attribution";
-import { liveUser } from "./lib/auth";
+import { liveUser, requireUser } from "./lib/auth";
 import { latestTouch } from "./lib/authority";
 import { checkCoverStored, checkCoverUse, coverBlobsOf, pinCovers } from "./lib/coverRefs";
 import { coverUrl } from "./lib/covers";
 import { releasesOf } from "./lib/editionRows";
 import { fail } from "./lib/errors";
-import { checkEvidence } from "./lib/evidence";
+import { checkComment, checkEvidence } from "./lib/evidence";
 import { ratedByDataTeam, syncMatureProjection } from "./lib/mature";
 import { anchoredOn, currentOps } from "./lib/observations";
-import { requireDataTeam, requireModerator } from "./lib/roles";
+import { publiclyVisible } from "./lib/publicRecords";
+import { onDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
   editorialField,
   fieldDescriptor,
   normalizeCitation,
   normalizeFieldValue,
+  overLength,
   type Citation,
   type RecordType,
 } from "./lib/moderationFields";
@@ -164,8 +166,10 @@ export function validateChanges(
  * from the text's current credit (lib/attribution.ts), so restating the
  * same source is a no-op and naming another is a change of its own, which
  * comes back with `citedText`, the text it names a source for. Empty text
- * has no source. `author` is checked for a claim to any cover blob the op
- * sets (lib/coverRefs.ts checkCoverUse).
+ * has no source. A changed value is held to the length a person may write
+ * (lib/moderationFields.ts overLength), and `author` is checked for a claim
+ * to any cover blob the op sets (lib/coverRefs.ts checkCoverUse), held to
+ * a reader's art when `reader` (default: they hold no data-team role).
  */
 export async function validateUpdate(
   ctx: QueryCtx,
@@ -174,7 +178,8 @@ export async function validateUpdate(
     doc: CatalogDoc;
     changes: Array<{ field: string; value: unknown }>;
     citation: Citation | null | undefined;
-    author: Id<"users">;
+    author: Doc<"users">;
+    reader?: boolean;
   },
 ): Promise<{
   changes: FieldChange[];
@@ -207,8 +212,10 @@ export async function validateUpdate(
     fail("noChanges", "Nothing changed — edit at least one field or its source.");
   }
   for (const change of changes) {
+    const tooLong = overLength(fieldDescriptor(ref.type, change.field)!, change.after);
+    if (tooLong !== null) fail("invalidField", tooLong);
     if (change.field === "coverImage") {
-      await checkCoverUse(ctx, doc as Doc<"releases">, change, args.author);
+      await checkCoverUse(ctx, doc as Doc<"releases">, change, args.author, args.reader);
     }
   }
   return { changes, citation, ...(citedText !== undefined ? { citedText } : {}) };
@@ -526,7 +533,7 @@ export const submitDirectEdit = mutation({
     const user = await requireModerator(ctx);
     const ref = args.ref;
 
-    const comment = args.comment.trim();
+    const comment = checkComment(args.comment);
     if (comment === "") fail("commentRequired", "Every change needs a change comment.");
 
     const doc = await getCanonical(ctx, ref);
@@ -541,10 +548,9 @@ export const submitDirectEdit = mutation({
       doc,
       changes: args.changes,
       citation: args.citation,
-      author: user._id,
+      author: user,
     });
-    const evidenceRows = args.evidence ?? [];
-    await checkEvidence(ctx, evidenceRows);
+    const evidenceRows = await checkEvidence(ctx, args.evidence ?? []);
     const author = {
       kind: "user" as const,
       userId: user._id,
@@ -631,6 +637,13 @@ export async function resolveEditTarget(
   }
 }
 
+/** The edit-form key `resolveEditTarget` finds `doc` by. */
+export function editKeyOf(doc: CatalogDoc): string {
+  if ("publicId" in doc) return String(doc.publicId);
+  if ("slug" in doc) return doc.slug;
+  return doc._id;
+}
+
 /** Where the edit form links back to, as `/{entity}/{publicId}/{slug}` input. */
 export type BackLink = {
   entity: "series" | "volume" | "edition" | "bundle";
@@ -638,10 +651,16 @@ export type BackLink = {
   title: string;
 } | null;
 
+/**
+ * A record's title and the page the edit form links back to. `reads`
+ * (catalogPages.ts TitleReads) reads the parents a title names: a
+ * Volume's Series, a Release's Edition and an Edition's covered Volumes.
+ */
 export async function displayInfo(
   ctx: QueryCtx,
   type: RecordType,
   doc: CatalogDoc,
+  reads: TitleReads = titleReads(ctx),
 ): Promise<{ title: string; backLink: BackLink }> {
   switch (type) {
     case "series": {
@@ -657,7 +676,7 @@ export async function displayInfo(
     }
     case "volume": {
       const volume = doc as Doc<"volumes">;
-      const series = await ctx.db.get(volume.seriesId);
+      const series = await reads.get(volume.seriesId);
       const title = volumeTitle(series?.title ?? "Unknown series", volume.label ?? null);
       return {
         title,
@@ -666,7 +685,7 @@ export async function displayInfo(
     }
     case "edition": {
       const edition = doc as Doc<"editions">;
-      const { title } = await editionCoverage(ctx, edition);
+      const title = await editionTitleOf(reads, edition);
       return {
         title,
         backLink: { entity: "edition", publicId: edition.publicId, title },
@@ -674,9 +693,9 @@ export async function displayInfo(
     }
     case "release": {
       const release = doc as Doc<"releases">;
-      const edition = await ctx.db.get(release.editionId);
+      const edition = await reads.get(release.editionId);
       if (!edition) return { title: "Release", backLink: null };
-      const { title } = await editionCoverage(ctx, edition);
+      const title = await editionTitleOf(reads, edition);
       return {
         title: `${title} — ${release.format}${release.binding ? ` (${release.binding})` : ""} release`,
         backLink: { entity: "edition", publicId: edition.publicId, title },
@@ -713,14 +732,19 @@ export async function displayInfo(
  * and whether an import's Proposal on the record waits in review (which a
  * clear, moving the base, would leave stale).
  * Editors use it to draft update and clearOverride Proposals; Moderators for
- * direct edits and clears — the mutations re-check the stronger role.
+ * direct edits and clears — the mutations re-check the stronger role. Any
+ * other signed-in User drafts Suggestions from it: they get only a record
+ * the public catalog shows (publiclyVisible: a Hidden or Merged Record,
+ * or a Volume of a hidden Series, stays the Data Team's), and
+ * `importReviewPending` as null, since pending Proposals are not theirs to
+ * see.
  */
 export const editForm = query({
   args: { type: recordType, key: v.string() },
   handler: async (ctx, { type, key }) => {
-    await requireDataTeam(ctx);
+    const team = onDataTeam(await requireUser(ctx));
     const doc = await resolveEditTarget(ctx, type, key);
-    if (!doc) return null;
+    if (!doc || (!team && !(await publiclyVisible(ctx, type, doc)))) return null;
     const ref = { type, id: doc._id } as RecordRef;
     const history = await revisionsOf(ctx, ref);
     const { title, backLink } = await displayInfo(ctx, type, doc);
@@ -737,7 +761,7 @@ export const editForm = query({
           : [];
       }),
       baseRevisionId: history[0]?._id ?? null,
-      importReviewPending: await importReviewPending(ctx, ref),
+      importReviewPending: team ? await importReviewPending(ctx, ref) : null,
       fields: EDITABLE_FIELDS[type].map((descriptor) => ({
         ...descriptor,
         value: (doc as Record<string, unknown>)[descriptor.name] ?? null,
@@ -867,8 +891,10 @@ function blurbText(raw: unknown): string | null {
  * recordOnly conflict entry whose text differs from it. Also which text is
  * canonical now and who authored it (the latest Revision touching the
  * field, as reconciliation resolves the incumbent). Volumes and Bundles
- * take no source text, so theirs list nothing. Data Team: the blurbs are
- * the sources' own public text, and Editors pick from them too.
+ * take no source text, so theirs list nothing. The blurbs are the sources'
+ * own public text, so any signed-in User drafting a change may read them;
+ * outside the Data Team, of a record the public catalog shows only
+ * (publiclyVisible).
  */
 export const sourceBlurbs = query({
   args: {
@@ -883,10 +909,10 @@ export const sourceBlurbs = query({
     }),
   },
   handler: async (ctx, { ref }) => {
-    await requireDataTeam(ctx);
+    const team = onDataTeam(await requireUser(ctx));
     const id = ctx.db.normalizeId(TABLE_FOR_TYPE[ref.type], ref.id);
     const doc = id ? await ctx.db.get(id) : null;
-    if (!id || !doc) return null;
+    if (!id || !doc || (!team && !(await publiclyVisible(ctx, ref.type, doc)))) return null;
     const field =
       ref.type === "release" || ref.type === "releaseBundle" ? "description" : "synopsis";
     const canonicalText = blurbText((doc as Record<string, unknown>)[field]);

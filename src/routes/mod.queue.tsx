@@ -25,7 +25,8 @@ import { warningLabel } from "~/lib/proposalDraft";
  * changes; filters (operation, record type, kind, author or source, age,
  * warnings, staleness) and the preset views live in the URL, so a view is
  * a link. The queue pages through Proposals and says how many it has
- * checked (convex/proposals.ts reviewQueuePage). Claims are shown so reviewers
+ * checked (convex/proposals.ts reviewQueuePage), and links any it could not
+ * read within a page's read limits. Claims are shown so reviewers
  * coordinate without exclusive authority. Never indexed.
  */
 export const Route = createFileRoute("/mod/queue")({
@@ -88,6 +89,7 @@ const VIEWS: ReadonlyArray<{ label: string; search: QueueSearch; hint?: string }
   { label: "All", search: {} },
   { label: "Import offers", search: { from: "imports", op: "update" }, hint: IMPORT_HINT },
   { label: "People", search: { from: "humans" } },
+  { label: "Suggestions", search: { kind: "suggestion" } },
   { label: "Reports", search: { kind: "report" } },
   { label: "Stale", search: { stale: true } },
 ];
@@ -146,6 +148,8 @@ function Queue() {
     { initialNumItems: QUEUE_PAGE },
   );
   const rows = results.filter((row): row is QueueRowData => row.matches);
+  // Rows the page could not read within its read limits: listed for opening one by one.
+  const notLoaded = results.filter((row) => "notLoaded" in row);
   const filtered = Object.keys(setFilters(search)).length > 0;
   const view = VIEWS.find((entry) => sameView(entry.search, search));
 
@@ -318,6 +322,22 @@ function Queue() {
               ))}
             </ol>
           )}
+          {notLoaded.length > 0 ? (
+            <p className="notice">
+              {notLoaded.length === 1
+                ? "One proposal was too much to read with the rest, so whether it matches is not known. Open "
+                : `${notLoaded.length} proposals were too much to read with the rest, so whether they match is not known. Open `}
+              {notLoaded.map((row, i) => (
+                <span key={row.proposalId}>
+                  {i > 0 ? ", " : null}
+                  <Link to="/mod/proposal/$id" params={{ id: row.proposalId }}>
+                    proposal {i + 1}
+                  </Link>
+                </span>
+              ))}
+              .
+            </p>
+          ) : null}
           {status === "CanLoadMore" || status === "LoadingMore" ? (
             <button
               type="button"
@@ -398,7 +418,7 @@ function QueueRow({
         <div className="work-meta">
           <span>
             {row.author.kind === "user"
-              ? `@${row.author.username ?? "deleted"}${row.author.role ? ` (${row.author.role})` : ""}`
+              ? `@${row.author.username ?? "deleted"} (${row.author.role ?? "reader"})`
               : sourceName(row.author.sourceKey)}
           </span>
           <span>waiting {formatAge(now - row.submittedAt)}</span>

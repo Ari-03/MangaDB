@@ -1,10 +1,12 @@
 // Page scaffolding the catalog and mod routes share: the visible breadcrumb
-// trail, the 404 body of a catalog record, and the slugless-URL redirect.
+// trail, a link to a record's page, the 404 body of a catalog record, and
+// the slugless-URL redirect.
 
 import { Link, notFound, redirect } from "@tanstack/react-router";
-import { Fragment, type ReactElement } from "react";
+import { Fragment, type ReactElement, type ReactNode } from "react";
 
-import { parsePublicId } from "~/lib/slug";
+import type { BackLink } from "../../convex/moderation";
+import { parsePublicId, slugParams } from "~/lib/slug";
 
 /**
  * The visible trail under the masthead: "MangaDB / …". A string crumb is
@@ -26,6 +28,34 @@ export function Breadcrumbs({ trail }: { trail: Array<string | ReactElement> }) 
         </Fragment>
       ))}
     </nav>
+  );
+}
+
+/** The route of each record page a form or a Proposal can name. */
+const RECORD_PAGES = {
+  series: "/series/$publicId/$slug",
+  volume: "/volume/$publicId/$slug",
+  edition: "/edition/$publicId/$slug",
+  bundle: "/bundle/$publicId/$slug",
+} as const;
+
+/**
+ * A link to the record page `page` names (convex/moderation.ts BackLink, a
+ * Proposal subject's `page`), slugged from `title`.
+ */
+export function RecordPageLink({
+  page,
+  title,
+  children,
+}: {
+  page: Pick<NonNullable<BackLink>, "entity" | "publicId">;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <Link to={RECORD_PAGES[page.entity]} params={slugParams(page.publicId, title)}>
+      {children}
+    </Link>
   );
 }
 

@@ -1,5 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { useState } from "react";
+
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import { Byline } from "~/lib/byline";
@@ -108,6 +110,7 @@ function ConcealedVolumePage() {
 function VolumePage() {
   const page = Route.useLoaderData();
   const { volume, series, credits, description, editions, coverUrl, coverEdition } = page;
+  const [artShown, setArtShown] = useState(false);
   const ratingTarget = { kind: "volume" as const, publicId: volume.publicId };
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
@@ -151,9 +154,12 @@ function VolumePage() {
                 volume.label !== null ? { series: series.title, number: volume.label } : undefined
               }
               lazy={false}
+              onArt={setArtShown}
             />
           </div>
-          {coverEdition ? <EditionCoverLink edition={coverEdition} /> : null}
+          {coverEdition ? (
+            <EditionCoverLink edition={coverEdition} artShown={Boolean(coverUrl) || artShown} />
+          ) : null}
         </div>
 
         {/* The viewer's take, under the cover: their private Rating of this

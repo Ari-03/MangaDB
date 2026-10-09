@@ -942,6 +942,14 @@ export default defineSchema({
     ),
   })
     .index("by_state", ["state", "submittedAt"])
+    // The review queue's views of one kind of author (proposals.reviewQueuePage).
+    .index("by_state_and_author_kind", ["state", "author.kind", "submittedAt"])
+    .index("by_state_and_author_role", [
+      "state",
+      "author.kind",
+      "author.roleAtAuthorship",
+      "submittedAt",
+    ])
     .index("by_author", ["author.userId", "state"]),
 
   // Immutable once submitted; Request Changes yields a new version.
@@ -963,7 +971,10 @@ export default defineSchema({
     authorId: v.id("users"),
     kind: v.union(v.literal("comment"), v.literal("requestChanges"), v.literal("reject")),
     text: v.string(),
-  }).index("by_proposal", ["proposalId"]),
+  })
+    .index("by_proposal", ["proposalId"])
+    // A Proposal's decision notes without its discussion (suggestions.ts).
+    .index("by_proposal_and_kind", ["proposalId", "kind"]),
 
   // One immutable public Revision per affected record per approval.
   revisions: defineTable({
@@ -988,7 +999,7 @@ export default defineSchema({
     // Launch gate ④: verifying a correction produced public Revisions.
     .index("by_proposal", ["proposalId"]),
 
-  // Cover art a data-team member uploaded for a Cover change
+  // Cover art a person uploaded for a Cover change or a Suggestion
   // (coverUploads.ts): the upload URL names a row and its `token`, and the
   // HTTP action that receives the file stores it and records the blob on
   // that row, so only its uploader can put it in a change. The hourly
@@ -1003,7 +1014,6 @@ export default defineSchema({
     sweepAfter: v.number(),
   })
     .index("by_storage", ["storageId"])
-    .index("by_uploader", ["uploaderId", "sweepAfter"])
     .index("by_sweepAfter", ["sweepAfter"]),
 
   // A stored cover something besides a record still needs: a Revision whose

@@ -49,6 +49,14 @@ export async function requireDataTeam(ctx: QueryCtx | MutationCtx): Promise<Doc<
   return await requireRole(ctx, DATA_ROLES);
 }
 
+/**
+ * Whether a User holds a data-team role now. A User without one is a
+ * reader, whose Proposals are Suggestions (proposals.ts checkSuggestionOps).
+ */
+export function onDataTeam(user: Doc<"users">): boolean {
+  return user.role !== undefined;
+}
+
 /** An Administrator who is neither suspended nor deleting their account. */
 function activeAdministrator(user: Doc<"users">): boolean {
   return user.role === "administrator" && !user.suspended && user.deletingSince === undefined;

@@ -1,9 +1,10 @@
-// The Cover section of the edit and propose forms (/mod/edit, /mod/propose)
-// for a Release or a Bundle: the stored art beside its replacement, which a
-// person drops, chooses, pastes, or reuses from a related record, or
-// removes. The new cover is one more field of the form's draft (the JSON
-// of a CoverDraft under `coverImage`, lib/editForm.tsx), saved with the
-// form's one Save and change comment through the usual write path.
+// The Cover section of the edit, propose and suggest forms (/mod/edit,
+// /mod/propose, /suggest) for a Release or a Bundle: the stored art beside
+// its replacement, which a person drops, chooses, pastes, or reuses from a
+// related record, or removes. The new cover is one more field of the
+// form's draft (the JSON of a CoverDraft under `coverImage`,
+// lib/editForm.tsx), saved with the form's one Save and change comment
+// through the usual write path.
 //
 // A chosen file uploads at once (convex/coverUploads.ts) while the person
 // writes the comment; the form holds Save until it lands. Only the newest
@@ -26,9 +27,16 @@ import {
 import { clothColor } from "~/lib/cover";
 import { decodeCover, encodeCover } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
+import { useArtConcealed } from "~/lib/mature";
 
 type EditForm = NonNullable<FunctionReturnType<typeof api.moderation.editForm>>;
 export type CoverContext = NonNullable<EditForm["cover"]>;
+
+/** The record forms the Cover section sits in. */
+export type CoverFormRoute =
+  | "/mod/edit/$type/$key"
+  | "/mod/propose/$type/$key"
+  | "/suggest/$type/$key";
 
 /** Smallest file the server keeps as art (convex/lib/covers.ts MIN_COVER_BYTES). */
 const MIN_BYTES = 2048;
@@ -109,20 +117,37 @@ type Upload = {
   | { status: "done"; storageId: string }
 );
 
-/** Art in the shelf's 2:3 frame, or the cloth placeholder with a line of words. */
-function ArtFrame({ url, alt, empty }: { url: string | null; alt: string; empty: string }) {
+/**
+ * Art in the shelf's 2:3 frame, or the cloth placeholder with a line of
+ * words. Inside a ConcealArt boundary (lib/mature.tsx) for a viewer who has
+ * not opted in to 18+ art, catalog art shows as cloth too; `own` art, the
+ * viewer's own upload, always shows.
+ */
+function ArtFrame({
+  url,
+  alt,
+  empty,
+  own = false,
+}: {
+  url: string | null;
+  alt: string;
+  empty: string;
+  own?: boolean;
+}) {
+  const concealed = useArtConcealed() && !own;
+  const words = url && concealed ? "18+ art hidden" : empty;
   return (
     <span className="cover">
-      {url ? (
+      {url && !concealed ? (
         <img src={url} alt={alt} width={400} height={600} />
       ) : (
         <span
           className="cover-ph"
           style={{ "--cloth": clothColor(alt) } as CSSProperties}
           role="img"
-          aria-label={empty}
+          aria-label={words}
         >
-          <span className="cover-ph-title">{empty}</span>
+          <span className="cover-ph-title">{words}</span>
         </span>
       )}
     </span>
@@ -133,8 +158,10 @@ function ArtFrame({ url, alt, empty }: { url: string | null; alt: string; empty:
  * The Cover section. `value` and `initial` are the form-state strings of
  * the cover (lib/editForm.tsx encodeCover); `setValue` changes it, and
  * `revert` puts back the stored cover untouched. `onUploading` tells the
- * form to hold Save. `proposing` sends the mature-art link to the Series'
- * propose form instead of its edit form.
+ * form to hold Save. `formRoute` is the form this section sits in, where the
+ * mature-art link opens the Series too: the edit, propose or suggest form.
+ * `knownArt` is art the form can already show by blob, such as the upload a
+ * resumed Draft holds, drawn as the replacement while it is chosen.
  */
 export function CoverField({
   cover,
@@ -147,7 +174,8 @@ export function CoverField({
   onUploading,
   overridden,
   disabled,
-  proposing,
+  formRoute,
+  knownArt = [],
 }: {
   cover: CoverContext;
   boxSet: boolean;
@@ -159,7 +187,8 @@ export function CoverField({
   onUploading: (uploading: boolean) => void;
   overridden: boolean;
   disabled: boolean;
-  proposing: boolean;
+  formRoute: CoverFormRoute;
+  knownArt?: ReadonlyArray<{ storageId: string; url: string | null; own?: boolean }>;
 }) {
   const startUpload = useMutation(api.coverUploads.uploadUrl);
   const finishUpload = useMutation(api.coverUploads.uploaded);
@@ -286,7 +315,11 @@ export function CoverField({
   });
 
   const reused = cover.related.find((art) => art.storageId === replacement);
+  const known = knownArt.find((art) => art.storageId === replacement);
+  const knownUrl = known?.url ?? null;
   const uploadShown = upload && (upload.status !== "done" || upload.storageId === replacement);
+  // A replacement the section draws: a fresh upload, reused art, or known art.
+  const drawn = Boolean(uploadShown) || reused !== undefined || knownUrl !== null;
   const facts = uploadShown ? coverFactsLine(upload.facts) : null;
   const fallback = cover.isbn13
     ? `the jacket fetched for ISBN ${cover.isbn13} when one exists, else the cloth placeholder`
@@ -341,9 +374,17 @@ export function CoverField({
               url={upload.preview}
               alt={`Replacement cover, ${upload.facts.width} by ${upload.facts.height} pixels`}
               empty="Replacement"
+              own
             />
           ) : reused ? (
             <ArtFrame url={reused.url} alt={`Cover from ${reused.label}`} empty="Replacement" />
+          ) : knownUrl !== null ? (
+            <ArtFrame
+              url={knownUrl}
+              alt="Replacement cover"
+              empty="Replacement"
+              own={known?.own === true}
+            />
           ) : (
             <label
               className={over ? "dropzone is-over" : "dropzone"}
@@ -359,9 +400,14 @@ export function CoverField({
                 if (file) void choose(file);
               }}
             >
-              <span>
+              {/* A touch screen has nothing to drop or paste with: it shows
+                  the second line instead (styles/mod.css). */}
+              <span className="dropzone-pointer">
                 <b>Drop a JPEG, PNG or WebP here</b>
                 choose a file, or paste an image. Up to 10 MB.
+              </span>
+              <span className="dropzone-touch">
+                <b>Choose a photo</b>A JPEG, PNG or WebP, up to 10 MB.
               </span>
               <input
                 type="file"
@@ -442,7 +488,7 @@ export function CoverField({
       ) : null}
 
       <div className="mod-actions cover-edit-actions">
-        {uploadShown || reused ? (
+        {drawn ? (
           <>
             <button
               type="button"
@@ -465,7 +511,7 @@ export function CoverField({
             />
           </>
         ) : null}
-        {uploadShown || reused ? (
+        {drawn ? (
           <button
             type="button"
             className="btn btn-sm"
@@ -528,10 +574,7 @@ export function CoverField({
         {!cover.mature && cover.series ? (
           <p className="field-help">
             If this jacket is 18+, set the{" "}
-            <Link
-              to={proposing ? "/mod/propose/$type/$key" : "/mod/edit/$type/$key"}
-              params={{ type: "series", key: String(cover.series.publicId) }}
-            >
+            <Link to={formRoute} params={{ type: "series", key: String(cover.series.publicId) }}>
               series content rating
             </Link>{" "}
             too; covers follow the series rating, not the file.

@@ -1,5 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { useState } from "react";
+
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import { findEditionGroup } from "../../convex/lib/editionGroups";
@@ -142,6 +144,7 @@ function SeriesPage() {
   const page = Route.useLoaderData();
   const { edition: editionKey } = Route.useSearch();
   const { series, family, credits, volumes, editionGroups, coverUrl, coverEdition } = page;
+  const [artShown, setArtShown] = useState(false);
   const ratingTarget = { kind: "series" as const, publicId: series.publicId };
   const facts = packagingFacts(editionGroups);
   // The first path's first book fronts the Series — the standard run leads,
@@ -176,9 +179,17 @@ function SeriesPage() {
           <div className="series-cover">
             {/* The front book's jacket; coverless Series get the cloth
                 binding rather than a broken image. */}
-            <Cover src={coverUrl} isbn13={heroIsbns} title={series.title} lazy={false} />
+            <Cover
+              src={coverUrl}
+              isbn13={heroIsbns}
+              title={series.title}
+              lazy={false}
+              onArt={setArtShown}
+            />
           </div>
-          {coverEdition ? <EditionCoverLink edition={coverEdition} /> : null}
+          {coverEdition ? (
+            <EditionCoverLink edition={coverEdition} artShown={Boolean(coverUrl) || artShown} />
+          ) : null}
           {facts.dateSpan ? (
             <p className="note">English releases on file: {facts.dateSpan}.</p>
           ) : null}

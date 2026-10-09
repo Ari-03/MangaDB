@@ -42,11 +42,11 @@ const TOOLS = [
   { id: "packaging", to: "/mod/packaging", label: "Catalog gaps" },
   { id: "proposals", to: "/mod/proposals", label: "My proposals" },
   { id: "comments", to: "/mod/comments", label: "Comments" },
-  { id: "launch", to: "/mod/launch", label: "Launch" },
   { id: "roles", to: "/mod/roles", label: "Roles" },
 ] as const;
 
-export type ModTool = (typeof TOOLS)[number]["id"];
+/** A workroom page. Launch (/mod/launch) sits in the frame but has no tab. */
+export type ModTool = (typeof TOOLS)[number]["id"] | "launch";
 
 /** The badge beside a tab: a count, a dot, or nothing. */
 function TabBadge({ count, label }: { count: number | undefined; label: string }) {
@@ -340,6 +340,7 @@ export const KIND_LABELS = {
   newRecords: "New records",
   sensitive: "Merge, hide or lock",
   report: "Report",
+  suggestion: "Suggestion",
 } satisfies Record<QueueKind, string>;
 
 /** How a summary names a sensitive op. */
@@ -355,15 +356,27 @@ const ACTION_LABELS: Record<string, string> = {
 /**
  * A Proposal's change in one line: the first fields with before and after,
  * what it creates, the overrides it clears, the sensitive ops; a report's
- * message instead. Nothing when the summary is empty.
+ * message instead. Nothing when the summary is empty. `afterOnly` leaves
+ * the before-values out (a reader's Suggestion on a record no longer public).
  */
-export function ChangeSummary({ summary }: { summary: QueueSummary }) {
+export function ChangeSummary({
+  summary,
+  afterOnly = false,
+}: {
+  summary: QueueSummary;
+  afterOnly?: boolean;
+}) {
   if (summary.report !== null) {
     return <p className="work-change work-report">{summary.report}</p>;
   }
   const parts: ReactNode[] = summary.fields.map((change) => (
     <span key={change.field}>
-      <span className="k">{change.label}:</span> <del>{renderFieldValue(change.before)}</del> →{" "}
+      <span className="k">{change.label}:</span>{" "}
+      {afterOnly ? null : (
+        <>
+          <del>{renderFieldValue(change.before)}</del> →{" "}
+        </>
+      )}
       <ins>{renderFieldValue(change.after)}</ins>
     </span>
   ));

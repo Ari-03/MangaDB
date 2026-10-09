@@ -1,10 +1,11 @@
 // What a catalog page shows around a cover or a description for editing
 // and crediting it: the source footer every reader sees under a blurb, and
-// the data team's links beside the art and the text. Each link goes to the
-// record that owns what is shown (convex/catalogPages.ts `Owner`), never a
-// guess: Moderators to the direct edit, Editors to the proposal form, both
-// at the matching section (`#cover`, `#description`). Readers without a
-// data-team role see no links.
+// the links beside the art and the text for anyone signed in. Each link
+// goes to the record that owns what is shown (convex/catalogPages.ts
+// `Owner`), never a guess: Moderators to the direct edit, Editors to the
+// proposal form, other signed-in readers to the suggest form, each at the
+// matching section (`#cover`, `#description`). Signed-out visitors see no
+// links.
 
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
@@ -12,7 +13,7 @@ import type { ReactNode } from "react";
 import type { Owner } from "../../convex/catalogPages";
 import type { Citation } from "../../convex/lib/moderationFields";
 import { slugParams } from "~/lib/slug";
-import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
+import { useIsDataTeam, useIsModerator, useReadyViewer } from "~/lib/viewer";
 
 /** The section of the edit form a link lands on. */
 export type EditAnchor = "cover" | "description";
@@ -33,7 +34,7 @@ export function BlurbSource({ attribution }: { attribution: Citation | null | un
   );
 }
 
-/** One link to `owner`'s edit or propose form at `anchor`, by the viewer's role. */
+/** One link to `owner`'s edit, propose or suggest form at `anchor`, by the viewer's role. */
 export function ContextEditLink({
   owner,
   anchor,
@@ -44,12 +45,19 @@ export function ContextEditLink({
   children: ReactNode;
 }) {
   const isModerator = useIsModerator();
+  const isDataTeam = useIsDataTeam();
   return (
     <Link
-      to={isModerator ? "/mod/edit/$type/$key" : "/mod/propose/$type/$key"}
+      to={
+        isModerator
+          ? "/mod/edit/$type/$key"
+          : isDataTeam
+            ? "/mod/propose/$type/$key"
+            : "/suggest/$type/$key"
+      }
       params={{ type: owner.type, key: owner.key }}
       hash={anchor}
-      title={`Edit ${owner.label}`}
+      title={isDataTeam ? `Edit ${owner.label}` : `Suggest a change to ${owner.label}`}
     >
       {children}
     </Link>
@@ -57,9 +65,9 @@ export function ContextEditLink({
 }
 
 /**
- * The data team's row of edit links under a blurb or a cover, with an
- * optional note before them ("This is the series synopsis."). Nothing for
- * other readers.
+ * The row of edit links under a blurb or a cover, with an optional note
+ * before them ("This is the series synopsis."), for anyone signed in with
+ * a username. Nothing for signed-out visitors.
  */
 export function EditLinks({
   note,
@@ -70,8 +78,7 @@ export function EditLinks({
   children: ReactNode;
   id?: string;
 }) {
-  const isDataTeam = useIsDataTeam();
-  if (!isDataTeam) return null;
+  if (!useReadyViewer()) return null;
   return (
     <p className="mod-edit-link context-edit" id={id}>
       {note ? <span>{note}</span> : null}
@@ -81,11 +88,25 @@ export function EditLinks({
 }
 
 /**
- * A Volume or Series page's cover link: the art there is one Edition's,
- * so it leads to that Edition's page, where the cover link names the
- * Release that holds it (`#cover`).
+ * The words of a cover link: "Change cover" while the page shows art, from
+ * the catalog or found by ISBN, and "Add a cover" over the cloth placeholder.
  */
-export function EditionCoverLink({ edition }: { edition: { publicId: number; title: string } }) {
+export function coverLinkLabel(artShown: boolean): string {
+  return artShown ? "Change cover" : "Add a cover";
+}
+
+/**
+ * A Volume or Series page's cover link, under the art: the art there is
+ * one Edition's, so it leads to that Edition's page, where the cover link
+ * names the Release that holds it (`#cover`).
+ */
+export function EditionCoverLink({
+  edition,
+  artShown,
+}: {
+  edition: { publicId: number; title: string };
+  artShown: boolean;
+}) {
   return (
     <EditLinks>
       <Link
@@ -94,7 +115,7 @@ export function EditionCoverLink({ edition }: { edition: { publicId: number; tit
         hash="cover"
         title={`Edit on the ${edition.title} page`}
       >
-        Change cover
+        {coverLinkLabel(artShown)}
       </Link>
     </EditLinks>
   );

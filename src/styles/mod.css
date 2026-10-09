@@ -531,14 +531,10 @@
 
 /* ---------- cover + description ---------------------------------- */
 
-/* The data team's links beside a public page's art, blurb and Release
-   rows (lib/contextEdit.tsx): the .mod-edit-link look, set close by. */
+/* The edit links beside a public page's art and blurb
+   (lib/contextEdit.tsx): the .mod-edit-link look, set close by. */
 .context-edit {
   margin-top: 8px;
-}
-.release-side .context-edit {
-  margin: 0;
-  justify-content: flex-end;
 }
 
 /* The Cover and Description sections of /mod/edit and /mod/propose. They
@@ -797,6 +793,71 @@
 @media (max-width: 720px) {
   .cover-grid {
     grid-template-columns: var(--cover-w);
+  }
+}
+
+/* A touch screen has no drag and drop, and no paste worth offering: the
+   drop zone says "Choose a photo" there instead (lib/coverField.tsx). */
+.dropzone-touch {
+  display: none;
+}
+@media (hover: none) and (pointer: coarse) {
+  .dropzone-pointer {
+    display: none;
+  }
+  .dropzone-touch {
+    display: block;
+  }
+}
+
+/* ---------- a reader's suggest form and Suggestions ----------------- */
+
+/* /suggest and /me/suggestions/{id} borrow the propose form's look on the
+   site's ordinary page. A reviewer's word to the author stands out from
+   the rest of the page; long links and values wrap rather than widen it. */
+.suggestion-decision {
+  border-left: 3px solid var(--mod-warn);
+  white-space: pre-line;
+}
+.suggestion-actions {
+  margin-top: 18px;
+}
+.suggest-signin {
+  margin-top: 20px;
+}
+.suggest-page .revision-changes,
+.suggest-page .revision-comment,
+.suggest-page .breadcrumbs,
+.suggest-page .notice,
+.suggestion-list .work-reason {
+  overflow-wrap: anywhere;
+}
+
+/* Phones: 16px inputs (smaller ones make iOS zoom the page) and tap
+   targets of at least 44px. */
+@media (max-width: 720px) {
+  .suggest-page input:not([type="checkbox"]):not([type="radio"]),
+  .suggest-page textarea,
+  .suggest-page select {
+    font-size: 16px;
+  }
+  .suggest-page .btn,
+  .suggest-page button.btn {
+    min-height: 44px;
+  }
+  .suggest-page .date-fieldset input {
+    max-width: 6rem;
+  }
+  .suggest-page .mod-actions > .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .suggestion-list .work-row {
+    padding: 12px 14px;
+  }
+  .suggestion-list .work-title {
+    display: inline-block;
+    padding: 6px 0;
   }
 }
 

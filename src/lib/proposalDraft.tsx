@@ -1,6 +1,7 @@
-// The Draft Proposal round trip the proposal forms share (/mod/propose and
-// /mod/propose-new): save the draft, submit it for review, and ask for
-// explicit acknowledgment when convex/proposals.ts answers with warnings.
+// The Draft Proposal round trip the proposal forms share (/mod/propose,
+// /mod/propose-new and the reader's /suggest): save the draft, submit it
+// for review, and ask for explicit acknowledgment when convex/proposals.ts
+// answers with warnings.
 
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
@@ -34,15 +35,23 @@ export function unacknowledgedWarnings(err: unknown): string[] | null {
 /**
  * One proposal form's draft state. `saveDraft` and `submit` take a builder
  * so a field that fails to parse (it throws) reads as the save's error;
- * submitting saves first, then opens the submitted proposal. A submission
+ * submitting saves first, then opens the submitted proposal: on /mod, or a
+ * reader's Suggestion under /me (`suggest`). Saves go to `resume`, a Draft
+ * the author is revising, until the first save names one. A submission
  * with unacknowledged warnings parks them in `pendingWarnings` for
  * <ProposalWarnings>.
  */
-export function useProposalDraft() {
+export function useProposalDraft({
+  resume,
+  suggest = false,
+}: {
+  resume?: Id<"proposals">;
+  suggest?: boolean;
+} = {}) {
   const navigate = useNavigate();
   const saveDraftMutation = useMutation(api.proposals.saveDraft);
   const submitProposal = useMutation(api.proposals.submitProposal);
-  const [draftId, setDraftId] = useState<Id<"proposals"> | null>(null);
+  const [draftId, setDraftId] = useState<Id<"proposals"> | null>(resume ?? null);
   const [pendingWarnings, setPendingWarnings] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,10 +85,9 @@ export function useProposalDraft() {
     try {
       const proposalId = await save(build);
       await submitProposal({ proposalId, acknowledgeWarnings });
-      await navigate({
-        to: "/mod/proposal/$id",
-        params: { id: proposalId as string },
-      });
+      const params = { id: proposalId as string };
+      if (suggest) await navigate({ to: "/me/suggestions/$id", params });
+      else await navigate({ to: "/mod/proposal/$id", params });
     } catch (err) {
       const warnings = unacknowledgedWarnings(err);
       if (warnings) {
