@@ -1165,17 +1165,17 @@ describe("suggestions — sources and art only hidden records hold", () => {
     const { proposalId } = await suggest(PLAIN, publicArt);
     const asReader = t.withIdentity({ subject: PLAIN });
     expect((await asReader.query(api.suggestions.detail, { proposalId }))?.coverArt).toEqual([
-      { storageId: publicArt, url: expect.any(String) },
+      { storageId: publicArt, url: expect.any(String), own: false },
     ]);
     await t.run((ctx) => ctx.db.patch(siblingId, { status: "hidden" }));
     expect((await asReader.query(api.suggestions.detail, { proposalId }))?.coverArt).toEqual([
-      { storageId: publicArt, url: null },
+      { storageId: publicArt, url: null, own: false },
     ]);
     // Their own upload they always see.
     const { proposalId: ownDraft } = await suggest(PLAIN, own);
     expect(
       (await asReader.query(api.suggestions.detail, { proposalId: ownDraft }))?.coverArt,
-    ).toEqual([{ storageId: own, url: expect.any(String) }]);
+    ).toEqual([{ storageId: own, url: expect.any(String), own: true }]);
   });
 });
 

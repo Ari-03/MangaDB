@@ -188,7 +188,7 @@ export function CoverField({
   overridden: boolean;
   disabled: boolean;
   formRoute: CoverFormRoute;
-  knownArt?: ReadonlyArray<{ storageId: string; url: string | null }>;
+  knownArt?: ReadonlyArray<{ storageId: string; url: string | null; own?: boolean }>;
 }) {
   const startUpload = useMutation(api.coverUploads.uploadUrl);
   const finishUpload = useMutation(api.coverUploads.uploaded);
@@ -315,7 +315,8 @@ export function CoverField({
   });
 
   const reused = cover.related.find((art) => art.storageId === replacement);
-  const knownUrl = knownArt.find((art) => art.storageId === replacement)?.url ?? null;
+  const known = knownArt.find((art) => art.storageId === replacement);
+  const knownUrl = known?.url ?? null;
   const uploadShown = upload && (upload.status !== "done" || upload.storageId === replacement);
   // A replacement the section draws: a fresh upload, reused art, or known art.
   const drawn = Boolean(uploadShown) || reused !== undefined || knownUrl !== null;
@@ -378,7 +379,12 @@ export function CoverField({
           ) : reused ? (
             <ArtFrame url={reused.url} alt={`Cover from ${reused.label}`} empty="Replacement" />
           ) : knownUrl !== null ? (
-            <ArtFrame url={knownUrl} alt="Replacement cover" empty="Replacement" />
+            <ArtFrame
+              url={knownUrl}
+              alt="Replacement cover"
+              empty="Replacement"
+              own={known?.own === true}
+            />
           ) : (
             <label
               className={over ? "dropzone is-over" : "dropzone"}

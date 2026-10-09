@@ -323,7 +323,8 @@ export const detail = query({
  * draws it, with `url` null unless the reader uploaded it or a record the
  * public catalog shows holds it (lib/coverRefs.ts publicArt): art only a
  * hidden record holds is not shown, though the change still names it. So
- * is art past the read budget, whose holders are not read.
+ * is art past the read budget, whose holders are not read. `own` marks the
+ * reader's own uploads, which the form shows even where 18+ art is hidden.
  */
 async function readerArt(
   ctx: QueryCtx,
@@ -333,11 +334,17 @@ async function readerArt(
 ) {
   const art = [];
   for (const storageId of coverBlobsOf(changes)) {
-    const open = await loaded(async () => {
+    const own = await loaded(async () => {
       await reads.room();
-      return (await ownUpload(ctx, storageId, userId)) || (await publicArt(ctx, storageId, reads));
+      return await ownUpload(ctx, storageId, userId);
     }, false);
-    art.push({ storageId, url: open ? await coverUrl(ctx, storageId) : null });
+    const open =
+      own ||
+      (await loaded(async () => {
+        await reads.room();
+        return await publicArt(ctx, storageId, reads);
+      }, false));
+    art.push({ storageId, url: open ? await coverUrl(ctx, storageId) : null, own });
   }
   return art;
 }
