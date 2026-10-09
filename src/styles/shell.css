@@ -498,13 +498,15 @@
     gap: 12px;
   }
   /* with the search box folded away, nothing else pushes these to the edge;
-     the Discord link and the Queue link move into the drawer */
+     the Discord, Queue and My library links move into the drawer, leaving
+     Clerk's account button as the one account control in the row */
   .header-actions {
     margin-left: auto;
     gap: 8px;
   }
   .header-actions .discord-link,
-  .header-actions .nav-link {
+  .header-actions .nav-link,
+  .header-actions .account {
     display: none;
   }
 }
@@ -526,13 +528,6 @@
   }
   .header-actions .btn {
     display: none;
-  }
-  .account span:not(.avatar) {
-    display: none;
-  }
-  .account {
-    padding: 3px;
-    border-color: transparent;
   }
   .section {
     padding-block: 38px 6px;
