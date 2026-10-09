@@ -168,7 +168,8 @@ export function validateChanges(
  * comes back with `citedText`, the text it names a source for. Empty text
  * has no source. A changed value is held to the length a person may write
  * (lib/moderationFields.ts overLength), and `author` is checked for a claim
- * to any cover blob the op sets (lib/coverRefs.ts checkCoverUse).
+ * to any cover blob the op sets (lib/coverRefs.ts checkCoverUse), held to
+ * a reader's art when `reader` (default: they hold no data-team role).
  */
 export async function validateUpdate(
   ctx: QueryCtx,
@@ -178,6 +179,7 @@ export async function validateUpdate(
     changes: Array<{ field: string; value: unknown }>;
     citation: Citation | null | undefined;
     author: Doc<"users">;
+    reader?: boolean;
   },
 ): Promise<{
   changes: FieldChange[];
@@ -213,7 +215,7 @@ export async function validateUpdate(
     const tooLong = overLength(fieldDescriptor(ref.type, change.field)!, change.after);
     if (tooLong !== null) fail("invalidField", tooLong);
     if (change.field === "coverImage") {
-      await checkCoverUse(ctx, doc as Doc<"releases">, change, args.author);
+      await checkCoverUse(ctx, doc as Doc<"releases">, change, args.author, args.reader);
     }
   }
   return { changes, citation, ...(citedText !== undefined ? { citedText } : {}) };

@@ -228,8 +228,11 @@ Pages:
   locks. The older `proposals.reviewQueue` (no paging, an array with
   `ageMs`) stays for clients built before the paged one and filters by the
   same rules.
-- `/mod/proposal/{id}`: every version with before and after per record,
-  bases, evidence, and internal discussion notes.
+- `/mod/proposal/{id}`: the newest 50 versions with before and after per
+  record, bases, evidence, and internal discussion notes. A reader can
+  resubmit without a Moderator, so older versions are not shown; the page
+  says "Showing the newest 50 of N versions" then. The current version is
+  always among them.
 - `/mod/proposals`: your own proposals, titled by their change comment,
   with the same change line as the queue.
 - `/mod/propose/{type}/{key}`: the Editor form, linked as "Propose a
@@ -279,7 +282,10 @@ these limits (`checkSuggestionOps` and the reader buckets in
 
 Saving, submitting and rebasing check the author's role now, so a Draft
 someone wrote while on the Data Team goes no further once they are off it
-unless it is a Suggestion. They can still withdraw it.
+unless it is a Suggestion. They can still withdraw it. A Suggestion stays
+one whatever role its author holds later (`isSuggestion`): appointed to
+the Data Team, they still save, submit and rebase it under these rules,
+and what they start there is theirs as an Editor.
 
 Catalog pages show a signed-in reader the Data Team's links beside a
 cover, a description and the Release rows, leading to
@@ -317,6 +323,9 @@ reader wrote of it (the new values, citation, evidence and comment). A
 Source Observation cited as evidence whose record is no longer public
 reads "(not public)", without its page, and a cover only a non-public
 record holds is named without its art; the Data Team's page shows both.
+An op other than an update, which a Suggestion saved before the rules
+above held might carry, reads "A change a suggestion cannot make", naming
+no record (`readerOps`).
 
 An open Suggestion is stale when a record it changes has a newer Revision
 or has left ordinary editing, judged from its working ops: the Draft's

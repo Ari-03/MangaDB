@@ -4,6 +4,7 @@
 // reader's own Suggestion (/me/suggestions) both draw them.
 
 import type { renderEvidence, renderOps } from "../../convex/proposals";
+import type { readerOps } from "../../convex/suggestions";
 import { editorialField } from "../../convex/lib/moderationFields";
 import {
   CLEAR_OVERRIDE_HINT,
@@ -14,7 +15,7 @@ import {
   type CoverArt,
 } from "~/lib/moderation";
 
-type RenderedOps = Awaited<ReturnType<typeof renderOps>>;
+type RenderedOps = Awaited<ReturnType<typeof renderOps | typeof readerOps>>;
 type RenderedEvidence = Awaited<ReturnType<typeof renderEvidence>>;
 
 /** A version's or a Draft's ops, in order, with cover art for cover changes. */
@@ -97,7 +98,8 @@ export function OpsList({ ops, art }: { ops: RenderedOps; art: CoverArt }) {
             <p>
               {/* Sensitive catalog operations render as a
                   one-line summary; their full impact preview lives on the
-                  record's manage panel. */}
+                  record's manage panel. A reader's page names any op but
+                  an update the same way, without its records. */}
               <strong>{op.summary}</strong>
             </p>
           )}

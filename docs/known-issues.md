@@ -571,6 +571,19 @@ is fixed.
   record shows or names in History (`publicArt`). When an import replaces
   a record's art while a Suggestion on it is open, the old art is held
   only by that Suggestion's pin, so its before thumbnail is drawn blank.
+- **The proposal page shows only the newest 50 versions.**
+  `proposals.proposalDetail` renders the newest 50 (`VERSIONS_SHOWN`), and
+  so does a reader's `suggestions.detail`; older ones are in
+  `proposalVersions` but not on any page. Its internal discussion is still
+  read whole, which only the Data Team can lengthen.
+- **Suggestions changed on the Data Team before the rule keep what they
+  hold.** A Suggestion now stays under the reader rules whatever its
+  author's role. One its author filled with creations or override clears
+  while on the Data Team, before that held, can no longer be submitted or
+  rebased by them; In Review, a Moderator still decides it. Its reader page
+  names those ops "A change a suggestion cannot make". An operator finds
+  them as `proposals` with no `author.roleAtAuthorship` whose ops are not
+  all updates.
 - **A deleted account's Drafts stay Drafts.** Account deletion keeps
   Proposals. A Draft has no author left to submit or withdraw it, and the
   cover a Draft names stays pinned (`coverRefs`). In-Review ones can still

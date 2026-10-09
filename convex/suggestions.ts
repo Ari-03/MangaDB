@@ -13,7 +13,9 @@
 // A record the public catalog no longer shows (hidden, merged, or under a
 // hidden parent: lib/publicRecords.ts publiclyVisible) is named NOT_PUBLIC, and
 // only what the author wrote of it is shown; so is a cited observation of
-// such a record, and cover art only such records hold is not drawn.
+// such a record, and cover art only such records hold is not drawn. An op
+// other than an update, which a Suggestion cannot carry, names nothing
+// (readerOps).
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -26,22 +28,24 @@ import { coverBlobsOf, ownUpload, publicArt } from "./lib/coverRefs";
 import { coverUrl } from "./lib/covers";
 import {
   currentVersionOf,
+  isSuggestion,
   observationFacts,
   recordFacts,
   recordSubjectOf,
   renderEvidence,
   renderOps,
   staleRecordsOf,
+  VERSIONS_SHOWN,
 } from "./proposals";
 
 /** The most rows the Suggestions list shows, newest first. */
 export const MINE_MAX = 50;
 
+/** How a reader's own page names an op other than an update. */
+export const WITHHELD_OP = "A change a suggestion cannot make";
+
 /** The most decisions one Proposal's page shows, the newest. */
 const NOTES_READ = 100;
-
-/** The most versions one Proposal's page shows, the newest. */
-const VERSIONS_READ = 50;
 
 const STATES = ["draft", "inReview", "approved", "rejected", "withdrawn"] as const;
 
@@ -49,14 +53,34 @@ const DECISION_KINDS = ["reject", "requestChanges"] as const;
 
 /**
  * Whether `user` wrote `proposal` as a reader: a person holding no
- * data-team role then, the queue's `suggestion` kind (lib/queueSummary.ts).
+ * data-team role then, the queue's `suggestion` kind (proposals.ts
+ * isSuggestion).
  */
 function readerAuthored(proposal: Doc<"proposals">, user: Doc<"users">) {
   return (
-    proposal.author.kind === "user" &&
-    proposal.author.userId === user._id &&
-    proposal.author.roleAtAuthorship === undefined
+    proposal.author.kind === "user" && proposal.author.userId === user._id && isSuggestion(proposal)
   );
+}
+
+/**
+ * A Suggestion's ops as its author reads them: each update rendered
+ * (proposals.ts renderOps, with `facts` from `recordFacts(ctx, true)`),
+ * and any other op as WITHHELD_OP, naming no record. The reader gate keeps
+ * other ops out of a Suggestion; a row written before it held may still
+ * carry one, and a creation's summary names the records it hangs from.
+ */
+export async function readerOps(
+  ctx: QueryCtx,
+  ops: Doc<"proposalVersions">["ops"],
+  live: boolean,
+  facts: ReturnType<typeof recordFacts>,
+) {
+  const rendered = [];
+  for (const op of ops) {
+    if (op.kind === "update") rendered.push(...(await renderOps(ctx, [op], live, facts)));
+    else rendered.push({ kind: "withheld" as const, summary: WITHHELD_OP });
+  }
+  return rendered;
 }
 
 /**
@@ -186,7 +210,7 @@ export const mine = query({
 });
 
 /**
- * One of the viewer's own Suggestions: its newest VERSIONS_READ submitted
+ * One of the viewer's own Suggestions: its newest VERSIONS_SHOWN submitted
  * versions with their ops (before and after per record) and evidence, the
  * Draft working copy, the reviewers' newest decisions, and, while it is a
  * Draft the suggest form can show whole, the record it revises it on
@@ -209,7 +233,7 @@ export const detail = query({
         .query("proposalVersions")
         .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
         .order("desc")
-        .take(VERSIONS_READ)
+        .take(VERSIONS_SHOWN)
     ).reverse();
     const undecided = proposal.state === "draft" || proposal.state === "inReview";
     // One read of each record and source however many versions name it.
@@ -222,14 +246,14 @@ export const detail = query({
         versionNo: version.versionNo,
         current,
         changeComment: version.changeComment,
-        ops: await renderOps(ctx, version.ops, undecided && current, facts),
+        ops: await readerOps(ctx, version.ops, undecided && current, facts),
         evidence: await renderEvidence(ctx, version.evidence, sources),
         submittedAt: version._creationTime,
       });
     }
     const draft = proposal.draft
       ? {
-          ops: await renderOps(ctx, proposal.draft.ops, undecided, facts),
+          ops: await readerOps(ctx, proposal.draft.ops, undecided, facts),
           evidence: await renderEvidence(ctx, proposal.draft.evidence, sources),
           comment: proposal.draft.comment,
         }

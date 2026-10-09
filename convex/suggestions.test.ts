@@ -23,8 +23,9 @@ import {
   MAX_SUGGESTION_BYTES,
   MAX_SUGGESTION_OPS,
   NOT_PUBLIC,
+  VERSIONS_SHOWN,
 } from "./proposals";
-import { MINE_MAX } from "./suggestions";
+import { MINE_MAX, WITHHELD_OP } from "./suggestions";
 import {
   insertCoverage,
   insertEdition,
@@ -1262,5 +1263,167 @@ describe("suggestions — cover upload allowance", () => {
       READER_UPLOADS_PER_DAY,
     );
     await asReader.mutation(api.coverUploads.uploadUrl, {});
+  });
+});
+
+describe("suggestions — many resubmissions", () => {
+  it("keeps the Moderator's page readable however often a reader resubmits", async () => {
+    const t = makeT({ transactionLimits: true });
+    await setup(t);
+    const readerId = await userIdOf(t, PLAIN);
+    // Ten retitles, resubmitted 205 times, as a reader may within the limits.
+    const versions = 205;
+    const proposalId = await t.run(async (ctx) => {
+      const ops = [];
+      for (let i = 0; i < MAX_SUGGESTION_OPS; i++) {
+        const seriesId = await insertSeries(ctx, { publicId: 100 + i, title: `Series ${i}` });
+        const { revisionId: baseRevisionId } = await insertSourceRevision(ctx, {
+          ref: series(seriesId),
+          sourceKey: "kodansha",
+          changes: [{ field: "title", after: `Series ${i}` }],
+        });
+        ops.push({
+          kind: "update" as const,
+          ref: series(seriesId),
+          baseRevisionId,
+          changes: [{ field: "title", before: `Series ${i}`, after: `Retitled ${i}` }],
+        });
+      }
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "user", userId: readerId },
+        state: "inReview",
+        currentVersionNo: versions,
+        submittedAt: Date.now(),
+      });
+      for (let versionNo = 1; versionNo <= versions; versionNo++) {
+        await ctx.db.insert("proposalVersions", {
+          proposalId,
+          versionNo,
+          ops,
+          evidence: URL_EVIDENCE,
+          changeComment: `Round ${versionNo}.`,
+        });
+      }
+      return proposalId;
+    });
+
+    const detail = await t
+      .withIdentity({ subject: MOD })
+      .query(api.proposals.proposalDetail, { proposalId });
+    expect(detail?.versions).toHaveLength(VERSIONS_SHOWN);
+    expect(detail?.versions[0]?.versionNo).toBe(versions - VERSIONS_SHOWN + 1);
+    expect(detail?.versions.at(-1)).toMatchObject({
+      versionNo: versions,
+      current: true,
+      ops: Array.from({ length: MAX_SUGGESTION_OPS }, () => ({ kind: "update", stale: false })),
+    });
+    expect(detail).toMatchObject({ currentVersionNo: versions, stale: false });
+    const asReader = t.withIdentity({ subject: PLAIN });
+    expect((await asReader.query(api.suggestions.detail, { proposalId }))?.versions).toHaveLength(
+      VERSIONS_SHOWN,
+    );
+  });
+});
+
+describe("suggestions — a Suggestion stays one", () => {
+  it("holds a Suggestion to the reader gate whatever role its author holds later", async () => {
+    const t = makeT();
+    const ids = await setup(t);
+    const { seriesId } = ids;
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const { proposalId } = await asReader.mutation(api.proposals.saveDraft, {
+      ops: [titleOp(seriesId, "Beta")],
+      evidence: URL_EVIDENCE,
+      comment: "The publisher's spelling.",
+    });
+    const hiddenId = await t.run((ctx) =>
+      insertSeries(ctx, { publicId: 2, title: "Secret Gamma", status: "hidden" }),
+    );
+    // A held book's source, and art only a hidden Release shows.
+    const heldSource = await t.run((ctx) =>
+      insertObservation(ctx, { sourceKey: "kodansha", sourceRecordId: "held" }),
+    );
+    const hiddenArt = await catalogArt(t);
+    const hiddenRelease = await insertHiddenRelease(t, ids);
+    await t.run((ctx) => ctx.db.patch(hiddenRelease, { coverImage: { storageId: hiddenArt } }));
+    const userId = await userIdOf(t, PLAIN);
+    await t.run((ctx) => ctx.db.patch(userId, { role: "editor" }));
+
+    // On the Data Team, its author still revises it as a reader.
+    const volumeOp = {
+      kind: "create" as const,
+      table: "volumes",
+      tempId: "v",
+      fields: { seriesId, label: "2" },
+    };
+    const save = (ops: FunctionArgs<typeof api.proposals.saveDraft>["ops"]) =>
+      asReader.mutation(api.proposals.saveDraft, {
+        proposalId,
+        ops,
+        evidence: URL_EVIDENCE,
+        comment: "A new volume.",
+      });
+    await expect(save([volumeOp])).rejects.toMatchObject({ data: { code: "forbidden" } });
+    await expect(save([titleOp(hiddenId, "Gamma")])).rejects.toMatchObject({
+      data: { code: "notFound" },
+    });
+    await expect(
+      asReader.mutation(api.proposals.saveDraft, {
+        proposalId,
+        ops: [titleOp(seriesId, "Beta")],
+        evidence: [{ kind: "observation", observationId: heldSource }],
+        comment: "As the source has it.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "invalidEvidence" } });
+    await expect(
+      save([
+        {
+          kind: "update",
+          ref: release(ids.releaseId),
+          changes: [{ field: "coverImage", value: { storageId: hiddenArt } }],
+        },
+      ]),
+    ).rejects.toMatchObject({ data: { code: "invalidField" } });
+    // What they start on the Data Team is theirs to write as an Editor.
+    await asReader.mutation(api.proposals.saveDraft, {
+      ops: [volumeOp],
+      evidence: URL_EVIDENCE,
+      comment: "A new volume.",
+    });
+
+    // A Suggestion turned into a creation before the gate held it goes no further.
+    await t.run((ctx) =>
+      ctx.db.patch(proposalId, {
+        draft: {
+          ops: [{ ...volumeOp, fields: { seriesId: hiddenId, label: "2" } }],
+          evidence: URL_EVIDENCE,
+          comment: "A new volume.",
+        },
+      }),
+    );
+    for (const call of [api.proposals.submitProposal, api.proposals.rebaseProposal]) {
+      await expect(asReader.mutation(call, { proposalId })).rejects.toMatchObject({
+        data: { code: "forbidden" },
+      });
+    }
+
+    // Once the role is gone, its page and row tell nothing of the Series it names.
+    await t.run((ctx) => ctx.db.patch(userId, { role: undefined }));
+    const detail = await asReader.query(api.suggestions.detail, { proposalId });
+    expect(detail?.draft?.ops).toEqual([{ kind: "withheld", summary: WITHHELD_OP }]);
+    expect(JSON.stringify(detail)).not.toContain("Secret Gamma");
+    const mine = await asReader.query(api.suggestions.mine, {});
+    expect(mine?.map((row) => row.proposalId)).toEqual([proposalId]);
+    expect(JSON.stringify(mine)).not.toContain("Secret Gamma");
+
+    // A report filed as a reader still reads back.
+    const { proposalId: reportId } = await asReader.mutation(api.reports.submit, {
+      seriesPublicId: 1,
+      message: "Volume 2 is missing.",
+    });
+    expect(await asReader.query(api.suggestions.detail, { proposalId: reportId })).toMatchObject({
+      state: "inReview",
+      versions: [{ ops: [] }],
+    });
   });
 });

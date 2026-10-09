@@ -227,9 +227,11 @@ export async function checkCoverStored(ctx: QueryCtx, value: unknown) {
  * Whether `author` may put the cover in `change` on `doc`: removing art,
  * keeping the record's own blob, a blob `author` uploaded (coverUploads.ts),
  * or art the catalog already holds. For the Data Team that is any art a
- * record shows or History names; for a reader only art a record the public
- * catalog shows holds (`publicArt`), so a Suggestion cannot reach art only
- * a hidden record has. Anything else is a blob they have no claim to.
+ * record shows or History names; for a reader (`reader`, by default one
+ * holding no data-team role; proposals.ts passes it for a Suggestion
+ * whoever writes it) only art a record the public catalog shows holds
+ * (`publicArt`), so a Suggestion cannot reach art only a hidden record
+ * has. Anything else is a blob they have no claim to.
  * Checked when a direct edit is saved and when a Proposal is drafted or
  * submitted; approval checks only that the blob is still there
  * (`checkCoverBlob`), since the Proposal has pinned it.
@@ -239,6 +241,7 @@ export async function checkCoverUse(
   doc: Pick<Doc<"releases">, "coverImage">,
   change: Change,
   author: Doc<"users">,
+  reader = !onDataTeam(author),
 ) {
   const raw = coverStorageId(change.after);
   if (raw === null) return;
@@ -255,9 +258,9 @@ export async function checkCoverUse(
     await checkCoverBlob(ctx, storageId, true);
     return;
   }
-  const catalogArt = onDataTeam(author)
-    ? (await shown(ctx, storageId)) || (await pinned(ctx, storageId, true))
-    : await publicArt(ctx, storageId);
+  const catalogArt = reader
+    ? await publicArt(ctx, storageId)
+    : (await shown(ctx, storageId)) || (await pinned(ctx, storageId, true));
   if (!catalogArt) {
     fail("invalidField", "That file is not an upload of yours or art on the catalog.");
   }

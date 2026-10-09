@@ -104,8 +104,29 @@ const rateLimiter = new RateLimiter(components.rateLimiter, RATE_LIMITS);
 /** The most ops one Suggestion carries (the Data Team's cap is MAX_OPS_PER_PROPOSAL). */
 export const MAX_SUGGESTION_OPS = 10;
 
+/** The most versions one Proposal's page shows, the newest (proposalDetail, suggestions.detail). */
+export const VERSIONS_SHOWN = 50;
+
 /** The most Suggestions one reader may have open (Draft or In Review) at once. */
 export const MAX_OPEN_SUGGESTIONS = 20;
+
+/**
+ * Whether `proposal` is a Suggestion: a person wrote it holding no
+ * data-team role (lib/queueSummary.ts `suggestion`). It stays one whatever
+ * role they hold later, so the reader gate (`readerGated`) holds it while
+ * they revise it on the Data Team and after that role is revoked.
+ */
+export function isSuggestion(proposal: Doc<"proposals">) {
+  return proposal.author.kind === "user" && proposal.author.roleAtAuthorship === undefined;
+}
+
+/**
+ * Whether `user` writing `proposal` (null for a new Draft) is held to the
+ * reader gate: they hold no data-team role, or it is a Suggestion.
+ */
+function readerGated(user: Doc<"users">, proposal: Doc<"proposals"> | null) {
+  return !onDataTeam(user) || (proposal !== null && isSuggestion(proposal));
+}
 
 /**
  * The reader gate on a Proposal's ops: a Suggestion only updates fields of
@@ -113,8 +134,9 @@ export const MAX_OPEN_SUGGESTIONS = 20;
  * clearing an override, and merging, hiding or locking stay with the Data
  * Team. Which fields an update may name is the field registry's to say
  * (moderation.ts validateChanges), as for anyone. Saving, submitting and
- * rebasing all check it, so a Draft written while its author was on the
- * Data Team goes no further once they are not.
+ * rebasing all check it (`readerGated`), so a Draft written while its
+ * author was on the Data Team goes no further once they are not, and a
+ * Suggestion never becomes more than one.
  */
 function checkSuggestionOps(ops: ReadonlyArray<{ kind: string }>) {
   if (ops.length > MAX_SUGGESTION_OPS) {
@@ -241,12 +263,14 @@ type OpInput =
  * record takes one update and any number of clears, but never a change to
  * a field and the clear of its override together: the change is itself a
  * human correction, and which of the two applied last would decide the
- * outcome.
+ * outcome. `reader` (a Suggestion's Draft) holds a cover to the art a
+ * reader may use (lib/coverRefs.ts checkCoverUse).
  */
 async function buildDraftOps(
   ctx: MutationCtx,
   submitted: OpInput[],
   author: Doc<"users">,
+  reader: boolean,
 ): Promise<StoredOp[]> {
   if (submitted.length === 0) {
     fail("noOps", "A proposal needs at least one operation.");
@@ -303,6 +327,7 @@ async function buildDraftOps(
         changes: op.changes,
         citation: op.citation,
         author,
+        reader,
       });
       ops.push({
         kind: "update",
@@ -526,7 +551,8 @@ export async function staleRecordsOf(
  * Any data-team member may author proposals; any other signed-in User a
  * Suggestion (checkSuggestionOps), under their own rate limit,
  * MAX_OPEN_SUGGESTIONS and MAX_SUGGESTION_BYTES, citing only observations
- * the public catalog shows. A Draft that places a held book is refused
+ * the public catalog shows; a Suggestion stays under those rules whoever
+ * revises it (`readerGated`). A Draft that places a held book is refused
  * (`placementDraft`): its author states it through placement.setPlacement,
  * which rebuilds its ops from the observation.
  */
@@ -539,25 +565,8 @@ export const saveDraft = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    const team = onDataTeam(user);
-    if (!team) {
-      checkSuggestionOps(args.ops);
-      await checkSuggestionTargets(ctx, args.ops);
-    }
-    await rateLimiter.limit(ctx, team ? "proposalDraftSave" : "suggestionDraftSave", {
-      key: user._id,
-      throws: true,
-    });
-    const ops = await buildDraftOps(ctx, args.ops as OpInput[], user);
-    const draft: Draft = {
-      ops,
-      evidence: await checkEvidence(ctx, args.evidence, !team),
-      comment: checkComment(args.comment),
-    };
-    if (!team) checkSuggestionSize(draft);
-
+    const proposal = args.proposalId ? await ctx.db.get(args.proposalId) : null;
     if (args.proposalId) {
-      const proposal = await ctx.db.get(args.proposalId);
       if (!proposal) fail("notFound", "No such proposal.");
       requireAuthor(proposal, user);
       if (proposal.state !== "draft") {
@@ -569,11 +578,30 @@ export const saveDraft = mutation({
           "This Draft places a held book: state its coverage, line and comment in its placement form.",
         );
       }
-      await ctx.db.patch(args.proposalId, { draft });
-      await pinProposalCovers(ctx, args.proposalId, ops);
-      return { proposalId: args.proposalId };
     }
-    if (!team) await checkOpenSuggestions(ctx, user._id);
+    const reader = readerGated(user, proposal);
+    if (reader) {
+      checkSuggestionOps(args.ops);
+      await checkSuggestionTargets(ctx, args.ops);
+    }
+    await rateLimiter.limit(ctx, reader ? "suggestionDraftSave" : "proposalDraftSave", {
+      key: user._id,
+      throws: true,
+    });
+    const ops = await buildDraftOps(ctx, args.ops as OpInput[], user, reader);
+    const draft: Draft = {
+      ops,
+      evidence: await checkEvidence(ctx, args.evidence, reader),
+      comment: checkComment(args.comment),
+    };
+    if (reader) checkSuggestionSize(draft);
+
+    if (proposal) {
+      await ctx.db.patch(proposal._id, { draft });
+      await pinProposalCovers(ctx, proposal._id, ops);
+      return { proposalId: proposal._id };
+    }
+    if (reader) await checkOpenSuggestions(ctx, user._id);
     const proposalId = await ctx.db.insert("proposals", {
       author: {
         kind: "user",
@@ -595,7 +623,8 @@ export const saveDraft = mutation({
  * per-user submission rate limit — then the draft freezes into an immutable
  * Proposal Version and the proposal lands In Review. Resubmission after
  * Request Changes runs through here again and mints the next version. Only
- * the author submits; a reader's Draft must still be a Suggestion.
+ * the author submits; a reader's Draft, or a Suggestion, must still pass
+ * the reader gate (`readerGated`).
  */
 export const submitProposal = mutation({
   args: {
@@ -604,18 +633,18 @@ export const submitProposal = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    const team = onDataTeam(user);
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) fail("notFound", "No such proposal.");
     requireAuthor(proposal, user);
     if (proposal.state !== "draft") {
       fail("badState", "Only Draft proposals can be submitted.");
     }
+    const reader = readerGated(user, proposal);
     const draft = proposal.draft;
     if (!draft || draft.ops.length === 0) {
       fail("noOps", "This draft has no operations to submit.");
     }
-    if (!team) {
+    if (reader) {
       checkSuggestionOps(draft.ops);
       await checkSuggestionTargets(ctx, draft.ops);
       // A Draft written on the Data Team, or a source hidden since it was saved.
@@ -645,7 +674,7 @@ export const submitProposal = mutation({
       // A cover must still be the author's upload or catalog art, and stored.
       for (const change of changes) {
         if (change.field === "coverImage") {
-          await checkCoverUse(ctx, doc as Doc<"releases">, change, user);
+          await checkCoverUse(ctx, doc as Doc<"releases">, change, user, reader);
         }
       }
     }
@@ -672,7 +701,7 @@ export const submitProposal = mutation({
       });
     }
 
-    await rateLimiter.limit(ctx, team ? "proposalSubmit" : "suggestionSubmit", {
+    await rateLimiter.limit(ctx, reader ? "suggestionSubmit" : "proposalSubmit", {
       key: user._id,
       throws: true,
     });
@@ -728,7 +757,8 @@ export const withdrawProposal = mutation({
  * a clearOverride re-anchors too, or drops when its field is no longer
  * overridden; ops whose record vanished drop entirely (reported back). The
  * author then reviews the rebased draft and resubmits as a new immutable
- * version. Only the author rebases; a reader's must be a Suggestion.
+ * version. Only the author rebases; a reader's, or a Suggestion, must
+ * still carry only what a Suggestion may (`readerGated`).
  */
 export const rebaseProposal = mutation({
   args: { proposalId: v.id("proposals") },
@@ -758,7 +788,7 @@ export const rebaseProposal = mutation({
     } else {
       return fail("badState", "Only Draft or In-Review proposals can be rebased.");
     }
-    if (!onDataTeam(user)) checkSuggestionOps(source.ops);
+    if (readerGated(user, proposal)) checkSuggestionOps(source.ops);
 
     const ops: StoredOp[] = [];
     const dropped: string[] = [];
@@ -1779,9 +1809,13 @@ export const reviewQueuePage = query({
 
 /**
  * Everything the review page needs (Data-Team-only): the proposal's state
- * and people, every immutable version with rendered ops (grouped
- * before/after, base Revisions, staleness), evidence beside the changes,
- * the current Draft working copy, and the internal discussion.
+ * and people, its newest VERSIONS_SHOWN immutable versions with rendered
+ * ops (grouped before/after, base Revisions, staleness), evidence beside
+ * the changes, the current Draft working copy, and the internal
+ * discussion. The current version is always among them; versions are
+ * numbered from 1, so `currentVersionNo` says how many there are. A reader
+ * resubmits without a Moderator, so the history is bounded, and each
+ * record and observation is read once however many versions name it.
  */
 export const proposalDetail = query({
   args: { proposalId: v.id("proposals") },
@@ -1791,14 +1825,16 @@ export const proposalDetail = query({
     if (!proposal) return null;
 
     const usernameOf = usernameLookup(ctx);
-    const versions = await ctx.db
-      .query("proposalVersions")
-      .withIndex("by_proposal", (q) => q.eq("proposalId", args.proposalId))
-      .collect();
-    versions.sort((a, b) => a.versionNo - b.versionNo);
+    const versions = (
+      await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", args.proposalId))
+        .order("desc")
+        .take(VERSIONS_SHOWN)
+    ).reverse();
 
     const undecided = proposal.state === "draft" || proposal.state === "inReview";
-    // One read of each observation however many versions cite it.
+    const facts = recordFacts(ctx);
     const sources = observationFacts(ctx);
     const renderedVersions = [];
     for (const version of versions) {
@@ -1808,7 +1844,7 @@ export const proposalDetail = query({
         current,
         changeComment: version.changeComment,
         warnings: version.warningsAcknowledged ?? [],
-        ops: await renderOps(ctx, version.ops, undecided && current),
+        ops: await renderOps(ctx, version.ops, undecided && current, facts),
         evidence: await renderEvidence(ctx, version.evidence, sources),
         submittedAt: version._creationTime,
       });
@@ -1829,7 +1865,7 @@ export const proposalDetail = query({
       });
     }
 
-    const current = versions.find((version) => version.versionNo === proposal.currentVersionNo);
+    const current = await currentVersionOf(ctx, proposal);
     // A placement whose source now names another book than its author
     // reviewed is stale too: approval refuses it (placement.ts).
     const stale =
@@ -1851,7 +1887,7 @@ export const proposalDetail = query({
       versions: renderedVersions,
       draft: proposal.draft
         ? {
-            ops: await renderOps(ctx, proposal.draft.ops, undecided),
+            ops: await renderOps(ctx, proposal.draft.ops, undecided, facts),
             evidence: await renderEvidence(ctx, proposal.draft.evidence, sources),
             comment: proposal.draft.comment,
             warnings: computeWarnings(proposal.draft.ops),

@@ -585,6 +585,12 @@ function ProposalDetail({ id }: { id: string }) {
       ) : null}
 
       {/* ---- immutable versions, newest first ---- */}
+      {/* Versions are numbered from 1, so the current one counts them. */}
+      {detail.versions.length < detail.currentVersionNo ? (
+        <p className="section-hint">
+          Showing the newest {detail.versions.length} of {detail.currentVersionNo} versions.
+        </p>
+      ) : null}
       {[...detail.versions].reverse().map((version) => (
         <section key={version.versionNo} className="proposal-version">
           <h2>
