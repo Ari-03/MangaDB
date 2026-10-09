@@ -482,9 +482,27 @@ function AgendaView({
   releases: Array<BrowseRelease>;
   followedSeries?: FollowedSeriesSet;
 }) {
+  const days = groupByDay(releases);
   return (
     <div className="agenda">
-      {groupByDay(releases).map(([day, dayReleases]) => {
+      {/* Phones stack every day in one long column; this row jumps to one.
+          CSS shows it only there, where the day rail is not beside the list. */}
+      {days.length > 1 ? (
+        <nav className="day-jump" aria-label="Jump to a day">
+          {days.map(([day]) => (
+            <a key={day ?? "tba"} href={`#${dayAnchorId(anchor, day)}`}>
+              {day === null ? (
+                "TBA"
+              ) : (
+                <>
+                  {weekdayName(anchor, day)} <b>{day}</b>
+                </>
+              )}
+            </a>
+          ))}
+        </nav>
+      ) : null}
+      {days.map(([day, dayReleases]) => {
         return (
           <section key={day ?? "tba"} className="day" id={dayAnchorId(anchor, day)}>
             <div className="day-marker">

@@ -56,6 +56,8 @@
   --container: 1280px;
   --header-h: 66px;
   --cover-w: 168px;
+  /* a shelf book's side margin; the ledge under it reaches back across it */
+  --shelf-pad: 13px;
 
   --sans: "Nunito Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --display: "Fraunces", Georgia, "Times New Roman", serif;

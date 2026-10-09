@@ -432,7 +432,8 @@
   font-family: var(--display);
 }
 
-.menu-toggle {
+.menu-toggle,
+.search-toggle {
   display: none;
 }
 
@@ -489,11 +490,36 @@
   .search {
     display: none;
   }
-  .menu-toggle {
+  .menu-toggle,
+  .search-toggle {
     display: grid;
   }
   .header-inner {
     gap: 12px;
+  }
+  /* with the search box folded away, nothing else pushes these to the edge;
+     the Discord, workroom and My library links move into the drawer, leaving
+     Clerk's account button as the one account control in the row */
+  .header-actions {
+    margin-left: auto;
+    gap: 8px;
+  }
+  .header-actions .discord-link,
+  .header-actions .nav-link,
+  .header-actions .account {
+    display: none;
+  }
+}
+/* the narrowest phones keep the mark and drop the wordmark, so the header's
+   buttons and the account avatar still fit on one row */
+@media (max-width: 359px) {
+  .brand-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 @media (max-width: 720px) {
@@ -503,18 +529,35 @@
   .header-actions .btn {
     display: none;
   }
-  .account span:not(.avatar) {
-    display: none;
-  }
-  .account {
-    padding: 3px;
-    border-color: transparent;
-  }
   .section {
     padding-block: 38px 6px;
   }
   .footer-cols {
     gap: 32px;
+  }
+}
+/* Touch screens. iOS Safari zooms the page into any focused field set under
+   16px and leaves it zoomed, so phones get 16px fields whatever a page's own
+   rule says. Short "more" links get a taller invisible hit area. */
+@media (max-width: 720px) {
+  input:not([type="checkbox"], [type="radio"], [type="range"]),
+  select,
+  textarea {
+    /* biome-ignore lint/complexity/noImportantStyles: a floor for every field, over each page's own smaller size */
+    font-size: 16px !important;
+  }
+  .footer-col a {
+    padding-block: 8px;
+  }
+}
+@media (pointer: coarse) {
+  .section-link {
+    position: relative;
+  }
+  .section-link::after {
+    content: "";
+    position: absolute;
+    inset: -10px -4px;
   }
 }
 /* mobile drawer, opened by the menu button */

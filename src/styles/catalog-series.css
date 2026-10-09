@@ -94,7 +94,8 @@
   padding-top: 20px;
   border-top: 1px solid var(--line);
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(198px, 1fr));
+  /* min(100%, …) lets a phone-width hero stack the facts instead of widening */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 198px), 1fr));
   gap: 16px 30px;
   max-width: 760px;
 }
@@ -410,6 +411,11 @@
 }
 .shelf-item--missing .caption-meta {
   font-style: italic;
+}
+/* A reading path's labels are short ("Vol. 3", "Omnibus 2"), so its captions
+   drop the second line other shelves keep free for long series titles. */
+.reading-path .caption-title {
+  min-height: 0;
 }
 
 /* Volume Progress: a durable read count, edited in place. Sits in the shelf
@@ -761,8 +767,9 @@
 
 @media (max-width: 720px) {
   /* stacked: the hero's gap spaces cover, TakePanel, tracking card and body */
+  /* minmax(0, …): a plain 1fr track grows to its widest child's min-content */
   .series-hero {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 30px;
   }
   .series-cover {
@@ -772,7 +779,7 @@
     margin-top: 24px;
   }
   .volume-hero {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 34px;
   }
   .volume-cover {
