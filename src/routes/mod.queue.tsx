@@ -88,6 +88,7 @@ const VIEWS: ReadonlyArray<{ label: string; search: QueueSearch; hint?: string }
   { label: "All", search: {} },
   { label: "Import offers", search: { from: "imports", op: "update" }, hint: IMPORT_HINT },
   { label: "People", search: { from: "humans" } },
+  { label: "Suggestions", search: { kind: "suggestion" } },
   { label: "Reports", search: { kind: "report" } },
   { label: "Stale", search: { stale: true } },
 ];
@@ -398,7 +399,7 @@ function QueueRow({
         <div className="work-meta">
           <span>
             {row.author.kind === "user"
-              ? `@${row.author.username ?? "deleted"}${row.author.role ? ` (${row.author.role})` : ""}`
+              ? `@${row.author.username ?? "deleted"} (${row.author.role ?? "reader"})`
               : sourceName(row.author.sourceKey)}
           </span>
           <span>waiting {formatAge(now - row.submittedAt)}</span>

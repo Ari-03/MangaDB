@@ -410,16 +410,27 @@ describe("moderation.editForm", () => {
     expect(after?.baseRevisionId).toBe(edit.revisionId);
   });
 
-  it("is data-team-only and resolves releases by document ID", async () => {
+  it("needs a signed-in user, keeps hidden records from readers, and resolves releases by document ID", async () => {
     const t = makeT();
     await setup(t);
-    // Editors read the form too since #32 (they draft update proposals from
-    // it); anyone without a data-team role is refused.
+    // Editors read the form since #32 (they draft update proposals from
+    // it), and readers since Suggestions; signed out, nobody does.
     await expect(
-      t
-        .withIdentity({ subject: PLAIN })
+      t.query(api.moderation.editForm, { type: "series", key: "1" }),
+    ).rejects.toMatchObject({ data: { code: "unauthenticated" } });
+    const seriesId = await addSeries(t);
+    const asReader = t.withIdentity({ subject: PLAIN });
+    expect(
+      await asReader.query(api.moderation.editForm, { type: "series", key: "1" }),
+    ).toMatchObject({ title: "Alpha", importReviewPending: null });
+    // A Hidden Record stays the Data Team's.
+    await t.run((ctx) => ctx.db.patch(seriesId, { status: "hidden" }));
+    expect(await asReader.query(api.moderation.editForm, { type: "series", key: "1" })).toBeNull();
+    expect(
+      await t
+        .withIdentity({ subject: MOD })
         .query(api.moderation.editForm, { type: "series", key: "1" }),
-    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+    ).toMatchObject({ status: "hidden", importReviewPending: false });
 
     const releaseId = await t.run((ctx) => insertLooseRelease(ctx, { binding: "paperback" }));
     const form = await t
@@ -551,7 +562,7 @@ describe("moderation.sourceBlurbs", () => {
     });
   });
 
-  it("reports a human author and is Data-Team-only", async () => {
+  it("reports a human author and is read by any signed-in user", async () => {
     const t = makeT();
     await setup(t);
     const releaseId = await seedRelease(t);
@@ -578,11 +589,15 @@ describe("moderation.sourceBlurbs", () => {
       .withIdentity({ subject: EDITOR })
       .query(api.moderation.sourceBlurbs, { ref: { type: "release", id: releaseId } });
     expect(asEditor?.blurbs).toHaveLength(2);
-    await expect(
-      t
-        .withIdentity({ subject: PLAIN })
-        .query(api.moderation.sourceBlurbs, { ref: { type: "release", id: releaseId } }),
-    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+    // Readers too, for their Suggestions, while the record is active.
+    const asReader = t.withIdentity({ subject: PLAIN });
+    const ref = { type: "release" as const, id: releaseId };
+    expect((await asReader.query(api.moderation.sourceBlurbs, { ref }))?.blurbs).toHaveLength(2);
+    await t.run((ctx) => ctx.db.patch(releaseId, { status: "hidden" }));
+    expect(await asReader.query(api.moderation.sourceBlurbs, { ref })).toBeNull();
+    await expect(t.query(api.moderation.sourceBlurbs, { ref })).rejects.toMatchObject({
+      data: { code: "unauthenticated" },
+    });
   });
 
   it("reads a series link observation's synopsis", async () => {

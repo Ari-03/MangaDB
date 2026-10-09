@@ -103,7 +103,7 @@ async function submitTitleProposal(t: TestT, seriesId: Id<"series">, title = "Be
 }
 
 describe("proposals — authorization", () => {
-  it("drafting needs a data-team role; review needs a moderator", async () => {
+  it("drafting needs a signed-in user; review needs a moderator", async () => {
     const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
@@ -111,8 +111,13 @@ describe("proposals — authorization", () => {
     await expect(t.mutation(api.proposals.saveDraft, draftArgs)).rejects.toMatchObject({
       data: { code: "unauthenticated" },
     });
+    // A reader drafts only Suggestions (suggestions.test.ts): no creations.
     await expect(
-      t.withIdentity({ subject: PLAIN }).mutation(api.proposals.saveDraft, draftArgs),
+      t.withIdentity({ subject: PLAIN }).mutation(api.proposals.saveDraft, {
+        ops: [{ kind: "create", table: "volumes", tempId: "v", fields: { seriesId, label: "2" } }],
+        evidence: [],
+        comment: "Nope.",
+      }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
     const proposalId = await submitTitleProposal(t, seriesId);

@@ -340,6 +340,7 @@ export const KIND_LABELS = {
   newRecords: "New records",
   sensitive: "Merge, hide or lock",
   report: "Report",
+  suggestion: "Suggestion",
 } satisfies Record<QueueKind, string>;
 
 /** How a summary names a sensitive op. */

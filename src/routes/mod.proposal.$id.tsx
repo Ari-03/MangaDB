@@ -516,6 +516,8 @@ function ProposalDetail({ id }: { id: string }) {
     });
 
   const currentVersion = detail.versions.find((version) => version.current);
+  // Whether a reviewer may send it back: a person's, with ops to revise.
+  const revisable = detail.author.kind === "user" && (currentVersion?.ops.length ?? 0) > 0;
   // A placement whose coverage is unstated is refused at submission; say so first.
   const coveragePending = detail.placement?.coverage.kind === "pending";
 
@@ -649,7 +651,7 @@ function ProposalDetail({ id }: { id: string }) {
             </button>
           </div>
           <label>
-            {detail.author.kind === "user"
+            {revisable
               ? "Decision note (required to reject or request changes)"
               : "Decision note (required to reject)"}
             <textarea
@@ -659,8 +661,9 @@ function ProposalDetail({ id }: { id: string }) {
             />
           </label>
           <div className="mod-actions">
-            {/* An import cannot revise a Draft (proposals.requestChanges). */}
-            {detail.author.kind === "user" ? (
+            {/* An import cannot revise a Draft, and a report has nothing to
+                revise (proposals.requestChanges). */}
+            {revisable ? (
               <button
                 type="button"
                 className="btn btn-sm"

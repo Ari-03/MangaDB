@@ -19,7 +19,7 @@ import { getSourceByKey } from "./importSources";
 import { internal } from "./_generated/api";
 import { citation as citationValidator, evidence, recordRef, recordType } from "./schema";
 import { fieldAttribution } from "./lib/attribution";
-import { liveUser } from "./lib/auth";
+import { liveUser, requireUser } from "./lib/auth";
 import { latestTouch } from "./lib/authority";
 import { checkCoverStored, checkCoverUse, coverBlobsOf, pinCovers } from "./lib/coverRefs";
 import { coverUrl } from "./lib/covers";
@@ -28,7 +28,7 @@ import { fail } from "./lib/errors";
 import { checkEvidence } from "./lib/evidence";
 import { ratedByDataTeam, syncMatureProjection } from "./lib/mature";
 import { anchoredOn, currentOps } from "./lib/observations";
-import { requireDataTeam, requireModerator } from "./lib/roles";
+import { onDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
   editorialField,
@@ -631,6 +631,13 @@ export async function resolveEditTarget(
   }
 }
 
+/** The edit-form key `resolveEditTarget` finds `doc` by. */
+export function editKeyOf(doc: CatalogDoc): string {
+  if ("publicId" in doc) return String(doc.publicId);
+  if ("slug" in doc) return doc.slug;
+  return doc._id;
+}
+
 /** Where the edit form links back to, as `/{entity}/{publicId}/{slug}` input. */
 export type BackLink = {
   entity: "series" | "volume" | "edition" | "bundle";
@@ -713,14 +720,18 @@ export async function displayInfo(
  * and whether an import's Proposal on the record waits in review (which a
  * clear, moving the base, would leave stale).
  * Editors use it to draft update and clearOverride Proposals; Moderators for
- * direct edits and clears — the mutations re-check the stronger role.
+ * direct edits and clears — the mutations re-check the stronger role. Any
+ * other signed-in User drafts Suggestions from it: they get an active
+ * record only (a Hidden or Merged Record stays the Data Team's), and
+ * `importReviewPending` as null, since pending Proposals are not theirs to
+ * see.
  */
 export const editForm = query({
   args: { type: recordType, key: v.string() },
   handler: async (ctx, { type, key }) => {
-    await requireDataTeam(ctx);
+    const team = onDataTeam(await requireUser(ctx));
     const doc = await resolveEditTarget(ctx, type, key);
-    if (!doc) return null;
+    if (!doc || (!team && doc.status !== "active")) return null;
     const ref = { type, id: doc._id } as RecordRef;
     const history = await revisionsOf(ctx, ref);
     const { title, backLink } = await displayInfo(ctx, type, doc);
@@ -737,7 +748,7 @@ export const editForm = query({
           : [];
       }),
       baseRevisionId: history[0]?._id ?? null,
-      importReviewPending: await importReviewPending(ctx, ref),
+      importReviewPending: team ? await importReviewPending(ctx, ref) : null,
       fields: EDITABLE_FIELDS[type].map((descriptor) => ({
         ...descriptor,
         value: (doc as Record<string, unknown>)[descriptor.name] ?? null,
@@ -867,8 +878,9 @@ function blurbText(raw: unknown): string | null {
  * recordOnly conflict entry whose text differs from it. Also which text is
  * canonical now and who authored it (the latest Revision touching the
  * field, as reconciliation resolves the incumbent). Volumes and Bundles
- * take no source text, so theirs list nothing. Data Team: the blurbs are
- * the sources' own public text, and Editors pick from them too.
+ * take no source text, so theirs list nothing. The blurbs are the sources'
+ * own public text, so any signed-in User drafting a change may read them;
+ * outside the Data Team, of an active record only.
  */
 export const sourceBlurbs = query({
   args: {
@@ -883,10 +895,10 @@ export const sourceBlurbs = query({
     }),
   },
   handler: async (ctx, { ref }) => {
-    await requireDataTeam(ctx);
+    const team = onDataTeam(await requireUser(ctx));
     const id = ctx.db.normalizeId(TABLE_FOR_TYPE[ref.type], ref.id);
     const doc = id ? await ctx.db.get(id) : null;
-    if (!id || !doc) return null;
+    if (!id || !doc || (!team && doc.status !== "active")) return null;
     const field =
       ref.type === "release" || ref.type === "releaseBundle" ? "description" : "synopsis";
     const canonicalText = blurbText((doc as Record<string, unknown>)[field]);

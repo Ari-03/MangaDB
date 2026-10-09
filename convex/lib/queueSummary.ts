@@ -1,7 +1,7 @@
 // What a review-queue row says about a Proposal before anyone opens it
 // (proposals.reviewQueuePage, proposals.myProposals; the legacy
 // proposals.reviewQueue filters with it too): its kind, the first few
-// field changes with labels, what it creates or clears, and for a Reader's
+// field changes with labels, what it creates or clears, and for a reader's
 // report the message itself. Pure functions of the stored version, so they
 // cost no reads and the queue filters on `kind` beside the other facets.
 // The stored change comment is untouched (versions are immutable); the
@@ -24,6 +24,7 @@ export const queueKind = v.union(
   v.literal("newRecords"),
   v.literal("sensitive"),
   v.literal("report"),
+  v.literal("suggestion"),
 );
 
 export type QueueKind = Infer<typeof queueKind>;
@@ -44,15 +45,17 @@ const SENSITIVE_OPS = new Set<StoredOp["kind"]>([
 /**
  * A Proposal's kind: any merge, split, hide, restore, lock or unlock is
  * `sensitive`; a source's creation is `importCreation` and its field offer
- * `importOffer`; a person's Proposal with no ops is a Reader's `report`
- * (reports.submit); a person's creation is `newRecords`; the rest is
- * `fieldChange`.
+ * `importOffer`; a person's Proposal with no ops is a reader's `report`
+ * (reports.submit); one written by a person holding no data-team role is
+ * a reader's `suggestion` (proposals.saveDraft); a person's creation is
+ * `newRecords`; the rest is `fieldChange`.
  */
 export function queueKindOf(ops: readonly StoredOp[], author: Author): QueueKind {
   if (ops.some((op) => SENSITIVE_OPS.has(op.kind))) return "sensitive";
   const creates = ops.some((op) => op.kind === "create");
   if (author.kind === "source") return creates ? "importCreation" : "importOffer";
   if (ops.length === 0) return "report";
+  if (author.roleAtAuthorship === undefined) return "suggestion";
   return creates ? "newRecords" : "fieldChange";
 }
 

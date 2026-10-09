@@ -1,5 +1,5 @@
-// Cover art uploads for the Cover section of the edit and propose forms.
-// The form asks for an upload URL (`uploadUrl`) and posts the file to it.
+// Cover art uploads for the Cover section of the edit, propose and suggest
+// forms. The form asks for an upload URL (`uploadUrl`) and posts the file to it.
 // The URL is this deployment's HTTP action (http.ts /cover-upload), not a
 // bare storage URL: it stores the file itself and records the blob on the
 // upload row (`stored`), so a row only ever names a blob its own upload
@@ -23,12 +23,15 @@ import {
   pinned,
   shown,
 } from "./lib/coverRefs";
+import { requireUser } from "./lib/auth";
 import { fail } from "./lib/errors";
-import { requireDataTeam } from "./lib/roles";
+import { onDataTeam } from "./lib/roles";
 
 const DAY = 24 * 60 * 60 * 1000;
-/** Uploads one person may start in a day: a form needs one or two. */
-const UPLOADS_PER_DAY = 50;
+/** Uploads a Data Team member may start in a day: a form needs one or two. */
+export const UPLOADS_PER_DAY = 50;
+/** Uploads a reader may start in a day, for the covers their Suggestions change. */
+export const READER_UPLOADS_PER_DAY = 5;
 /** Rows one sweep run handles before it schedules the next. */
 const SWEEP_BATCH = 100;
 /** Revisions one backfill run reads. */
@@ -39,18 +42,20 @@ const BACKFILL_STALL = 10 * 60 * 1000;
 /**
  * Start an upload: the URL to POST the file to, which carries the upload
  * row's id and secret token, and the row the finished blob is reported
- * against. Data Team only.
+ * against. Any signed-in User: the Data Team for edits and Proposals, a
+ * reader for a Suggestion, under a smaller daily allowance.
  */
 export const uploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
-    const user = await requireDataTeam(ctx);
+    const user = await requireUser(ctx);
+    const allowance = onDataTeam(user) ? UPLOADS_PER_DAY : READER_UPLOADS_PER_DAY;
     const now = Date.now();
     const recent = await ctx.db
       .query("coverUploads")
       .withIndex("by_uploader", (q) => q.eq("uploaderId", user._id).gt("sweepAfter", now))
-      .take(UPLOADS_PER_DAY);
-    if (recent.length >= UPLOADS_PER_DAY) {
+      .take(allowance);
+    if (recent.length >= allowance) {
       fail("rateLimited", "Too many cover uploads today. Try again tomorrow.");
     }
     const token = crypto.randomUUID();
@@ -94,7 +99,7 @@ export const stored = internalMutation({
 export const uploaded = mutation({
   args: { uploadId: v.id("coverUploads"), storageId: v.id("_storage") },
   handler: async (ctx, { uploadId, storageId }) => {
-    const user = await requireDataTeam(ctx);
+    const user = await requireUser(ctx);
     const row = await ctx.db.get(uploadId);
     if (!row || row.uploaderId !== user._id) fail("forbidden", "No such upload of yours.");
     if (row.storageId !== storageId) {

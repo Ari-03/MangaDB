@@ -69,7 +69,8 @@ import {
   reportSeriesPublicId,
   summarizeVersion,
 } from "./lib/queueSummary";
-import { requireDataTeam, requireModerator } from "./lib/roles";
+import { requireUser } from "./lib/auth";
+import { onDataTeam, requireDataTeam, requireModerator } from "./lib/roles";
 import {
   applyMerge,
   SINGLE_RECORD_OPS,
@@ -83,7 +84,8 @@ import { checkPlacement, placementChanged, placementView } from "./placement";
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
 
 // Token buckets per user (Convex rate-limiter component): steady editing
-// never hits these; scripted abuse does.
+// never hits these; scripted abuse does. A reader's Suggestions draw on
+// their own, tighter buckets.
 export const RATE_LIMITS = {
   proposalSubmit: { kind: "token bucket", rate: 30, period: HOUR, capacity: 5 },
   proposalDraftSave: {
@@ -92,9 +94,56 @@ export const RATE_LIMITS = {
     period: HOUR,
     capacity: 20,
   },
+  suggestionSubmit: { kind: "token bucket", rate: 10, period: HOUR, capacity: 3 },
+  suggestionDraftSave: { kind: "token bucket", rate: 60, period: HOUR, capacity: 10 },
 } as const;
 
 const rateLimiter = new RateLimiter(components.rateLimiter, RATE_LIMITS);
+
+/** The most ops one Suggestion carries (the Data Team's cap is MAX_OPS_PER_PROPOSAL). */
+export const MAX_SUGGESTION_OPS = 10;
+
+/** The most Suggestions one reader may have open (Draft or In Review) at once. */
+export const MAX_OPEN_SUGGESTIONS = 20;
+
+/**
+ * The reader gate on a Proposal's ops: a Suggestion only updates fields of
+ * existing records, at most MAX_SUGGESTION_OPS of them. Creating records,
+ * clearing an override, and merging, hiding or locking stay with the Data
+ * Team. Which fields an update may name is the field registry's to say
+ * (moderation.ts validateChanges), as for anyone. Saving, submitting and
+ * rebasing all check it, so a Draft written while its author was on the
+ * Data Team goes no further once they are not.
+ */
+function checkSuggestionOps(ops: ReadonlyArray<{ kind: string }>) {
+  if (ops.length > MAX_SUGGESTION_OPS) {
+    fail("bulkCap", `A suggestion carries at most ${MAX_SUGGESTION_OPS} changes.`);
+  }
+  if (ops.some((op) => op.kind !== "update")) {
+    fail(
+      "forbidden",
+      "A suggestion changes fields of existing records. Creating records or clearing an override needs the Data Team.",
+    );
+  }
+}
+
+/** Refuse a reader's new Suggestion while MAX_OPEN_SUGGESTIONS of theirs are open. */
+async function checkOpenSuggestions(ctx: MutationCtx, userId: Id<"users">) {
+  let open = 0;
+  for (const state of ["draft", "inReview"] as const) {
+    const rows = await ctx.db
+      .query("proposals")
+      .withIndex("by_author", (q) => q.eq("author.userId", userId).eq("state", state))
+      .take(MAX_OPEN_SUGGESTIONS);
+    open += rows.length;
+  }
+  if (open >= MAX_OPEN_SUGGESTIONS) {
+    fail(
+      "tooManyOpen",
+      `You have ${MAX_OPEN_SUGGESTIONS} suggestions open. Submit, finish or withdraw some first.`,
+    );
+  }
+}
 
 // ---------- shared shapes ----------
 
@@ -399,7 +448,7 @@ type StaleRecord = {
  * silent rebase. Each record is listed once per reason, however many of
  * its ops are stale.
  */
-async function staleRecordsOf(
+export async function staleRecordsOf(
   ctx: QueryCtx | MutationCtx,
   ops: StoredOp[],
 ): Promise<StaleRecord[]> {
@@ -437,9 +486,11 @@ async function staleRecordsOf(
 /**
  * Create or update a Draft proposal — the mutable working copy. Validation
  * runs now so problems surface while drafting, and again at submission and
- * approval. Any data-team member may author proposals. A Draft that places
- * a held book is refused (`placementDraft`): its author states it through
- * placement.setPlacement, which rebuilds its ops from the observation.
+ * approval. Any data-team member may author proposals; any other signed-in
+ * User a Suggestion (checkSuggestionOps), under their own rate limit and
+ * MAX_OPEN_SUGGESTIONS. A Draft that places a held book is refused
+ * (`placementDraft`): its author states it through placement.setPlacement,
+ * which rebuilds its ops from the observation.
  */
 export const saveDraft = mutation({
   args: {
@@ -449,8 +500,10 @@ export const saveDraft = mutation({
     comment: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await requireDataTeam(ctx);
-    await rateLimiter.limit(ctx, "proposalDraftSave", {
+    const user = await requireUser(ctx);
+    const team = onDataTeam(user);
+    if (!team) checkSuggestionOps(args.ops);
+    await rateLimiter.limit(ctx, team ? "proposalDraftSave" : "suggestionDraftSave", {
       key: user._id,
       throws: true,
     });
@@ -479,6 +532,7 @@ export const saveDraft = mutation({
       await pinProposalCovers(ctx, args.proposalId, ops);
       return { proposalId: args.proposalId };
     }
+    if (!team) await checkOpenSuggestions(ctx, user._id);
     const proposalId = await ctx.db.insert("proposals", {
       author: {
         kind: "user",
@@ -499,7 +553,8 @@ export const saveDraft = mutation({
  * source evidence for factual changes, explicit warning acknowledgment, the
  * per-user submission rate limit — then the draft freezes into an immutable
  * Proposal Version and the proposal lands In Review. Resubmission after
- * Request Changes runs through here again and mints the next version.
+ * Request Changes runs through here again and mints the next version. Only
+ * the author submits; a reader's Draft must still be a Suggestion.
  */
 export const submitProposal = mutation({
   args: {
@@ -507,7 +562,8 @@ export const submitProposal = mutation({
     acknowledgeWarnings: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const user = await requireDataTeam(ctx);
+    const user = await requireUser(ctx);
+    const team = onDataTeam(user);
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) fail("notFound", "No such proposal.");
     requireAuthor(proposal, user);
@@ -518,6 +574,7 @@ export const submitProposal = mutation({
     if (!draft || draft.ops.length === 0) {
       fail("noOps", "This draft has no operations to submit.");
     }
+    if (!team) checkSuggestionOps(draft.ops);
     if (draft.comment === "") {
       fail("commentRequired", "Every submission needs a change comment.");
     }
@@ -568,7 +625,10 @@ export const submitProposal = mutation({
       });
     }
 
-    await rateLimiter.limit(ctx, "proposalSubmit", { key: user._id, throws: true });
+    await rateLimiter.limit(ctx, team ? "proposalSubmit" : "suggestionSubmit", {
+      key: user._id,
+      throws: true,
+    });
 
     const versionNo = proposal.currentVersionNo + 1;
     await ctx.db.insert("proposalVersions", {
@@ -591,11 +651,14 @@ export const submitProposal = mutation({
   },
 });
 
-/** Withdraw your own Draft or In-Review proposal — terminal, no review. */
+/**
+ * Withdraw your own Draft or In-Review proposal — terminal, no review. Any
+ * signed-in author may, whatever their role now.
+ */
 export const withdrawProposal = mutation({
   args: { proposalId: v.id("proposals") },
   handler: async (ctx, args) => {
-    const user = await requireDataTeam(ctx);
+    const user = await requireUser(ctx);
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) fail("notFound", "No such proposal.");
     requireAuthor(proposal, user);
@@ -618,12 +681,12 @@ export const withdrawProposal = mutation({
  * a clearOverride re-anchors too, or drops when its field is no longer
  * overridden; ops whose record vanished drop entirely (reported back). The
  * author then reviews the rebased draft and resubmits as a new immutable
- * version.
+ * version. Only the author rebases; a reader's must be a Suggestion.
  */
 export const rebaseProposal = mutation({
   args: { proposalId: v.id("proposals") },
   handler: async (ctx, args) => {
-    const user = await requireDataTeam(ctx);
+    const user = await requireUser(ctx);
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) fail("notFound", "No such proposal.");
     requireAuthor(proposal, user);
@@ -648,6 +711,7 @@ export const rebaseProposal = mutation({
     } else {
       return fail("badState", "Only Draft or In-Review proposals can be rebased.");
     }
+    if (!onDataTeam(user)) checkSuggestionOps(source.ops);
 
     const ops: StoredOp[] = [];
     const dropped: string[] = [];
@@ -751,7 +815,7 @@ async function requireInReview(
   return proposal;
 }
 
-async function currentVersionOf(
+export async function currentVersionOf(
   ctx: QueryCtx | MutationCtx,
   proposal: Doc<"proposals">,
 ): Promise<Doc<"proposalVersions"> | null> {
@@ -812,7 +876,9 @@ export const addNote = mutation({
  * version, alongside a required note telling the author what to fix.
  * Resubmission creates the next immutable version — reviewers never edit a
  * version themselves. Refused for an import's proposal: no one revises an
- * import's Draft, and no list shows one, so it would strand the book.
+ * import's Draft, and no list shows one, so it would strand the book. Also
+ * refused for a reader's report (no ops): there is nothing to revise, and a
+ * Draft with no ops can never be submitted again.
  */
 export const requestChanges = mutation({
   args: { proposalId: v.id("proposals"), note: v.string() },
@@ -831,6 +897,9 @@ export const requestChanges = mutation({
     }
     const version = await currentVersionOf(ctx, proposal);
     if (!version) fail("notFound", "The submitted version is missing.");
+    if (version.ops.length === 0) {
+      fail("nothingToRevise", "A report has nothing to revise: approve it or reject it.");
+    }
     await ctx.db.insert("proposalNotes", {
       proposalId: args.proposalId,
       versionNo: proposal.currentVersionNo,
@@ -1156,7 +1225,7 @@ async function describeCreate(
  * still in Draft or review); a decided Proposal's approval itself moved the
  * base, and the live value is not what it reviewed.
  */
-async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boolean) {
+export async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boolean) {
   const rendered = [];
   const tempLabels = new Map<string, string>();
   for (const op of ops) {
@@ -1249,7 +1318,7 @@ async function refLabel(ctx: QueryCtx | MutationCtx, ref: RecordRef): Promise<st
 }
 
 /** Evidence rows with observation references resolved for display. */
-async function renderEvidence(ctx: QueryCtx | MutationCtx, rows: Evidence[]) {
+export async function renderEvidence(ctx: QueryCtx | MutationCtx, rows: Evidence[]) {
   const rendered = [];
   for (const row of rows) {
     if (row.kind === "observation") {
@@ -1257,6 +1326,7 @@ async function renderEvidence(ctx: QueryCtx | MutationCtx, rows: Evidence[]) {
       const snapshot = observation?.snapshot as { url?: unknown } | undefined;
       rendered.push({
         kind: "observation" as const,
+        observationId: row.observationId,
         sourceKey: observation?.sourceKey ?? "(missing)",
         url: typeof snapshot?.url === "string" ? snapshot.url : null,
       });
@@ -1415,7 +1485,10 @@ async function queueSubjectOf(ctx: QueryCtx, version: Doc<"proposalVersions">) {
  * Release's ISBN for its jacket), else the Series a report was filed from.
  * "(missing record)" when that record is gone; null when nothing names one.
  */
-async function recordSubjectOf(ctx: QueryCtx, version: Doc<"proposalVersions">) {
+export async function recordSubjectOf(
+  ctx: QueryCtx,
+  version: Pick<Doc<"proposalVersions">, "ops" | "evidence">,
+) {
   const { ops } = version;
   const refOp = ops.find((op) => op.kind === "merge" || "ref" in op);
   const ref = refOp?.kind === "merge" ? refOp.survivor : refOp && "ref" in refOp ? refOp.ref : null;

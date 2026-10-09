@@ -142,6 +142,7 @@ import type * as seo from "../seo.js";
 import type * as seriesBrowse from "../seriesBrowse.js";
 import type * as sevenSeas from "../sevenSeas.js";
 import type * as sharing from "../sharing.js";
+import type * as suggestions from "../suggestions.js";
 import type * as users from "../users.js";
 import type * as workroom from "../workroom.js";
 import type * as yenPress from "../yenPress.js";
@@ -287,6 +288,7 @@ declare const fullApi: ApiFromModules<{
   seriesBrowse: typeof seriesBrowse;
   sevenSeas: typeof sevenSeas;
   sharing: typeof sharing;
+  suggestions: typeof suggestions;
   users: typeof users;
   workroom: typeof workroom;
   yenPress: typeof yenPress;
