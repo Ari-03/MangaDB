@@ -550,11 +550,6 @@ is fixed.
   returned to Draft before has no ops to submit. Its author sees it on
   `/me` Suggestions and can withdraw it; nobody can submit it. An operator
   finds them as `proposals` in state `draft` whose `draft.ops` is empty.
-- **The suggest form shows a Mature Series' cover to everyone.** The
-  public pages conceal it in the browser for viewers who have not opted in
-  to 18+ art (`<ConcealArt>`); the Cover section of `/suggest` (and of the
-  Data Team's forms) draws the stored art. The server sends the same art
-  URL to both.
 - **A long run of Data Team Proposals can hide older Suggestions.**
   `suggestions.mine` reads each state's newest 50 of the viewer's
   Proposals and keeps the ones written as a reader, so someone who wrote

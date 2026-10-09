@@ -31,6 +31,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { editorialField, type RecordType } from "../../convex/lib/moderationFields";
 import { CoverField } from "~/lib/coverField";
 import { DescriptionField } from "~/lib/descriptionField";
+import { ConcealArt } from "~/lib/mature";
 import { useIsDataTeam } from "~/lib/viewer";
 import {
   draftCitation,
@@ -405,24 +406,28 @@ function ProposeFormBody({
             </div>
           ) : null}
           {form.cover && coverField ? (
-            <CoverField
-              cover={form.cover}
-              boxSet={type === "releaseBundle"}
-              title={form.title}
-              value={values[coverField.name] ?? ""}
-              initial={initial[coverField.name] ?? ""}
-              setValue={(value) => setValue(coverField.name, value)}
-              revert={() => {
-                setState({ ...values, [coverField.name]: initial[coverField.name] ?? "" });
-                setDirty(new Set([...dirty].filter((key) => key !== coverField.name)));
-                draft.clearSaved();
-              }}
-              onUploading={setUploading}
-              overridden={form.overriddenFields.includes(coverField.name)}
-              disabled={draft.busy}
-              formRoute={suggest ? "/suggest/$type/$key" : "/mod/propose/$type/$key"}
-              knownArt={resume?.coverArt}
-            />
+            // A reader who has not opted in to 18+ art sees cloth for a
+            // Mature Series' covers here too, as on its public pages.
+            <ConcealArt mature={ownSuggestion && form.cover.mature} notice={false}>
+              <CoverField
+                cover={form.cover}
+                boxSet={type === "releaseBundle"}
+                title={form.title}
+                value={values[coverField.name] ?? ""}
+                initial={initial[coverField.name] ?? ""}
+                setValue={(value) => setValue(coverField.name, value)}
+                revert={() => {
+                  setState({ ...values, [coverField.name]: initial[coverField.name] ?? "" });
+                  setDirty(new Set([...dirty].filter((key) => key !== coverField.name)));
+                  draft.clearSaved();
+                }}
+                onUploading={setUploading}
+                overridden={form.overriddenFields.includes(coverField.name)}
+                disabled={draft.busy}
+                formRoute={suggest ? "/suggest/$type/$key" : "/mod/propose/$type/$key"}
+                knownArt={resume?.coverArt}
+              />
+            </ConcealArt>
           ) : null}
           {plainFields.map((field) => (
             <FieldInput key={field.name} field={field} values={values} setValue={setValue} />
