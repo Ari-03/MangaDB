@@ -1701,14 +1701,18 @@ const queueFilterArgs = {
 export const NOT_LOADED_COMMENT =
   "Not loaded: too much to read with the rest of the queue. Open it to review it.";
 
+/** How many In-Review proposals the legacy queue scans, oldest first. */
+export const LEGACY_QUEUE_MAX = 1000;
+
 /**
- * Every In-Review proposal, oldest first, with the facets the queue filters
+ * The oldest In-Review proposals, oldest first, with the facets the queue filters
  * on and its age in `ageMs`, filtered with the same rules as
  * reviewQueuePage. Data-Team-visible only. This is the contract clients
  * built before the paged queue still call, kept with its arguments and
  * array result so a Worker or open tab older than the Convex deploy keeps
- * working; it reads the whole In-Review index. The site calls
- * reviewQueuePage. Remove this once no deployed client calls it.
+ * working; it reads the oldest LEGACY_QUEUE_MAX In-Review proposals, so a
+ * backlog of reports or Suggestions cannot make the scan itself fail. The
+ * site calls reviewQueuePage. Remove this once no deployed client calls it.
  * Rows share one read of each record within the read budget
  * (lib/proposalReads.ts), as reviewQueuePage's do. Past it, every
  * remaining Proposal is listed unfiltered in the same row shape, with
@@ -1724,7 +1728,7 @@ export const reviewQueue = query({
       .query("proposals")
       .withIndex("by_state", (q) => q.eq("state", "inReview"))
       .order("asc")
-      .collect();
+      .take(LEGACY_QUEUE_MAX);
 
     const usernameOf = usernameLookup(ctx);
     const reads = proposalReads(ctx, { budgeted: true });

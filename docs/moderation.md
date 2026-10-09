@@ -234,7 +234,8 @@ Pages:
   same rules, within the same read budget: past it, each remaining
   proposal comes back unfiltered in the old row shape with `notLoaded:
   true`, no ops and a comment saying it was not loaded, so an old client
-  lists it and links to its page.
+  lists it and links to its page. It reads only the oldest 1,000 In-Review
+  proposals (`LEGACY_QUEUE_MAX`), so a large backlog cannot make it fail.
 - `/mod/proposal/{id}`: the Draft and the newest 50 versions, and internal
   discussion notes. The Draft and the newest 6 versions show before and
   after per record, bases and evidence; older ones their number, comment,
