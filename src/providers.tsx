@@ -284,7 +284,7 @@ function SignedInNav({ mobile }: { mobile: boolean }) {
         </Link>
         {isDataTeam ? (
           <Link to="/mod/queue" className="nav-link">
-            Review queue
+            Mod
           </Link>
         ) : null}
       </>
@@ -293,8 +293,8 @@ function SignedInNav({ mobile }: { mobile: boolean }) {
   return (
     <>
       {isDataTeam ? (
-        <Link to="/mod/queue" className="nav-link">
-          Queue
+        <Link to="/mod/queue" className="nav-link" title="Moderation">
+          Mod
         </Link>
       ) : null}
       <Link to="/me" className="account">

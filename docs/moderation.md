@@ -9,9 +9,11 @@ approved change leaves a public Revision. Terms are defined in
 ## The workroom
 
 Every `/mod` tool page (review queue, imports, catalog gaps, your
-proposals, launch, comments while they are on, and roles for Moderators)
+proposals, comments while they are on, roles for Moderators, and launch)
 sits in one frame (`src/lib/modShell.tsx`): a breadcrumb, a tab strip of
-the tools, the page title and one line of hint. The queue tab counts
+the tools, the page title and one line of hint. Launch has no tab; it is
+reached at `/mod/launch`. The header's "Mod" link opens the workroom on
+the review queue. The queue tab counts
 In-Review proposals, and Imports gets a red dot while any source is
 unhealthy (`workroom.counts`; each count reads at most 101 rows and shows
 "100+" past 100). Explanations of how a page works sit in a closed "How
@@ -223,7 +225,11 @@ Pages:
   Filters and views live in the URL, so a view can be shared as a link.
   The list loads 25 proposals at a time (`proposals.reviewQueuePage` is
   paginated, at most 50 a page) and says how many it has checked and how
-  many match; "Check the next 25" reads further. A page that would read
+  many match; "Check the next 25" reads further. A filter on one kind of
+  author reads only that author's rows, by index: Suggestions reads only
+  readers' proposals; People, Reports, field changes and new records only
+  people's; the import kinds only sources'. So a few Suggestions are on
+  the first page however many older import offers wait. A page that would read
   past a query's read limits (records at the largest the field limits
   allow) stops early and links the proposals it could not read, to open
   one by one (`READ_RESERVE` in `convex/lib/proposalReads.ts`, which has

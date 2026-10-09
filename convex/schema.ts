@@ -942,6 +942,14 @@ export default defineSchema({
     ),
   })
     .index("by_state", ["state", "submittedAt"])
+    // The review queue's views of one kind of author (proposals.reviewQueuePage).
+    .index("by_state_and_author_kind", ["state", "author.kind", "submittedAt"])
+    .index("by_state_and_author_role", [
+      "state",
+      "author.kind",
+      "author.roleAtAuthorship",
+      "submittedAt",
+    ])
     .index("by_author", ["author.userId", "state"]),
 
   // Immutable once submitted; Request Changes yields a new version.
