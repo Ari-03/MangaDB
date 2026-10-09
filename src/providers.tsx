@@ -78,7 +78,7 @@ export function BrandMark() {
 /**
  * The sticky site header of the Bookshelf look (styles/shell.css): brand,
  * primary nav, search, theme toggle, and the account controls. Under 960px
- * the nav, search, Discord, Queue and My library links fold into a drawer
+ * the nav, search, Discord, workroom and My library links fold into a drawer
  * behind the menu button, and a search button opens that drawer with its
  * search box focused.
  */

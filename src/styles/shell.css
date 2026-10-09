@@ -498,7 +498,7 @@
     gap: 12px;
   }
   /* with the search box folded away, nothing else pushes these to the edge;
-     the Discord, Queue and My library links move into the drawer, leaving
+     the Discord, workroom and My library links move into the drawer, leaving
      Clerk's account button as the one account control in the row */
   .header-actions {
     margin-left: auto;
